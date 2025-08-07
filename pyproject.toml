@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "slyme"
+version = "0.0.0"
+description = "Placeholder for slyme series."
+readme = "README.md"
+authors = [{ name = "Zikang Liu", email = "liuzikang0625@gmail.com" }]
+license = "Apache-2.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.8"
+dependencies = []
