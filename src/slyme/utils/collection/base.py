@@ -1,4 +1,9 @@
-from collections.abc import Mapping, MutableMapping, Sequence, MutableSequence
+from collections.abc import (
+    Mapping,
+    MutableMapping,
+    Sequence,
+    MutableSequence,
+)
 from slyme.utils.typing import (
     TypeVar,
     Generic,
@@ -10,7 +15,7 @@ from slyme.utils.typing import (
     Tuple,
 )
 from slyme.utils.inspect import resolve_instance_classname
-from slyme.utils.descriptor import Attribute
+from slyme.utils.descriptor.protocol import Attribute
 from slyme.utils.mixin import InitAdapterMixin
 
 _KT = TypeVar("_KT")
@@ -51,6 +56,18 @@ class MappingProxy(Mapping[_KT, _VT], InitAdapterMixin, Generic[_KT, _VT]):
     def __len__(self, /) -> int:
         return len(self._mapping_source)
 
+    def __str__(self) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._mapping_source}"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._mapping_source!r}"
+        )
+
 
 class MutableMappingProxy(
     MutableMapping[_KT, _VT], InitAdapterMixin, Generic[_KT, _VT]
@@ -90,6 +107,18 @@ class MutableMappingProxy(
 
     def __len__(self, /) -> int:
         return len(self._mutable_mapping_source)
+
+    def __str__(self) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._mutable_mapping_source}"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._mutable_mapping_source!r}"
+        )
 
 
 class SequenceProxy(Sequence[_T], InitAdapterMixin, Generic[_T]):
@@ -134,8 +163,14 @@ class SequenceProxy(Sequence[_T], InitAdapterMixin, Generic[_T]):
 
     def __str__(self) -> str:
         return (
-            f"{resolve_instance_classname(self)}<{str(hex(id(self)))}>"
-            f"{str(self._sequence_source)}"
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._sequence_source}"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._sequence_source!r}"
         )
 
 
@@ -196,6 +231,12 @@ class MutableSequenceProxy(MutableSequence[_T], InitAdapterMixin, Generic[_T]):
 
     def __str__(self) -> str:
         return (
-            f"{resolve_instance_classname(self)}<{str(hex(id(self)))}>"
-            f"{str(self._mutable_sequence_source)}"
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._mutable_sequence_source}"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{self._mutable_sequence_source!r}"
         )
