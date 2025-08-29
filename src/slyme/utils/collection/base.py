@@ -187,7 +187,7 @@ class MutableSequenceProxy(MutableSequence[_T], InitAdapterMixin, Generic[_T]):
         super().__init__(**kwargs)
         self._mutable_sequence_source = []
         if sequence_data is not None:
-            self._mutable_sequence_source.extend(sequence_data)
+            self.extend(sequence_data)
 
     @overload
     def __getitem__(self, index: SupportsIndex) -> _T: ...
