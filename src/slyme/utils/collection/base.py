@@ -8,7 +8,6 @@ from slyme.utils.typing import (
     TypeVar,
     Iterator,
     Iterable,
-    SupportsIndex,
     overload,
     Union,
     Tuple,
@@ -40,13 +39,13 @@ class _MappingMixin(Mapping[_KT, _VT]):
     def __len__(self, /) -> int:
         return len(self._mapping_source)
 
-    def __str__(self) -> str:
+    def __str__(self, /) -> str:
         return (
             f"{resolve_instance_classname(self)}<{hex(id(self))}>"
             f"{self._mapping_source}"
         )
 
-    def __repr__(self) -> str:
+    def __repr__(self, /) -> str:
         return (
             f"{resolve_instance_classname(self)}<{hex(id(self))}>"
             f"{self._mapping_source!r}"
@@ -75,16 +74,16 @@ class MappingProxy(_MappingMixin[_KT, _VT], Mapping[_KT, _VT], InitAdapterMixin)
             self._mapping_source = dict(mapping_data)
 
 
-class MutableMappingProxy(_MappingMixin[_KT, _VT], MutableMapping[_KT, _VT], InitAdapterMixin):
+class MutableMappingProxy(
+    _MappingMixin[_KT, _VT], MutableMapping[_KT, _VT], InitAdapterMixin
+):
     """Mutable mapping proxy class.
 
     NOTE: ``_mapping_source`` should be set by the instance.
     """
 
     __slots__ = ()
-    _mapping_source: Attribute[
-        MutableMapping[_KT, _VT], MutableMapping[_KT, _VT]
-    ]
+    _mapping_source: Attribute[MutableMapping[_KT, _VT], MutableMapping[_KT, _VT]]
 
     def __init__(
         self,
@@ -110,7 +109,7 @@ class _SequenceMixin(Sequence[_T]):
     __slots__ = ()
     _sequence_source: Attribute[Sequence[_T], Sequence[_T]]
 
-    def _from_seq(self, seq: _ST) -> _ST:
+    def _from_seq(self, seq: _ST, /) -> _ST:
         """Return a sequence instance with the input ``seq`` as the data source.
 
         NOTE: This method will directly return the ``seq`` itself by default, rather than a newly
@@ -121,16 +120,16 @@ class _SequenceMixin(Sequence[_T]):
         """
         return seq
 
-    def __len__(self) -> int:
+    def __len__(self, /) -> int:
         return len(self._sequence_source)
 
-    def __str__(self) -> str:
+    def __str__(self, /) -> str:
         return (
             f"{resolve_instance_classname(self)}<{hex(id(self))}>"
             f"{self._sequence_source}"
         )
 
-    def __repr__(self) -> str:
+    def __repr__(self, /) -> str:
         return (
             f"{resolve_instance_classname(self)}<{hex(id(self))}>"
             f"{self._sequence_source!r}"
@@ -175,11 +174,12 @@ class SequenceProxy(_SequenceMixin[_T], Sequence[_T], InitAdapterMixin):
         else:
             self._sequence_source = tuple(sequence_data)
 
+    # NOTE: ``SupportsIndex`` type may pass type checker in future versions.
     @overload
-    def __getitem__(self, index: SupportsIndex) -> _T: ...
+    def __getitem__(self, index: int, /) -> _T: ...
     @overload
-    def __getitem__(self, index: slice) -> Sequence[_T]: ...
-    def __getitem__(self, index):
+    def __getitem__(self, index: slice, /) -> Sequence[_T]: ...
+    def __getitem__(self, index: Union[int, slice], /) -> Union[_T, Sequence[_T]]:
         if isinstance(index, slice):
             return self._from_seq(self._sequence_source[index])
         return self._sequence_source[index]
@@ -200,36 +200,43 @@ class MutableSequenceProxy(_SequenceMixin[_T], MutableSequence[_T], InitAdapterM
         if sequence_data is not None:
             self.extend(sequence_data)
 
+    # NOTE: ``SupportsIndex`` type may pass type checker in future versions.
     @overload
-    def __getitem__(self, index: SupportsIndex) -> _T: ...
+    def __getitem__(self, index: int, /) -> _T: ...
     @overload
-    def __getitem__(self, index: slice) -> MutableSequence[_T]: ...
-    def __getitem__(self, index):
+    def __getitem__(self, index: slice, /) -> MutableSequence[_T]: ...
+    def __getitem__(
+        self, index: Union[int, slice], /
+    ) -> Union[_T, MutableSequence[_T]]:
         if isinstance(index, slice):
             return self._from_seq(self._sequence_source[index])
         return self._sequence_source[index]
 
+    # NOTE: ``SupportsIndex`` type may pass type checker in future versions.
     @overload
-    def __setitem__(self, index: SupportsIndex, value: _T) -> None: ...
+    def __setitem__(self, index: int, value: _T, /) -> None: ...
     @overload
-    def __setitem__(self, index: slice, value: Iterable[_T]) -> None: ...
-    def __setitem__(self, index, value):
+    def __setitem__(self, index: slice, value: Iterable[_T], /) -> None: ...
+    def __setitem__(
+        self, index: Union[int, slice], value: Union[_T, Iterable[_T]], /
+    ) -> None:
         self._sequence_source[index] = value
 
+    # NOTE: ``SupportsIndex`` type may pass type checker in future versions.
     @overload
-    def __delitem__(self, index: SupportsIndex) -> None: ...
+    def __delitem__(self, index: int, /) -> None: ...
     @overload
-    def __delitem__(self, index: slice) -> None: ...
-    def __delitem__(self, index):
+    def __delitem__(self, index: slice, /) -> None: ...
+    def __delitem__(self, index: Union[int, slice], /) -> None:
         del self._sequence_source[index]
 
-    def insert(self, index: int, value: _T) -> None:
+    def insert(self, index: int, value: _T, /) -> None:
         self._sequence_source.insert(index, value)
 
     #
     # Other extended mixin methods.
     #
-    def pop_all(self) -> MutableSequence[_T]:
+    def pop_all(self, /) -> MutableSequence[_T]:
         """Pop all the sequence elements."""
         # NOTE: Shallow copy the full sequence.
         seq = self[:]
