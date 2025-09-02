@@ -145,27 +145,48 @@ class ComponentCollection(CompositeMixin, MutableSequenceProxy[_ComponentT]):
         value: Union[_ComponentT, Iterable[_ComponentT]],
         /,
     ) -> None:
-        old_items = self[index] if isinstance(index, slice) else [self[index]]
+        old_items = (
+            self[index] if (_is_slice := isinstance(index, slice)) else [self[index]]
+        )
         new_items = (
-            # NOTE: Materialize ``value`` into list to allow multiple traversals.
-            (value := list(cast(Iterable[_ComponentT], value)))
-            if isinstance(index, slice)
-            else [value := cast(_ComponentT, value)]
+            cast(Iterable[_ComponentT], value)
+            if _is_slice
+            else [cast(_ComponentT, value)]
         )
         # >>> ATOMIC start <<<
         for item in old_items:
             del item._parent  # Should always succeed.
         try:
-            # Set parent
+            # Rationale for this implementation:
+            # This design is optimized to prevent the redundant memory allocation of two identical
+            # lists.
+            # The challenge is twofold:
+            # a) The input ``value`` could be a single-pass iterable (like a generator), so it must
+            #    be materialized into a list before it can be iterated for multiple times (1. set the
+            #    parent pointer and 2. call super().__setitem__).
+            # b) We need a list of newly attached items (`attached`) to enable precise rollback in
+            #    case of an exception.
+            # A naive solution would be to first do `new_items_list = list(value)` and then iterate
+            # over `new_items_list` to populate `attached`. This would result in two identical lists
+            # in memory if the operation succeeds (`new_items_list` and `attached`).
+            # This implementation solves the redundancy by merging the two steps: it iterates through
+            # the `new_items` iterable exactly once, simultaneously setting the parent pointers and
+            # building the `attached` list. This list then serves both as the source for the super()
+            # call and as the manifest for the rollback mechanism.
+            # Set parent.
             attached: list[_ComponentT] = []
             for item in new_items:
                 item._parent = self
                 attached.append(item)
             # Set item(s).
-            super().__setitem__(index, value)
+            super().__setitem__(
+                index, attached if _is_slice else cast(_ComponentT, value)
+            )
         except Exception:
             # Rollback to keep consistency
             for item in attached:
+                # This is safe because the attach operation (`item._parent = self`) only
+                # succeeds if the item's parent was `None` to begin with.
                 del item._parent  # Should always succeed.
             for item in old_items:
                 item._parent = self
@@ -199,6 +220,8 @@ class ComponentCollection(CompositeMixin, MutableSequenceProxy[_ComponentT]):
             super().insert(index, value)
         except Exception:
             # Rollback to keep consistency
+            # This is safe because the attach operation (`value._parent = self`) only
+            # succeeds if the value's parent was `None` to begin with.
             del value._parent  # Should always succeed.
             raise
         # >>> ATOMIC end <<<
