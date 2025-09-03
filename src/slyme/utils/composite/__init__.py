@@ -3,3 +3,9 @@ from .base import (
     ComponentCollection,
     ComponentContainer,
 )
+from .mixin import (
+    CompositeMixin,
+    CompositeStructure,
+    composite_iter,
+    composite_filter,
+)

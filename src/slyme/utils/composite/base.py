@@ -15,7 +15,9 @@ _ComponentT = TypeVar("_ComponentT", bound="Component")
 _ComponentCollectionT = TypeVar("_ComponentCollectionT", bound="ComponentCollection")
 
 
-class Component(CompositeMixin, Generic[_ComponentT, _ComponentCollectionT]):
+class Component(
+    CompositeMixin[_ComponentT], Generic[_ComponentT, _ComponentCollectionT]
+):
     __slots__ = ()
     _prop__parent: Attribute[
         Union[_ComponentCollectionT, None], Union[_ComponentCollectionT, None]
@@ -123,7 +125,9 @@ class Component(CompositeMixin, Generic[_ComponentT, _ComponentCollectionT]):
         return CompositeStructure[Self, None](self, None)
 
 
-class ComponentCollection(CompositeMixin, MutableSequenceProxy[_ComponentT]):
+class ComponentCollection(
+    CompositeMixin[_ComponentT], MutableSequenceProxy[_ComponentT]
+):
     __slots__ = ()
 
     def __init__(self, /, children: SequenceData[_ComponentT] = None, **kwargs):
