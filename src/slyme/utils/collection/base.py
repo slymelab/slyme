@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from collections.abc import (
     Mapping,
     MutableMapping,
@@ -69,9 +70,9 @@ class MappingProxy(_MappingMixin[_KT, _VT], Mapping[_KT, _VT], InitAdapterMixin)
     ):
         super().__init__(**kwargs)
         if mapping_data is None:
-            self._mapping_source = {}
+            self._mapping_source = MappingProxyType({})
         else:
-            self._mapping_source = dict(mapping_data)
+            self._mapping_source = MappingProxyType(dict(mapping_data))
 
 
 class MutableMappingProxy(
