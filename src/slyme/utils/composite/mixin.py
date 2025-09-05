@@ -83,7 +83,7 @@ class _CompositeIterFunc(Protocol):
     ) -> Generator[_CompositeMixinT, Any, None]: ...
 
 
-_COMPOSITE_ITER_STRATEGY: dict[str, _CompositeIterFunc] = {
+_COMPOSITE_ITER_REGISTRY: dict[str, _CompositeIterFunc] = {
     "depth": _composite_iter_depth_first,
     "breadth": _composite_iter_breadth_first,
 }
@@ -92,7 +92,7 @@ _COMPOSITE_ITER_STRATEGY: dict[str, _CompositeIterFunc] = {
 def composite_iter(
     item: _CompositeMixinT, /, *, strategy: str = "depth"
 ) -> Generator[_CompositeMixinT, Any, None]:
-    yield from _COMPOSITE_ITER_STRATEGY[strategy](item)
+    yield from _COMPOSITE_ITER_REGISTRY[strategy](item)
 
 
 def composite_filter(

@@ -107,7 +107,7 @@ def _freeze_weakref_cached(obj: _FreezeMixinT) -> _FreezeMixinT:
     return frozen_instance
 
 
-_FREEZE_STRATEGY = {
+_FREEZE_REGISTRY = {
     "eager": _freeze_eager,
     "cached": _freeze_cached,
     "weakref_cached": _freeze_weakref_cached,
@@ -129,4 +129,4 @@ class FreezeMixin(metaclass=FrozenClsMeta):
         return object.__new__(cls)
 
     def freeze(self, strategy: str = "weakref_cached") -> Self:
-        return _FREEZE_STRATEGY[strategy](self)
+        return _FREEZE_REGISTRY[strategy](self)

@@ -5,8 +5,8 @@ Core logger module.
 import sys
 import logging
 from contextlib import ContextDecorator
-from slyme.utils.typing.native import Any
-from slyme.utils.typing.extension import NOTHING
+from slyme.utils.typing import Any
+from slyme.utils.constant import NOTHING
 
 
 def _create_core_logger(name: str) -> logging.Logger:

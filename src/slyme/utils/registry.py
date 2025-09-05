@@ -3,11 +3,10 @@ A convenient registry util that dynamically retrieves items based on keys.
 """
 
 import importlib
-from .base.collection import BaseDict
-from .exception import APIMisused
+from .mixin.collection import MutableMappingMixin
 from .decorator import auto_decorator
 from .common import FuncParams
-from .typing.native import (
+from .typing import (
     Union,
     Iterable,
     TypeVar,
@@ -17,14 +16,14 @@ from .typing.native import (
     Mapping,
     Dict,
 )
-from .typing.extension import Missing, MISSING
+from .constant import Missing, MISSING
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 _VT2 = TypeVar("_VT2")
 
 
-class GeneralRegistry(BaseDict[_KT, _VT], Generic[_KT, _VT]):
+class GeneralRegistry(MutableMappingMixin[_KT, _VT], Generic[_KT, _VT]):
     """
     A general registry whose type of keys can be any specified value.
 
@@ -164,10 +163,8 @@ class GeneralRegistry(BaseDict[_KT, _VT], Generic[_KT, _VT]):
         if key is MISSING:
             # The key should be explicitly specified or be properly handled by subclasses,
             # so it should never be ``MISSING`` here.
-            from .exception import APIMisused
-
             namespace = self.smx_get_namespace()
-            raise APIMisused(
+            raise ValueError(
                 f"Error when registering ``{repr(cls)}`` in registry ``{namespace}``. "
                 f"Key cannot be ``MISSING``. Check the key setting."
             )
@@ -188,7 +185,7 @@ class GeneralRegistry(BaseDict[_KT, _VT], Generic[_KT, _VT]):
             return self[key]
         if key not in self.load_mapping__:
             namespace = self.smx_get_namespace()
-            raise APIMisused(
+            raise KeyError(
                 f"The given key ``{key}`` does not exist in registry ``{namespace}`` or "
                 "in the load_mapping. Check the registry settings."
             )
@@ -200,7 +197,7 @@ class GeneralRegistry(BaseDict[_KT, _VT], Generic[_KT, _VT]):
             importlib.import_module(module_setting)
         if key not in self:
             namespace = self.smx_get_namespace()
-            raise APIMisused(
+            raise KeyError(
                 f"The given key ``{key}`` still does not exist in registry ``{namespace}`` "
                 f"after loading the module ``{module_setting}``. Check the registry settings."
             )
@@ -223,10 +220,8 @@ class Registry(GeneralRegistry[str, _VT], Generic[_VT]):
             # Try to get the ``__name__`` of ``cls`` if ``key`` is not specified.
             key = getattr(cls, "__name__", MISSING)
         if key is MISSING:
-            from .exception import APIMisused
-
             namespace = self.smx_get_namespace()
-            raise APIMisused(
+            raise ValueError(
                 f"Registry cannot correctly infer the ``key`` when registering "
                 f"``{repr(cls)}`` in registry {namespace}. Neither is the ``key`` "
                 f"param specified, nor does the attribute ``__name__`` exist in "

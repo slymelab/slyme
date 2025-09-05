@@ -7,9 +7,9 @@ useful but unrelated utils in slyme.
 # new classes, and it should be at the beginning of the file in order
 # to avoid circular imports.
 #
-from .typing.native import Generic, TypeVar, Hashable, Set, Type, Union, Any, List
-from .typing.extension import resolve_instance_classname
-from .descriptor import ReadonlyDescriptor, get_descriptor_private_name
+from .typing import Generic, TypeVar, Hashable, Set, Type, Union, Any, List
+from .inspect import resolve_instance_classname
+from .descriptor.property import ReadonlyProperty, get_descriptor_private_name
 
 _ArgsT = TypeVar("_ArgsT")
 _KwargsT = TypeVar("_KwargsT")
@@ -53,8 +53,8 @@ class HashCache:
         get_descriptor_private_name("hashable"),
         get_descriptor_private_name("hash_value"),
     )
-    hashable = ReadonlyDescriptor()
-    hash_value = ReadonlyDescriptor()
+    hashable = ReadonlyProperty()
+    hash_value = ReadonlyProperty()
 
     def __init__(self, hashable: Hashable) -> None:
         self.hashable = hashable
@@ -123,52 +123,23 @@ def make_params_hashable(
 # NOTE: Other module blocks should be placed below (including the related
 # imports) in order to avoid possible circular imports.
 #
-
-import threading
-from .typing.native import Mapping
+from .typing import Mapping
 
 
-class Count:
-    """
-    Count times of variable-get. It can be used to generate unique ids
-    of objects (e.g., handler ids can be automatically generated if
-    they are not specified by the users). The class uses a thread lock
-    to make the generated value globally unique.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.value = 0
-        self.__t_lock = threading.RLock()
-
-    def __set__(self, *_):
-        pass
-
-    def __get__(self, *_):
-        with self.__t_lock:
-            value = self.value
-            self.value += 1
-        return value
-
-
-#
 # dict and list formatter
-#
-
-
-def dict_to_key_value_str_list(__dict: Mapping, key_value_sep: str = "=") -> list:
+def dict_to_key_value_str_list(dict_: Mapping, key_value_sep: str = "=", /) -> list:
     """
     Parse items in a dict to a str list using ``key_value_sep`` to concat
     the keys and values.
     """
-    return [f"{key}{key_value_sep}{value}" for key, value in __dict.items()]
+    return [f"{key}{key_value_sep}{value}" for key, value in dict_.items()]
 
 
 def dict_to_key_value_str(
-    __dict: Mapping, key_value_sep: str = "=", str_sep: str = ", "
+    dict_: Mapping, key_value_sep: str = "=", str_sep: str = ", ", /
 ) -> str:
     """
     Parse items in a dict to a str using ``key_value_sep`` to concat the
     keys and values, and using ``str_sep`` to concat the items.
     """
-    return str_sep.join(dict_to_key_value_str_list(__dict, key_value_sep=key_value_sep))
+    return str_sep.join(dict_to_key_value_str_list(dict_, key_value_sep=key_value_sep))

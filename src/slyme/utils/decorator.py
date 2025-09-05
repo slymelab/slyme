@@ -1,6 +1,6 @@
 from functools import wraps
 import slyme.logging.logger as logger
-from .typing.native import (
+from .typing import (
     Union,
     Callable,
     TypeVar,
@@ -10,13 +10,14 @@ from .typing.native import (
     Literal,
     Dict,
 )
-from .typing.extension import MISSING, Missing, unwrap_method, resolve_name
+from .inspect import unwrap_method, resolve_name
+from .constant import FlagConstant
 
 _FuncOrMethodT = TypeVar("_FuncOrMethodT")
 
 
 def auto_decorator(
-    *, index: Union[int, Missing] = MISSING, keyword: Union[str, Missing] = MISSING
+    *, index: Union[int, None] = None, keyword: Union[str, None] = None
 ) -> Callable[[_FuncOrMethodT], _FuncOrMethodT]:
     """
     This function serves as a meta-decorator. It allows a decorator function to
@@ -93,17 +94,17 @@ def auto_decorator(
     def decorator(func: _FuncOrMethodT) -> _FuncOrMethodT:
         @wraps(func)
         def wrapper(*args, **kwargs):
-            arg_match = MISSING
+            arg_match = None
             # Check ``keyword`` arg match.
-            if keyword is not MISSING:
-                arg_match = kwargs.get(keyword, MISSING)
+            if keyword is not None:
+                arg_match = kwargs.get(keyword, FlagConstant.MISSING)
             # Check ``index`` arg match.
-            if index is not MISSING and arg_match is MISSING:
-                arg_match = MISSING if index >= len(args) else args[index]
+            if index is not None and arg_match is FlagConstant.MISSING:
+                arg_match = FlagConstant.MISSING if index >= len(args) else args[index]
 
             _decorator = func(*args, **kwargs)
             # Pass ``arg_match`` to ``_decorator`` if it is not ``MISSING``.
-            return _decorator if arg_match is MISSING else _decorator(arg_match)
+            return _decorator if arg_match is FlagConstant.MISSING else _decorator(arg_match)
 
         return wrapper
 
@@ -172,7 +173,7 @@ _NOT_IMPLEMENTED_LEVEL_REGISTRY: Dict[str, Callable[[str], None]] = {
 
 @overload
 def not_implemented(
-    _func: Missing = MISSING, *, level: NotImplementedLevelType = "error"
+    _func: None = None, *, level: NotImplementedLevelType = "error"
 ) -> Callable[[_FuncOrMethodT], _FuncOrMethodT]: ...
 @overload
 def not_implemented(
@@ -180,7 +181,7 @@ def not_implemented(
 ) -> _FuncOrMethodT: ...
 @auto_decorator(index=0, keyword="_func")
 def not_implemented(
-    _func=MISSING,
+    _func=None,
     *,
     level: NotImplementedLevelType = "error",
 ):
@@ -217,14 +218,14 @@ def is_not_implemented(func: _FuncOrMethodT) -> bool:
 
 @overload
 def func_setattr(
-    _func: Missing = MISSING, *, attr_dict: Mapping[str, Any]
+    _func: None = None, *, attr_dict: Mapping[str, Any]
 ) -> Callable[[_FuncOrMethodT], _FuncOrMethodT]: ...
 @overload
 def func_setattr(
     _func: _FuncOrMethodT, *, attr_dict: Mapping[str, Any]
 ) -> _FuncOrMethodT: ...
 @auto_decorator(index=0, keyword="_func")
-def func_setattr(_func=MISSING, *, attr_dict: Mapping[str, Any]):
+def func_setattr(_func=None, *, attr_dict: Mapping[str, Any]):
     """
     Set attributes to the function in a decorator way.
     """

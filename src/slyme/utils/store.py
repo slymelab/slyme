@@ -5,14 +5,13 @@ Global store module that provides global data management.
 import threading
 from abc import ABCMeta
 
-from .base.attr import ItemAttrMixin
+from .mixin.attr import ItemAttrMixin
 
-from .base.observer import AttrObservable
+from .mixin.observer import AttrObservable
 
-from .metaclass.adapter import metaclasses
-from .metaclass.singleton import SingletonMetaclass
-from .metaclass.metabase import SingletonMetabase
-from .typing.native import (
+from .meta.adapter import metaclasses
+from .singleton import SingletonMeta, Singleton
+from .typing import (
     Any,
     Union,
     TYPE_CHECKING,
@@ -23,20 +22,20 @@ from .typing.native import (
     Tuple,
     FrozenSet,
 )
-from .typing.extension import (
+from .constant import (
     is_slyme_naming,
     Missing,
     MISSING,
     NoneOrNothing,
     EmptyFlag,
 )
-from .base.attr import AttrMixin
+from .mixin.attr import AttrMixin
 from .decorator import not_implemented
 
 # type hint only
 if TYPE_CHECKING:
-    from .base.observer import AttrObserver
-    from .base.scoped import ScopedAttrAssign, ScopedAttrRestore
+    from .mixin.observer import AttrObserver
+    from .mixin.scoped import ScopedAttrAssign, ScopedAttrRestore
     from .execution import generator_context_manager
     from .abc.base.scoped import (
         ScopedManagerABC,
@@ -87,7 +86,7 @@ class StoreLocal:
 
 
 class StoreABC(
-    ItemAttrMixin, SingletonMetabase, metaclass=metaclasses(SingletonMetaclass, ABCMeta)
+    ItemAttrMixin, Singleton, metaclass=metaclasses(SingletonMeta, ABCMeta)
 ):
     """
     ``StoreABC`` provides a global singleton helper that manages a set of

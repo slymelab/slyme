@@ -1,3 +1,0 @@
-"""
-ABCs for util classes.
-"""

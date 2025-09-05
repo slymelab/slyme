@@ -13,6 +13,7 @@ from .mixin import CompositeMixin, CompositeStructure
 
 _ComponentT = TypeVar("_ComponentT", bound="Component")
 _ComponentCollectionT = TypeVar("_ComponentCollectionT", bound="ComponentCollection")
+_ComponentContainerT = TypeVar("_ComponentContainerT", bound="ComponentContainer")
 
 
 class Component(
@@ -237,7 +238,7 @@ class ComponentCollection(
 
 
 class ComponentContainer(
-    Component[_ComponentT, _ComponentCollectionT],
+    Component[_ComponentT, _ComponentContainerT],
     ComponentCollection[_ComponentT],
 ):
     __slots__ = ()
