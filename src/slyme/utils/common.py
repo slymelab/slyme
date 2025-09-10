@@ -9,7 +9,6 @@ useful but unrelated utils in slyme.
 #
 from .typing import Generic, TypeVar, Hashable, Set, Type, Union, Any, List
 from .inspect import resolve_instance_classname
-from .descriptor.property import ReadonlyProperty, get_descriptor_private_name
 
 _ArgsT = TypeVar("_ArgsT")
 _KwargsT = TypeVar("_KwargsT")
@@ -49,31 +48,43 @@ class HashCache:
     the hash value of ``HashCache`` will raise a ``TypeError``.
     """
 
-    __slots__ = (
-        get_descriptor_private_name("hashable"),
-        get_descriptor_private_name("hash_value"),
-    )
-    hashable = ReadonlyProperty()
-    hash_value = ReadonlyProperty()
+    __slots__ = ("_hashable", "_hash_value")
+
+    @property
+    def hashable(self) -> Hashable:
+        return self._hashable
+
+    @hashable.setter
+    def hashable(self, hashable: Hashable) -> None:
+        if hasattr(self, "_hashable"):
+            raise AttributeError("``hashable`` is readonly.")
+        self._hashable = hashable
+
+    @property
+    def hash_value(self) -> int:
+        return self._hash_value
+
+    @hash_value.setter
+    def hash_value(self, hash_value: int) -> None:
+        if hasattr(self, "_hash_value"):
+            raise AttributeError("``hash_value`` is readonly.")
+        self._hash_value = hash_value
 
     def __init__(self, hashable: Hashable) -> None:
         self.hashable = hashable
-        try:
-            self.hash_value = hash(hashable)
-        except TypeError:
-            self.hash_value = None
+        self.hash_value = hash(hashable)
 
     def __hash__(self) -> int:
         return self.hash_value
 
-    def __eq__(self, __value: Any) -> bool:
+    def __eq__(self, other: Any, /) -> bool:
         """
         Determine whether the two hashable objects are equal.
         """
         return (
-            isinstance(__value, HashCache)
-            and self.hash_value == __value.hash_value
-            and self.hashable == __value.hashable
+            isinstance(other, HashCache)
+            and self.hash_value == other.hash_value
+            and self.hashable == other.hashable
         )
 
 
@@ -115,8 +126,10 @@ def make_params_hashable(
         # If fast type, return the value itself.
         return hashable[0]
     # Return ``HashCache`` to improve efficiency.
-    hash_cache = HashCache(tuple(hashable))
-    return hash_cache if hash_cache.hash_value is not None else None
+    try:
+        return HashCache(tuple(hashable))
+    except TypeError:
+        return
 
 
 #
