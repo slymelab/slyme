@@ -1,7 +1,7 @@
 """Execution control."""
 
 from types import TracebackType
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager
 from collections.abc import Generator
 from slyme.utils.typing import (
     TypeVar,
@@ -9,22 +9,18 @@ from slyme.utils.typing import (
     Tuple,
     Any,
     ContextManager,
-    List,
     Iterable,
     SupportsIndex,
     Callable,
     Type,
     cast,
     Self,
+    Literal,
 )
-from slyme.utils.constant import (
-    MISSING,
-    Stop,
-    STOP,
-    Missing,
-)
+from slyme.utils.constant import MISSING, Missing
 from slyme.utils.collection import MutableSequenceProxy
 from slyme.utils.collection.base import SequenceData
+from .manager import context_manager_stack
 
 _YieldT_co = TypeVar("_YieldT_co", covariant=True)
 _SendT_contra = TypeVar("_SendT_contra", contravariant=True)
@@ -102,9 +98,9 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
         value: _SendT_contra,
         /,
         *,
-        should_stop: Union[bool, None] = MISSING,  # TODO
+        should_stop: Union[Missing, bool, None] = MISSING,
     ) -> _YieldT_co:
-        if not isinstance(should_stop, (Missing, bool)) or should_stop is not None:
+        if not isinstance(should_stop, bool) or should_stop is not None or should_stop is not MISSING:
             raise ValueError(
                 f"``should_stop`` should be ``MISSING``, ``None`` or a boolean value."
             )
@@ -138,7 +134,7 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
         *,
         should_stop: Union[Missing, bool, None] = MISSING,
     ) -> _YieldT_co:
-        if not isinstance(should_stop, (Missing, bool)) or should_stop is not None:
+        if not isinstance(should_stop, bool) or should_stop is not None or should_stop is not MISSING:
             raise ValueError(
                 f"``should_stop`` should be ``MISSING``, ``None`` or a boolean value."
             )
@@ -330,51 +326,3 @@ def generator_context_manager(gen: Generator[_YieldT_co, _SendT_contra, _ReturnT
     ``RuntimeError`` will be raised by ``@contextmanager``.
     """
     yield from gen
-
-
-# Context Manager Stack
-_EnterT_co = TypeVar("_EnterT_co", covariant=True)
-
-
-@contextmanager
-def context_manager_stack(
-    cms: Iterable[ContextManager[_EnterT_co]],
-) -> Generator[Tuple[_EnterT_co, ...], Any, None]:
-    """
-    Call context managers in FILO order. Exceptions will be passed through each
-    context manager until they are processed. Compared to the standard ``with``
-    statement, it can handle context managers of indefinite quantity. The below
-    two examples are totally equivalent:
-        ```Python
-        # Example 1
-        with A(), B(), C():
-            ...
-
-        # Example 2
-        cm_list = [A(), B(), C()]
-        with context_manager_stack(cm_list):
-            ...
-        ```
-    """
-    # Use ``ExitStack`` to correctly process exceptions.
-    with ExitStack() as stack:
-        vals: List[_EnterT_co] = []
-        for cm in cms:
-            val = stack.enter_context(cm)
-            vals.append(val)
-            # If the context manager returns ``STOP``, then directly break.
-            if val is STOP:
-                break
-        yield tuple(vals)
-
-
-def check_stop_flag(values: Tuple[Union[Stop, Any], ...]) -> bool:
-    """
-    Check whether the stack enter execution has normally finished or stopped.
-    NOTE: This is implemented by checking the yielded values. Return ``True``
-    if the stack stopped.
-
-    ``values``: The yielded values.
-    """
-    # Only check whether the last value is ``STOP`` if the tuple is not empty.
-    return values[-1] is STOP if len(values) > 0 else False

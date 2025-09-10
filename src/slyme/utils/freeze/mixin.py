@@ -11,7 +11,6 @@ from slyme.utils.typing import (
 from slyme.utils.inspect import resolve_instance_classname, resolve_name
 from slyme.utils.collection import MappingProxy
 from .descriptor import FrozenAttr
-from .meta import FrozenClsMeta
 
 _FreezeMixinT = TypeVar("_FreezeMixinT", bound="FreezeMixin")
 
@@ -57,7 +56,7 @@ def _create_cached_frozen_cls(cls: Type[_FreezeMixinT]) -> Type[_FreezeMixinT]:
             return _frozen_view[name]
         return super(frozen_cls, self).__getattribute__(name)
 
-    type.__setattr__(frozen_cls, "__getattribute__", __getattribute__)
+    frozen_cls.__getattribute__ = __getattribute__
     return frozen_cls
 
 
@@ -80,7 +79,7 @@ def _freeze_cached(obj: _FreezeMixinT) -> _FreezeMixinT:
                 # This is done only once per class.
                 # The frozen class will be cached in the class attribute.
                 frozen_cls = _create_cached_frozen_cls(cls)
-                type.__setattr__(cls, "_frozen_cls", frozen_cls)
+                cls._frozen_cls = frozen_cls
     frozen_instance = frozen_cls._create_frozen()
     object.__setattr__(frozen_instance, "_frozen_view", attr_view)
     return frozen_instance
@@ -101,7 +100,7 @@ def _freeze_weakref_cached(obj: _FreezeMixinT) -> _FreezeMixinT:
                 # Create a subclass of ``cls`` with frozen attributes.
                 # The frozen class will be cached in the class attribute in a weakref manner.
                 frozen_cls = _create_cached_frozen_cls(cls)
-                type.__setattr__(cls, "_frozen_cls_weakref", weakref.ref(frozen_cls))
+                cls._frozen_cls_weakref = weakref.ref(frozen_cls)
     frozen_instance = frozen_cls._create_frozen()
     object.__setattr__(frozen_instance, "_frozen_view", attr_view)
     return frozen_instance
@@ -114,12 +113,12 @@ _FREEZE_REGISTRY = {
 }
 
 
-class FreezeMixin(metaclass=FrozenClsMeta):
+class FreezeMixin:
     """Dynamically create a frozen view of the instance."""
     _frozen_cls: ClassVar[Type[Self]]
-    _frozen_cls_rlock: ClassVar[RLock]
+    _frozen_cls_rlock: ClassVar[RLock] = RLock()
     _frozen_cls_weakref: ClassVar[weakref.ReferenceType[Type[Self]]]
-    _frozen_cls_weakref_rlock: ClassVar[RLock]
+    _frozen_cls_weakref_rlock: ClassVar[RLock] = RLock()
 
     def _frozen_attr_view(self) -> Dict[str, Any]:
         return {}
@@ -130,3 +129,9 @@ class FreezeMixin(metaclass=FrozenClsMeta):
 
     def freeze(self, strategy: str = "weakref_cached") -> Self:
         return _FREEZE_REGISTRY[strategy](self)
+
+    def __init_subclass__(cls):
+        super().__init_subclass__()
+        # NOTE: Should set RLock for each subclass
+        cls._frozen_cls_rlock = RLock()
+        cls._frozen_cls_weakref_rlock = RLock()

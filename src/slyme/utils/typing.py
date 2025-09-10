@@ -55,7 +55,6 @@ if sys.version_info >= (3, 9):
         Awaitable as Awaitable,
         Iterable as Iterable,
         Iterator as Iterator,
-        Callable as Callable,
         Generator as Generator,
         Hashable as Hashable,
         Reversible as Reversible,
@@ -72,6 +71,11 @@ if sys.version_info >= (3, 9):
         AbstractContextManager as ContextManager,
         AbstractAsyncContextManager as AsyncContextManager,
     )
+
+if sys.version_info >= (3, 9, 2):
+    # NOTE: Union[collections.abc.Callable[[], None]] will raise TypeError in py<3.9.2,
+    # so we should use typing.Callable instead in those versions.
+    from collections.abc import Callable as Callable
 
 if sys.version_info < (3, 10):
     from typing_extensions import (

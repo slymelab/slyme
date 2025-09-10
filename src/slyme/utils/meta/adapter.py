@@ -6,6 +6,7 @@ from slyme.utils.inspect import (
     resolve_mro,
 )
 from slyme.utils.typing import Any, Dict, List, Mapping, Tuple, Type, Union
+from slyme.utils.common import make_params_hashable, FuncParams
 
 
 def create_metaclass_adapter(*metaclasses: Type, **kwargs) -> Type[Type]:
@@ -171,8 +172,6 @@ class MetaclassResolver:
         cache it in the ``_metaclass_adapter_dict``. If the params are not hashable,
         then directly create a new metaclass adapter and return (without caching it).
         """
-        from slyme.utils.common import make_params_hashable, FuncParams
-
         key = make_params_hashable(FuncParams(*final_metaclasses, **meta_kwargs))
         if key is not None and key in cls._metaclass_adapter_dict:
             return cls._metaclass_adapter_dict[key]

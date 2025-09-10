@@ -1,5 +1,5 @@
 from functools import wraps
-import slyme.logging.logger as logger
+from slyme.utils.logging import get_logger
 from .typing import (
     Union,
     Callable,
@@ -11,9 +11,10 @@ from .typing import (
     Dict,
 )
 from .inspect import unwrap_method, resolve_name
-from .constant import FlagConstant
+from .constant import MISSING
 
 _FuncOrMethodT = TypeVar("_FuncOrMethodT")
+logger = get_logger(__name__)
 
 
 def auto_decorator(
@@ -97,14 +98,14 @@ def auto_decorator(
             arg_match = None
             # Check ``keyword`` arg match.
             if keyword is not None:
-                arg_match = kwargs.get(keyword, FlagConstant.MISSING)
+                arg_match = kwargs.get(keyword, MISSING)
             # Check ``index`` arg match.
-            if index is not None and arg_match is FlagConstant.MISSING:
-                arg_match = FlagConstant.MISSING if index >= len(args) else args[index]
+            if index is not None and arg_match is MISSING:
+                arg_match = MISSING if index >= len(args) else args[index]
 
             _decorator = func(*args, **kwargs)
             # Pass ``arg_match`` to ``_decorator`` if it is not ``MISSING``.
-            return _decorator if arg_match is FlagConstant.MISSING else _decorator(arg_match)
+            return _decorator if arg_match is MISSING else _decorator(arg_match)
 
         return wrapper
 
@@ -152,7 +153,7 @@ def _not_implemented_error(func_name: str):
 
 
 def _not_implemented_warning(func_name: str):
-    logger.core_logger.warning(
+    logger.warning(
         f"You are calling the function or method ``{func_name}`` which is not implemented."
     )
 
@@ -235,9 +236,7 @@ def func_setattr(_func=None, *, attr_dict: Mapping[str, Any]):
             try:
                 setattr(func, key, value)
             except AttributeError as e:
-                from slyme.logging.logger import core_logger
-
-                core_logger.error(str(e), stack_info=True)
+                logger.error(str(e), stack_info=True)
         return func
 
     return decorator

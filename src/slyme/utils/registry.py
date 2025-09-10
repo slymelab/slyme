@@ -3,7 +3,7 @@ A convenient registry util that dynamically retrieves items based on keys.
 """
 
 import importlib
-from .mixin.collection import MutableMappingMixin
+from .collection import MutableMappingProxy
 from .decorator import auto_decorator
 from .common import FuncParams
 from .typing import (
@@ -16,14 +16,14 @@ from .typing import (
     Mapping,
     Dict,
 )
-from .constant import Missing, MISSING
+from .constant import MISSING, Missing
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 _VT2 = TypeVar("_VT2")
 
 
-class GeneralRegistry(MutableMappingMixin[_KT, _VT], Generic[_KT, _VT]):
+class GeneralRegistry(MutableMappingProxy[_KT, _VT], Generic[_KT, _VT]):
     """
     A general registry whose type of keys can be any specified value.
 

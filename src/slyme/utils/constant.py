@@ -1,14 +1,20 @@
 """This module defines special constants in ``slyme``."""
 
 from threading import RLock
-from enum import Enum
+from enum import Enum, auto
 from .typing import Any, Literal, Tuple, Union, Self
 
 
 # Flag constants.
 class FlagConstant(Enum):
-    MISSING = object()
-    STOP = object()
+    MISSING = auto()
+    STOP = auto()
+
+
+Missing = Literal[FlagConstant.MISSING]
+MISSING: Missing = FlagConstant.MISSING
+Stop = Literal[FlagConstant.STOP]
+STOP: Stop = FlagConstant.STOP
 
 
 class _SingletonMeta(type):
@@ -21,46 +27,40 @@ class _SingletonMeta(type):
     _singleton_t_lock: RLock
     _singleton_instance: Union[None, Any]
 
-    def __init__(cls, /, *args, **kwargs):
+    def __init__(cls, /, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        type.__setattr__(cls, "_singleton_t_lock", RLock())
-        type.__setattr__(cls, "_singleton_instance", None)
+        cls._singleton_t_lock = RLock()
+        cls._singleton_instance = None
 
-    def __call__(cls, /, *args: Any, **kwargs: Any) -> Any:
+    def __call__(cls, /, *args: Any, **kwargs: Any):
         if cls._singleton_instance is None:
             with cls._singleton_t_lock:
                 if cls._singleton_instance is None:
-                    type.__setattr__(
-                        cls, "_singleton_instance", super().__call__(*args, **kwargs)
-                    )
+                    cls._singleton_instance = super().__call__(*args, **kwargs)
         return cls._singleton_instance
 
 
 class _ConstantMeta(_SingletonMeta):
-    """Freeze class attribute modification."""
+    """Metaclass for constants."""
 
-    def __setattr__(cls, name, value):
-        raise TypeError(f"Class ``{cls.__name__}`` is frozen and cannot be modified.")
-
-    def __delattr__(cls, name):
-        raise TypeError(f"Class ``{cls.__name__}`` is frozen and cannot be modified.")
+    pass
 
 
 class _Constant(metaclass=_ConstantMeta):
-    """Base class of singleton classes.
+    """Base class of constant classes.
 
     NOTE: This class is for ``slyme.utils.constant`` only.
     """
 
     __slots__ = ()
 
-    def __new__(cls, /, *args, **kwargs):
+    def __new__(cls, /, *args, **kwargs) -> Self:
         if cls._singleton_instance is None:
             with cls._singleton_t_lock:
                 if cls._singleton_instance is None:
                     # NOTE: Directly use ``object.__new__`` here.
                     instance = object.__new__(cls)
-                    type.__setattr__(cls, "_singleton_instance", instance)
+                    cls._singleton_instance = instance
         return cls._singleton_instance
 
 

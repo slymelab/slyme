@@ -8,11 +8,10 @@ from slyme.utils.typing import (
     Dict,
     TypeVar,
     Mapping,
-    Literal,
     Self,
 )
 from slyme.utils.execution import generator_context_manager
-from slyme.utils.constant import FlagConstant
+from slyme.utils.constant import MISSING, Missing
 from slyme.utils.collection import MutableSequenceProxy
 from .common import Scope
 
@@ -35,10 +34,9 @@ class ScopedManager(Scope):
     @contextmanager
     def enter_scope(self, scoped: Any) -> Generator:
         manager_collection: Union[
-            ScopedManagerCollection[ScopedManager], Literal[FlagConstant.MISSING]
-        ] = getattr(scoped, "_scoped_managers", FlagConstant.MISSING)
-
-        if manager_collection is FlagConstant.MISSING:
+            ScopedManagerCollection[ScopedManager], Missing
+        ] = getattr(scoped, "_scoped_managers", MISSING)
+        if manager_collection is MISSING:
             # Disable traceback.
             yield from self._scoped_manager_yield(scoped)
         else:

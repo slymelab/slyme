@@ -1,3 +1,4 @@
+from slyme.utils.typing import Self, ClassVar, Union
 from slyme.utils.inspect import compare_method
 from .meta import SingletonMeta
 
@@ -23,8 +24,9 @@ class Singleton(metaclass=SingletonMeta):
     """
     
     __slots__ = ()
+    _singleton_instance: ClassVar[Union[Self, None]]
 
-    def __new__(cls, /, *args, **kwargs):
+    def __new__(cls, /, *args, **kwargs) -> Self:
         if cls._singleton_instance is None:
             with cls._singleton_t_lock:
                 if cls._singleton_instance is None:
@@ -34,5 +36,5 @@ class Singleton(metaclass=SingletonMeta):
                         instance = super().__new__(cls)
                     else:
                         instance = super().__new__(cls, *args, **kwargs)
-                    type.__setattr__(cls, "_singleton_instance", instance)
+                    cls._singleton_instance = instance
         return cls._singleton_instance

@@ -1,3 +1,1 @@
-"""
-``slyme`` util module.
-"""
+"""``slyme`` util module."""
