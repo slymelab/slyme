@@ -10,7 +10,7 @@ from slyme.utils.typing import (
     Mapping,
     Self,
 )
-from slyme.utils.execution import generator_context_manager
+from slyme.utils.execution import GeneratorExecutor
 from slyme.utils.constant import MISSING, Missing
 from slyme.utils.collection import MutableSequenceProxy
 from .common import Scope
@@ -89,7 +89,7 @@ class ScopedAttrAssign(ScopedAttrRestore):
         self.attr_assign = attr_assign
 
     def _scoped_manager_yield(self, scoped: Any) -> Generator[Self, Any, None]:
-        with generator_context_manager(super()._scoped_manager_yield(scoped)):
+        with GeneratorExecutor(super()._scoped_manager_yield(scoped)):
             for attr, value in self.attr_assign.items():
                 setattr(scoped, attr, value)
             yield self

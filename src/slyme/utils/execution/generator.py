@@ -78,11 +78,18 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
             ``should_stop`` is ``None``, then suppress any ``StopIteration`` exception without any check. Defaults to ``MISSING``.
     """
 
-    __slots__ = ("_gen",)
+    __slots__ = ("_gen", "exit_send_callback")
 
-    def __init__(self, gen: Generator[_YieldT_co, _SendT_contra, _ReturnT_co], /):
+    def __init__(
+        self,
+        gen: Generator[_YieldT_co, _SendT_contra, _ReturnT_co],
+        /,
+        *,
+        exit_send_callback: Union[Callable[[Self], _SendT_contra], None] = None,
+    ):
         super().__init__()
         self._gen = gen
+        self.exit_send_callback = exit_send_callback
 
     @property
     def gen(self) -> Generator[_YieldT_co, _SendT_contra, _ReturnT_co]:
@@ -100,7 +107,11 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
         *,
         should_stop: Union[Missing, bool, None] = MISSING,
     ) -> _YieldT_co:
-        if not isinstance(should_stop, bool) or should_stop is not None or should_stop is not MISSING:
+        if (
+            not isinstance(should_stop, bool)
+            or should_stop is not None
+            or should_stop is not MISSING
+        ):
             raise ValueError(
                 f"``should_stop`` should be ``MISSING``, ``None`` or a boolean value."
             )
@@ -134,7 +145,11 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
         *,
         should_stop: Union[Missing, bool, None] = MISSING,
     ) -> _YieldT_co:
-        if not isinstance(should_stop, bool) or should_stop is not None or should_stop is not MISSING:
+        if (
+            not isinstance(should_stop, bool)
+            or should_stop is not None
+            or should_stop is not MISSING
+        ):
             raise ValueError(
                 f"``should_stop`` should be ``MISSING``, ``None`` or a boolean value."
             )
@@ -201,20 +216,6 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
         else:
             return result
 
-
-class ContextGeneratorExecutor(
-    GeneratorExecutor[_YieldT_co, _SendT_contra, _ReturnT_co]
-):
-    def __init__(
-        self,
-        gen: Generator[_YieldT_co, _SendT_contra, _ReturnT_co],
-        /,
-        *,
-        exit_send_callback: Union[Callable[[Self], _SendT_contra], None] = None,
-    ):
-        super().__init__(gen)
-        self.exit_send_callback = exit_send_callback
-
     # Context manager protocol
     def __enter__(self):
         return self.next(should_stop=False)
@@ -244,7 +245,9 @@ class ContextGeneratorExecutor(
 
 class GeneratorExecutorCollection(MutableSequenceProxy[_GeneratorExecutorT]):
     def __init__(
-        self, /, generator_executors: SequenceData[Union[_GeneratorExecutorT, Generator]] = None
+        self,
+        /,
+        generator_executors: SequenceData[Union[_GeneratorExecutorT, Generator]] = None,
     ):
         super().__init__(sequence_data=generator_executors)
 
@@ -275,10 +278,7 @@ class GeneratorExecutorCollection(MutableSequenceProxy[_GeneratorExecutorT]):
 
         NOTE: The generators should be yield-once.
         """
-        gen_stack = tuple(self)
-        return context_manager_stack(
-            generator_context_manager(gen) for gen in gen_stack
-        )
+        return context_manager_stack(tuple(self))
 
     def __setitem__(
         self,
@@ -316,13 +316,3 @@ class GeneratorExecutorCollection(MutableSequenceProxy[_GeneratorExecutorT]):
             else GeneratorExecutor(object)
         )
         return super().insert(index, object)
-
-
-# Generator Context Manager.
-@contextmanager
-def generator_context_manager(gen: Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
-    """
-    Wraps a generator into a context manager. NOTE: The generator should be yield-once, otherwise a
-    ``RuntimeError`` will be raised by ``@contextmanager``.
-    """
-    yield from gen
