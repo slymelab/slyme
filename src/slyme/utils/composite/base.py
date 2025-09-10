@@ -20,7 +20,7 @@ class Component(
     CompositeMixin[_ComponentT], Generic[_ComponentT, _ComponentCollectionT]
 ):
     __slots__ = ()
-    _prop__parent: Attribute[
+    _parent_ref: Attribute[
         Union[_ComponentCollectionT, None], Union[_ComponentCollectionT, None]
     ]
 
@@ -36,7 +36,7 @@ class Component(
     # NOTE: Inner parent operations.
     @property
     def _parent(self, /) -> Union[_ComponentCollectionT, None]:
-        return self._prop__parent
+        return self._parent_ref
 
     @_parent.setter
     def _parent(self, value: Union[_ComponentCollectionT, None], /) -> None:
@@ -46,9 +46,9 @@ class Component(
         stable feature to ensure consistency operations (i.e., this operation will always succeed).
         """
         if value is None:
-            self._prop__parent = value
+            self._parent_ref = value
             return
-        if self._prop__parent is not None:
+        if self._parent_ref is not None:
             raise ValueError(
                 f"Cannot attach to a new parent when the component has already been attached."
             )
@@ -56,7 +56,7 @@ class Component(
             raise ValueError(
                 f"Parent of component can only be of ``ComponentCollection`` type, got {type(value)}."
             )
-        self._prop__parent = value
+        self._parent_ref = value
 
     @_parent.deleter
     def _parent(self) -> None:

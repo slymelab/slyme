@@ -140,7 +140,7 @@ from .typing import Mapping
 
 
 # dict and list formatter
-def dict_to_key_value_str_list(dict_: Mapping, key_value_sep: str = "=", /) -> list:
+def dict_to_key_value_str_list(dict_: Mapping, key_value_sep: str = "=") -> list:
     """
     Parse items in a dict to a str list using ``key_value_sep`` to concat
     the keys and values.
@@ -149,7 +149,7 @@ def dict_to_key_value_str_list(dict_: Mapping, key_value_sep: str = "=", /) -> l
 
 
 def dict_to_key_value_str(
-    dict_: Mapping, key_value_sep: str = "=", str_sep: str = ", ", /
+    dict_: Mapping, key_value_sep: str = "=", str_sep: str = ", "
 ) -> str:
     """
     Parse items in a dict to a str using ``key_value_sep`` to concat the

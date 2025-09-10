@@ -78,16 +78,16 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
             ``should_stop`` is ``None``, then suppress any ``StopIteration`` exception without any check. Defaults to ``MISSING``.
     """
 
-    __slots__ = ("_prop_gen",)
+    __slots__ = ("_gen",)
 
     def __init__(self, gen: Generator[_YieldT_co, _SendT_contra, _ReturnT_co], /):
         super().__init__()
-        self._prop_gen = gen
+        self._gen = gen
 
     @property
     def gen(self) -> Generator[_YieldT_co, _SendT_contra, _ReturnT_co]:
         # NOTE: gen is readonly for safety reasons.
-        return self._prop_gen
+        return self._gen
 
     def next(self, *, should_stop: Union[Missing, bool, None] = MISSING) -> _YieldT_co:
         """Call ``next`` and return the yielded value."""
