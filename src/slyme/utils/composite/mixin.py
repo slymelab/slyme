@@ -37,6 +37,20 @@ class CompositeMixin(ABC, Generic[_CompositeMixinT]):
     ) -> CompositeStructure[Union[Self, None], Union[Iterable[_CompositeMixinT], None]]:
         pass
 
+    def composite_iter(
+        self, /, *, strategy: str = "depth"
+    ) -> Generator[_CompositeMixinT, Any, None]:
+        return composite_iter(self, strategy=strategy)
+
+    def composite_filter(
+        self,
+        func: Callable[[_CompositeMixinT], bool],
+        /,
+        *,
+        strategy: str = "depth",
+    ) -> Generator[_CompositeMixinT, Any, None]:
+        return composite_filter(func, self, strategy=strategy)
+
 
 # Composite iter functions.
 def _composite_iter_depth_first(
