@@ -109,8 +109,8 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
     ) -> _YieldT_co:
         if (
             not isinstance(should_stop, bool)
-            or should_stop is not None
-            or should_stop is not MISSING
+            and should_stop is not None
+            and should_stop is not MISSING
         ):
             raise ValueError(
                 f"``should_stop`` should be ``MISSING``, ``None`` or a boolean value."
@@ -147,8 +147,8 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
     ) -> _YieldT_co:
         if (
             not isinstance(should_stop, bool)
-            or should_stop is not None
-            or should_stop is not MISSING
+            and should_stop is not None
+            and should_stop is not MISSING
         ):
             raise ValueError(
                 f"``should_stop`` should be ``MISSING``, ``None`` or a boolean value."

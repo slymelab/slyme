@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from collections import deque
 from slyme.utils.typing import (
     Any,
@@ -18,14 +19,13 @@ _ChildrenT_co = TypeVar("_ChildrenT_co", covariant=True)
 _CompositeMixinT = TypeVar("_CompositeMixinT", bound="CompositeMixin")
 
 
+@dataclass
 class CompositeStructure(Generic[_ThisT_co, _ChildrenT_co]):
     """Data class that contains composite structure."""
 
     __slots__ = ("this", "children")
-
-    def __init__(self, this: _ThisT_co, children: _ChildrenT_co, /) -> None:
-        self.this = this
-        self.children = children
+    this: _ThisT_co
+    children: _ChildrenT_co
 
 
 class CompositeMixin(ABC, Generic[_CompositeMixinT]):
