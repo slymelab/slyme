@@ -145,7 +145,7 @@ def dict_to_key_value_str_list(dict_: Mapping, key_value_sep: str = "=") -> list
     Parse items in a dict to a str list using ``key_value_sep`` to concat
     the keys and values.
     """
-    return [f"{key}{key_value_sep}{value}" for key, value in dict_.items()]
+    return [f"{key}{key_value_sep}{value!r}" for key, value in dict_.items()]
 
 
 def dict_to_key_value_str(

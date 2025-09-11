@@ -168,7 +168,7 @@ def resolve_bases(cls: Type, /) -> Tuple[Type, ...]:
     # Get the mro of ``cls`` (excluding itself).
     mro_classes = list((_cls for _cls in resolve_mro(cls) if _cls is not cls))
     bases = []
-    while len(mro_classes) > 0:
+    while mro_classes:
         # NOTE: should pop the first element in the list (index=0).
         base = mro_classes.pop(0)
         bases.append(base)

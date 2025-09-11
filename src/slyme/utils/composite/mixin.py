@@ -45,7 +45,7 @@ def _composite_iter_depth_first(
     """Iterate composite in depth-first manner."""
     stack: deque[Iterator[_CompositeMixinT]] = deque([iter([item])])
 
-    while len(stack) > 0:
+    while stack:
         try:
             node = next(stack[-1])
         except StopIteration:
@@ -64,7 +64,7 @@ def _composite_iter_breadth_first(
     """Iterate composite in breadth-first manner."""
     queue: deque[Iterator[_CompositeMixinT]] = deque([iter([item])])
 
-    while len(queue) > 0:
+    while queue:
         try:
             node = next(queue[0])
         except StopIteration:

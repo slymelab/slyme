@@ -48,4 +48,4 @@ def check_stop_flag(values: Tuple[Union[Stop, Any], ...]) -> bool:
     ``values``: The yielded values.
     """
     # Only check whether the last value is ``STOP`` if the tuple is not empty.
-    return values[-1] is STOP if len(values) > 0 else False
+    return values[-1] is STOP if values else False

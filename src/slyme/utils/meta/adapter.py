@@ -100,7 +100,7 @@ class MetaclassResolver:
         meta_bases = tuple(filter(is_metaclass_adapter, meta_bases))
 
         meta_queue = list(meta_bases)
-        while len(meta_queue) > 0:
+        while meta_queue:
             meta_cls = meta_queue.pop(0)
             if is_metaclass_adapter(meta_cls):
                 # Add the bases of the adapter metaclass to the queue.
@@ -116,7 +116,7 @@ class MetaclassResolver:
                 if required_cls not in metaclass_set
             )
         )
-        if len(missing_metaclasses) > 0:
+        if missing_metaclasses:
             raise ValueError(
                 f"When ``strict`` is set to ``True`` in ``Metaclasses``, you should "
                 f"manually list all the required metaclasses excluding the metaclass "
