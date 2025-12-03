@@ -142,7 +142,7 @@ def experimental():
 # not_implemented decorator.
 #
 
-NOT_IMPLEMENTED_ATTR_NAME = "smx_not_implemented"
+NOT_IMPLEMENTED_ATTR_NAME = "_not_implemented"
 NotImplementedLevelType = Union[Literal["error", "warning", "silent"], None]
 
 

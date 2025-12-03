@@ -15,7 +15,6 @@ from slyme.utils.typing import (
     Type,
     cast,
     Self,
-    Literal,
 )
 from slyme.utils.constant import MISSING, Missing
 from slyme.utils.collection import MutableSequenceProxy
