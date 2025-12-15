@@ -2,12 +2,19 @@ from abc import ABC, abstractmethod
 from slyme.utils.typing import (
     Callable,
     TypeVar,
-    Generic,
     Union,
     Any,
+    Self,
+    Generator,
 )
+from slyme.utils.constant import STOP
 from slyme.utils.collection.base import SequenceData
-from slyme.utils.composite import Component, ComponentContainer
+from slyme.utils.composite import Component, ComponentContainer, ComponentCollection
+from slyme.utils.execution import (
+    GeneratorExecutorCollection,
+    GeneratorExecutor,
+)
+from slyme.utils.execution.manager import check_stop_flag
 from slyme.utils.freeze import FreezeMixin
 from slyme.utils.inspect import resolve_instance_classname
 from slyme.context import Context
@@ -17,13 +24,11 @@ from .exception import (
     NodeContinue,
     NodeExceptionRecord,
     NodeException,
+    NodeWrapperExceptionRecord,
 )
 
 _ComponentT = TypeVar("_ComponentT", bound="Component")
 _ComponentContainerT = TypeVar("_ComponentContainerT", bound="ComponentContainer")
-_NodeT = TypeVar("_NodeT", bound="Node")
-_NodeContainerT = TypeVar("_NodeContainerT", bound="NodeContainer")
-_NodeWrapperT = TypeVar("_NodeWrapperT", bound="NodeWrapper")
 
 
 class NodeBase(Component[_ComponentT, _ComponentContainerT], FreezeMixin, ABC):
@@ -53,35 +58,30 @@ class NodeBase(Component[_ComponentT, _ComponentContainerT], FreezeMixin, ABC):
         """
         render_cls = RENDER_REGISTRY.get(strategy)
         if not render_cls:
-            raise ValueError(f"Unknown render strategy: `{strategy}`. Available: {list(RENDER_REGISTRY.keys())}")
+            raise ValueError(
+                f"Unknown render strategy: `{strategy}`. Available: {list(RENDER_REGISTRY.keys())}"
+            )
 
         render = render_cls()
         return render.render(self, **kwargs)
 
     def _get_render_info(self) -> "RenderInfo":
-        """
-        """
+        """ """
         return RenderInfo(
             classname=resolve_instance_classname(self),
             attr_dict={},
         )
 
-    def check_dependency_graph(self):
+    def check_dependency_graph(self, ctx: Context):
         pass
 
 
-class Node(
-    NodeBase[_NodeT, _NodeContainerT], Generic[_NodeT, _NodeContainerT, _NodeWrapperT]
-):
-    """
-    
-    """
+class Node(NodeBase["Node", "NodeContainer"]):
+    """ """
 
-    def __init__(self, /, node_wrappers: SequenceData[_NodeWrapperT] = None, **kwargs):
+    def __init__(self, /, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs):
         super().__init__(**kwargs)
-        self.node_wrappers = NodeWrapperCollection[_NodeWrapperT](
-            children=node_wrappers
-        )
+        self.node_wrappers = NodeWrapperCollection[NodeWrapper](children=node_wrappers)
 
     # Core APIs.
     @abstractmethod
@@ -110,17 +110,15 @@ class Node(
 
     def _get_render_info(self) -> "RenderInfo":
         render_info = super()._get_render_info()
-        render_info.attr_dict.update({
-            "node_wrappers": self.node_wrappers,
-        })
+        render_info.attr_dict.update(
+            {
+                "node_wrappers": self.node_wrappers,
+            }
+        )
         return render_info
 
 
-class NodeContainer(
-    Node[_NodeT, _NodeContainerT, _NodeWrapperT],
-    ComponentContainer[_NodeT, _NodeContainerT],
-    Generic[_NodeT, _NodeContainerT, _NodeWrapperT],
-):
+class NodeContainer(Node, ComponentContainer[Node, "NodeContainer"]):
     """
     ABC for HandlerContainers.
     """
@@ -128,8 +126,8 @@ class NodeContainer(
     def __init__(
         self,
         /,
-        node_wrappers: SequenceData[_NodeWrapperT] = None,
-        children: SequenceData[_NodeT] = None,
+        node_wrappers: SequenceData["NodeWrapper"] = None,
+        children: SequenceData[Node] = None,
         **kwargs,
     ):
         super().__init__(node_wrappers=node_wrappers, children=children, **kwargs)
@@ -157,5 +155,45 @@ class NodeContainer(
             pass
 
 
-from .wrapper import NodeWrapper, NodeWrapperCollection
+class NodeWrapper(NodeContainer):
+
+    def _execute(self, ctx: Context) -> None:
+        # The ``wrapped`` param is set to ``self``.
+        with GeneratorExecutor(self._execute_yield(ctx, self)) as val:
+            if val is not STOP:
+                self._execute_children(ctx)
+
+    @abstractmethod
+    def _execute_yield(self, ctx: Context, wrapped: Union[Node, Self]) -> Generator:
+        """Core node wrapper API for custom operations."""
+        yield
+
+    def execute_yield(self, ctx: Context, wrapped: Node) -> Generator:
+        """A mixin method that wraps the generator returned by ``_execute_yield``."""
+        try:
+            yield from self._execute_yield(ctx, wrapped)
+        # directly raise
+        except NodeException:
+            raise
+        # wrap other Exception
+        except Exception as e:
+            raise NodeWrapperExceptionRecord(
+                exception_node=self, wrapped_node=wrapped, exception=e
+            )
+
+
+class NodeWrapperCollection(ComponentCollection[NodeWrapper]):
+
+    def execute_wrappers(self, ctx: Context, wrapped: Node) -> None:
+        """"""
+        if len(self) == 0:
+            # Directly call `_execute`.
+            return wrapped._execute(ctx)
+        with GeneratorExecutorCollection(
+            wrapper.execute_yield(ctx, wrapped) for wrapper in self
+        ).stack_context_manager() as vals:
+            if not check_stop_flag(vals):
+                wrapped._execute(ctx)
+
+
 from .render import RENDER_REGISTRY, RenderInfo
