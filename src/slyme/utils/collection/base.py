@@ -15,7 +15,6 @@ from slyme.utils.typing import (
 )
 from slyme.utils.inspect import resolve_instance_classname
 from slyme.utils.descriptor.protocol import Attribute
-from slyme.utils.mixin import InitAdapterMixin
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
@@ -53,7 +52,7 @@ class _MappingMixin(Mapping[_KT, _VT]):
         )
 
 
-class MappingProxy(_MappingMixin[_KT, _VT], Mapping[_KT, _VT], InitAdapterMixin):
+class MappingProxy(_MappingMixin[_KT, _VT], Mapping[_KT, _VT]):
     """Readonly mapping proxy class.
 
     NOTE: ``_mapping_source`` should be set exactly once by the instance
@@ -76,7 +75,7 @@ class MappingProxy(_MappingMixin[_KT, _VT], Mapping[_KT, _VT], InitAdapterMixin)
 
 
 class MutableMappingProxy(
-    _MappingMixin[_KT, _VT], MutableMapping[_KT, _VT], InitAdapterMixin
+    _MappingMixin[_KT, _VT], MutableMapping[_KT, _VT]
 ):
     """Mutable mapping proxy class.
 
@@ -159,7 +158,7 @@ class _SequenceMixin(Sequence[_T]):
         raise ValueError("value not found")
 
 
-class SequenceProxy(_SequenceMixin[_T], Sequence[_T], InitAdapterMixin):
+class SequenceProxy(_SequenceMixin[_T], Sequence[_T]):
     """Readonly sequence proxy class.
 
     NOTE: ``_sequence_source`` should be set exactly once by the instance
@@ -186,7 +185,7 @@ class SequenceProxy(_SequenceMixin[_T], Sequence[_T], InitAdapterMixin):
         return self._sequence_source[index]
 
 
-class MutableSequenceProxy(_SequenceMixin[_T], MutableSequence[_T], InitAdapterMixin):
+class MutableSequenceProxy(_SequenceMixin[_T], MutableSequence[_T]):
     """Mutable sequence proxy class.
 
     NOTE: ``_sequence_source`` should be set by the instance.

@@ -1,8 +1,3 @@
 """
-slyme util base classes. Enhance the functionality of subclasses through inheritance.
+slyme mixins.
 """
-from .adapter import (
-    InitAdapterMixin,
-    InitSubclassAdapterMixin,
-    NewAdapterMixin,
-)

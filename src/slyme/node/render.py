@@ -1,7 +1,6 @@
 import sys
 from dataclasses import dataclass
 from slyme.utils.typing import Any, Protocol, Iterator, Union, TextIO, Literal
-from slyme.utils.mixin import InitSubclassAdapterMixin
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.inspect import resolve_name
 from . import NodeBase, NodeContainer
@@ -19,11 +18,11 @@ class _RenderFunc(Protocol):
     def __call__(self, render, node, /, **kwargs) -> Any: ...
 
 
-class NodeRender(InitSubclassAdapterMixin):
+class NodeRender:
     registry: TypeRegistry[NodeBase, _RenderFunc]
 
-    def __init_subclass__(cls, *args, **kwargs):
-        super().__init_subclass__(*args, **kwargs)
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
         cls.registry = TypeRegistry(f"TypeRegistryOf{resolve_name(cls)}")
 
     def render(
@@ -103,12 +102,11 @@ def _(
         connector = style.corner if is_last else style.branch
 
     if info.attr_dict:
-        attrs = ", ".join(f"{k}={v}" for k, v in info.attr_dict.items())
-        attr_str = f"({attrs})"
+        attr_str = ", ".join(f"{k}={v}" for k, v in info.attr_dict.items())
     else:
         attr_str = ""
 
-    yield f"{prefix}{connector}{info.classname}{attr_str}"
+    yield f"{prefix}{connector}{info.classname}({attr_str})"
 
 
 @VanillaRender.registry(key=NodeContainer)

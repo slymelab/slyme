@@ -6,7 +6,6 @@ from slyme.utils.typing import (
 )
 from slyme.utils.execution import context_manager_stack
 from slyme.utils.descriptor.protocol import Attribute
-from slyme.utils.mixin import InitAdapterMixin
 from .common import Scope
 from .manager import (
     ScopedManagerCollection,
@@ -16,7 +15,7 @@ from .manager import (
 )
 
 
-class ScopedMixin(InitAdapterMixin):
+class ScopedMixin:
     """Provides scoped APIs"""
 
     __slots__ = ()
