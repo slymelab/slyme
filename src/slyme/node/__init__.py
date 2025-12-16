@@ -81,7 +81,7 @@ class Node(NodeBase["Node", "NodeContainer"]):
 
     def __init__(self, /, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs):
         super().__init__(**kwargs)
-        self.node_wrappers = NodeWrapperCollection[NodeWrapper](children=node_wrappers)
+        self.node_wrappers = NodeWrapperCollection(children=node_wrappers)
 
     # Core APIs.
     @abstractmethod
@@ -110,11 +110,8 @@ class Node(NodeBase["Node", "NodeContainer"]):
 
     def _get_render_info(self) -> "RenderInfo":
         render_info = super()._get_render_info()
-        render_info.attr_dict.update(
-            {
-                "node_wrappers": self.node_wrappers,
-            }
-        )
+        if len(self.node_wrappers) > 0:
+            render_info.attr_dict["node_wrappers"] = self.node_wrappers
         return render_info
 
 
