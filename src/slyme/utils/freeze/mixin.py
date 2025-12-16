@@ -130,8 +130,8 @@ class FreezeMixin:
     def freeze(self, strategy: str = "weakref_cached") -> Self:
         return _FREEZE_REGISTRY[strategy](self)
 
-    def __init_subclass__(cls):
-        super().__init_subclass__()
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
         # NOTE: Should set RLock for each subclass
         cls._frozen_cls_rlock = RLock()
         cls._frozen_cls_weakref_rlock = RLock()

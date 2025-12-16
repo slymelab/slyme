@@ -74,7 +74,9 @@ class _Ref(Generic[_T]):
 
 
 class _StoreNode:
-    """Inner store node."""
+    """Inner store node.
+    NOTE: `_StoreNode` can only be modified through `Store` for consistency.
+    """
 
     __slots__ = ("_data",)
 
