@@ -7,12 +7,12 @@ RawFuncType = FunctionType
 MAGIC_PATTERN = re.compile("^_{2}[^_](?:.*[^_])?_{2}$")
 
 
-def is_function_or_method(__item: Any) -> bool:
-    return isinstance(__item, (MethodType, FunctionType))
+def is_function_or_method(item: Any, /) -> bool:
+    return isinstance(item, (MethodType, FunctionType))
 
 
-def is_magic_naming(__name: str) -> bool:
-    return MAGIC_PATTERN.match(str(__name)) is not None
+def is_magic_naming(name: str, /) -> bool:
+    return MAGIC_PATTERN.match(str(name)) is not None
 
 
 #
@@ -59,7 +59,7 @@ def compare_method(func1: FuncOrMethodType, func2: FuncOrMethodType, /) -> bool:
     return unwrap_method(func1) is unwrap_method(func2)
 
 
-def resolve_name(named: Any) -> str:
+def resolve_name(named: Any, /) -> str:
     """
     Resolve the name of the given object based on the following order:
 
@@ -184,14 +184,14 @@ def resolve_bases(cls: Type, /) -> Tuple[Type, ...]:
 
 
 def _resolve_minimal_classes_through_subclass(
-    __classes: Iterable[Type],
+    classes: Iterable[Type], /
 ) -> Tuple[Type, ...]:
     """
     Implement ``resolve_minimal_classes`` through ``issubclass`` method.
     """
     # NOTE: should create a new tuple of ``__classes``, because some iterable items DO NOT
     # support iterating multiple times.
-    __classes = tuple(__classes)
+    classes = tuple(classes)
     # For class deduplication.
     seen_classes: Set[Type] = set()
 
@@ -199,7 +199,7 @@ def _resolve_minimal_classes_through_subclass(
         if cls in seen_classes:
             return False
 
-        for other_cls in __classes:
+        for other_cls in classes:
             if issubclass(other_cls, cls) and cls is not other_cls:
                 # Not the 'minimal class'.
                 return False
@@ -207,10 +207,10 @@ def _resolve_minimal_classes_through_subclass(
         seen_classes.add(cls)
         return True
 
-    return tuple(filter(_filter_func, __classes))
+    return tuple(filter(_filter_func, classes))
 
 
-def _resolve_minimal_classes_through_mro(__classes: Iterable[Type]) -> Tuple[Type, ...]:
+def _resolve_minimal_classes_through_mro(classes: Iterable[Type], /) -> Tuple[Type, ...]:
     """
     Implement ``resolve_minimal_classes`` through ``mro`` method.
 
@@ -219,11 +219,11 @@ def _resolve_minimal_classes_through_mro(__classes: Iterable[Type]) -> Tuple[Typ
     """
     # NOTE: should create a new tuple of ``__classes``, because some iterable items DO NOT
     # support iterating multiple times.
-    __classes = tuple(__classes)
+    classes = tuple(classes)
     # Build a super class set that contains all the super classes of ``__classes`` (excluding
     # themselves).
     super_class_set: Set[Type] = set()
-    for cls in __classes:
+    for cls in classes:
         super_class_set.update(resolve_mro(cls)[1:])
 
     def _filter_func(cls: Type) -> bool:
@@ -233,7 +233,7 @@ def _resolve_minimal_classes_through_mro(__classes: Iterable[Type]) -> Tuple[Typ
         super_class_set.add(cls)
         return result
 
-    return tuple(filter(_filter_func, __classes))
+    return tuple(filter(_filter_func, classes))
 
 
 _RESOLVE_MINIMAL_CLASSES_REGISTRY = {
@@ -243,7 +243,7 @@ _RESOLVE_MINIMAL_CLASSES_REGISTRY = {
 
 
 def resolve_minimal_classes(
-    __classes: Iterable[Type], *, algo: str = "subclass"
+    classes: Iterable[Type], /, *, algo: str = "subclass"
 ) -> Tuple[Type, ...]:
     """
     Resolve the 'minimal classes' of the given class iterable. 'minimal classes' denotes that
@@ -257,7 +257,7 @@ def resolve_minimal_classes(
     - mro: compare the classes using a super class mro set. May be faster when the number of
     classes is large, but ignore the virtual subclasses which do not follow the mro mechanism.
     """
-    return _RESOLVE_MINIMAL_CLASSES_REGISTRY[algo](__classes)
+    return _RESOLVE_MINIMAL_CLASSES_REGISTRY[algo](classes)
 
 
 #
@@ -266,28 +266,28 @@ def resolve_minimal_classes(
 
 
 def _class_difference_through_subclass(
-    __x_iterable: Iterable[Type], __y_iterable: Iterable[Type]
+    x_iterable: Iterable[Type], y_iterable: Iterable[Type], /
 ) -> Tuple[Type, ...]:
     """
     Implement ``class_difference`` through ``issubclass`` method.
     """
-    # NOTE: should create new tuples of ``__y_iterable``, because some iterable
+    # NOTE: should create new tuples of ``y_iterable``, because some iterable
     # items DO NOT support iterating multiple times.
-    __y_iterable = tuple(__y_iterable)
+    y_iterable = tuple(y_iterable)
 
     def _filter_func(x: Type) -> bool:
-        for y in __y_iterable:
+        for y in y_iterable:
             if issubclass(y, x):
                 # If ``y`` is exactly ``x`` or the subclass of ``x``, then ``x``
                 # should be discarded.
                 return False
         return True
 
-    return tuple(filter(_filter_func, __x_iterable))
+    return tuple(filter(_filter_func, x_iterable))
 
 
 def _class_difference_through_mro(
-    __x_iterable: Iterable[Type], __y_iterable: Iterable[Type]
+    x_iterable: Iterable[Type], y_iterable: Iterable[Type], /
 ) -> Tuple[Type, ...]:
     """
     Implement ``class_difference`` through ``mro`` method.
@@ -296,10 +296,10 @@ def _class_difference_through_mro(
     ``ABC.register``), and it will be faster when number of ``__y_iterable`` is large.
     """
     y_mro_set: Set[Type] = set()
-    for y in __y_iterable:
+    for y in y_iterable:
         y_mro_set.update(resolve_mro(y))
 
-    return tuple((x for x in __x_iterable if x not in y_mro_set))
+    return tuple((x for x in x_iterable if x not in y_mro_set))
 
 
 _CLASS_DIFFERENCE_REGISTRY = {
@@ -309,8 +309,9 @@ _CLASS_DIFFERENCE_REGISTRY = {
 
 
 def class_difference(
-    __x_iterable: Iterable[Type],
-    __y_iterable: Iterable[Type],
+    x_iterable: Iterable[Type],
+    y_iterable: Iterable[Type],
+    /,
     *,
     algo: str = "subclass",
 ) -> Tuple[Type, ...]:
@@ -340,4 +341,4 @@ def class_difference(
         print(class_difference((A, C, D, D), (B, C)))
         ```
     """
-    return _CLASS_DIFFERENCE_REGISTRY[algo](__x_iterable, __y_iterable)
+    return _CLASS_DIFFERENCE_REGISTRY[algo](x_iterable, y_iterable)
