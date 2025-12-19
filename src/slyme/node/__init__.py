@@ -7,15 +7,12 @@ from slyme.utils.typing import (
     Self,
     Generator,
 )
-from slyme.utils.constant import STOP
 from slyme.utils.collection.base import SequenceData
 from slyme.utils.composite import Component, ComponentContainer, ComponentCollection
-from slyme.utils.execution import (
-    GeneratorExecutorCollection,
-    GeneratorExecutor,
-)
+from slyme.utils.execution import GeneratorExecutorCollection
 from slyme.utils.execution.manager import check_stop_flag
 from slyme.utils.freeze import FreezeMixin
+from slyme.utils.store import KeyFieldMixin
 from slyme.utils.inspect import resolve_instance_classname
 from slyme.context import Context
 from .exception import (
@@ -31,7 +28,20 @@ _ComponentT = TypeVar("_ComponentT", bound="Component")
 _ComponentContainerT = TypeVar("_ComponentContainerT", bound="ComponentContainer")
 
 
-class NodeBase(Component[_ComponentT, _ComponentContainerT], FreezeMixin, ABC):
+class NodeElement(KeyFieldMixin, FreezeMixin, ABC):
+    """Base class for all node-related entities, integrating essential mixins.
+
+    Design Note:
+        This class is intentionally kept minimal to ensure forward compatibility.
+        It strictly encapsulates only the most fundamental attributes to prevent
+        future subclasses from inheriting redundant or conflicting functionality
+        that they may not require.
+    """
+
+    pass
+
+
+class NodeComponent(Component[_ComponentT, _ComponentContainerT], NodeElement):
     """Base class for Node and AsyncNode."""
 
     # Node search operations.
@@ -72,11 +82,19 @@ class NodeBase(Component[_ComponentT, _ComponentContainerT], FreezeMixin, ABC):
             attr_dict={},
         )
 
-    def check_dependency_graph(self, ctx: Context):
-        pass
+    def check_dependency(self, ctx: Context, /, *, strategy: str = "vanilla", **kwargs):
+        """Check the dependency graph of the node structure."""
+        checker_cls = DEPENDENCY_REGISTRY.get(strategy)
+        if not checker_cls:
+            raise ValueError(
+                f"Unknown dependency check strategy: `{strategy}`. Available: {list(DEPENDENCY_REGISTRY.keys())}"
+            )
+
+        checker = checker_cls()
+        return checker.check(self, ctx, **kwargs)
 
 
-class Node(NodeBase["Node", "NodeContainer"]):
+class Node(NodeComponent["Node", "NodeContainer"]):
     """ """
 
     def __init__(self, /, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs):
@@ -152,13 +170,14 @@ class NodeContainer(Node, ComponentContainer[Node, "NodeContainer"]):
             pass
 
 
-class NodeWrapper(NodeContainer):
+class NodeWrapper(Component["NodeWrapper", "NodeWrapperCollection"], NodeElement):
+    """Defines the interface for auxiliary logic attached to a Node.
 
-    def _execute(self, ctx: Context) -> None:
-        # The ``wrapped`` param is set to ``self``.
-        with GeneratorExecutor(self._execute_yield(ctx, self)) as val:
-            if val is not STOP:
-                self._execute_children(ctx)
+    Design Note:
+        NodeWrappers are not considered "first-class citizens" of the primary
+        graph topology. Instead, they serve as supplementary components that
+        decorate, intercept, or augment the execution flow of their host Node.
+    """
 
     @abstractmethod
     def _execute_yield(self, ctx: Context, wrapped: Union[Node, Self]) -> Generator:
@@ -180,6 +199,16 @@ class NodeWrapper(NodeContainer):
 
 
 class NodeWrapperCollection(ComponentCollection[NodeWrapper]):
+    """Manages the storage and execution of a sequence of NodeWrappers.
+
+    Design Note:
+        - Flat Structure: Unlike `NodeComponent` which forms recursive graphs,
+          this collection is designed to remain flat.
+        - Complexity Control: Deeply nesting wrappers or collections is
+          strictly discouraged. A flat architecture limits stack depth and
+          ensures execution flow remains transparent, preventing excessive
+          debugging complexity.
+    """
 
     def execute_wrappers(self, ctx: Context, wrapped: Node) -> None:
         """"""
@@ -194,3 +223,4 @@ class NodeWrapperCollection(ComponentCollection[NodeWrapper]):
 
 
 from .render import RENDER_REGISTRY, RenderInfo
+from .dependency import DEPENDENCY_REGISTRY

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from slyme.utils.typing import Any, Protocol, Iterator, Union, TextIO, Literal
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.inspect import resolve_name
-from . import NodeBase, NodeContainer
+from . import NodeComponent, NodeContainer
 
 RENDER_REGISTRY: Registry[type["NodeRender"]] = Registry("node_render")
 
@@ -19,19 +19,19 @@ class _RenderFunc(Protocol):
 
 
 class NodeRender:
-    registry: TypeRegistry[NodeBase, _RenderFunc]
+    registry: TypeRegistry[NodeComponent, _RenderFunc]
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls.registry = TypeRegistry(f"TypeRegistryOf{resolve_name(cls)}")
 
     def render(
-        self, node, node_cls: Union[type[NodeBase], None] = None, /, **kwargs
+        self, node, node_cls: Union[type[NodeComponent], None] = None, /, **kwargs
     ) -> Any:
         return self._render(node, node_cls, **kwargs)
 
     def _render(
-        self, node, node_cls: Union[type[NodeBase], None] = None, /, **kwargs
+        self, node, node_cls: Union[type[NodeComponent], None] = None, /, **kwargs
     ) -> Any:
         """Can specify a different node_cls (usually a super class of node) to lookup"""
         return self.registry.lookup(node_cls if node_cls is not None else type(node))(
@@ -61,7 +61,7 @@ class VanillaRender(NodeRender):
     def render(
         self,
         node,
-        node_cls: Union[type[NodeBase], None] = None,
+        node_cls: Union[type[NodeComponent], None] = None,
         /,
         mode: Literal["print", "str", "iter"] = "print",
         file: TextIO = sys.stdout,
@@ -82,10 +82,10 @@ class VanillaRender(NodeRender):
             raise NotImplementedError(f"Unknown render mode: {mode}")
 
 
-@VanillaRender.registry(key=NodeBase)
+@VanillaRender.registry(key=NodeComponent)
 def _(
     render: VanillaRender,
-    node: NodeBase,
+    node: NodeComponent,
     /,
     *,
     prefix: str = "",
@@ -121,9 +121,14 @@ def _(
     style: VanillaStyle,
     **kwargs,  # NOTE: For forward compatibility
 ) -> Iterator[str]:
-    # FIXME: find a super class of NodeContainer, rather than directly choose NodeBase
+    # FIXME: find a super class of NodeContainer, rather than directly choose NodeComponent
     yield from render._render(
-        node, NodeBase, prefix=prefix, is_last=is_last, is_root=is_root, style=style
+        node,
+        NodeComponent,
+        prefix=prefix,
+        is_last=is_last,
+        is_root=is_root,
+        style=style,
     )
 
     if is_root:

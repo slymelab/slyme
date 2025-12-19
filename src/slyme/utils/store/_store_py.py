@@ -320,3 +320,6 @@ class Store(_StoreNode):
                 for name, child in node._data.items():
                     stack.append((child, current_path_parts + (name,)))
         return leaves
+
+    def collect_leaves(self) -> dict[str, Any]:
+        return self._collect_leaves(self, ())
