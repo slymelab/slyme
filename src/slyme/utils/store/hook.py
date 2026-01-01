@@ -6,7 +6,7 @@ from slyme.utils.constant import Missing
 from slyme.utils.collection import MutableSequenceProxy
 
 if TYPE_CHECKING:
-    from . import Store, Key
+    from .store import Store, Key
 _StoreHookT = TypeVar("_StoreHookT", bound="StoreHook")
 
 
