@@ -3,11 +3,18 @@ from slyme.utils.typing import (
     Self,
     Union,
     Iterable,
+    Generic,
 )
-from slyme.utils.collection.base import MutableSequenceProxy, SequenceData
+from slyme.utils.collection.base import (
+    MutableSequenceProxy,
+    SequenceData,
+    MutableMappingProxy,
+    MappingData,
+)
 from .mixin import CompositeMixin, CompositeStructure
 
 _ComponentT = TypeVar("_ComponentT", bound="Component")
+_KT = TypeVar("_KT")
 
 
 class Component(CompositeMixin[_ComponentT]):
@@ -48,3 +55,37 @@ class ComponentContainer(
         self,
     ) -> CompositeStructure[Union[Self, None], Union[Iterable[_ComponentT], None]]:
         return CompositeStructure[Self, Self](self, self)
+
+
+class ComponentMappingCollection(
+    CompositeMixin[_ComponentT],
+    MutableMappingProxy[_KT, _ComponentT],
+    Generic[_KT, _ComponentT],
+):
+    __slots__ = ()
+
+    def __init__(self, /, children: MappingData[_KT, _ComponentT] = None, **kwargs):
+        super().__init__(mapping_data=children, **kwargs)
+
+    @property
+    def children(self, /) -> tuple[_ComponentT, ...]:
+        """Returns a readonly view of the children (values)"""
+        return tuple(self.values())
+
+    def composite_structure(
+        self,
+    ) -> CompositeStructure[Union[Self, None], Union[Iterable[_ComponentT], None]]:
+        return CompositeStructure[None, Iterable[_ComponentT]](None, self.values())
+
+
+class ComponentMappingContainer(
+    Component[_ComponentT],
+    ComponentMappingCollection[_KT, _ComponentT],
+    Generic[_KT, _ComponentT],
+):
+    __slots__ = ()
+
+    def composite_structure(
+        self,
+    ) -> CompositeStructure[Union[Self, None], Union[Iterable[_ComponentT], None]]:
+        return CompositeStructure[Self, Iterable[_ComponentT]](self, self.values())
