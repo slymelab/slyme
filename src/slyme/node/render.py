@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from slyme.utils.typing import Any, Protocol, Iterator, Union, TextIO, Literal
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.inspect import resolve_name
-from . import NodeComponent, NodeContainer
+from .base import NodeComponent, NodeList
 
 RENDER_REGISTRY: Registry[type["NodeRender"]] = Registry("node_render")
 
@@ -109,10 +109,10 @@ def _(
     yield f"{prefix}{connector}{info.classname}({attr_str})"
 
 
-@VanillaRender.registry(key=NodeContainer)
+@VanillaRender.registry(key=NodeList)
 def _(
     render: VanillaRender,
-    node: NodeContainer,
+    node: NodeList,
     /,
     *,
     prefix: str = "",

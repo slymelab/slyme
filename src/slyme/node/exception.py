@@ -11,18 +11,6 @@ class NodeInterrupt(NodeException):
     pass
 
 
-class NodeBreak(NodeInterrupt):
-    """Break the ``NodeContainer`` execution."""
-
-    pass
-
-
-class NodeContinue(NodeInterrupt):
-    """Similar to continue, skip the remaining nodes, and proceed to the next iteration (if any)."""
-
-    pass
-
-
 class NodeTerminate(NodeInterrupt):
     """Terminate the whole node execution."""
 
@@ -57,3 +45,14 @@ class NodeWrapperExceptionRecord(NodeExceptionRecord):
 
     def __str__(self) -> str:
         return f"exception_wrapper: {self.exception_node}, wrapped_node: {self.wrapped_node}"
+
+
+class NodeExpressionExceptionRecord(NodeExceptionRecord):
+    """Used to record the exception info raised by a ``NodeWrapper``."""
+
+    def __init__(self, exception_node, exception: Exception, source_node=None) -> None:
+        super().__init__(exception_node, exception)
+        self.source_node = source_node
+
+    def __str__(self) -> str:
+        return f"exception_wrapper: {self.exception_node}, source_node: {self.source_node}"
