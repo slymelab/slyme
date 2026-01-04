@@ -30,7 +30,7 @@ class StoreHook:
         pass
 
 
-class StoreHookContainer(StoreHook, MutableSequenceProxy[_StoreHookT]):
+class StoreHookList(StoreHook, MutableSequenceProxy[_StoreHookT]):
     def getitem(self, instance: "Store", key: "Key", value: Any, /) -> None:
         for hook in self:
             hook.getitem(instance, key, value)

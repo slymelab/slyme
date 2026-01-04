@@ -8,7 +8,7 @@ from slyme.utils.execution import context_manager_stack
 from slyme.utils.descriptor.protocol import Attribute
 from .common import Scope
 from .manager import (
-    ScopedManagerCollection,
+    ScopedManagerList,
     ScopedManager,
     ScopedAttrRestore,
     ScopedAttrAssign,
@@ -20,12 +20,12 @@ class ScopedMixin:
 
     __slots__ = ()
     _scoped_managers: Attribute[
-        ScopedManagerCollection[ScopedManager], ScopedManagerCollection[ScopedManager]
+        ScopedManagerList[ScopedManager], ScopedManagerList[ScopedManager]
     ]
 
     def __init__(self, /, **kwargs):
         super().__init__(**kwargs)
-        self._scoped_managers = ScopedManagerCollection()
+        self._scoped_managers = ScopedManagerList()
 
     def scoped(self, scopes: Iterable[Scope]) -> AbstractContextManager:
         return context_manager_stack(scope.enter_scope(self) for scope in scopes)

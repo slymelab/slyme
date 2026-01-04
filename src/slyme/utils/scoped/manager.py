@@ -24,7 +24,7 @@ class ScopedManager(Scope):
     __slots__ = ()
 
     @abstractmethod
-    def _scoped_manager_yield(self, scoped: Any) -> Generator:
+    def scope(self, scoped: Any) -> Generator:
         """Inner API to be overridden by subclasses.
 
         This generator method will be called by ``enter_scope``.
@@ -34,20 +34,20 @@ class ScopedManager(Scope):
     @contextmanager
     def enter_scope(self, scoped: Any) -> Generator:
         manager_collection: Union[
-            ScopedManagerCollection[ScopedManager], Missing
+            ScopedManagerList[ScopedManager], Missing
         ] = getattr(scoped, "_scoped_managers", MISSING)
         if manager_collection is MISSING:
             # Disable traceback.
-            yield from self._scoped_manager_yield(scoped)
+            yield from self.scope(scoped)
         else:
             manager_collection.append(self)
             try:
-                yield from self._scoped_manager_yield(scoped)
+                yield from self.scope(scoped)
             finally:
                 del manager_collection[manager_collection.rindex(self)]
 
 
-class ScopedManagerCollection(MutableSequenceProxy[_ScopedManagerT]):
+class ScopedManagerList(MutableSequenceProxy[_ScopedManagerT]):
     """A collection that contains entered scoped managers."""
 
     __slots__ = ("_sequence_source",)
@@ -61,7 +61,7 @@ class ScopedAttrRestore(ScopedManager):
         self.attrs = tuple(attrs)
         self.prev_values: Dict[str, Any] = {}
 
-    def _scoped_manager_yield(self, scoped: Any) -> Generator[Self, Any, None]:
+    def scope(self, scoped: Any) -> Generator[Self, Any, None]:
         for attr in self.attrs:
             # Only cache existing attributes of ``obj``.
             if hasattr(scoped, attr):
@@ -88,8 +88,8 @@ class ScopedAttrAssign(ScopedAttrRestore):
         super().__init__(attr_assign.keys())
         self.attr_assign = attr_assign
 
-    def _scoped_manager_yield(self, scoped: Any) -> Generator[Self, Any, None]:
-        with GeneratorExecutor(super()._scoped_manager_yield(scoped)):
+    def scope(self, scoped: Any) -> Generator[Self, Any, None]:
+        with GeneratorExecutor(super().scope(scoped)):
             for attr, value in self.attr_assign.items():
                 setattr(scoped, attr, value)
             yield self

@@ -26,7 +26,7 @@ class Component(CompositeMixin[_ComponentT]):
         return CompositeStructure[Self, None](self, None)
 
 
-class ComponentCollection(
+class ComponentList(
     CompositeMixin[_ComponentT], MutableSequenceProxy[_ComponentT]
 ):
     __slots__ = ()
@@ -45,9 +45,9 @@ class ComponentCollection(
         return CompositeStructure[None, Self](None, self)
 
 
-class ComponentContainer(
+class ListComposite(
     Component[_ComponentT],
-    ComponentCollection[_ComponentT],
+    ComponentList[_ComponentT],
 ):
     __slots__ = ()
 
@@ -57,7 +57,7 @@ class ComponentContainer(
         return CompositeStructure[Self, Self](self, self)
 
 
-class ComponentMappingCollection(
+class ComponentDict(
     CompositeMixin[_ComponentT],
     MutableMappingProxy[_KT, _ComponentT],
     Generic[_KT, _ComponentT],
@@ -78,9 +78,9 @@ class ComponentMappingCollection(
         return CompositeStructure[None, Iterable[_ComponentT]](None, self.values())
 
 
-class ComponentMappingContainer(
+class DictComposite(
     Component[_ComponentT],
-    ComponentMappingCollection[_KT, _ComponentT],
+    ComponentDict[_KT, _ComponentT],
     Generic[_KT, _ComponentT],
 ):
     __slots__ = ()

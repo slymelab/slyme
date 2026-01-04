@@ -242,7 +242,7 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
                 raise
 
 
-class GeneratorExecutorCollection(MutableSequenceProxy[_GeneratorExecutorT]):
+class GeneratorExecutorList(MutableSequenceProxy[_GeneratorExecutorT]):
     def __init__(
         self,
         /,

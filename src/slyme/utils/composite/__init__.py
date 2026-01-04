@@ -1,7 +1,9 @@
 from .base import (
     Component,
-    ComponentCollection,
-    ComponentContainer,
+    ComponentList,
+    ListComposite,
+    ComponentDict,
+    DictComposite,
 )
 from .mixin import (
     CompositeMixin,
