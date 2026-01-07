@@ -68,11 +68,10 @@ class KeyField(GetattrAdapterMixin, Generic[_KeyT]):
         owner: Union[type["KeyFieldMixin"], None] = None,
     ) -> Union[Self, _KeyT]:
         """
-        Retrieve the Key instance from the owner's `_store_keys`.
+        Retrieve the Key instance from the owner's `__dict__`.
 
-        This method relies on two critical preconditions:
+        This method relies on critical preconditions:
         1. `self.name` must be set (guaranteed by `KeyField.__getattr__` check).
-        2. `instance._store_keys` must exist (guaranteed by `KeyFieldMixin.__getattr__` check).
 
         Failure in either precondition triggers a specific `RuntimeError` rather than
         a generic `AttributeError`, aiding in debugging initialization issues.
@@ -81,7 +80,7 @@ class KeyField(GetattrAdapterMixin, Generic[_KeyT]):
             return self
 
         try:
-            return instance._store_keys[self.name]
+            return instance.__dict__[self.name]
         except KeyError:
             raise AttributeError(
                 f"KeyField `{self.name}` has not been assigned a value yet. "
@@ -102,12 +101,12 @@ class KeyField(GetattrAdapterMixin, Generic[_KeyT]):
                 f"Expected a `{Key}` instance for field `{self.name}`, got {type(value)}."
             )
 
-        instance._store_keys[self.name] = value
+        instance.__dict__[self.name] = value
 
     def __delete__(self, instance: "KeyFieldMixin"):
         """"""
         try:
-            del instance._store_keys[self.name]
+            del instance.__dict__[self.name]
         except KeyError:
             raise AttributeError(
                 f"KeyField `{self.name}` is not set, and cannot delete."

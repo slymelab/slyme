@@ -9,32 +9,10 @@ class KeyFieldMixin(GetattrAdapterMixin):
     Mixin for managing KeyFields using a Local KeyFields Dictionary.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._store_keys: dict[str, Key] = {}
-
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls._local_key_fields: dict[str, KeyField] = {}
         cls.sync_local_key_fields()
-
-    def __getattr__(self, name: str):
-        """
-        Safeguard against accessing `_store_keys` on an uninitialized instance.
-
-        If `KeyField.__get__` tries to access `instance._store_keys` and fails,
-        Python invokes this method. We trap it here to raise a clear `RuntimeError`
-        about missing initialization, preventing the error from being misinterpreted
-        as the KeyField itself being missing.
-        """
-        if name == "_store_keys":
-            raise RuntimeError(
-                f"Attribute `_store_keys` is missing on instance of {resolve_instance_classname(self)}. "
-                "This implies you are attempting to assign a value to a KeyField before the instance is initialized. "
-                "Please ensure `super().__init__` (or `KeyFieldMixin.__init__`) is called before setting "
-                "any KeyField values."
-            )
-        return super().__getattr__(name)
 
     @classmethod
     def sync_local_key_fields(cls) -> None:
@@ -92,12 +70,16 @@ class KeyFieldMixin(GetattrAdapterMixin):
         """
         Get runtime Key values for all defined fields.
         """
-        store_keys = self._store_keys.copy()
+        defined_fields = self.get_key_fields()
+        store_keys = {
+            name: self.__dict__[name]
+            for name in defined_fields
+            if name in self.__dict__
+        }
         if not strict:
             return store_keys
 
         # Strict Mode: Consistency Check
-        defined_fields = self.get_key_fields()
         missing_keys = defined_fields.keys() - store_keys.keys()
 
         if missing_keys:
