@@ -21,8 +21,6 @@ _ScopedManagerT = TypeVar("_ScopedManagerT", bound="ScopedManager")
 class ScopedManager(Scope):
     """``ScopedManager`` defines a generator method API used for scoped management."""
 
-    __slots__ = ()
-
     @abstractmethod
     def scope(self, scoped: Any) -> Generator:
         """Inner API to be overridden by subclasses.
@@ -50,12 +48,11 @@ class ScopedManager(Scope):
 class ScopedManagerList(MutableSequenceProxy[_ScopedManagerT]):
     """A collection that contains entered scoped managers."""
 
-    __slots__ = ("_sequence_source",)
+    pass
 
 
 # Scoped Attribute.
 class ScopedAttrRestore(ScopedManager):
-    __slots__ = ("attrs", "prev_values")
 
     def __init__(self, attrs: Iterable[str]) -> None:
         self.attrs = tuple(attrs)
@@ -82,7 +79,6 @@ class ScopedAttrRestore(ScopedManager):
 
 
 class ScopedAttrAssign(ScopedAttrRestore):
-    __slots__ = ("attr_assign",)
 
     def __init__(self, attr_assign: Mapping[str, Any]) -> None:
         super().__init__(attr_assign.keys())

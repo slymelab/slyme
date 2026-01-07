@@ -18,7 +18,6 @@ _KT = TypeVar("_KT")
 
 
 class Component(CompositeMixin[_ComponentT]):
-    __slots__ = ()
 
     def composite_structure(
         self,
@@ -29,7 +28,6 @@ class Component(CompositeMixin[_ComponentT]):
 class ComponentList(
     CompositeMixin[_ComponentT], MutableSequenceProxy[_ComponentT]
 ):
-    __slots__ = ()
 
     def __init__(self, /, children: SequenceData[_ComponentT] = None, **kwargs):
         super().__init__(sequence_data=children, **kwargs)
@@ -49,7 +47,6 @@ class ListComposite(
     Component[_ComponentT],
     ComponentList[_ComponentT],
 ):
-    __slots__ = ()
 
     def composite_structure(
         self,
@@ -62,7 +59,6 @@ class ComponentDict(
     MutableMappingProxy[_KT, _ComponentT],
     Generic[_KT, _ComponentT],
 ):
-    __slots__ = ()
 
     def __init__(self, /, children: MappingData[_KT, _ComponentT] = None, **kwargs):
         super().__init__(mapping_data=children, **kwargs)
@@ -83,7 +79,6 @@ class DictComposite(
     ComponentDict[_KT, _ComponentT],
     Generic[_KT, _ComponentT],
 ):
-    __slots__ = ()
 
     def composite_structure(
         self,

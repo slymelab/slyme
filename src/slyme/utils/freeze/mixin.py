@@ -30,7 +30,6 @@ def _freeze_eager(obj: _FreezeMixinT) -> _FreezeMixinT:
     cls = type(obj)
     attrs = obj._frozen_attr_view()
     namespace = {
-        "__slots__": (),
         "__setattr__": _readonly_error,
         "__delattr__": _readonly_error,
     }
@@ -44,7 +43,6 @@ def _freeze_eager(obj: _FreezeMixinT) -> _FreezeMixinT:
 def _create_cached_frozen_cls(cls: Type[_FreezeMixinT]) -> Type[_FreezeMixinT]:
     """Create a cached frozen cls using ``_frozen_view`` attribute as the frozen view."""
     namespace = {
-        "__slots__": ("_frozen_view",),
         "__setattr__": _readonly_error,
         "__delattr__": _readonly_error,
     }
@@ -60,14 +58,10 @@ def _create_cached_frozen_cls(cls: Type[_FreezeMixinT]) -> Type[_FreezeMixinT]:
     return frozen_cls
 
 
-class _FrozenMappingProxy(MappingProxy[str, Any]):
-    __slots__ = ("_mapping_source",)
-
-
 def _freeze_cached(obj: _FreezeMixinT) -> _FreezeMixinT:
     """Create a frozen instance using cached frozen cls."""
     cls = type(obj)
-    attr_view = _FrozenMappingProxy(obj._frozen_attr_view())
+    attr_view = MappingProxy(obj._frozen_attr_view())
     if "_frozen_cls" in cls.__dict__:
         frozen_cls = cls._frozen_cls
     else:
@@ -88,7 +82,7 @@ def _freeze_cached(obj: _FreezeMixinT) -> _FreezeMixinT:
 def _freeze_weakref_cached(obj: _FreezeMixinT) -> _FreezeMixinT:
     """Create a frozen instance using weakref frozen cls."""
     cls = type(obj)
-    attr_view = _FrozenMappingProxy(obj._frozen_attr_view())
+    attr_view = MappingProxy(obj._frozen_attr_view())
     frozen_cls = None
     if "_frozen_cls_weakref" in cls.__dict__:
         frozen_cls = cls._frozen_cls_weakref()

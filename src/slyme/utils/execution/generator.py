@@ -77,8 +77,6 @@ class GeneratorExecutor(Generator[_YieldT_co, _SendT_contra, _ReturnT_co]):
             ``should_stop`` is ``None``, then suppress any ``StopIteration`` exception without any check. Defaults to ``MISSING``.
     """
 
-    __slots__ = ("_gen", "exit_send_callback")
-
     def __init__(
         self,
         gen: Generator[_YieldT_co, _SendT_contra, _ReturnT_co],

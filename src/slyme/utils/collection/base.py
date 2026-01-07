@@ -14,7 +14,6 @@ from slyme.utils.typing import (
     Tuple,
 )
 from slyme.utils.inspect import resolve_instance_classname
-from slyme.utils.descriptor.protocol import Attribute
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
@@ -27,8 +26,7 @@ SequenceData = Union[Iterable[_T], None]
 class _MappingMixin(Mapping[_KT, _VT]):
     """Mapping mixin methods."""
 
-    __slots__ = ()
-    _mapping_source: Attribute[Mapping[_KT, _VT], Mapping[_KT, _VT]]
+    _mapping_source: Mapping[_KT, _VT]
 
     def __getitem__(self, key: _KT, /) -> _VT:
         return self._mapping_source[key]
@@ -59,8 +57,6 @@ class MappingProxy(_MappingMixin[_KT, _VT], Mapping[_KT, _VT]):
     to avoid unexpected behavior.
     """
 
-    __slots__ = ()
-
     def __init__(
         self,
         /,
@@ -81,9 +77,7 @@ class MutableMappingProxy(
 
     NOTE: ``_mapping_source`` should be set by the instance.
     """
-
-    __slots__ = ()
-    _mapping_source: Attribute[MutableMapping[_KT, _VT], MutableMapping[_KT, _VT]]
+    _mapping_source: MutableMapping[_KT, _VT]
 
     def __init__(
         self,
@@ -106,8 +100,7 @@ class MutableMappingProxy(
 class _SequenceMixin(Sequence[_T]):
     """Sequence mixin methods."""
 
-    __slots__ = ()
-    _sequence_source: Attribute[Sequence[_T], Sequence[_T]]
+    _sequence_source: Sequence[_T]
 
     def _from_seq(self, seq: _ST, /) -> _ST:
         """Return a sequence instance with the input ``seq`` as the data source.
@@ -165,8 +158,6 @@ class SequenceProxy(_SequenceMixin[_T], Sequence[_T]):
     to avoid unexpected behavior.
     """
 
-    __slots__ = ()
-
     def __init__(self, /, sequence_data: SequenceData[_T] = None, **kwargs):
         super().__init__(**kwargs)
         if sequence_data is None:
@@ -191,8 +182,7 @@ class MutableSequenceProxy(_SequenceMixin[_T], MutableSequence[_T]):
     NOTE: ``_sequence_source`` should be set by the instance.
     """
 
-    __slots__ = ()
-    _sequence_source: Attribute[MutableSequence[_T], MutableSequence[_T]]
+    _sequence_source: MutableSequence[_T]
 
     def __init__(self, /, sequence_data: SequenceData[_T] = None, **kwargs):
         super().__init__(**kwargs)

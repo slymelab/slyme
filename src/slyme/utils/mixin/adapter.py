@@ -2,7 +2,6 @@ from slyme.utils.inspect import resolve_instance_classname
 
 
 class GetattrAdapterMixin:
-    __slots__ = ()
 
     def __getattr__(self, name: str):
         try:

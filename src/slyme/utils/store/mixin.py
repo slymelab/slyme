@@ -1,5 +1,4 @@
 from slyme.utils.inspect import resolve_instance_classname
-from slyme.utils.descriptor import Attribute
 from slyme.utils.mixin import GetattrAdapterMixin
 from .store import Key
 from .descriptor import KeyField
@@ -10,17 +9,13 @@ class KeyFieldMixin(GetattrAdapterMixin):
     Mixin for managing KeyFields using a Local KeyFields Dictionary.
     """
 
-    __slots__ = ()
-    _local_key_fields: dict[str, KeyField]
-    _store_keys: Attribute[dict[str, Key], dict[str, Key]]
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._store_keys = {}
+        self._store_keys: dict[str, Key] = {}
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        cls._local_key_fields = {}
+        cls._local_key_fields: dict[str, KeyField] = {}
         cls.sync_local_key_fields()
 
     def __getattr__(self, name: str):

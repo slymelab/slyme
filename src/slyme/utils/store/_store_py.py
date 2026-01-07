@@ -22,8 +22,6 @@ _T = TypeVar("_T")
 class Key(Generic[_T]):
     """Immutable dotted key with cached hash and split parts."""
 
-    __slots__ = ("_path", "_parts", "_hash")
-
     @property
     def path(self) -> str:
         return self._path
@@ -59,8 +57,6 @@ class Key(Generic[_T]):
 class _Ref(Generic[_T]):
     """Reference node to distinguish any value."""
 
-    __slots__ = ("_value",)
-
     @property
     def value(self) -> _T:
         return self._value
@@ -77,8 +73,6 @@ class _StoreNode:
     """Inner store node.
     NOTE: `_StoreNode` can only be modified through `Store` for consistency.
     """
-
-    __slots__ = ("_data",)
 
     @property
     def value(self) -> Self:
@@ -135,8 +129,6 @@ class _DiffResult:
 
 class Store(_StoreNode):
     """Dotted-attribute-style nested store."""
-
-    __slots__ = ("hook",)
 
     def __init__(
         self,

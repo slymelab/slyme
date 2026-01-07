@@ -48,8 +48,6 @@ class HashCache:
     the hash value of ``HashCache`` will raise a ``TypeError``.
     """
 
-    __slots__ = ("_hashable", "_hash_value")
-
     @property
     def hashable(self) -> Hashable:
         return self._hashable

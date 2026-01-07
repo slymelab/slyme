@@ -22,8 +22,7 @@ class Singleton(metaclass=SingletonMeta):
     print(A() is B())  # False
     ```
     """
-    
-    __slots__ = ()
+
     _singleton_instance: ClassVar[Union[Self, None]]
 
     def __new__(cls, /, *args, **kwargs) -> Self:

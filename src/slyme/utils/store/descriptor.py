@@ -26,7 +26,6 @@ class KeyField(GetattrAdapterMixin, Generic[_KeyT]):
     Strictly forbids default creation logic on access.
     Supports explicit deletion via 'del'.
     """
-    __slots__ = ("path_factory", "doc", "name")
 
     def __init__(
         self, path_factory: Union[_PathFactory[_KeyT], None] = None, doc: str = ""

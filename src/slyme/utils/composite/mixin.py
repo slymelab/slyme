@@ -29,7 +29,6 @@ class CompositeStructure(Generic[_ThisT_co, _ChildrenT_co]):
 
 
 class CompositeMixin(ABC, Generic[_CompositeMixinT]):
-    __slots__ = ()
 
     @abstractmethod
     def composite_structure(
