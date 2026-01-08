@@ -1,9 +1,13 @@
 from types import MappingProxyType
+from collections import OrderedDict
 from collections.abc import (
     Mapping,
     MutableMapping,
     Sequence,
     MutableSequence,
+    Set,
+    MutableSet,
+    Collection,
 )
 from slyme.utils.typing import (
     TypeVar,
@@ -21,6 +25,7 @@ _T = TypeVar("_T")
 _ST = TypeVar("_ST")
 MappingData = Union[Mapping[_KT, _VT], Iterable[Tuple[_KT, _VT]], None]
 SequenceData = Union[Iterable[_T], None]
+SetData = Union[Iterable[_T], None]
 
 
 class _MappingMixin(Mapping[_KT, _VT]):
@@ -70,13 +75,12 @@ class MappingProxy(_MappingMixin[_KT, _VT], Mapping[_KT, _VT]):
             self._mapping_source = MappingProxyType(dict(mapping_data))
 
 
-class MutableMappingProxy(
-    _MappingMixin[_KT, _VT], MutableMapping[_KT, _VT]
-):
+class MutableMappingProxy(_MappingMixin[_KT, _VT], MutableMapping[_KT, _VT]):
     """Mutable mapping proxy class.
 
     NOTE: ``_mapping_source`` should be set by the instance.
     """
+
     _mapping_source: MutableMapping[_KT, _VT]
 
     def __init__(
@@ -232,3 +236,60 @@ class MutableSequenceProxy(_SequenceMixin[_T], MutableSequence[_T]):
         seq = self[:]
         self.clear()
         return seq
+
+
+class _SetMixin(Set[_T]):
+    """Set mixin methods."""
+
+    _set_source: Collection[_T]
+
+    def __contains__(self, value: object, /) -> bool:
+        return value in self._set_source
+
+    def __iter__(self, /) -> Iterator[_T]:
+        return iter(self._set_source)
+
+    def __len__(self, /) -> int:
+        return len(self._set_source)
+
+    def __str__(self, /) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{{{', '.join(map(repr, self._set_source))}}}"
+        )
+
+    def __repr__(self, /) -> str:
+        return (
+            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{{{', '.join(map(repr, self._set_source))}}}"
+        )
+
+
+class OrderedSetProxy(_SetMixin[_T], MutableSet[_T]):
+    """Mutable ordered set proxy class using OrderedDict."""
+
+    _set_source: OrderedDict[_T, None]
+
+    def __init__(self, /, set_data: SetData[_T] = None, **kwargs):
+        super().__init__(**kwargs)
+        self._set_source = OrderedDict()
+        if set_data is not None:
+            self.update(set_data)
+
+    def add(self, value: _T, /) -> None:
+        """Add an element to the set."""
+        self._set_source[value] = None
+
+    def discard(self, value: _T, /) -> None:
+        """Remove an element from the set if it is a member."""
+        self._set_source.pop(value, None)
+
+    def update(self, *others: Iterable[_T]) -> None:
+        """Update the set with the union of itself and others."""
+        for other in others:
+            for value in other:
+                self.add(value)
+
+
+# Public alias for user convenience
+OrderedSet = OrderedSetProxy

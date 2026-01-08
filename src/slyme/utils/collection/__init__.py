@@ -3,4 +3,6 @@ from .base import (
     MutableMappingProxy,
     SequenceProxy,
     MutableSequenceProxy,
+    OrderedSetProxy,
+    OrderedSet,
 )
