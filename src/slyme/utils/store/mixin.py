@@ -1,10 +1,9 @@
 from slyme.utils.inspect import resolve_instance_classname
-from slyme.utils.mixin import GetattrAdapterMixin
 from .store import Key
 from .descriptor import KeyField
 
 
-class KeyFieldMixin(GetattrAdapterMixin):
+class KeyFieldMixin:
     """
     Mixin for managing KeyFields using a Local KeyFields Dictionary.
     """
