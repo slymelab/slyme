@@ -5,6 +5,7 @@ from slyme.utils.typing import (
     Mapping,
 )
 from slyme.utils.execution import context_manager_stack
+from slyme.utils.attribute import cached_property
 from .common import Scope
 from .manager import (
     ScopedManagerList,
@@ -17,9 +18,9 @@ from .manager import (
 class ScopedMixin:
     """Provides scoped APIs"""
 
-    def __init__(self, /, **kwargs):
-        super().__init__(**kwargs)
-        self._scoped_managers: ScopedManagerList[ScopedManager] = ScopedManagerList()
+    @cached_property
+    def _scoped_managers(self) -> ScopedManagerList[ScopedManager]:
+        return ScopedManagerList()
 
     def scoped(self, scopes: Iterable[Scope]) -> AbstractContextManager:
         return context_manager_stack(scope.enter_scope(self) for scope in scopes)
