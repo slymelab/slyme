@@ -2,6 +2,7 @@
 A convenient registry util that dynamically retrieves items based on keys.
 """
 
+from collections import defaultdict
 from .collection import MutableMappingProxy
 from .decorator import auto_decorator
 from .typing import (
@@ -9,6 +10,7 @@ from .typing import (
     TypeVar,
     overload,
     Callable,
+    Iterable,
 )
 from .inspect import resolve_mro
 from .constant import MISSING, Missing
@@ -83,6 +85,19 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
 
         return decorator
 
+    def unregister(
+        self, key: _KT, *, strict: Union[bool, Missing] = MISSING
+    ) -> None:
+        """
+        Unregister an item by its key.
+        """
+        strict = self._resolve_strict(strict)
+        try:
+            del self[key]
+        except KeyError:
+            if strict:
+                raise
+
     def _register(
         self, obj: _VT, key: Union[_KT, Missing], strict: Union[bool, Missing]
     ) -> None:
@@ -135,6 +150,41 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
     Registry that uses Python types as keys and supports MRO-based lookup.
     """
 
+    def __init__(
+        self,
+        namespace: Union[str, Missing] = MISSING,
+        /,
+        *,
+        strict: bool = True,
+    ):
+        super().__init__(namespace, strict=strict)
+        self._subclass_graph: dict[type[_KT], set[type[_KT]]] = defaultdict(set)
+
+    def _register(
+        self, obj: _VT, key: type[_KT], strict: Union[bool, Missing]
+    ) -> None:
+        super()._register(obj, key, strict)
+        # Update subclass graph
+        for existing_key in self.keys():
+            if existing_key is key:
+                continue
+            if issubclass(key, existing_key):
+                self._subclass_graph[existing_key].add(key)
+            elif issubclass(existing_key, key):
+                self._subclass_graph[key].add(existing_key)
+
+    def unregister(
+        self, key: type[_KT], *, strict: Union[bool, Missing] = MISSING
+    ) -> None:
+        contains = key in self
+        super().unregister(key, strict=strict)
+        if not contains:
+            return
+        # Update subclass graph
+        self._subclass_graph.pop(key, None)
+        for children_set in self._subclass_graph.values():
+            children_set.discard(key)
+
     def lookup_cls(self, key: type[_KT]) -> Union[type[_KT], None]:
         """
         Walk through the MRO of the given ``key`` (a class) and return the first
@@ -158,3 +208,17 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         if default is MISSING:
             raise KeyError(f"{key} cannot be correctly resolved in {self.namespace}.")
         return default
+
+    def collect_cls(self, base_cls: type[_KT]) -> Iterable[type[_KT]]:
+        if base_cls not in self:
+            raise KeyError(base_cls)
+        yield base_cls
+        yield from self._subclass_graph[base_cls]
+
+    def collect(self, base_cls: type[_KT]) -> Iterable[_VT]:
+        """
+        Collect and yield values of all **registered** keys that are subclasses of ``base_cls``.
+        Includes ``base_cls`` itself.
+        """
+        for cls_key in self.collect_cls(base_cls):
+            yield self[cls_key]
