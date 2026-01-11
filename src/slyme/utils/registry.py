@@ -2,7 +2,7 @@
 A convenient registry util that dynamically retrieves items based on keys.
 """
 
-from .collection import MutableMappingProxy, OrderedSet
+from .collection import MutableMappingProxy
 from .decorator import auto_decorator
 from .typing import (
     Union,
@@ -142,20 +142,9 @@ class Registry(GeneralRegistry[str, _VT]):
         return super()._register(obj, key, strict)
 
 
-class _SubclassGraphDict(dict):
-    __slots__ = ()
-
-    def __missing__(self, key):
-        raise RuntimeError(
-            f"{key} not found in subclass graph. Maybe the class key is not properly "
-            "registered. Use TypeRegistry.__call__ rather than custom dict setitem "
-            "to register a class key."
-        )
-
-
 class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
     """
-    Registry that uses Python types as keys and supports MRO-based lookup.
+    Registry that uses Python types as keys and supports inheritance lookup.
     """
 
     def __init__(
@@ -168,47 +157,32 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
     ):
         super().__init__(namespace, strict=strict)
         self.orthogonal = orthogonal
-        self._subclass_graph: dict[type[_KT], OrderedSet[type[_KT]]] = _SubclassGraphDict()
 
     def _register(self, obj: _VT, key: type[_KT], strict: Union[bool, Missing]) -> None:
-        # Check Inheritance
-        parents = []
-        children = []
-        for existing in self.keys():
-            if existing is key:
-                continue
-            if issubclass(key, existing):
-                parents.append(existing)
-            elif issubclass(existing, key):
-                children.append(existing)
-        # Check orthogonal
-        if self.orthogonal and (parents or children):
-            error_msgs = []
-            if parents:
-                error_msgs.append(f"Conflict with existing parents: {parents}")
-            if children:
-                error_msgs.append(f"Conflict with existing children: {children}")
-            raise ValueError(
-                f"Orthogonal conflict when registering {key} in {self.namespace}:\n"
-                + "\n".join(error_msgs)
-            )
+        if not isinstance(key, type):
+            raise TypeError(f"TypeRegistry key must be a class, got {type(key)}.")
+        # Check orthogonal.
+        if self.orthogonal:
+            parents = []
+            children = []
+            for existing in self.keys():
+                if existing is key:
+                    continue
+                if issubclass(key, existing):
+                    parents.append(existing)
+                elif issubclass(existing, key):
+                    children.append(existing)
+            if parents or children:
+                error_msgs = []
+                if parents:
+                    error_msgs.append(f"Conflict with existing parents: {parents}")
+                if children:
+                    error_msgs.append(f"Conflict with existing children: {children}")
+                raise ValueError(
+                    f"Orthogonal conflict when registering {key} in {self.namespace}:\n"
+                    + "\n".join(error_msgs)
+                )
         super()._register(obj, key, strict)
-        # Update subclass graph
-        for parent in parents:
-            self._subclass_graph[parent].add(key)
-        self._subclass_graph[key] = OrderedSet(children)
-
-    def unregister(
-        self, key: type[_KT], *, strict: Union[bool, Missing] = MISSING
-    ) -> None:
-        contains = key in self
-        super().unregister(key, strict=strict)
-        if not contains:
-            return
-        # Update subclass graph
-        self._subclass_graph.pop(key, None)
-        for children_set in self._subclass_graph.values():
-            children_set.discard(key)
 
     def lookup_cls(
         self, key: type[_KT], *, reverse: bool = False
@@ -216,6 +190,13 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         """
         Walk through the MRO of the given ``key`` (a class) and return the first
         base class (KEY) that is registered in this registry.
+
+        **NOTE on Virtual Subclasses:**
+        This method strictly relies on the standard Python Method Resolution Order
+        (MRO) to resolve the most specific (or generic) registered key.
+        Therefore, it **does not** support virtual subclasses (e.g., classes
+        registered via ``abc.ABCMeta.register``), because virtual ancestors do
+        not appear in a class's ``__mro__``.
 
         Args:
             key: The class to lookup.
@@ -246,6 +227,13 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         *,
         reverse: bool = False,
     ) -> Union[_VT, _T]:
+        """
+        Lookup the value associated with the first registered base class of ``key``
+        following the MRO.
+
+        See ``lookup_cls`` for details on MRO-based resolution and the limitation
+        regarding virtual subclasses.
+        """
         found_cls_key = self.lookup_cls(key, reverse=reverse)
         if found_cls_key is not None:
             return self[found_cls_key]
@@ -255,27 +243,29 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
 
     def lookup_all_cls(self, key: type[_KT]) -> Iterable[type[_KT]]:
         """
-        Yield all **registered** keys found in the MRO of the given ``key``.
+        Yield all **registered** keys that are superclasses (including virtual ones) of ``key``.
 
-        This iterates strictly following the MRO (Method Resolution Order).
+        NOTE: Unlike ``lookup_cls``, this method relies on ``issubclass`` check
+        rather than MRO. The yield order follows the **registration order**,
+        not the inheritance order.
         """
-        for base in resolve_mro(key):
-            if base in self:
-                yield base
+        for cls_key in self.keys():
+            if issubclass(key, cls_key):
+                yield cls_key
 
     def lookup_all(self, key: type[_KT]) -> Iterable[_VT]:
         """
-        Yield all **registered** values found in the MRO of the given ``key``.
+        Yield all **registered** values whose keys are superclasses of the given ``key``.
         """
         for cls_key in self.lookup_all_cls(key):
             yield self[cls_key]
 
     def collect_cls(self, base_cls: type[_KT]) -> Iterable[type[_KT]]:
-        if base_cls in self:
-            yield base_cls
-            yield from self._subclass_graph[base_cls]
-            return
-        # Directly collect subclasses if not registered.
+        """
+        Yield all **registered** keys that are subclasses (including virtual ones) of ``base_cls``.
+
+        This iterates over all registered keys and checks ``issubclass(registered_key, base_cls)``.
+        """
         for cls_key in self.keys():
             if issubclass(cls_key, base_cls):
                 yield cls_key
