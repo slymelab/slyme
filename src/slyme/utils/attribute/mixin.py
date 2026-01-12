@@ -5,7 +5,7 @@ from slyme.utils.registry import TypeRegistry
 from .descriptor import cached_property
 
 
-class _AttributeTypeRegistry(TypeRegistry[Any, OrderedSet[str]]):
+class AttributeTypeRegistry(TypeRegistry[Any, OrderedSet[str]]):
     """
     Registry specialized for managing attribute types.
 
@@ -58,12 +58,12 @@ class AttributeRegistryMixin:
     """
 
     @cached_property
-    def _attr_registry(self) -> _AttributeTypeRegistry:
-        registry = _AttributeTypeRegistry(str(self))
+    def _attr_registry(self) -> AttributeTypeRegistry:
+        registry = AttributeTypeRegistry(str(self))
         self._init_attr_registry(registry)
         return registry
 
-    def _init_attr_registry(self, registry: _AttributeTypeRegistry) -> None:
+    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
         """
         Hook method to initialize the attribute registry configuration.
 
