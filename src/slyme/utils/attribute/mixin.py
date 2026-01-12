@@ -1,7 +1,29 @@
 from slyme.utils.typing import Any, Union
+from slyme.utils.constant import MISSING, Missing
 from slyme.utils.collection import OrderedSet
 from slyme.utils.registry import TypeRegistry
 from .descriptor import cached_property
+
+
+class _AttributeTypeRegistry(TypeRegistry[Any, OrderedSet[str]]):
+    """
+    Registry specialized for managing attribute types.
+
+    It encapsulates the logic of registering a type as a Key and initializing 
+    an empty OrderedSet as the Value.
+    """
+
+    def __init__(self, namespace: Union[str, Missing] = MISSING):
+        # Hardcode strict=True and orthogonal=True as they are essential for this mixin
+        super().__init__(namespace, strict=True, orthogonal=True)
+
+    def register_type(self, type_cls: type) -> None:
+        """
+        Register a type category.
+        Equivalent to: self(OrderedSet(), key=type_cls, strict=True)
+        """
+        # Call the parent's __call__ to register, initializing Value as an empty OrderedSet
+        self(OrderedSet(), key=type_cls, strict=True)
 
 
 class AttributeRegistryMixin:
@@ -36,12 +58,12 @@ class AttributeRegistryMixin:
     """
 
     @cached_property
-    def _attr_registry(self) -> TypeRegistry[Any, OrderedSet[str]]:
-        registry = TypeRegistry(str(self), strict=True, orthogonal=True)
+    def _attr_registry(self) -> _AttributeTypeRegistry:
+        registry = _AttributeTypeRegistry(str(self))
         self._init_attr_registry(registry)
         return registry
 
-    def _init_attr_registry(self, registry: TypeRegistry[Any, OrderedSet[str]]) -> None:
+    def _init_attr_registry(self, registry: _AttributeTypeRegistry) -> None:
         """
         Hook method to initialize the attribute registry configuration.
 
@@ -50,7 +72,7 @@ class AttributeRegistryMixin:
         intend to track.
 
         Args:
-            registry: The initialized ``TypeRegistry`` instance ready for configuration.
+            registry: The initialized ``_AttributeTypeRegistry`` instance ready for configuration.
         """
         pass
 
@@ -61,7 +83,8 @@ class AttributeRegistryMixin:
         self._register_attribute(name, value=value, value_cls=None)
 
     def _register_type(self, type_cls: type) -> None:
-        self._attr_registry(OrderedSet(), key=type_cls, strict=True)
+        """Register a type category (Proxy to registry)."""
+        self._attr_registry.register_type(type_cls)
 
     def _register_attribute(
         self,
