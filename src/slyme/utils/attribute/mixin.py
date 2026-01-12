@@ -45,6 +45,9 @@ class AttributeRegistryMixin:
             return
         self._register_attribute(name, value=value, value_cls=None)
 
+    def _register_type(self, type_cls: type) -> None:
+        self._attr_registry(OrderedSet(), key=type_cls, strict=True)
+
     def _register_attribute(
         self,
         name: str,
