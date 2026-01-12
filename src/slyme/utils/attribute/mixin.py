@@ -37,7 +37,22 @@ class AttributeRegistryMixin:
 
     @cached_property
     def _attr_registry(self) -> TypeRegistry[Any, OrderedSet[str]]:
-        return TypeRegistry(str(self), strict=True, orthogonal=True)
+        registry = TypeRegistry(str(self), strict=True, orthogonal=True)
+        self._init_attr_registry(registry)
+        return registry
+
+    def _init_attr_registry(self, registry: TypeRegistry[Any, OrderedSet[str]]) -> None:
+        """
+        Hook method to initialize the attribute registry configuration.
+
+        This method is called once during the first access to ``_attr_registry``.
+        Subclasses should override this method to register the specific types they
+        intend to track.
+
+        Args:
+            registry: The initialized ``TypeRegistry`` instance ready for configuration.
+        """
+        pass
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "_attr_registry":
