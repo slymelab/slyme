@@ -6,15 +6,13 @@ from slyme.utils.typing import (
     Any,
     Generic,
 )
-from slyme.utils.mixin import GetattrAdapterMixin
-from slyme.utils.collection.base import SequenceData, MappingData
+from slyme.utils.attribute import AttributeRegistryMixin, AttributeTypeRegistry
+from slyme.utils.collection.base import SequenceData
 from slyme.utils.composite import (
     Component,
-    ListComposite,
-    DictComposite,
 )
 from slyme.utils.freeze import FreezeMixin
-from slyme.utils.store import KeyFieldMixin
+from slyme.utils.store import StoreKeyMixin
 from slyme.utils.inspect import resolve_instance_classname
 from slyme.context import Context
 from .exception import (
@@ -28,7 +26,7 @@ _ComponentT = TypeVar("_ComponentT", bound="Component")
 _R = TypeVar("_R")
 
 
-class NodeElement(KeyFieldMixin, FreezeMixin, GetattrAdapterMixin, ABC):
+class NodeElement(StoreKeyMixin, AttributeRegistryMixin, FreezeMixin, ABC):
     """Base class for all node-related entities, integrating essential mixins.
 
     Design Note:
@@ -101,6 +99,11 @@ class Node(NodeComponent["Node"]):
         super().__init__(**kwargs)
         self.node_wrappers = NodeWrapperList(children=node_wrappers)
 
+    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
+        super()._init_attr_registry(registry)
+        registry.register_type(Node)
+        registry.register_type(NodeExpression)
+
     # Core APIs.
     @abstractmethod
     def execute(self, ctx: Context) -> None:
@@ -134,35 +137,11 @@ class Node(NodeComponent["Node"]):
         return render_info
 
 
-class NodeList(Node, ListComposite[Node]):
-    """ """
+class NodeExpression(Component["NodeExpression"], NodeElement, Generic[_R]):
+    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
+        super()._init_attr_registry(registry)
+        registry.register_type(NodeExpression)
 
-    def __init__(
-        self,
-        /,
-        node_wrappers: SequenceData["NodeWrapper"] = None,
-        children: SequenceData[Node] = None,
-        **kwargs,
-    ):
-        super().__init__(node_wrappers=node_wrappers, children=children, **kwargs)
-
-    def execute(self, ctx: Context) -> None:
-        for node in self:
-            node(ctx)
-
-
-class NodeDict(Node, DictComposite[str, Node]):
-    def __init__(
-        self,
-        /,
-        node_wrappers: SequenceData["NodeWrapper"] = None,
-        children: MappingData[str, Node] = None,
-        **kwargs,
-    ):
-        super().__init__(node_wrappers=node_wrappers, children=children, **kwargs)
-
-
-class NodeExpression(NodeElement, Generic[_R]):
     @abstractmethod
     def evaluate(self, ctx: Context) -> _R:
         pass

@@ -1,4 +1,5 @@
-from .base import NodeElement, NodeComponent, Node, NodeList, NodeDict, NodeExpression
+from .base import NodeElement, NodeComponent, Node, NodeExpression
+from .container import NodeDict, NodeList, NodeExpressionDict, NodeExpressionList
 from .wrapper import NodeWrapper
 
 __all__ = [
@@ -9,4 +10,6 @@ __all__ = [
     "NodeDict",
     "NodeExpression",
     "NodeWrapper",
+    "NodeExpressionDict",
+    "NodeExpressionList",
 ]

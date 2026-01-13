@@ -2,11 +2,12 @@ from abc import abstractmethod
 from slyme.utils.typing import (
     Generator,
 )
+from slyme.utils.attribute import AttributeTypeRegistry
 from slyme.utils.composite import Component, ComponentList
 from slyme.utils.execution import GeneratorExecutorList
 from slyme.utils.execution.manager import check_stop_flag
 from slyme.context import Context
-from .base import NodeElement, Node
+from .base import NodeElement, Node, NodeExpression
 from .exception import (
     NodeException,
     NodeWrapperExceptionRecord,
@@ -21,6 +22,10 @@ class NodeWrapper(Component["NodeWrapper"], NodeElement):
         graph topology. Instead, they serve as supplementary components that
         decorate, intercept, or augment the execution flow of their host Node.
     """
+
+    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
+        super()._init_attr_registry(registry)
+        registry.register_type(NodeExpression)
 
     @abstractmethod
     def wrap(self, ctx: Context, wrapped: Node) -> Generator:

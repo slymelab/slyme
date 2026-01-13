@@ -1,9 +1,10 @@
 import sys
 from dataclasses import dataclass
+from .container import NodeList
 from slyme.utils.typing import Any, Protocol, Iterator, Union, TextIO, Literal
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.inspect import resolve_name
-from .base import NodeComponent, NodeList
+from .base import NodeComponent
 
 RENDER_REGISTRY: Registry[type["NodeRender"]] = Registry("node_render")
 

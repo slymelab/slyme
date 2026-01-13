@@ -1,90 +1,27 @@
-from slyme.utils.inspect import resolve_instance_classname
-from .store import Key
-from .descriptor import KeyField
+from slyme.utils.typing import Union
+from slyme.utils.attribute import AttributeRegistryMixin, AttributeTypeRegistry
+from .store import StoreKey
 
 
-class KeyFieldMixin:
+class StoreKeyMixin(AttributeRegistryMixin):
     """
     Mixin for managing KeyFields using a Local KeyFields Dictionary.
     """
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._local_key_fields: dict[str, KeyField] = {}
-        cls.sync_local_key_fields()
+    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
+        super()._init_attr_registry(registry)
+        registry.register_type(StoreKey)
 
-    @classmethod
-    def sync_local_key_fields(cls) -> None:
-        """"""
-        cls._local_key_fields.clear()
-        for name, value in cls.__dict__.items():
-            if isinstance(value, KeyField):
-                cls._local_key_fields[name] = value
-
-    @classmethod
-    def set_key_field(
-        cls, name: str, field: KeyField, force_sync: bool = False
-    ) -> None:
-        """Dynamically set a KeyField."""
-        if not isinstance(field, KeyField):
-            raise TypeError(f"Value for {name} must be a KeyField")
-
-        setattr(cls, name, field)
-        field.__set_name__(cls, name)
-        if force_sync:
-            cls.sync_local_key_fields()
-        else:
-            cls._local_key_fields[name] = field
-
-    @classmethod
-    def del_key_field(cls, name: str, force_sync: bool = False) -> None:
-        """Dynamically delete a KeyField."""
-        # NOTE: Should ensure the field exists and is a KeyField instance first.
-        field = cls.__dict__[name]
-        if not isinstance(field, KeyField):
-            raise TypeError(
-                f"Class attribute '{name}' should be a KeyField, got {type(field)}."
-            )
-
-        delattr(cls, name)
-        if force_sync:
-            cls.sync_local_key_fields()
-        else:
-            cls._local_key_fields.pop(name, None)
-
-    @classmethod
-    def get_key_fields(cls) -> dict[str, KeyField]:
+    @property
+    def store_keys(self) -> dict[str, StoreKey]:
         """
-        Resolve all available KeyFields by traversing the MRO dynamically.
+        Retrieve a dictionary of all registered Store Keys on this instance.
         """
-        all_fields: dict[str, KeyField] = {}
-        for base in reversed(cls.__mro__):
-            local_fields = getattr(base, "_local_key_fields", None)
-            if local_fields:
-                all_fields.update(local_fields)
-
-        return all_fields
-
-    def get_keys(self, strict: bool = True) -> dict[str, Key]:
-        """
-        Get runtime Key values for all defined fields.
-        """
-        defined_fields = self.get_key_fields()
-        store_keys = {
-            name: self.__dict__[name]
-            for name in defined_fields
-            if name in self.__dict__
+        return {
+            name: value
+            for name in self._attr_registry[StoreKey]
+            if (value := getattr(self, name)) is not None
         }
-        if not strict:
-            return store_keys
 
-        # Strict Mode: Consistency Check
-        missing_keys = defined_fields.keys() - store_keys.keys()
-
-        if missing_keys:
-            raise AttributeError(
-                f"Instance of {resolve_instance_classname(self)} is missing values for "
-                f"required KeyFields: {', '.join(repr(k) for k in missing_keys)}. "
-                "Ensure all fields are initialized before retrieving keys in strict mode."
-            )
-        return store_keys
+    def register_store_key(self, name: str, value: Union[StoreKey, None]) -> None:
+        self._register_attribute(name, value, StoreKey)

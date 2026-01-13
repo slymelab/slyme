@@ -1,14 +1,14 @@
-from slyme.utils.store import Store, Key
+from slyme.utils.store import Store, StoreKey
 from slyme.utils.typing import TypeVar
 
 _T = TypeVar("_T")
 
 
-class RequiresKey(Key[_T]):
+class RequiresKey(StoreKey[_T]):
     pass
 
 
-class ProducesKey(Key[_T]):
+class ProducesKey(StoreKey[_T]):
     pass
 
 

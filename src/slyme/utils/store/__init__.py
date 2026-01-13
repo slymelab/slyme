@@ -1,3 +1,2 @@
-from .store import Store, Key
-from .descriptor import KeyField
-from .mixin import KeyFieldMixin
+from .store import Store, StoreKey
+from .mixin import StoreKeyMixin

@@ -19,7 +19,7 @@ from .hook import StoreHook
 _T = TypeVar("_T")
 
 
-class Key(Generic[_T]):
+class StoreKey(Generic[_T]):
     """Immutable dotted key with cached hash and split parts."""
 
     @property
@@ -85,12 +85,12 @@ class _StoreNode:
             data if data is not None else {}
         )
 
-    def __getitem__(self, key: Union[Key[_T], str]) -> _T:
+    def __getitem__(self, key: Union[StoreKey[_T], str]) -> _T:
         if isinstance(key, str):
-            key = Key(key)
+            key = StoreKey(key)
         return self._getitem(key)
 
-    def _getitem(self, key: Key[_T]) -> _T:
+    def _getitem(self, key: StoreKey[_T]) -> _T:
         # NOTE: Annotate to `Any` to pass the type checker.
         result: Any = self._resolve(key.parts).value
         return result
@@ -138,18 +138,18 @@ class Store(_StoreNode):
         super().__init__(data=data)
         self.hook = hook
 
-    def __getitem__(self, key: Union[Key[_T], str]) -> _T:
+    def __getitem__(self, key: Union[StoreKey[_T], str]) -> _T:
         if isinstance(key, str):
-            key = Key(key)
+            key = StoreKey(key)
         value = self._getitem(key)
         if self.hook is not None:
             # Call hook
             self.hook.getitem(self, key, value)
         return value
 
-    def __setitem__(self, key: Union[Key[_T], str], value: _T) -> None:
+    def __setitem__(self, key: Union[StoreKey[_T], str], value: _T) -> None:
         if isinstance(key, str):
-            key = Key(key)
+            key = StoreKey(key)
         *dirs, last = key.parts
         node = self._touch(dirs)
         if self.hook is not None:
@@ -166,9 +166,9 @@ class Store(_StoreNode):
             # Directly set
             node._data[last] = _Ref(value)
 
-    def __delitem__(self, key: Union[Key[_T], str]) -> None:
+    def __delitem__(self, key: Union[StoreKey[_T], str]) -> None:
         if isinstance(key, str):
-            key = Key(key)
+            key = StoreKey(key)
         *dirs, last = key.parts
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreNode):

@@ -3,7 +3,8 @@ from slyme.utils.typing import Any, Protocol, Union, Self
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.inspect import resolve_name
 from slyme.context import RequiresKey, ProducesKey, Context
-from .base import NodeComponent, Node, NodeList, NodeElement
+from .base import NodeComponent, Node, NodeElement
+from .container import NodeList
 
 # Registry definition
 DEPENDENCY_REGISTRY: Registry[type["NodeDependencyChecker"]] = Registry(
@@ -123,7 +124,7 @@ class VanillaDependencyChecker(NodeDependencyChecker):
 def _resolve_dep_info(node: NodeElement, /):
     info = VanillaDependencyInfo()
 
-    keys_dict = node.get_keys()
+    keys_dict = node.store_keys
     for _, key_obj in keys_dict.items():
         if isinstance(key_obj, RequiresKey):
             info.requires.add(key_obj.path)
