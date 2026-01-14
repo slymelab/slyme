@@ -66,9 +66,9 @@ class _Ref(Generic[_T]):
         return f"{type(self).__name__}(value={self.value!r})"
 
 
-class _StoreNode:
+class _StoreContainer:
     """Inner store node.
-    NOTE: `_StoreNode` can only be modified through `Store` for consistency.
+    NOTE: `_StoreContainer` can only be modified through `Store` for consistency.
     """
 
     @property
@@ -76,9 +76,9 @@ class _StoreNode:
         return self
 
     def __init__(
-        self, data: Union[dict[str, Union["_StoreNode", _Ref]], None] = None
+        self, data: Union[dict[str, Union["_StoreContainer", _Ref]], None] = None
     ) -> None:
-        self._data: dict[str, Union[_StoreNode, _Ref]] = (
+        self._data: dict[str, Union[_StoreContainer, _Ref]] = (
             data if data is not None else {}
         )
 
@@ -92,11 +92,11 @@ class _StoreNode:
         result: Any = self._resolve(key.parts).value
         return result
 
-    def _resolve(self, parts: Iterable[str]) -> Union["_StoreNode", _Ref]:
+    def _resolve(self, parts: Iterable[str]) -> Union["_StoreContainer", _Ref]:
         """Resolve the path parts and get the final node."""
-        node: Union[_StoreNode, _Ref] = self
+        node: Union[_StoreContainer, _Ref] = self
         for p in parts:
-            if not isinstance(node, _StoreNode):
+            if not isinstance(node, _StoreContainer):
                 raise KeyError(f"Path {parts} not found")
             node = node._data[p]
         return node
@@ -111,7 +111,7 @@ class _StoreNode:
     def copy(self) -> Self:
         return type(self)(
             data={
-                k: (v.copy() if isinstance(v, _StoreNode) else v)
+                k: (v.copy() if isinstance(v, _StoreContainer) else v)
                 for k, v in self._data.items()
             }
         )
@@ -125,13 +125,13 @@ class _DiffResult:
     modified: dict[str, tuple[Any, Any]]  # {key: (self_value, other_value)}
 
 
-class Store(_StoreNode):
+class Store(_StoreContainer):
     """Dotted-attribute-style nested store."""
 
     def __init__(
         self,
         hook: Union[StoreHook, None] = None,
-        data: Union[dict[str, Union[_StoreNode, _Ref]], None] = None,
+        data: Union[dict[str, Union[_StoreContainer, _Ref]], None] = None,
     ) -> None:
         super().__init__(data=data)
         self.hook = hook
@@ -169,7 +169,7 @@ class Store(_StoreNode):
             key = StoreKey(key)
         *dirs, last = key.parts
         parent = self._resolve(dirs)
-        if not isinstance(parent, _StoreNode):
+        if not isinstance(parent, _StoreContainer):
             raise KeyError(f"Parent path not found for {key!r}")
         if self.hook is not None:
             # Get the old value first
@@ -185,16 +185,16 @@ class Store(_StoreNode):
             # Directly delete
             del parent._data[last]
 
-    def _touch(self, parts: Iterable[str]) -> _StoreNode:
+    def _touch(self, parts: Iterable[str]) -> _StoreContainer:
         """Recursively resolve the store nodes along the path, and create a
         new node if the node not exists."""
-        node: _StoreNode = self
+        node: _StoreContainer = self
         for p in parts:
-            nxt: Union[_StoreNode, _Ref, None] = node._data.get(p)
+            nxt: Union[_StoreContainer, _Ref, None] = node._data.get(p)
             if nxt is None:
-                nxt = _StoreNode()
+                nxt = _StoreContainer()
                 node._data[p] = nxt
-            elif not isinstance(nxt, _StoreNode):
+            elif not isinstance(nxt, _StoreContainer):
                 raise KeyError(f"Conflict: {p!r} is already a leaf value.")
             node = nxt
         return node
@@ -234,7 +234,7 @@ class Store(_StoreNode):
         removed: dict[str, Any] = {}
         modified: dict[str, tuple[Any, Any]] = {}
         # The stack holds tuples of (node_from_self, node_from_other, current_path_tuple)
-        stack: deque[tuple[_StoreNode, _StoreNode, tuple[str, ...]]] = deque(
+        stack: deque[tuple[_StoreContainer, _StoreContainer, tuple[str, ...]]] = deque(
             [(self, other, ())]
         )
 
@@ -265,8 +265,8 @@ class Store(_StoreNode):
                 current_path = path_parts + (key_str,)
 
                 # Both are internal nodes, so we continue traversing.
-                if isinstance(child_self, _StoreNode) and isinstance(
-                    child_other, _StoreNode
+                if isinstance(child_self, _StoreContainer) and isinstance(
+                    child_other, _StoreContainer
                 ):
                     stack.append((child_self, child_other, current_path))
                     continue
@@ -297,12 +297,12 @@ class Store(_StoreNode):
 
     def _collect_leaves(
         self,
-        start_node: Union[_StoreNode, _Ref],
+        start_node: Union[_StoreContainer, _Ref],
         path_prefix: tuple[str, ...],
     ) -> dict[str, Any]:
         """Helper to recursively find all leaf values from a starting node."""
         leaves = {}
-        stack: deque[tuple[Union[_StoreNode, _Ref], tuple[str, ...]]] = deque(
+        stack: deque[tuple[Union[_StoreContainer, _Ref], tuple[str, ...]]] = deque(
             [(start_node, path_prefix)]
         )
 
@@ -311,7 +311,7 @@ class Store(_StoreNode):
             if isinstance(node, _Ref):
                 # It's a leaf node, add it to our collection
                 leaves[".".join(current_path_parts)] = node.value
-            elif isinstance(node, _StoreNode):
+            elif isinstance(node, _StoreContainer):
                 # It's an internal node, add its children to the stack
                 for name, child in node._data.items():
                     stack.append((child, current_path_parts + (name,)))
