@@ -48,7 +48,7 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         return strict if strict is not MISSING else self.strict
 
     @overload
-    def __call__(
+    def register(
         self,
         obj: Missing = MISSING,
         *,
@@ -56,14 +56,14 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         strict: Union[bool, Missing] = MISSING,
     ) -> Callable[[_VT2], _VT2]: ...
     @overload
-    def __call__(
+    def register(
         self,
         obj: _VT2,
         *,
         key: Union[_KT, Missing] = MISSING,
         strict: Union[bool, Missing] = MISSING,
     ) -> _VT2: ...
-    def __call__(
+    def register(
         self,
         obj: Union[_VT2, Missing] = MISSING,
         *,
@@ -120,7 +120,7 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         Override __setitem__ to enforce registration logic.
         This prevents users from bypassing checks by doing `registry[key] = value`.
         """
-        self(value, key=key)
+        self.register(value, key=key)
 
     def __delitem__(self, key: _KT) -> None:
         """
