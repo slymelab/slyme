@@ -89,7 +89,7 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         """
         strict = self._resolve_strict(strict)
         try:
-            del self[key]
+            super().__delitem__(key)
         except KeyError:
             if strict:
                 raise
@@ -113,7 +113,20 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
                 f"Key ``{key}`` already exists in registry ``{self.namespace}``."
             )
         # Register ``obj`` with ``key``.
-        self[key] = obj
+        super().__setitem__(key, obj)
+
+    def __setitem__(self, key: _KT, value: _VT) -> None:
+        """
+        Override __setitem__ to enforce registration logic.
+        This prevents users from bypassing checks by doing `registry[key] = value`.
+        """
+        self(value, key=key)
+
+    def __delitem__(self, key: _KT) -> None:
+        """
+        Override __delitem__ to enforce unregistration logic.
+        """
+        self.unregister(key)
 
 
 class Registry(GeneralRegistry[str, _VT]):
