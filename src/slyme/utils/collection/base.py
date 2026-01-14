@@ -191,16 +191,6 @@ class MutableSequenceProxy(_SequenceMixin[_T], MutableSequence[_T]):
     def insert(self, index: int, value: _T, /) -> None:
         self._sequence_source.insert(index, value)
 
-    #
-    # Other extended mixin methods.
-    #
-    def pop_all(self, /) -> MutableSequence[_T]:
-        """Pop all the sequence elements."""
-        # NOTE: Shallow copy the full sequence.
-        seq = self[:]
-        self.clear()
-        return seq
-
 
 class _SetMixin(Set[_T]):
     """Set mixin methods."""

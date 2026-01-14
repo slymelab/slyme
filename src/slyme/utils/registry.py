@@ -10,7 +10,6 @@ from typing import (
     overload,
 )
 from .collection import MutableMappingProxy
-from .decorator import auto_decorator
 from .constant import MISSING, Missing
 
 _T = TypeVar("_T")
@@ -64,7 +63,6 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         key: Union[_KT, Missing] = MISSING,
         strict: Union[bool, Missing] = MISSING,
     ) -> _VT2: ...
-    @auto_decorator(index=1, keyword="obj")
     def __call__(
         self,
         obj: Union[_VT2, Missing] = MISSING,
@@ -75,13 +73,15 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         """
         Register an item. Can be used as a decorator or a normal method.
         """
-
         def decorator(_obj: _VT2) -> _VT2:
             # Call the core register method.
             self._register(_obj, key, strict)
             return _obj
 
-        return decorator
+        if obj is MISSING:
+            return decorator
+        else:
+            return decorator(obj)
 
     def unregister(self, key: _KT, *, strict: Union[bool, Missing] = MISSING) -> None:
         """

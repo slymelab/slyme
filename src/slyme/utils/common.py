@@ -5,18 +5,16 @@ useful but unrelated utils in slyme.
 # NOTE: The below module block is used to help ``Metaclasses`` create
 # new classes, and it should be at the beginning of the file in order
 # to avoid circular imports.
-from typing import Generic, TypeVar, Hashable, Union, Any
-
-_ArgsT = TypeVar("_ArgsT")
-_KwargsT = TypeVar("_KwargsT")
+from typing import Hashable, Union, Any
 
 
-class FuncParams(Generic[_ArgsT, _KwargsT]):
+class FuncParams:
     """
     Pack multiple function params in a single object.
     """
+    __slots__ = ("args", "kwargs")
 
-    def __init__(self, /, *args: _ArgsT, **kwargs: _KwargsT) -> None:
+    def __init__(self, /, *args, **kwargs) -> None:
         self.args = args
         self.kwargs = kwargs
 
@@ -84,7 +82,7 @@ class HashCache:
 
 
 def make_params_hashable(
-    func_params: FuncParams[Hashable, Hashable],
+    func_params: FuncParams,
     typed: bool = False,
     kwarg_mark: Hashable = object(),
     type_mark: Hashable = object(),
