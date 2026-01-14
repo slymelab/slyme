@@ -96,14 +96,17 @@ class MetaclassResolver:
         # The ``meta_bases`` should only keep adapter metaclasses.
         meta_bases = tuple(filter(is_metaclass_adapter, meta_bases))
 
-        meta_queue = list(meta_bases)
-        while meta_queue:
-            meta_cls = meta_queue.pop(0)
-            if is_metaclass_adapter(meta_cls):
-                # Add the bases of the adapter metaclass to the queue.
-                meta_queue.extend(meta_cls.__bases__)
-            else:
-                required_metaclasses.add(meta_cls)
+        def _collect_bases(bases: tuple[type, ...]) -> None:
+            for base in bases:
+                if is_metaclass_adapter(base):
+                    # Add the bases of the adapter metaclass to the queue.
+                    _collect_bases(base.__bases__)
+                else:
+                    required_metaclasses.add(base)
+
+        for meta_base in meta_bases:
+            _collect_bases(meta_base.__bases__)
+
         # Resolve all the mro of metaclasses.
         metaclass_set = set(chain(*(inspect.getmro(_cls) for _cls in metaclasses)))
         missing_metaclasses = tuple(

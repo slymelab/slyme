@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from collections import deque
 from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import (
