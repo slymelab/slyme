@@ -4,13 +4,7 @@ from .typing import (
     Union,
     Callable,
     TypeVar,
-    overload,
-    Any,
-    Mapping,
-    Literal,
-    Dict,
 )
-from .inspect import unwrap_method, resolve_name
 from .constant import MISSING
 
 _FuncOrMethodT = TypeVar("_FuncOrMethodT")
@@ -112,19 +106,6 @@ def auto_decorator(
     return decorator
 
 
-def method_chaining(func):
-    """
-    [func, level-1]
-    """
-
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        func(self, *args, **kwargs)
-        return self
-
-    return wrapper
-
-
 def deprecated():
     """
     [func, level-1]
@@ -136,107 +117,3 @@ def deprecated():
 def experimental():
     # TODO
     pass
-
-
-#
-# not_implemented decorator.
-#
-
-NOT_IMPLEMENTED_ATTR_NAME = "_not_implemented"
-NotImplementedLevelType = Union[Literal["error", "warning", "silent"], None]
-
-
-def _not_implemented_error(func_name: str):
-    raise NotImplementedError(
-        f"You are calling the function or method ``{func_name}`` which is not implemented."
-    )
-
-
-def _not_implemented_warning(func_name: str):
-    logger.warning(
-        f"You are calling the function or method ``{func_name}`` which is not implemented."
-    )
-
-
-def _not_implemented_silent(*args, **kwargs):
-    """
-    Do nothing.
-    """
-    pass
-
-
-_NOT_IMPLEMENTED_LEVEL_REGISTRY: Dict[str, Callable[[str], None]] = {
-    "error": _not_implemented_error,
-    "warning": _not_implemented_warning,
-    "silent": _not_implemented_silent,
-}
-
-
-@overload
-def not_implemented(
-    _func: None = None, *, level: NotImplementedLevelType = "error"
-) -> Callable[[_FuncOrMethodT], _FuncOrMethodT]: ...
-@overload
-def not_implemented(
-    _func: _FuncOrMethodT, *, level: NotImplementedLevelType = "error"
-) -> _FuncOrMethodT: ...
-@auto_decorator(index=0, keyword="_func")
-def not_implemented(
-    _func=None,
-    *,
-    level: NotImplementedLevelType = "error",
-):
-    """
-    NOTE: When ``level`` is not None, ``@not_implemented`` will ignore the body of the decorated function or method,
-    so just leaving it empty would be the best choice.
-    """
-
-    def decorator(func: _FuncOrMethodT) -> _FuncOrMethodT:
-        if level is None:
-            return func_setattr(func, attr_dict={NOT_IMPLEMENTED_ATTR_NAME: True})
-
-        func_name = resolve_name(func)
-
-        @func_setattr(attr_dict={NOT_IMPLEMENTED_ATTR_NAME: True})
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            _NOT_IMPLEMENTED_LEVEL_REGISTRY[level](func_name)
-
-        return wrapper
-
-    return decorator
-
-
-def is_not_implemented(func: _FuncOrMethodT) -> bool:
-    static_func = unwrap_method(func)
-    return getattr(static_func, NOT_IMPLEMENTED_ATTR_NAME, False)
-
-
-#
-# FuncSetAttr.
-#
-
-
-@overload
-def func_setattr(
-    _func: None = None, *, attr_dict: Mapping[str, Any]
-) -> Callable[[_FuncOrMethodT], _FuncOrMethodT]: ...
-@overload
-def func_setattr(
-    _func: _FuncOrMethodT, *, attr_dict: Mapping[str, Any]
-) -> _FuncOrMethodT: ...
-@auto_decorator(index=0, keyword="_func")
-def func_setattr(_func=None, *, attr_dict: Mapping[str, Any]):
-    """
-    Set attributes to the function in a decorator way.
-    """
-
-    def decorator(func: _FuncOrMethodT) -> _FuncOrMethodT:
-        for key, value in attr_dict.items():
-            try:
-                setattr(func, key, value)
-            except AttributeError as e:
-                logger.error(str(e), stack_info=True)
-        return func
-
-    return decorator

@@ -1,9 +1,9 @@
+import inspect
 from itertools import chain, filterfalse
 from slyme.utils.inspect import (
     class_difference,
     resolve_bases,
     resolve_minimal_classes,
-    resolve_mro,
 )
 from slyme.utils.typing import Any, Dict, List, Mapping, Tuple, Type, Union
 from slyme.utils.common import make_params_hashable, FuncParams
@@ -108,7 +108,7 @@ class MetaclassResolver:
             else:
                 required_metaclasses.add(meta_cls)
         # Resolve all the mro of metaclasses.
-        metaclass_set = set(chain(*(resolve_mro(_cls) for _cls in metaclasses)))
+        metaclass_set = set(chain(*(inspect.getmro(_cls) for _cls in metaclasses)))
         missing_metaclasses = tuple(
             (
                 required_cls

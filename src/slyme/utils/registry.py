@@ -2,6 +2,7 @@
 A convenient registry util that dynamically retrieves items based on keys.
 """
 
+import inspect
 from .collection import MutableMappingProxy
 from .decorator import auto_decorator
 from .typing import (
@@ -11,7 +12,6 @@ from .typing import (
     Callable,
     Iterable,
 )
-from .inspect import resolve_mro
 from .constant import MISSING, Missing
 
 _T = TypeVar("_T")
@@ -204,7 +204,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
                 If ``True``, lookup from the end of MRO (finding the most generic registered base).
                 If ``False`` (default), lookup from the start of MRO (finding the most specific registered base).
         """
-        mro = resolve_mro(key)
+        mro = inspect.getmro(key)
         if reverse:
             mro = reversed(mro)
         for base in mro:

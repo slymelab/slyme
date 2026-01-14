@@ -1,62 +1,8 @@
-import re
+import inspect
 from types import FunctionType, MethodType
-from .typing import Any, Tuple, Union, overload, Iterable, Type, Set
+from .typing import Any, Tuple, Union, Iterable, Type, Set
 
 FuncOrMethodType = Union[FunctionType, MethodType]
-RawFuncType = FunctionType
-MAGIC_PATTERN = re.compile("^_{2}[^_](?:.*[^_])?_{2}$")
-
-
-def is_function_or_method(item: Any, /) -> bool:
-    return isinstance(item, (MethodType, FunctionType))
-
-
-def is_magic_naming(name: str, /) -> bool:
-    return MAGIC_PATTERN.match(str(name)) is not None
-
-
-#
-# Introspection utilities.
-#
-
-
-@overload
-def unwrap_method(func: FuncOrMethodType, /) -> RawFuncType: ...
-@overload
-def unwrap_method(func: None, /) -> None: ...
-def unwrap_method(
-    func: Union[FuncOrMethodType, None], /
-) -> Union[RawFuncType, None]:
-    """Get the original static function if the given ``func`` is a method."""
-    while isinstance(func, MethodType):
-        # get the original function body of the method
-        func = func.__func__
-    return func
-
-
-def compare_method(func1: FuncOrMethodType, func2: FuncOrMethodType, /) -> bool:
-    """
-    Compare whether the two methods have the same static function reference.
-
-    Example:
-        ```Python
-        class A:
-            def method(self):
-                pass
-
-        a1 = A()
-        a2 = A()
-        # False
-        print(a1.method is a1.method)
-        # False
-        print(a1.method is a2.method)
-        # True
-        print(compare_method(a1.method, a1.method))
-        # True
-        print(compare_method(a1.method, a2.method))
-        ```
-    """
-    return unwrap_method(func1) is unwrap_method(func2)
 
 
 def resolve_name(named: Any, /) -> str:
@@ -92,33 +38,6 @@ def resolve_instance_classname(obj: Any, /) -> str:
     # especially when the ``__getattribute__`` method is overridden by ``__obj`` (e.g.,
     # ``NOTHING.__class__`` will return ``NOTHING`` itself rather than the ``Nothing`` class).
     return resolve_name(type(obj))
-
-
-def resolve_mro(cls: Type, /) -> Tuple[Type, ...]:
-    """
-    Safely resolve the mro of any given class. NOTE: If the class has the
-    attribute ``__mro__``, then directly return it. Otherwise, call the
-    corresponding ``mro()`` method to the the mro.
-    """
-    # If ``cls`` has ``__mro__``, then directly return.
-    if hasattr(cls, "__mro__"):
-        return cls.__mro__
-
-    try:
-        # NOTE: Some class (e.g., typing.Sequence) doesn't support subclass
-        # check, and ``issubclass`` will raise an exception.
-        is_type_subclass = issubclass(cls, type)
-    except Exception:
-        is_type_subclass = False
-
-    if is_type_subclass:
-        # NOTE: If the given class is a metaclass, then the corresponding
-        # ``mro`` method to be called should be in the 'metaclass of the
-        # given metaclass' (i.e., type(cls)).
-        return tuple(type(cls).mro(cls))
-    else:
-        # Normal classes simply call the ``mro`` method.
-        return tuple(cls.mro())
 
 
 def resolve_bases(cls: Type, /) -> Tuple[Type, ...]:
@@ -166,14 +85,14 @@ def resolve_bases(cls: Type, /) -> Tuple[Type, ...]:
         return cls.__bases__
 
     # Get the mro of ``cls`` (excluding itself).
-    mro_classes = list((_cls for _cls in resolve_mro(cls) if _cls is not cls))
+    mro_classes = list((_cls for _cls in inspect.getmro(cls) if _cls is not cls))
     bases = []
     while mro_classes:
         # NOTE: should pop the first element in the list (index=0).
         base = mro_classes.pop(0)
         bases.append(base)
         # Get the mro of ``base`` and remove them from ``mro_classes``.
-        base_mro_set = set(resolve_mro(base))
+        base_mro_set = set(inspect.getmro(base))
         mro_classes = list((_cls for _cls in mro_classes if _cls not in base_mro_set))
     return tuple(bases)
 
@@ -224,7 +143,7 @@ def _resolve_minimal_classes_through_mro(classes: Iterable[Type], /) -> Tuple[Ty
     # themselves).
     super_class_set: Set[Type] = set()
     for cls in classes:
-        super_class_set.update(resolve_mro(cls)[1:])
+        super_class_set.update(inspect.getmro(cls)[1:])
 
     def _filter_func(cls: Type) -> bool:
         result = cls not in super_class_set
@@ -297,7 +216,7 @@ def _class_difference_through_mro(
     """
     y_mro_set: Set[Type] = set()
     for y in y_iterable:
-        y_mro_set.update(resolve_mro(y))
+        y_mro_set.update(inspect.getmro(y))
 
     return tuple((x for x in x_iterable if x not in y_mro_set))
 
