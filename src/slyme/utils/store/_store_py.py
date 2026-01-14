@@ -104,9 +104,7 @@ class _StoreContainer:
     def __repr__(self) -> str:
         sep = ", "
         data_str = sep.join([f"{k}={v.value!r}" for k, v in self._data.items()])
-        return (
-            f"{type(self).__name__}({data_str})"
-        )
+        return f"{type(self).__name__}({data_str})"
 
     def copy(self) -> Self:
         return type(self)(
@@ -233,88 +231,73 @@ class Store(_StoreContainer):
         added: dict[str, Any] = {}
         removed: dict[str, Any] = {}
         modified: dict[str, tuple[Any, Any]] = {}
-        # The stack holds tuples of (node_from_self, node_from_other, current_path_tuple)
-        stack: deque[tuple[_StoreContainer, _StoreContainer, tuple[str, ...]]] = deque(
-            [(self, other, ())]
-        )
 
-        while stack:
-            node_self, node_other, path_parts = stack.pop()
+        def _recursive_diff(
+            node_self: Union["_StoreContainer", "_Ref"],
+            node_other: Union["_StoreContainer", "_Ref"],
+            path_parts: tuple[str, ...],
+        ) -> None:
+            # Case 1: Both are internal nodes (Containers)
+            if isinstance(node_self, _StoreContainer) and isinstance(
+                node_other, _StoreContainer
+            ):
+                keys_self = set(node_self._data.keys())
+                keys_other = set(node_other._data.keys())
+                # 1. Removed: Keys in self but not in other
+                for key in keys_self - keys_other:
+                    removed.update(
+                        self._collect_leaves(node_self._data[key], path_parts + (key,))
+                    )
+                # 2. Added: Keys in other but not in self
+                for key in keys_other - keys_self:
+                    added.update(
+                        self._collect_leaves(node_other._data[key], path_parts + (key,))
+                    )
+                # 3. Common: Recurse on shared keys
+                for key in keys_self & keys_other:
+                    _recursive_diff(
+                        node_self._data[key], node_other._data[key], path_parts + (key,)
+                    )
+            # Case 2: Both are leaf nodes (Refs)
+            elif isinstance(node_self, _Ref) and isinstance(node_other, _Ref):
+                val_self = node_self.value
+                val_other = node_other.value
+                is_different = False
+                if strategy == "ref":
+                    is_different = node_self is not node_other
+                elif strategy == "is":
+                    is_different = val_self is not val_other
+                elif strategy == "eq":
+                    is_different = val_self != val_other
+                if is_different:
+                    modified[".".join(path_parts)] = (val_self, val_other)
+            # Case 3: Type Mismatch (One is Container, one is Ref)
+            # Treat as "remove old tree" and "add new tree"
+            else:
+                removed.update(self._collect_leaves(node_self, path_parts))
+                added.update(self._collect_leaves(node_other, path_parts))
 
-            keys_self = set(node_self._data.keys())
-            keys_other = set(node_other._data.keys())
-
-            # Find removed keys (in self but not in other)
-            for key_str in keys_self - keys_other:
-                # The entire subtree under this key was removed.
-                removed_node = node_self._data[key_str]
-                removed.update(
-                    self._collect_leaves(removed_node, path_parts + (key_str,))
-                )
-
-            # Find added keys (in other but not in self)
-            for key_str in keys_other - keys_self:
-                # The entire subtree under this key was added.
-                added_node = node_other._data[key_str]
-                added.update(self._collect_leaves(added_node, path_parts + (key_str,)))
-
-            # Find common keys to compare their children
-            for key_str in keys_self & keys_other:
-                child_self = node_self._data[key_str]
-                child_other = node_other._data[key_str]
-                current_path = path_parts + (key_str,)
-
-                # Both are internal nodes, so we continue traversing.
-                if isinstance(child_self, _StoreContainer) and isinstance(
-                    child_other, _StoreContainer
-                ):
-                    stack.append((child_self, child_other, current_path))
-                    continue
-
-                # Both are leaf nodes, so we compare their values.
-                if isinstance(child_self, _Ref) and isinstance(child_other, _Ref):
-                    val_self = child_self.value
-                    val_other = child_other.value
-
-                    # Comparison logic
-                    if strategy == "ref":
-                        is_different = child_self is not child_other
-                    elif strategy == "is":
-                        is_different = val_self is not val_other
-                    elif strategy == "eq":
-                        is_different = val_self != val_other
-
-                    if is_different:
-                        modified[".".join(current_path)] = (val_self, val_other)
-                    continue
-
-                # Mismatch in node types. Treat as a removal of the old and an
-                # addition of the new.
-                removed.update(self._collect_leaves(child_self, current_path))
-                added.update(self._collect_leaves(child_other, current_path))
-
+        _recursive_diff(self, other, ())
         return _DiffResult(added, removed, modified)
 
     def _collect_leaves(
         self,
-        start_node: Union[_StoreContainer, _Ref],
+        node: Union["_StoreContainer", "_Ref"],
         path_prefix: tuple[str, ...],
     ) -> dict[str, Any]:
         """Helper to recursively find all leaf values from a starting node."""
-        leaves = {}
-        stack: deque[tuple[Union[_StoreContainer, _Ref], tuple[str, ...]]] = deque(
-            [(start_node, path_prefix)]
-        )
+        leaves: dict[str, Any] = {}
 
-        while stack:
-            node, current_path_parts = stack.pop()
+        def _traverse(
+            node: Union["_StoreContainer", "_Ref"], current_path: tuple[str, ...]
+        ) -> None:
             if isinstance(node, _Ref):
-                # It's a leaf node, add it to our collection
-                leaves[".".join(current_path_parts)] = node.value
+                leaves[".".join(current_path)] = node.value
             elif isinstance(node, _StoreContainer):
-                # It's an internal node, add its children to the stack
                 for name, child in node._data.items():
-                    stack.append((child, current_path_parts + (name,)))
+                    _traverse(child, current_path + (name,))
+
+        _traverse(node, path_prefix)
         return leaves
 
     def collect_leaves(self) -> dict[str, Any]:
