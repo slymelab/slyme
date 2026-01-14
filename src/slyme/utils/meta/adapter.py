@@ -5,11 +5,11 @@ from slyme.utils.inspect import (
     resolve_bases,
     resolve_minimal_classes,
 )
-from slyme.utils.typing import Any, Dict, List, Mapping, Tuple, Type, Union
+from slyme.utils.typing import Any, Mapping, Union
 from slyme.utils.common import make_params_hashable, FuncParams
 
 
-def create_metaclass_adapter(*metaclasses: Type, **kwargs) -> Type[Type]:
+def create_metaclass_adapter(*metaclasses: type, **kwargs) -> type[type]:
     """
     Create a new metaclass adapter with given ``metaclasses`` and ``kwargs``.
     """
@@ -25,7 +25,7 @@ def create_metaclass_adapter(*metaclasses: Type, **kwargs) -> Type[Type]:
     return MetaclassAdapter
 
 
-def is_metaclass_adapter(cls: Type) -> bool:
+def is_metaclass_adapter(cls: type) -> bool:
     """
     Check if a class is a metaclass adapter. Return ``True`` if and only if ``cls`` has attribute
     ``_is_metaclass_adapter`` and the value is ``True``.
@@ -40,17 +40,17 @@ class MetaclassResolver:
     """
 
     # A dict that stores metaclass adapters with tuple of bases and kwargs as the dict key.
-    _metaclass_adapter_dict: Dict[Any, Type] = {}
+    _metaclass_adapter_dict: dict[Any, type] = {}
 
     @classmethod
     def resolve(
         cls,
-        bases: Tuple[Type, ...],
-        metaclasses: Tuple[Union[Type, None], ...],
+        bases: tuple[type, ...],
+        metaclasses: tuple[Union[type, None], ...],
         *,
         strict: bool = True,
         meta_kwargs: Union[Mapping[str, Any], None] = None,
-    ) -> Type:
+    ) -> type:
         """
         Resolve a proper metaclass with given ``bases`` and ``metaclasses``.
         """
@@ -59,7 +59,7 @@ class MetaclassResolver:
         # Get the minimal meta bases.
         meta_bases = resolve_minimal_classes(meta_bases)
         # Get the pure metaclasses without ``None``.
-        pure_metaclasses: Tuple[Type, ...] = tuple(
+        pure_metaclasses: tuple[type, ...] = tuple(
             filter(cls.class_filter, metaclasses)
         )
         # Get meta bases difference.
@@ -85,8 +85,8 @@ class MetaclassResolver:
 
     @classmethod
     def resolve_required_and_adapters(
-        cls, meta_bases: Tuple[Type, ...], metaclasses: Tuple[Type, ...]
-    ) -> Tuple[Type, ...]:
+        cls, meta_bases: tuple[type, ...], metaclasses: tuple[type, ...]
+    ) -> tuple[type, ...]:
         """
         Parse and check the required metaclasses to be specified by the users in
         the strict mode. Return the remaining metaclass adapters to be further
@@ -123,8 +123,8 @@ class MetaclassResolver:
 
     @classmethod
     def resolve_final_metaclasses(
-        cls, meta_bases: Tuple[Type, ...], metaclasses: Tuple[Type, ...]
-    ) -> Tuple[Type, ...]:
+        cls, meta_bases: tuple[type, ...], metaclasses: tuple[type, ...]
+    ) -> tuple[type, ...]:
         """
         Resolve the final metaclass sequence. Insert ``meta_bases`` into ``metaclasses``
         at proper positions and remove ``None`` values.
@@ -134,7 +134,7 @@ class MetaclassResolver:
             # ``None`` is the last item by default.
             final_metaclasses.append(None)
         # Insert the ``meta_bases`` into proper positions.
-        insertions: List[Tuple[Type, Union[Type, None]]] = []
+        insertions: list[tuple[type, Union[type, None]]] = []
         for meta_base in meta_bases:
             insertion_found = False
             for meta_cls in final_metaclasses:
@@ -161,8 +161,8 @@ class MetaclassResolver:
 
     @classmethod
     def load_metaclass_adapter(
-        cls, final_metaclasses: Tuple[Type, ...], meta_kwargs: Mapping[str, Any]
-    ) -> Type:
+        cls, final_metaclasses: tuple[type, ...], meta_kwargs: Mapping[str, Any]
+    ) -> type:
         """
         Load metaclass with given ``final_metaclasses`` and ``meta_kwargs``. If adapter
         cache found, then directly return, otherwise create a new metaclass adapter and
@@ -181,7 +181,7 @@ class MetaclassResolver:
     @classmethod
     def make_func(
         cls,
-        *metaclasses: Union[Type, None],
+        *metaclasses: Union[type, None],
         strict: bool = True,
         meta_kwargs: Union[Mapping[str, Any], None] = None,
     ):
@@ -191,8 +191,8 @@ class MetaclassResolver:
 
         def _metaclass_func(
             name: str,
-            bases: Tuple[Type, ...],
-            namespace: Dict[str, Any],
+            bases: tuple[type, ...],
+            namespace: dict[str, Any],
             /,
             **kwargs: Any,
         ):
@@ -203,7 +203,7 @@ class MetaclassResolver:
         return _metaclass_func
 
     @staticmethod
-    def class_filter(cls: Union[Type, None], /) -> bool:
+    def class_filter(cls: Union[type, None], /) -> bool:
         """
         Filter function that removes ``None`` values.
         """
@@ -211,7 +211,7 @@ class MetaclassResolver:
 
 
 def metaclasses(
-    *metaclasses: Union[Type, None],
+    *metaclasses: Union[type, None],
     strict: bool = True,
     meta_kwargs: Union[Mapping[str, Any], None] = None,
 ):

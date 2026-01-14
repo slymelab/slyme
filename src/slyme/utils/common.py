@@ -5,7 +5,7 @@ useful but unrelated utils in slyme.
 # NOTE: The below module block is used to help ``Metaclasses`` create
 # new classes, and it should be at the beginning of the file in order
 # to avoid circular imports.
-from .typing import Generic, TypeVar, Hashable, Set, Type, Union, Any, List
+from .typing import Generic, TypeVar, Hashable, Union, Any
 from .inspect import resolve_instance_classname
 
 _ArgsT = TypeVar("_ArgsT")
@@ -23,7 +23,7 @@ class FuncParams(Generic[_ArgsT, _KwargsT]):
 
     def __repr__(self) -> str:
         sep = ", "
-        params: List[str] = []
+        params: list[str] = []
         arg_str = sep.join(map(repr, self.args))
         if arg_str:
             params.append(arg_str)
@@ -89,7 +89,7 @@ def make_params_hashable(
     typed: bool = False,
     kwarg_mark: Hashable = object(),
     type_mark: Hashable = object(),
-    fast_types: Set[Type] = {int, str},
+    fast_types: set[type] = {int, str},
 ) -> Union[Hashable, HashCache, None]:
     """
     Make the function params a hashable item and return. If there is
