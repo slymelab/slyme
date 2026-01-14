@@ -1,10 +1,9 @@
 from dataclasses import dataclass, field
-from slyme.utils.typing import Any, Protocol, Union, Self
+from typing import Any, Protocol, Union
+from typing_extensions import Self
 from slyme.utils.registry import Registry, TypeRegistry
-from slyme.utils.inspect import resolve_name
-from slyme.context import RequiresKey, ProducesKey, Context
+from slyme.context import Context
 from .base import NodeComponent, Node, NodeElement
-from .container import NodeList
 
 # Registry definition
 DEPENDENCY_REGISTRY: Registry[type["NodeDependencyChecker"]] = Registry(
@@ -26,7 +25,7 @@ class NodeDependencyChecker:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         # Each subclass (Strategy) gets its own isolated TypeRegistry.
-        cls.registry = TypeRegistry(f"TypeRegistryOf{resolve_name(cls)}")
+        cls.registry = TypeRegistry(f"TypeRegistryOf{cls.__name__}")
 
     def check(
         self,

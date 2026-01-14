@@ -1,19 +1,13 @@
 from abc import ABC, abstractmethod
-from slyme.utils.typing import (
-    Callable,
+from collections.abc import Callable
+from typing import (
     TypeVar,
     Union,
     Any,
     Generic,
 )
-from slyme.utils.attribute import AttributeRegistryMixin, AttributeTypeRegistry
 from slyme.utils.collection.base import SequenceData
-from slyme.utils.composite import (
-    Component,
-)
-from slyme.utils.freeze import FreezeMixin
 from slyme.utils.store import StoreKeyMixin
-from slyme.utils.inspect import resolve_instance_classname
 from slyme.context import Context
 from .exception import (
     NodeTerminate,
@@ -22,11 +16,10 @@ from .exception import (
     NodeExpressionExceptionRecord,
 )
 
-_ComponentT = TypeVar("_ComponentT", bound="Component")
 _R = TypeVar("_R")
 
 
-class NodeElement(StoreKeyMixin, AttributeRegistryMixin, FreezeMixin, ABC):
+class NodeElement(StoreKeyMixin, ABC):
     """Base class for all node-related entities, integrating essential mixins.
 
     Design Note:
@@ -39,7 +32,7 @@ class NodeElement(StoreKeyMixin, AttributeRegistryMixin, FreezeMixin, ABC):
     pass
 
 
-class NodeComponent(Component[_ComponentT], NodeElement):
+class NodeComponent(NodeElement):
     """Base class for Node and AsyncNode."""
 
     # Node search operations.
@@ -99,11 +92,6 @@ class Node(NodeComponent["Node"]):
         super().__init__(**kwargs)
         self.node_wrappers = NodeWrapperList(children=node_wrappers)
 
-    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
-        super()._init_attr_registry(registry)
-        registry.register_type(Node)
-        registry.register_type(NodeExpression)
-
     # Core APIs.
     @abstractmethod
     def execute(self, ctx: Context) -> None:
@@ -137,10 +125,7 @@ class Node(NodeComponent["Node"]):
         return render_info
 
 
-class NodeExpression(Component["NodeExpression"], NodeElement, Generic[_R]):
-    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
-        super()._init_attr_registry(registry)
-        registry.register_type(NodeExpression)
+class NodeExpression(NodeElement, Generic[_R]):
 
     @abstractmethod
     def evaluate(self, ctx: Context) -> _R:

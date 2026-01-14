@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from slyme.utils.typing import TypeVar, Generic
+from typing import TypeVar, Generic
 
 _ContextT = TypeVar("_ContextT")
 

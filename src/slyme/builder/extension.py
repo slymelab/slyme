@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from slyme.utils.composite import Component, ComponentList
-from slyme.utils.typing import TypeVar, Generic, Generator
+from typing import TypeVar, Generic
+from slyme.utils.collection import MutableSequenceProxy
 
 _ContextT = TypeVar("_ContextT")
 _BuilderExtensionT = TypeVar("_BuilderExtensionT")
@@ -21,8 +21,7 @@ class BuilderExtension(ABC, Generic[_ContextT]):
 
 
 class BuilderExtensionList(
-    BuilderExtension[_ContextT],
-    ComponentList[_BuilderExtensionT],
+    MutableSequenceProxy[_BuilderExtensionT],
     ABC,
     Generic[_ContextT, _BuilderExtensionT],
 ):

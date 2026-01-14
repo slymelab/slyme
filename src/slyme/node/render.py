@@ -1,9 +1,7 @@
 import sys
 from dataclasses import dataclass
-from .container import NodeList
-from slyme.utils.typing import Any, Protocol, Iterator, Union, TextIO, Literal
+from typing import Any, Protocol, Iterator, Union, TextIO, Literal
 from slyme.utils.registry import Registry, TypeRegistry
-from slyme.utils.inspect import resolve_name
 from .base import NodeComponent
 
 RENDER_REGISTRY: Registry[type["NodeRender"]] = Registry("node_render")
@@ -24,7 +22,7 @@ class NodeRender:
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        cls.registry = TypeRegistry(f"TypeRegistryOf{resolve_name(cls)}")
+        cls.registry = TypeRegistry(f"TypeRegistryOf{cls.__name__}")
 
     def render(
         self, node, node_cls: Union[type[NodeComponent], None] = None, /, **kwargs

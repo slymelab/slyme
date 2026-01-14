@@ -1,12 +1,8 @@
 from abc import abstractmethod
-from slyme.utils.typing import (
-    Generator,
-)
-from slyme.utils.attribute import AttributeTypeRegistry
-from slyme.utils.composite import Component, ComponentList
-from slyme.utils.execution import GeneratorExecutorList
-from slyme.utils.execution.manager import check_stop_flag
+from contextlib import contextmanager
+from collections.abc import Generator
 from slyme.context import Context
+from slyme.utils.collection import MutableSequenceProxy
 from .base import NodeElement, Node, NodeExpression
 from .exception import (
     NodeException,
@@ -14,7 +10,7 @@ from .exception import (
 )
 
 
-class NodeWrapper(Component["NodeWrapper"], NodeElement):
+class NodeWrapper(NodeElement):
     """Defines the interface for auxiliary logic attached to a Node.
 
     Design Note:
@@ -23,11 +19,8 @@ class NodeWrapper(Component["NodeWrapper"], NodeElement):
         decorate, intercept, or augment the execution flow of their host Node.
     """
 
-    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
-        super()._init_attr_registry(registry)
-        registry.register_type(NodeExpression)
-
     @abstractmethod
+    @contextmanager
     def wrap(self, ctx: Context, wrapped: Node) -> Generator:
         """Core node wrapper API for custom operations."""
         yield
@@ -46,7 +39,7 @@ class NodeWrapper(Component["NodeWrapper"], NodeElement):
             )
 
 
-class NodeWrapperList(ComponentList[NodeWrapper]):
+class NodeWrapperList(MutableSequenceProxy[NodeWrapper]):
     """Manages the storage and execution of a sequence of NodeWrappers.
 
     Design Note:
