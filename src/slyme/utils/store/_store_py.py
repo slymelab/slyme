@@ -209,7 +209,6 @@ class Store(_StoreContainer):
         self, other: "Store", strategy: Literal["ref", "is", "eq"] = "ref"
     ) -> _DiffResult:
         """Compares this Store with another, identifying added, removed, and modified items.
-        This implementation uses a non-recursive, stack-based traversal algorithm.
 
         Args:
             other: The other Store instance to compare against.
