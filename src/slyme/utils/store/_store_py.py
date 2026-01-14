@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from collections import deque
-from contextlib import AbstractContextManager
+from contextlib import contextmanager
 from slyme.utils.typing import (
     Any,
     Generic,
@@ -13,7 +13,6 @@ from slyme.utils.typing import (
 from slyme.utils.constant import MISSING
 from slyme.utils.inspect import resolve_instance_classname
 from slyme.utils.common import dict_to_key_value_str
-from slyme.utils.scoped import ScopedAttrAssign
 from .hook import StoreHook
 
 _T = TypeVar("_T")
@@ -201,8 +200,14 @@ class Store(_StoreNode):
             node = nxt
         return node
 
-    def with_hook(self, hook: StoreHook) -> AbstractContextManager:
-        return ScopedAttrAssign({"hook": hook}).enter_scope(self)
+    @contextmanager
+    def with_hook(self, hook: StoreHook):
+        prev_hook = self.hook
+        self.hook = hook
+        try:
+            yield
+        finally:
+            self.hook = prev_hook
 
     def diff(
         self, other: "Store", strategy: Literal["ref", "is", "eq"] = "ref"

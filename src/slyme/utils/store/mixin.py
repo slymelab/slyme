@@ -1,16 +1,11 @@
 from slyme.utils.typing import Union
-from slyme.utils.attribute import AttributeRegistryMixin, AttributeTypeRegistry
 from .store import StoreKey
 
 
-class StoreKeyMixin(AttributeRegistryMixin):
+class StoreKeyMixin:
     """
     Mixin for managing KeyFields using a Local KeyFields Dictionary.
     """
-
-    def _init_attr_registry(self, registry: AttributeTypeRegistry) -> None:
-        super()._init_attr_registry(registry)
-        registry.register_type(StoreKey)
 
     @property
     def store_keys(self) -> dict[str, StoreKey]:

@@ -1,1 +1,0 @@
-from .mixin import FreezeMixin
