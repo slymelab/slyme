@@ -3,15 +3,14 @@ A convenient registry util that dynamically retrieves items based on keys.
 """
 
 import inspect
-from .collection import MutableMappingProxy
-from .decorator import auto_decorator
-from .typing import (
+from collections.abc import Callable, Iterable
+from typing import (
     Union,
     TypeVar,
     overload,
-    Callable,
-    Iterable,
 )
+from .collection import MutableMappingProxy
+from .decorator import auto_decorator
 from .constant import MISSING, Missing
 
 _T = TypeVar("_T")

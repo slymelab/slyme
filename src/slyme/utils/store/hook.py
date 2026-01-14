@@ -1,7 +1,7 @@
 """Store hooks."""
 
 from dataclasses import dataclass
-from slyme.utils.typing import Union, Any, TYPE_CHECKING, TypeVar
+from typing import Union, Any, TYPE_CHECKING, TypeVar
 from slyme.utils.constant import Missing
 from slyme.utils.collection import MutableSequenceProxy
 

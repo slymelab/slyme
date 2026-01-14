@@ -1,11 +1,11 @@
 import inspect
 from itertools import chain, filterfalse
+from typing import Any, Union
+from collections.abc import Mapping
 from slyme.utils.inspect import (
     class_difference,
-    resolve_bases,
     resolve_minimal_classes,
 )
-from slyme.utils.typing import Any, Mapping, Union
 from slyme.utils.common import make_params_hashable, FuncParams
 
 
@@ -101,7 +101,7 @@ class MetaclassResolver:
             meta_cls = meta_queue.pop(0)
             if is_metaclass_adapter(meta_cls):
                 # Add the bases of the adapter metaclass to the queue.
-                meta_queue.extend(resolve_bases(meta_cls))
+                meta_queue.extend(meta_cls.__bases__)
             else:
                 required_metaclasses.add(meta_cls)
         # Resolve all the mro of metaclasses.

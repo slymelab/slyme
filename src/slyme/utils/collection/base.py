@@ -8,22 +8,20 @@ from collections.abc import (
     Set,
     MutableSet,
     Collection,
-)
-from slyme.utils.typing import (
-    TypeVar,
     Iterator,
     Iterable,
+)
+from typing import (
+    TypeVar,
     overload,
     Union,
-    Tuple,
 )
-from slyme.utils.inspect import resolve_instance_classname
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 _T = TypeVar("_T")
 _ST = TypeVar("_ST")
-MappingData = Union[Mapping[_KT, _VT], Iterable[Tuple[_KT, _VT]], None]
+MappingData = Union[Mapping[_KT, _VT], Iterable[tuple[_KT, _VT]], None]
 SequenceData = Union[Iterable[_T], None]
 SetData = Union[Iterable[_T], None]
 
@@ -44,7 +42,7 @@ class _MappingMixin(Mapping[_KT, _VT]):
 
     def __repr__(self, /) -> str:
         return (
-            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{type(self).__name__}<{hex(id(self))}>"
             f"{self._mapping_source!r}"
         )
 
@@ -116,7 +114,7 @@ class _SequenceMixin(Sequence[_T]):
 
     def __repr__(self, /) -> str:
         return (
-            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{type(self).__name__}<{hex(id(self))}>"
             f"{self._sequence_source!r}"
         )
 
@@ -220,7 +218,7 @@ class _SetMixin(Set[_T]):
 
     def __repr__(self, /) -> str:
         return (
-            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
+            f"{type(self).__name__}<{hex(id(self))}>"
             f"{{{', '.join(map(repr, self._set_source))}}}"
         )
 

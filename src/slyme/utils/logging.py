@@ -1,7 +1,7 @@
 """logging utils module."""
 
 import logging
-from slyme.utils.typing import Union
+from typing import Union
 
 
 def get_logger(name: Union[str, None] = None) -> logging.Logger:

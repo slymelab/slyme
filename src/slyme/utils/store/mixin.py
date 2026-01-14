@@ -1,4 +1,4 @@
-from slyme.utils.typing import Union
+from typing import Union
 from .store import StoreKey
 
 

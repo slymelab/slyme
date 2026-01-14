@@ -1,10 +1,10 @@
-from slyme.utils.typing import (
+from typing import (
     Union,
     Protocol,
     overload,
-    Self,
     TypeVar,
 )
+from typing_extensions import Self
 
 _GetT_co = TypeVar("_GetT_co", covariant=True)
 _SetT_contra = TypeVar("_SetT_contra", contravariant=True)

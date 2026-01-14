@@ -1,10 +1,10 @@
 from functools import wraps
-from slyme.utils.logging import get_logger
-from .typing import (
+from collections.abc import Callable
+from typing import (
     Union,
-    Callable,
     TypeVar,
 )
+from slyme.utils.logging import get_logger
 from .constant import MISSING
 
 _FuncOrMethodT = TypeVar("_FuncOrMethodT")

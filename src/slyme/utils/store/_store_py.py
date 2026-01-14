@@ -1,17 +1,16 @@
 from dataclasses import dataclass
 from collections import deque
+from collections.abc import Iterable
 from contextlib import contextmanager
-from slyme.utils.typing import (
+from typing import (
     Any,
     Generic,
     TypeVar,
     Union,
-    Self,
     Literal,
-    Iterable,
 )
+from typing_extensions import Self
 from slyme.utils.constant import MISSING
-from slyme.utils.inspect import resolve_instance_classname
 from .hook import StoreHook
 
 _T = TypeVar("_T")
@@ -49,7 +48,7 @@ class StoreKey(Generic[_T]):
         return type(self) is type(other) and self.parts == other.parts
 
     def __repr__(self) -> str:
-        return f"{resolve_instance_classname(self)}({self.path!r})"
+        return f"{type(self).__name__}({self.path!r})"
 
 
 class _Ref(Generic[_T]):
@@ -64,7 +63,7 @@ class _Ref(Generic[_T]):
         self._value = value
 
     def __repr__(self) -> str:
-        return f"{resolve_instance_classname(self)}(value={self.value!r})"
+        return f"{type(self).__name__}(value={self.value!r})"
 
 
 class _StoreNode:
@@ -106,8 +105,7 @@ class _StoreNode:
         sep = ", "
         data_str = sep.join([f"{k}={v.value!r}" for k, v in self._data.items()])
         return (
-            f"{resolve_instance_classname(self)}"
-            f"({data_str})"
+            f"{type(self).__name__}({data_str})"
         )
 
     def copy(self) -> Self:

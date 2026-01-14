@@ -5,8 +5,7 @@ useful but unrelated utils in slyme.
 # NOTE: The below module block is used to help ``Metaclasses`` create
 # new classes, and it should be at the beginning of the file in order
 # to avoid circular imports.
-from .typing import Generic, TypeVar, Hashable, Union, Any
-from .inspect import resolve_instance_classname
+from typing import Generic, TypeVar, Hashable, Union, Any
 
 _ArgsT = TypeVar("_ArgsT")
 _KwargsT = TypeVar("_KwargsT")
@@ -30,7 +29,7 @@ class FuncParams(Generic[_ArgsT, _KwargsT]):
         kwarg_str = sep.join([f"{key}={value!r}" for key, value in self.kwargs.items()])
         if kwarg_str:
             params.append(kwarg_str)
-        return f"{resolve_instance_classname(self)}({sep.join(params)})"
+        return f"{type(self).__name__}({sep.join(params)})"
 
 
 class HashCache:
