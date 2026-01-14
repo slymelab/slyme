@@ -19,9 +19,6 @@ def create_metaclass_adapter(*metaclasses: Type, **kwargs) -> Type[Type]:
         # metaclass simply inherits multiple metaclasses and does nothing else.
         _is_metaclass_adapter: bool = True
 
-        def __str__(self) -> str:
-            return f"{super().__str__()}{metaclasses}"
-
         def __repr__(self) -> str:
             return f"{super().__repr__()}{metaclasses}"
 

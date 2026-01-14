@@ -2,11 +2,9 @@
 useful but unrelated utils in slyme.
 """
 
-#
 # NOTE: The below module block is used to help ``Metaclasses`` create
 # new classes, and it should be at the beginning of the file in order
 # to avoid circular imports.
-#
 from .typing import Generic, TypeVar, Hashable, Set, Type, Union, Any, List
 from .inspect import resolve_instance_classname
 
@@ -23,13 +21,13 @@ class FuncParams(Generic[_ArgsT, _KwargsT]):
         self.args = args
         self.kwargs = kwargs
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         sep = ", "
         params: List[str] = []
-        arg_str = sep.join(map(str, self.args))
+        arg_str = sep.join(map(repr, self.args))
         if arg_str:
             params.append(arg_str)
-        kwarg_str = dict_to_key_value_str(self.kwargs, str_sep=sep)
+        kwarg_str = sep.join([f"{key}={value!r}" for key, value in self.kwargs.items()])
         if kwarg_str:
             params.append(kwarg_str)
         return f"{resolve_instance_classname(self)}({sep.join(params)})"
@@ -130,27 +128,5 @@ def make_params_hashable(
         return
 
 
-#
 # NOTE: Other module blocks should be placed below (including the related
 # imports) in order to avoid possible circular imports.
-#
-from .typing import Mapping
-
-
-# dict and list formatter
-def dict_to_key_value_str_list(dict_: Mapping, key_value_sep: str = "=") -> list:
-    """
-    Parse items in a dict to a str list using ``key_value_sep`` to concat
-    the keys and values.
-    """
-    return [f"{key}{key_value_sep}{value!r}" for key, value in dict_.items()]
-
-
-def dict_to_key_value_str(
-    dict_: Mapping, key_value_sep: str = "=", str_sep: str = ", "
-) -> str:
-    """
-    Parse items in a dict to a str using ``key_value_sep`` to concat the
-    keys and values, and using ``str_sep`` to concat the items.
-    """
-    return str_sep.join(dict_to_key_value_str_list(dict_, key_value_sep=key_value_sep))

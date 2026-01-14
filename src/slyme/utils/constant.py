@@ -1,7 +1,7 @@
 """This module defines special constants in ``slyme``."""
 
 from enum import Enum, auto
-from .typing import Any, Literal, Tuple, Self
+from .typing import Literal
 
 
 # Flag constants.

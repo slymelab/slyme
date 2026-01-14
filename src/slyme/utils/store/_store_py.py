@@ -12,7 +12,6 @@ from slyme.utils.typing import (
 )
 from slyme.utils.constant import MISSING
 from slyme.utils.inspect import resolve_instance_classname
-from slyme.utils.common import dict_to_key_value_str
 from .hook import StoreHook
 
 _T = TypeVar("_T")
@@ -104,9 +103,11 @@ class _StoreNode:
         return node
 
     def __repr__(self) -> str:
+        sep = ", "
+        data_str = sep.join([f"{k}={v.value!r}" for k, v in self._data.items()])
         return (
             f"{resolve_instance_classname(self)}"
-            f"({dict_to_key_value_str({k: v.value for k, v in self._data.items()})})"
+            f"({data_str})"
         )
 
     def copy(self) -> Self:

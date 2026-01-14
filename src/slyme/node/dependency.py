@@ -81,7 +81,8 @@ class VanillaDependencyReport:
     def valid(self) -> bool:
         return len(self.missing_keys) == 0
 
-    def __str__(self) -> str:
+    @property
+    def message(self) -> str:
         if self.valid:
             return "Dependency Check Passed (Vanilla)."
         return (

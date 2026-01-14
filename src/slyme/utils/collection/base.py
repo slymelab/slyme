@@ -42,12 +42,6 @@ class _MappingMixin(Mapping[_KT, _VT]):
     def __len__(self, /) -> int:
         return len(self._mapping_source)
 
-    def __str__(self, /) -> str:
-        return (
-            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
-            f"{self._mapping_source}"
-        )
-
     def __repr__(self, /) -> str:
         return (
             f"{resolve_instance_classname(self)}<{hex(id(self))}>"
@@ -120,39 +114,11 @@ class _SequenceMixin(Sequence[_T]):
     def __len__(self, /) -> int:
         return len(self._sequence_source)
 
-    def __str__(self, /) -> str:
-        return (
-            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
-            f"{self._sequence_source}"
-        )
-
     def __repr__(self, /) -> str:
         return (
             f"{resolve_instance_classname(self)}<{hex(id(self))}>"
             f"{self._sequence_source!r}"
         )
-
-    def rindex(
-        self, value: _T, start: int = 0, stop: Union[int, None] = None, /
-    ) -> int:
-        """Reversed index."""
-        length = len(self)
-        if start < 0:
-            start = max(length + start, 0)
-
-        if stop is None:
-            stop = length
-        elif stop < 0:
-            stop += length
-
-        for i in range(stop - 1, start - 1, -1):
-            try:
-                v = self[i]
-            except IndexError:
-                break
-            if v is value or v == value:
-                return i
-        raise ValueError("value not found")
 
 
 class SequenceProxy(_SequenceMixin[_T], Sequence[_T]):
@@ -251,12 +217,6 @@ class _SetMixin(Set[_T]):
 
     def __len__(self, /) -> int:
         return len(self._set_source)
-
-    def __str__(self, /) -> str:
-        return (
-            f"{resolve_instance_classname(self)}<{hex(id(self))}>"
-            f"{{{', '.join(map(repr, self._set_source))}}}"
-        )
 
     def __repr__(self, /) -> str:
         return (
