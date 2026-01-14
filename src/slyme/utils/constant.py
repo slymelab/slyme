@@ -1,8 +1,7 @@
 """This module defines special constants in ``slyme``."""
 
-from threading import RLock
 from enum import Enum, auto
-from .typing import Any, Literal, Tuple, Union, Self
+from .typing import Any, Literal, Tuple, Self
 
 
 # Flag constants.
@@ -17,55 +16,8 @@ Stop = Literal[FlagConstant.STOP]
 STOP: Stop = FlagConstant.STOP
 
 
-class _SingletonMeta(type):
-    """Singleton metaclass that makes a specific class a singleton class.
-
-    NOTE: The `_SingletonMetaclass` works for each class (even subclasses) independently, because it sets
-    locks and `instance` separately for each class it creates.
-    """
-
-    _singleton_t_lock: RLock
-    _singleton_instance: Union[None, Any]
-
-    def __init__(cls, /, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        cls._singleton_t_lock = RLock()
-        cls._singleton_instance = None
-
-    def __call__(cls, /, *args: Any, **kwargs: Any):
-        if cls._singleton_instance is None:
-            with cls._singleton_t_lock:
-                if cls._singleton_instance is None:
-                    cls._singleton_instance = super().__call__(*args, **kwargs)
-        return cls._singleton_instance
-
-
-class _ConstantMeta(_SingletonMeta):
-    """Metaclass for constants."""
-
-    pass
-
-
-class _Constant(metaclass=_ConstantMeta):
-    """Base class of constant classes.
-
-    NOTE: This class is for ``slyme.utils.constant`` only.
-    """
-
-    __slots__ = ()
-
-    def __new__(cls, /, *args, **kwargs) -> Self:
-        if cls._singleton_instance is None:
-            with cls._singleton_t_lock:
-                if cls._singleton_instance is None:
-                    # NOTE: Directly use ``object.__new__`` here.
-                    instance = object.__new__(cls)
-                    cls._singleton_instance = instance
-        return cls._singleton_instance
-
-
 # ``Nothing`` class and ``NOTHING`` instance.
-class Nothing(_Constant):
+class Nothing:
     """
     This class defines a ``NOTHING`` constant. Different from ``None`` in Python, ``NOTHING``
     is more exception-friendly, which means no exception will be raised under the following
