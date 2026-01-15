@@ -366,6 +366,7 @@ class PyTreeEngine:
     ) -> PyTreeDef:
         """Recursive core for traversal."""
         # should_flatten check
+        handler = None
         should_flatten = is_leaf is None or not is_leaf(entry)
         if should_flatten:
             handler = self._lookup_handler(entry)
