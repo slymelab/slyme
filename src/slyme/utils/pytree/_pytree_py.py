@@ -365,16 +365,13 @@ class PyTreeEngine:
         is_leaf: Optional[Callable[[Any], bool]],
     ) -> PyTreeDef:
         """Recursive core for traversal."""
+        # should_flatten check
+        should_flatten = is_leaf is None or not is_leaf(entry)
+        if should_flatten:
+            handler = self._lookup_handler(entry)
+            should_flatten = handler is not None
 
-        # 1. Dynamic is_leaf check (Top Priority Interception)
-        if is_leaf is not None and is_leaf(entry):
-            leaf_sink(current_path, entry)
-            return LeafDef()
-
-        # 2. Handler lookup
-        handler = self._lookup_handler(entry)
-
-        if handler:
+        if should_flatten:
             children_iter, aux = handler.flatten(entry)
 
             # 3. Resolve Keys for Path Tracking.
