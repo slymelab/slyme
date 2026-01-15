@@ -15,7 +15,7 @@ from .hook import StoreHook
 _T = TypeVar("_T")
 
 
-class StoreKey(Generic[_T]):
+class Key(Generic[_T]):
     """Immutable dotted key with cached hash and split parts."""
 
     @property
@@ -51,7 +51,7 @@ class StoreKey(Generic[_T]):
 
 
 class _Ref(Generic[_T]):
-    """Reference node to distinguish any value."""
+    """Reference entry to distinguish any value."""
 
     @property
     def value(self) -> _T:
@@ -65,8 +65,8 @@ class _Ref(Generic[_T]):
         return f"{type(self).__name__}(value={self.value!r})"
 
 
-class _StoreContainer:
-    """Inner store node.
+class _StoreEntry:
+    """Inner store entry.
     NOTE: `_StoreContainer` can only be modified through `Store` for consistency.
     """
 
@@ -75,30 +75,30 @@ class _StoreContainer:
         return self
 
     def __init__(
-        self, data: Union[dict[str, Union["_StoreContainer", _Ref]], None] = None
+        self, data: Union[dict[str, Union["_StoreEntry", _Ref]], None] = None
     ) -> None:
-        self._data: dict[str, Union[_StoreContainer, _Ref]] = (
+        self._data: dict[str, Union[_StoreEntry, _Ref]] = (
             data if data is not None else {}
         )
 
-    def __getitem__(self, key: Union[StoreKey[_T], str]) -> _T:
+    def __getitem__(self, key: Union[Key[_T], str]) -> _T:
         if isinstance(key, str):
-            key = StoreKey(key)
+            key = Key(key)
         return self._getitem(key)
 
-    def _getitem(self, key: StoreKey[_T]) -> _T:
+    def _getitem(self, key: Key[_T]) -> _T:
         # NOTE: Annotate to `Any` to pass the type checker.
         result: Any = self._resolve(key.parts).value
         return result
 
-    def _resolve(self, parts: Iterable[str]) -> Union["_StoreContainer", _Ref]:
-        """Resolve the path parts and get the final node."""
-        node: Union[_StoreContainer, _Ref] = self
+    def _resolve(self, parts: Iterable[str]) -> Union["_StoreEntry", _Ref]:
+        """Resolve the path parts and get the final entry."""
+        entry: Union[_StoreEntry, _Ref] = self
         for p in parts:
-            if not isinstance(node, _StoreContainer):
+            if not isinstance(entry, _StoreEntry):
                 raise KeyError(f"Path {parts} not found")
-            node = node._data[p]
-        return node
+            entry = entry._data[p]
+        return entry
 
     def __repr__(self) -> str:
         sep = ", "
@@ -108,7 +108,7 @@ class _StoreContainer:
     def copy(self) -> Self:
         return type(self)(
             data={
-                k: (v.copy() if isinstance(v, _StoreContainer) else v)
+                k: (v.copy() if isinstance(v, _StoreEntry) else v)
                 for k, v in self._data.items()
             }
         )
@@ -122,51 +122,51 @@ class _DiffResult:
     modified: dict[str, tuple[Any, Any]]  # {key: (self_value, other_value)}
 
 
-class Store(_StoreContainer):
+class Store(_StoreEntry):
     """Dotted-attribute-style nested store."""
 
     def __init__(
         self,
         hook: Union[StoreHook, None] = None,
-        data: Union[dict[str, Union[_StoreContainer, _Ref]], None] = None,
+        data: Union[dict[str, Union[_StoreEntry, _Ref]], None] = None,
     ) -> None:
         super().__init__(data=data)
         self.hook = hook
 
-    def __getitem__(self, key: Union[StoreKey[_T], str]) -> _T:
+    def __getitem__(self, key: Union[Key[_T], str]) -> _T:
         if isinstance(key, str):
-            key = StoreKey(key)
+            key = Key(key)
         value = self._getitem(key)
         if self.hook is not None:
             # Call hook
-            self.hook.getitem(self, key, value)
+            self.hook.on_getitem(self, key, value)
         return value
 
-    def __setitem__(self, key: Union[StoreKey[_T], str], value: _T) -> None:
+    def __setitem__(self, key: Union[Key[_T], str], value: _T) -> None:
         if isinstance(key, str):
-            key = StoreKey(key)
+            key = Key(key)
         *dirs, last = key.parts
-        node = self._touch(dirs)
+        entry = self._touch(dirs)
         if self.hook is not None:
             # Get the old value first
             old_value = (
                 old.value
-                if (old := node._data.get(last, None)) is not None
+                if (old := entry._data.get(last, None)) is not None
                 else MISSING
             )
-            node._data[last] = _Ref(value)
+            entry._data[last] = _Ref(value)
             # Call hook
-            self.hook.setitem(self, key, old_value, value)
+            self.hook.on_setitem(self, key, old_value, value)
         else:
             # Directly set
-            node._data[last] = _Ref(value)
+            entry._data[last] = _Ref(value)
 
-    def __delitem__(self, key: Union[StoreKey[_T], str]) -> None:
+    def __delitem__(self, key: Union[Key[_T], str]) -> None:
         if isinstance(key, str):
-            key = StoreKey(key)
+            key = Key(key)
         *dirs, last = key.parts
         parent = self._resolve(dirs)
-        if not isinstance(parent, _StoreContainer):
+        if not isinstance(parent, _StoreEntry):
             raise KeyError(f"Parent path not found for {key!r}")
         if self.hook is not None:
             # Get the old value first
@@ -177,24 +177,24 @@ class Store(_StoreContainer):
             )
             del parent._data[last]
             # Call hook
-            self.hook.delitem(self, key, old_value)
+            self.hook.on_delitem(self, key, old_value)
         else:
             # Directly delete
             del parent._data[last]
 
-    def _touch(self, parts: Iterable[str]) -> _StoreContainer:
-        """Recursively resolve the store nodes along the path, and create a
-        new node if the node not exists."""
-        node: _StoreContainer = self
+    def _touch(self, parts: Iterable[str]) -> _StoreEntry:
+        """Recursively resolve the store entrys along the path, and create a
+        new entry if the entry not exists."""
+        entry: _StoreEntry = self
         for p in parts:
-            nxt: Union[_StoreContainer, _Ref, None] = node._data.get(p)
+            nxt: Union[_StoreEntry, _Ref, None] = entry._data.get(p)
             if nxt is None:
-                nxt = _StoreContainer()
-                node._data[p] = nxt
-            elif not isinstance(nxt, _StoreContainer):
+                nxt = _StoreEntry()
+                entry._data[p] = nxt
+            elif not isinstance(nxt, _StoreEntry):
                 raise KeyError(f"Conflict: {p!r} is already a leaf value.")
-            node = nxt
-        return node
+            entry = nxt
+        return entry
 
     @contextmanager
     def with_hook(self, hook: StoreHook):
@@ -231,38 +231,38 @@ class Store(_StoreContainer):
         modified: dict[str, tuple[Any, Any]] = {}
 
         def _recursive_diff(
-            node_self: Union["_StoreContainer", "_Ref"],
-            node_other: Union["_StoreContainer", "_Ref"],
+            entry_self: Union["_StoreEntry", "_Ref"],
+            entry_other: Union["_StoreEntry", "_Ref"],
             path_parts: tuple[str, ...],
         ) -> None:
-            # Case 1: Both are internal nodes (Containers)
-            if isinstance(node_self, _StoreContainer) and isinstance(
-                node_other, _StoreContainer
+            # Case 1: Both are internal entrys (Containers)
+            if isinstance(entry_self, _StoreEntry) and isinstance(
+                entry_other, _StoreEntry
             ):
-                keys_self = set(node_self._data.keys())
-                keys_other = set(node_other._data.keys())
+                keys_self = set(entry_self._data.keys())
+                keys_other = set(entry_other._data.keys())
                 # 1. Removed: Keys in self but not in other
                 for key in keys_self - keys_other:
                     removed.update(
-                        self._collect_leaves(node_self._data[key], path_parts + (key,))
+                        self._collect_leaves(entry_self._data[key], path_parts + (key,))
                     )
                 # 2. Added: Keys in other but not in self
                 for key in keys_other - keys_self:
                     added.update(
-                        self._collect_leaves(node_other._data[key], path_parts + (key,))
+                        self._collect_leaves(entry_other._data[key], path_parts + (key,))
                     )
                 # 3. Common: Recurse on shared keys
                 for key in keys_self & keys_other:
                     _recursive_diff(
-                        node_self._data[key], node_other._data[key], path_parts + (key,)
+                        entry_self._data[key], entry_other._data[key], path_parts + (key,)
                     )
-            # Case 2: Both are leaf nodes (Refs)
-            elif isinstance(node_self, _Ref) and isinstance(node_other, _Ref):
-                val_self = node_self.value
-                val_other = node_other.value
+            # Case 2: Both are leaf entrys (Refs)
+            elif isinstance(entry_self, _Ref) and isinstance(entry_other, _Ref):
+                val_self = entry_self.value
+                val_other = entry_other.value
                 is_different = False
                 if strategy == "ref":
-                    is_different = node_self is not node_other
+                    is_different = entry_self is not entry_other
                 elif strategy == "is":
                     is_different = val_self is not val_other
                 elif strategy == "eq":
@@ -272,30 +272,30 @@ class Store(_StoreContainer):
             # Case 3: Type Mismatch (One is Container, one is Ref)
             # Treat as "remove old tree" and "add new tree"
             else:
-                removed.update(self._collect_leaves(node_self, path_parts))
-                added.update(self._collect_leaves(node_other, path_parts))
+                removed.update(self._collect_leaves(entry_self, path_parts))
+                added.update(self._collect_leaves(entry_other, path_parts))
 
         _recursive_diff(self, other, ())
         return _DiffResult(added, removed, modified)
 
     def _collect_leaves(
         self,
-        node: Union["_StoreContainer", "_Ref"],
+        entry: Union["_StoreEntry", "_Ref"],
         path_prefix: tuple[str, ...],
     ) -> dict[str, Any]:
-        """Helper to recursively find all leaf values from a starting node."""
+        """Helper to recursively find all leaf values from a starting entry."""
         leaves: dict[str, Any] = {}
 
         def _traverse(
-            node: Union["_StoreContainer", "_Ref"], current_path: tuple[str, ...]
+            entry: Union["_StoreEntry", "_Ref"], current_path: tuple[str, ...]
         ) -> None:
-            if isinstance(node, _Ref):
-                leaves[".".join(current_path)] = node.value
-            elif isinstance(node, _StoreContainer):
-                for name, child in node._data.items():
+            if isinstance(entry, _Ref):
+                leaves[".".join(current_path)] = entry.value
+            elif isinstance(entry, _StoreEntry):
+                for name, child in entry._data.items():
                     _traverse(child, current_path + (name,))
 
-        _traverse(node, path_prefix)
+        _traverse(entry, path_prefix)
         return leaves
 
     def collect_leaves(self) -> dict[str, Any]:

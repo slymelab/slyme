@@ -1,2 +1,2 @@
-from .store import Store, StoreKey
+from .store import Store, Key
 from .mixin import StoreKeyMixin

@@ -1,5 +1,5 @@
 from typing import Union
-from .store import StoreKey
+from .store import Key
 
 
 class StoreKeyMixin:
@@ -8,15 +8,15 @@ class StoreKeyMixin:
     """
 
     @property
-    def store_keys(self) -> dict[str, StoreKey]:
+    def store_keys(self) -> dict[str, Key]:
         """
         Retrieve a dictionary of all registered Store Keys on this instance.
         """
         return {
             name: value
-            for name in self._attr_registry[StoreKey]
+            for name in self._attr_registry[Key]
             if (value := getattr(self, name)) is not None
         }
 
-    def register_store_key(self, name: str, value: Union[StoreKey, None]) -> None:
-        self._register_attribute(name, value, StoreKey)
+    def register_store_key(self, name: str, value: Union[Key, None]) -> None:
+        self._register_attribute(name, value, Key)
