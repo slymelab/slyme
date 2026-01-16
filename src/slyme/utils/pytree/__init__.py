@@ -14,6 +14,7 @@ from .pytree import (
     PyTreeDef,
     LeafDef,
     ContainerDef,
+    TraverseAux,
     PyTreeEngine,
     # Instances
     default_pytree_engine,
@@ -37,6 +38,7 @@ __all__ = [
     "PyTreeDef",
     "LeafDef",
     "ContainerDef",
+    "TraverseAux",
     "PyTreeEngine",
     "default_pytree_engine",
     "PYTREE_ENGINE_REGISTRY",

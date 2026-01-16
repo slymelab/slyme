@@ -151,13 +151,33 @@ class _PyTreeHandler:
     unflatten: _UnflattenFunc
 
 
+@dataclass(frozen=True)
+class TraverseAux:
+    """
+    Auxiliary data passed to `is_leaf` for context-aware pruning.
+    """
+    parent: Any
+    path: KeyPath
+
+
+class _IsLeafFunc(Protocol):
+    """
+    Protocol for functions that determine if a node is a leaf.
+    """
+    def __call__(self, node: Any, aux: TraverseAux, /) -> bool: ...
+
+
 class _ResolverFunc(Protocol):
     """
     Protocol for dynamic handler resolution.
-    Returns a handler if the object matches the criteria, else None.
+    Accepts an auxiliary context object.
     """
+    def __call__(self, obj: Any, aux: TraverseAux, /) -> Union[_PyTreeHandler, None]: ...
 
-    def __call__(self, obj: Any, /) -> Union[_PyTreeHandler, None]: ...
+
+class _LeafSinkFunc(Protocol):
+    """Internal protocol for collecting leaves."""
+    def __call__(self, leaf: Any, aux: TraverseAux, /) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -302,7 +322,7 @@ class PyTreeEngine:
 
         self.register(dict, _flatten_dict, _unflatten_dict)
 
-    def _lookup_handler(self, obj: Any) -> Union[_PyTreeHandler, None]:
+    def _lookup_handler(self, obj: Any, aux: TraverseAux) -> Union[_PyTreeHandler, None]:
         """
         Resolve handler via:
         1. Pre-resolvers (High Priority)
@@ -311,7 +331,7 @@ class PyTreeEngine:
         """
         # 1. Try Pre-resolvers
         for resolver in self._pre_resolvers:
-            handler = resolver(obj)
+            handler = resolver(obj, aux)
             if handler is not None:
                 return handler
 
@@ -328,7 +348,7 @@ class PyTreeEngine:
 
         # 3. Try Post-resolvers
         for resolver in self._post_resolvers:
-            handler = resolver(obj)
+            handler = resolver(obj, aux)
             if handler is not None:
                 return handler
 
@@ -338,57 +358,59 @@ class PyTreeEngine:
         self,
         tree: Any,
         *,
-        is_leaf: Optional[Callable[[Any], bool]] = None,
+        is_leaf: Optional[_IsLeafFunc] = None,
     ) -> tuple[list[Any], "PyTreeDef"]:
         """
         Flatten a tree into a list of leaves and a structure definition.
         """
         leaves: list[Any] = []
 
-        def _sink(path: KeyPath, leaf: Any) -> None:
+        def _sink(leaf: Any, aux: TraverseAux) -> None:
             leaves.append(leaf)
 
-        treedef = self._traverse(tree, _sink, (), is_leaf)
+        initial_aux = TraverseAux(parent=None, path=())
+        treedef = self._traverse(tree, initial_aux, _sink, is_leaf)
         return leaves, treedef
 
     def flatten_with_path(
         self,
         tree: Any,
         *,
-        is_leaf: Optional[Callable[[Any], bool]] = None,
+        is_leaf: Optional[_IsLeafFunc] = None,
     ) -> tuple[list[tuple[KeyPath, Any]], "PyTreeDef"]:
         """
         Flatten a tree into a list of (path, leaf) tuples and a structure definition.
         """
         leaves_with_path: list[tuple[KeyPath, Any]] = []
 
-        def _sink(path: KeyPath, leaf: Any) -> None:
-            leaves_with_path.append((path, leaf))
+        def _sink(leaf: Any, aux: TraverseAux) -> None:
+            leaves_with_path.append((aux.path, leaf))
 
-        treedef = self._traverse(tree, _sink, (), is_leaf)
+        initial_aux = TraverseAux(parent=None, path=())
+        treedef = self._traverse(tree, initial_aux, _sink, is_leaf)
         return leaves_with_path, treedef
 
     def _traverse(
         self,
         entry: Any,
-        leaf_sink: Callable[[KeyPath, Any], None],
-        current_path: KeyPath,
-        is_leaf: Optional[Callable[[Any], bool]],
+        traverse_aux: TraverseAux,
+        leaf_sink: _LeafSinkFunc,
+        is_leaf: Optional[_IsLeafFunc],
     ) -> PyTreeDef:
         """Recursive core for traversal."""
         # should_flatten check
         handler = None
-        should_flatten = is_leaf is None or not is_leaf(entry)
+        should_flatten = is_leaf is None or not is_leaf(entry, traverse_aux)
         if should_flatten:
-            handler = self._lookup_handler(entry)
+            handler = self._lookup_handler(entry, traverse_aux)
             should_flatten = handler is not None
 
         if should_flatten:
-            children_iter, aux = handler.flatten(entry)
+            children_iter, tree_aux = handler.flatten(entry)
 
             # 3. Resolve Keys for Path Tracking.
-            if aux.keys is not None:
-                keys_iter = iter(aux.keys)
+            if tree_aux.keys is not None:
+                keys_iter = iter(tree_aux.keys)
             else:
                 # Default fallback: Generate SequenceKey for indices.
                 keys_iter = (SequenceKey(i) for i in count())
@@ -404,18 +426,19 @@ class PyTreeEngine:
                         f"Not enough keys provided in TreeAux for container {type(entry)}"
                     )
 
+                child_traverse_aux = TraverseAux(parent=entry, path=traverse_aux.path + (key,))
                 child_def = self._traverse(
                     child,
+                    child_traverse_aux,
                     leaf_sink,
-                    current_path + (key,),
                     is_leaf,
                 )
                 child_defs.append(child_def)
 
-            return ContainerDef(type(entry), aux, tuple(child_defs), handler.unflatten)
+            return ContainerDef(type(entry), tree_aux, tuple(child_defs), handler.unflatten)
         else:
             # Leaf.
-            leaf_sink(current_path, entry)
+            leaf_sink(entry, traverse_aux)
             return LeafDef()
 
     @staticmethod
@@ -430,7 +453,7 @@ class PyTreeEngine:
         func: Callable[..., Any],
         tree: Any,
         *,
-        is_leaf: Optional[Callable[[Any], bool]] = None,
+        is_leaf: Optional[_IsLeafFunc] = None,
     ) -> Any:
         """Apply func to every leaf in the tree."""
         leaves, treedef = self.flatten(tree, is_leaf=is_leaf)

@@ -16,6 +16,7 @@ try:
         PyTreeDef,
         LeafDef,
         ContainerDef,
+        TraverseAux,
         PyTreeEngine,
         default_pytree_engine,
         PYTREE_ENGINE_REGISTRY,
@@ -30,6 +31,7 @@ except (ImportError, ModuleNotFoundError):
         PyTreeDef,
         LeafDef,
         ContainerDef,
+        TraverseAux,
         PyTreeEngine,
         default_pytree_engine,
         PYTREE_ENGINE_REGISTRY,
@@ -86,6 +88,7 @@ __all__ = [
     "PyTreeDef",
     "LeafDef",
     "ContainerDef",
+    "TraverseAux",
     "PyTreeEngine",
     # Instances
     "default_pytree_engine",
