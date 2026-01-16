@@ -142,7 +142,7 @@ class _UnflattenFunc(Protocol):
     Protocol for unflattening a container.
     """
 
-    def __call__(self, tree_aux: PyTreeAux, children: Iterable[Any], /) -> Any: ...
+    def __call__(self, children: Iterable[Any], tree_aux: PyTreeAux, /) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -222,7 +222,7 @@ class ContainerDef(PyTreeDef):
 
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
         children = [child._build(leaves_iter) for child in self.children_defs]
-        return self.unflatten_func(self.tree_aux, children)
+        return self.unflatten_func(children, self.tree_aux)
 
 
 class PyTreeEngine:
@@ -295,13 +295,13 @@ class PyTreeEngine:
         self.register(
             tuple,
             lambda x: (iter(x), PyTreeAux()),
-            lambda _, children: tuple(children),
+            lambda children, _: tuple(children),
         )
         # List
         self.register(
             list,
             lambda x: (iter(x), PyTreeAux()),
-            lambda _, children: list(children),
+            lambda children, _: list(children),
         )
 
         # Dict
@@ -313,7 +313,7 @@ class PyTreeEngine:
             children = (data[k] for k in keys)
             return children, PyTreeAux(keys=rich_keys)
 
-        def _unflatten_dict(tree_aux: PyTreeAux, children: Iterable[Any]) -> dict:
+        def _unflatten_dict(children: Iterable[Any], tree_aux: PyTreeAux) -> dict:
             if tree_aux.keys is None:
                 raise ValueError("Missing keys in TreeAux for dict unflattening.")
             # Unwrap DictKey to get raw keys.
