@@ -215,6 +215,7 @@ class PyTreeEngine:
         name: Optional[str] = None,
         strict_registration: bool = True,
         allow_inheritance: bool = True,
+        register_defaults: bool = True,
     ) -> None:
         self.name = repr(self) if name is None else name
         self.allow_inheritance = allow_inheritance
@@ -230,7 +231,8 @@ class PyTreeEngine:
         # Post-resolvers: Checked AFTER Type Registry (Low Priority)
         self._post_resolvers: list[_ResolverFunc] = []
 
-        self._register_defaults()
+        if register_defaults:
+            self._register_defaults()
 
     def register(
         self,
