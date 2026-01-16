@@ -20,6 +20,7 @@ from slyme.utils.registry import Registry, TypeRegistry
 @dataclass(frozen=True)
 class PyTreeKey:
     """Base class for path entries."""
+
     key: Any
 
     def resolve(self, obj: Any) -> Any:
@@ -32,10 +33,10 @@ class PyTreeKey:
     def codify(self, parent_expr: str) -> str:
         """
         Generate the Python code string to access this key from the parent expression.
-        
+
         Args:
             parent_expr: The code expression of the parent container (e.g., 'tree', 'tree[0]').
-            
+
         Returns:
             The new code expression (e.g., 'tree[0].value').
         """
@@ -45,6 +46,7 @@ class PyTreeKey:
 @dataclass(frozen=True)
 class SequenceKey(PyTreeKey):
     """Represents an index in a sequence (list, tuple)."""
+
     key: int
 
     def resolve(self, obj: Any) -> Any:
@@ -62,6 +64,7 @@ class SequenceKey(PyTreeKey):
 @dataclass(frozen=True)
 class MappingKey(PyTreeKey):
     """Represents a key in a mapping (dict)."""
+
     key: Hashable
 
     def resolve(self, obj: Any) -> Any:
@@ -79,6 +82,7 @@ class MappingKey(PyTreeKey):
 @dataclass(frozen=True)
 class AttributeKey(PyTreeKey):
     """Represents an attribute name (object)."""
+
     key: str
 
     def resolve(self, obj: Any) -> Any:
@@ -94,7 +98,6 @@ class AttributeKey(PyTreeKey):
 
 
 # Type Alias for Path
-# We use tuple for performance and hashability (standard in JAX/Optree).
 KeyPath = tuple[PyTreeKey, ...]
 
 
@@ -105,9 +108,18 @@ class PyTreeAux:
 
     Attributes:
         metadata: Custom data needed for unflattening (e.g., specific flags).
-        keys: Optional sequence/iterable of keys corresponding to the children.
-              Used for path tracking. If None, SequenceKey(0, 1, ...) are used.
+        keys: Optional sequence of keys corresponding to the children.
+
+              Used for path tracking during flattening and potentially for structure
+              reconstruction during unflattening.
+
+              WARNING: Must be a reusable iterable (e.g., tuple, list). Do NOT use
+              a one-time iterator (like a generator), as it may be iterated over
+              multiple times (once during flatten, and again during unflatten).
+
+              If None, defaults to SequenceKey(0), SequenceKey(1), ...
     """
+
     metadata: dict[str, Any] = field(default_factory=dict)
     keys: Optional[Iterable[PyTreeKey]] = None
 
@@ -121,6 +133,7 @@ class _FlattenFunc(Protocol):
         - children_iterable: MUST yield pure child values.
         - aux_data: Contains metadata and optional keys for path tracking.
     """
+
     def __call__(self, obj: Any, /) -> tuple[Iterable[Any], PyTreeAux]: ...
 
 
@@ -128,6 +141,7 @@ class _UnflattenFunc(Protocol):
     """
     Protocol for unflattening a container.
     """
+
     def __call__(self, aux: PyTreeAux, children: Iterable[Any], /) -> Any: ...
 
 
@@ -142,9 +156,11 @@ class _ResolverFunc(Protocol):
     Protocol for dynamic handler resolution.
     Returns a handler if the object matches the criteria, else None.
     """
+
     def __call__(self, obj: Any, /) -> Union[_PyTreeHandler, None]: ...
 
 
+@dataclass(frozen=True)
 class PyTreeDef:
     """Base class for tree definitions."""
 
@@ -189,29 +205,25 @@ class ContainerDef(PyTreeDef):
         return self.unflatten_func(self.aux, children)
 
 
-# Global registry to manage Tree instances.
-PYTREE_REGISTRY: Registry["PyTreeEngine"] = Registry("pytree_processor")
-
-
 class PyTreeEngine:
     """
-    A Tree processor that defines how to flatten and unflatten objects.
+    A PyTree Engine that defines PyTree Operations.
     """
 
     def __init__(
         self,
-        name: str,
+        name: Optional[str] = None,
         strict_registration: bool = True,
         allow_inheritance: bool = True,
     ) -> None:
-        self.name = name
+        self.name = repr(self) if name is None else name
         self.allow_inheritance = allow_inheritance
 
         # 1. Type-based Registry (O(1) lookup, Middle Priority)
         self._registry: TypeRegistry[Any, _PyTreeHandler] = TypeRegistry(
-            f"TreeRegistry_{name}", strict=strict_registration
+            f"PyTreeTypeRegistry<{self.name}>", strict=strict_registration
         )
-        
+
         # 2. Dynamic Resolvers
         # Pre-resolvers: Checked BEFORE Type Registry (High Priority)
         self._pre_resolvers: list[_ResolverFunc] = []
@@ -235,10 +247,7 @@ class PyTreeEngine:
         self._registry.register(handler, key=cls, strict=strict)
 
     def register_resolver(
-        self, 
-        resolver: _ResolverFunc, 
-        *, 
-        priority: Literal["pre", "post"] = "post"
+        self, resolver: _ResolverFunc, *, priority: Literal["pre", "post"] = "post"
     ) -> None:
         """
         Register a dynamic resolver function.
@@ -286,7 +295,7 @@ class PyTreeEngine:
             if aux.keys is None:
                 raise ValueError("Missing keys in TreeAux for dict unflattening.")
             # Unwrap DictKey to get raw keys.
-            raw_keys = [k.key for k in aux.keys if isinstance(k, MappingKey)]
+            raw_keys = [k.key for k in aux.keys]
             return dict(zip(raw_keys, children))
 
         self.register(dict, _flatten_dict, _unflatten_dict)
@@ -451,6 +460,8 @@ class PyTreeEngine:
         return expr
 
 
-# Register the default tree processor.
+# Register the default pytree engine.
 default_pytree_engine = PyTreeEngine("default")
-PYTREE_REGISTRY.register(default_pytree_engine, key="default")
+# Global registry to manage Tree instances.
+PYTREE_ENGINE_REGISTRY: Registry[PyTreeEngine] = Registry("pytree_engine")
+PYTREE_ENGINE_REGISTRY.register(default_pytree_engine, key="default")

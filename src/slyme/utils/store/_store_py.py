@@ -44,7 +44,7 @@ class Key(Generic[_T]):
         return self.hash
 
     def __eq__(self, other: Any) -> bool:
-        return type(self) is type(other) and self.parts == other.parts
+        return isinstance(other, Key) and self.parts == other.parts
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.path!r})"
@@ -67,7 +67,7 @@ class _Ref(Generic[_T]):
 
 class _StoreEntry:
     """Inner store entry.
-    NOTE: `_StoreContainer` can only be modified through `Store` for consistency.
+    NOTE: `_StoreEntry` can only be modified through `Store` for consistency.
     """
 
     @property
@@ -84,9 +84,6 @@ class _StoreEntry:
     def __getitem__(self, key: Union[Key[_T], str]) -> _T:
         if isinstance(key, str):
             key = Key(key)
-        return self._getitem(key)
-
-    def _getitem(self, key: Key[_T]) -> _T:
         # NOTE: Annotate to `Any` to pass the type checker.
         result: Any = self._resolve(key.parts).value
         return result
@@ -134,9 +131,7 @@ class Store(_StoreEntry):
         self.hook = hook
 
     def __getitem__(self, key: Union[Key[_T], str]) -> _T:
-        if isinstance(key, str):
-            key = Key(key)
-        value = self._getitem(key)
+        value = super().__getitem__(key)
         if self.hook is not None:
             # Call hook
             self.hook.on_getitem(self, key, value)
@@ -183,7 +178,7 @@ class Store(_StoreEntry):
             del parent._data[last]
 
     def _touch(self, parts: Iterable[str]) -> _StoreEntry:
-        """Recursively resolve the store entrys along the path, and create a
+        """Recursively resolve the store entries along the path, and create a
         new entry if the entry not exists."""
         entry: _StoreEntry = self
         for p in parts:
@@ -235,7 +230,7 @@ class Store(_StoreEntry):
             entry_other: Union["_StoreEntry", "_Ref"],
             path_parts: tuple[str, ...],
         ) -> None:
-            # Case 1: Both are internal entrys (Containers)
+            # Case 1: Both are internal entries (Containers)
             if isinstance(entry_self, _StoreEntry) and isinstance(
                 entry_other, _StoreEntry
             ):
@@ -249,14 +244,18 @@ class Store(_StoreEntry):
                 # 2. Added: Keys in other but not in self
                 for key in keys_other - keys_self:
                     added.update(
-                        self._collect_leaves(entry_other._data[key], path_parts + (key,))
+                        self._collect_leaves(
+                            entry_other._data[key], path_parts + (key,)
+                        )
                     )
                 # 3. Common: Recurse on shared keys
                 for key in keys_self & keys_other:
                     _recursive_diff(
-                        entry_self._data[key], entry_other._data[key], path_parts + (key,)
+                        entry_self._data[key],
+                        entry_other._data[key],
+                        path_parts + (key,),
                     )
-            # Case 2: Both are leaf entrys (Refs)
+            # Case 2: Both are leaf entries (Refs)
             elif isinstance(entry_self, _Ref) and isinstance(entry_other, _Ref):
                 val_self = entry_self.value
                 val_other = entry_other.value
