@@ -142,7 +142,7 @@ class _UnflattenFunc(Protocol):
     Protocol for unflattening a container.
     """
 
-    def __call__(self, aux: PyTreeAux, children: Iterable[Any], /) -> Any: ...
+    def __call__(self, tree_aux: PyTreeAux, children: Iterable[Any], /) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,7 @@ class _IsLeafFunc(Protocol):
     """
     Protocol for functions that determine if a node is a leaf.
     """
-    def __call__(self, node: Any, aux: TraverseAux, /) -> bool: ...
+    def __call__(self, node: Any, traverse_aux: TraverseAux, /) -> bool: ...
 
 
 class _ResolverFunc(Protocol):
@@ -172,12 +172,12 @@ class _ResolverFunc(Protocol):
     Protocol for dynamic handler resolution.
     Accepts an auxiliary context object.
     """
-    def __call__(self, obj: Any, aux: TraverseAux, /) -> Union[_PyTreeHandler, None]: ...
+    def __call__(self, obj: Any, traverse_aux: TraverseAux, /) -> Union[_PyTreeHandler, None]: ...
 
 
 class _LeafSinkFunc(Protocol):
     """Internal protocol for collecting leaves."""
-    def __call__(self, leaf: Any, aux: TraverseAux, /) -> None: ...
+    def __call__(self, leaf: Any, traverse_aux: TraverseAux, /) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -216,13 +216,13 @@ class LeafDef(PyTreeDef):
 @dataclass(frozen=True)
 class ContainerDef(PyTreeDef):
     cls: type
-    aux: PyTreeAux
+    tree_aux: PyTreeAux
     children_defs: tuple[PyTreeDef, ...]
     unflatten_func: _UnflattenFunc = field(compare=False, repr=False)
 
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
         children = [child._build(leaves_iter) for child in self.children_defs]
-        return self.unflatten_func(self.aux, children)
+        return self.unflatten_func(self.tree_aux, children)
 
 
 class PyTreeEngine:
@@ -313,16 +313,16 @@ class PyTreeEngine:
             children = (data[k] for k in keys)
             return children, PyTreeAux(keys=rich_keys)
 
-        def _unflatten_dict(aux: PyTreeAux, children: Iterable[Any]) -> dict:
-            if aux.keys is None:
+        def _unflatten_dict(tree_aux: PyTreeAux, children: Iterable[Any]) -> dict:
+            if tree_aux.keys is None:
                 raise ValueError("Missing keys in TreeAux for dict unflattening.")
             # Unwrap DictKey to get raw keys.
-            raw_keys = [k.key for k in aux.keys]
+            raw_keys = [k.key for k in tree_aux.keys]
             return dict(zip(raw_keys, children))
 
         self.register(dict, _flatten_dict, _unflatten_dict)
 
-    def _lookup_handler(self, obj: Any, aux: TraverseAux) -> Union[_PyTreeHandler, None]:
+    def _lookup_handler(self, obj: Any, traverse_aux: TraverseAux) -> Union[_PyTreeHandler, None]:
         """
         Resolve handler via:
         1. Pre-resolvers (High Priority)
@@ -331,7 +331,7 @@ class PyTreeEngine:
         """
         # 1. Try Pre-resolvers
         for resolver in self._pre_resolvers:
-            handler = resolver(obj, aux)
+            handler = resolver(obj, traverse_aux)
             if handler is not None:
                 return handler
 
@@ -348,7 +348,7 @@ class PyTreeEngine:
 
         # 3. Try Post-resolvers
         for resolver in self._post_resolvers:
-            handler = resolver(obj, aux)
+            handler = resolver(obj, traverse_aux)
             if handler is not None:
                 return handler
 
@@ -365,11 +365,11 @@ class PyTreeEngine:
         """
         leaves: list[Any] = []
 
-        def _sink(leaf: Any, aux: TraverseAux) -> None:
+        def _sink(leaf: Any, traverse_aux: TraverseAux) -> None:
             leaves.append(leaf)
 
-        initial_aux = TraverseAux(parent=None, path=())
-        treedef = self._traverse(tree, initial_aux, _sink, is_leaf)
+        initial_traverse_aux = TraverseAux(parent=None, path=())
+        treedef = self._traverse(tree, initial_traverse_aux, _sink, is_leaf)
         return leaves, treedef
 
     def flatten_with_path(
@@ -383,11 +383,11 @@ class PyTreeEngine:
         """
         leaves_with_path: list[tuple[KeyPath, Any]] = []
 
-        def _sink(leaf: Any, aux: TraverseAux) -> None:
-            leaves_with_path.append((aux.path, leaf))
+        def _sink(leaf: Any, traverse_aux: TraverseAux) -> None:
+            leaves_with_path.append((traverse_aux.path, leaf))
 
-        initial_aux = TraverseAux(parent=None, path=())
-        treedef = self._traverse(tree, initial_aux, _sink, is_leaf)
+        initial_traverse_aux = TraverseAux(parent=None, path=())
+        treedef = self._traverse(tree, initial_traverse_aux, _sink, is_leaf)
         return leaves_with_path, treedef
 
     def _traverse(
