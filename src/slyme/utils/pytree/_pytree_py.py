@@ -21,7 +21,7 @@ from slyme.utils.registry import Registry, TypeRegistry
 class PyTreeKey:
     """Base class for path entries."""
 
-    key: Any
+    key: Any = 0
 
     def resolve(self, obj: Any) -> Any:
         """
