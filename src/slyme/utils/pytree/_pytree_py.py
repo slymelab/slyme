@@ -4,7 +4,7 @@ Tree structure utilities for slyme (PyTree-like).
 Designed to be lightweight, explicit, and instance-isolated.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from collections.abc import Iterable, Callable, Iterator, Hashable
 from itertools import count
 from typing import (
@@ -122,6 +122,7 @@ class PyTreeAux:
 
     metadata: dict[str, Any] = field(default_factory=dict)
     keys: Optional[Iterable[PyTreeKey]] = None
+    cls: Optional[type] = None
 
 
 class _FlattenFunc(Protocol):
@@ -407,6 +408,11 @@ class PyTreeEngine:
 
         if should_flatten:
             children_iter, tree_aux = handler.flatten(entry)
+            # Auto fill tree_aux info
+            # TODO: Maybe refactor this into a function when the
+            # auto fill logic grows.
+            if tree_aux.cls is None:
+                tree_aux = replace(tree_aux, cls=type(entry))
 
             # 3. Resolve Keys for Path Tracking.
             if tree_aux.keys is not None:
