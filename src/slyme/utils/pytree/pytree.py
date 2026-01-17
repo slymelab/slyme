@@ -38,40 +38,40 @@ except (ImportError, ModuleNotFoundError):
     )
 
 
-def flatten(
+def tree_flatten(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> tuple[list[Any], PyTreeDef]:
     """Alias for default_pytree_engine.flatten."""
     return default_pytree_engine.flatten(tree, is_leaf=is_leaf)
 
 
-def flatten_with_path(
+def tree_flatten_with_path(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> tuple[list[tuple[KeyPath, Any]], PyTreeDef]:
     """Alias for default_pytree_engine.flatten_with_path."""
     return default_pytree_engine.flatten_with_path(tree, is_leaf=is_leaf)
 
 
-def iter(
+def tree_iter(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> Iterator[Any]:
     """Alias for default_pytree_engine.iter."""
     return default_pytree_engine.iter(tree, is_leaf=is_leaf)
 
 
-def iter_with_path(
+def tree_iter_with_path(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> Iterator[tuple[KeyPath, Any]]:
     """Alias for default_pytree_engine.iter_with_path."""
     return default_pytree_engine.iter_with_path(tree, is_leaf=is_leaf)
 
 
-def unflatten(treedef: PyTreeDef, leaves: Iterable[Any]) -> Any:
+def tree_unflatten(treedef: PyTreeDef, leaves: Iterable[Any]) -> Any:
     """Alias for default_pytree_engine.unflatten."""
     return default_pytree_engine.unflatten(treedef, leaves)
 
 
-def map(
+def tree_map(
     func: Callable[..., Any],
     tree: Any,
     *,
@@ -107,13 +107,13 @@ __all__ = [
     # Instances
     "default_pytree_engine",
     "PYTREE_ENGINE_REGISTRY",
-    # Helper Functions
-    "flatten",
-    "flatten_with_path",
-    "iter",
-    "iter_with_path",
-    "unflatten",
-    "map",
+    # Helper Functions (Renamed)
+    "tree_flatten",
+    "tree_flatten_with_path",
+    "tree_iter",
+    "tree_iter_with_path",
+    "tree_unflatten",
+    "tree_map",
     "get_entry",
     "codify_path",
 ]

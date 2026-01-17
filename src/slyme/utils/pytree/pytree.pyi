@@ -16,20 +16,20 @@ from ._pytree_py import (
     PYTREE_ENGINE_REGISTRY,
 )
 
-def flatten(
+def tree_flatten(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> tuple[list[Any], PyTreeDef]: ...
-def flatten_with_path(
+def tree_flatten_with_path(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> tuple[list[tuple[KeyPath, Any]], PyTreeDef]: ...
-def iter(
+def tree_iter(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> Iterator[Any]: ...
-def iter_with_path(
+def tree_iter_with_path(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> Iterator[tuple[KeyPath, Any]]: ...
-def unflatten(treedef: PyTreeDef, leaves: Iterable[Any]) -> Any: ...
-def map(
+def tree_unflatten(treedef: PyTreeDef, leaves: Iterable[Any]) -> Any: ...
+def tree_map(
     func: Callable[..., Any],
     tree: Any,
     *,
@@ -52,12 +52,12 @@ __all__ = [
     "PyTreeEngine",
     "default_pytree_engine",
     "PYTREE_ENGINE_REGISTRY",
-    "flatten",
-    "flatten_with_path",
-    "iter",
-    "iter_with_path",
-    "unflatten",
-    "map",
+    "tree_flatten",
+    "tree_flatten_with_path",
+    "tree_iter",
+    "tree_iter_with_path",
+    "tree_unflatten",
+    "tree_map",
     "get_entry",
     "codify_path",
 ]
