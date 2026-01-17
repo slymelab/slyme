@@ -109,17 +109,22 @@ def check_node_consistency(root: Node) -> None:
         # 1. Yield 'obj' (because obj is obj, so is_leaf=False) -> Calls handler (e.g. _flatten_node_element)
         # 2. Treat any child (attribute value) as a leaf (because child is not obj, so is_leaf=True)
         # This gives us exactly the direct attributes of 'obj' without recursing deeper yet.
-        direct_attrs_with_path = NODE_PYTREE_ENGINE.iter_with_path(
-            obj,
-            is_leaf=lambda x, _: x is not obj
-        )
+        #
+        # NOTE: We filter the result to ensure `direct_attrs_with_path` only contains actual attributes
+        # (children with non-empty paths), guarding against cases where obj might be treated as a leaf.
+        direct_attrs_with_path = [
+            (p, c) for p, c in NODE_PYTREE_ENGINE.iter_with_path(
+                obj,
+                is_leaf=lambda x, _: x is not obj
+            ) if p
+        ]
 
         for path, attr_value in direct_attrs_with_path:
             # Resolve attribute name from path (AttributeKey)
             # For Node objects, the path should be (AttributeKey('name'), )
-            if not path or not isinstance(path[0], AttributeKey):
+            if not isinstance(path[0], AttributeKey):
                 continue
-            
+
             attr_name = path[0].key
 
             # Step 1: Iterate over the attribute value to inspect its content structure.

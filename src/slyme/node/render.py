@@ -62,10 +62,14 @@ def _build_lines(obj: Any) -> RenderResult:
     my_category = RENDER_TYPE_REGISTRY.lookup(type(obj), default=None)
 
     # 2. Get Children
-    children_with_path = list(NODE_PYTREE_ENGINE.iter_with_path(
-        obj, 
-        is_leaf=lambda x, _: x is not obj
-    ))
+    # NOTE: Filter out the root object itself (empty path) to ensure `children_with_path`
+    # only contains actual children. This guarantees the variable name is semantically correct.
+    children_with_path = [
+        (p, c) for p, c in NODE_PYTREE_ENGINE.iter_with_path(
+            obj, 
+            is_leaf=lambda x, _: x is not obj
+        ) if p
+    ]
 
     # 3. Process Children Recursively
     #    We collect BOTH classified dict (for Grouped) and flat list (for Direct)
@@ -75,8 +79,6 @@ def _build_lines(obj: Any) -> RenderResult:
     has_valid_children = False
 
     for path, child in children_with_path:
-        if not path:
-            continue
         child_res = _build_lines(child)
 
         if child_res.category is not None:
