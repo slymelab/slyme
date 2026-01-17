@@ -2,6 +2,7 @@ from typing import Any, Optional
 from collections import defaultdict
 from dataclasses import dataclass
 from slyme.utils.registry import TypeRegistry
+from slyme.utils.store import Key
 from slyme.node.base import NodeElement, Node, NodeExpression
 from slyme.node.wrapper import NodeWrapper
 from slyme.node.pytree import NODE_PYTREE_ENGINE
@@ -17,20 +18,23 @@ RENDER_TYPE_REGISTRY = TypeRegistry("render_category")
 RENDER_TYPE_REGISTRY.register("nodes", key=Node)
 RENDER_TYPE_REGISTRY.register("expressions", key=NodeExpression)
 RENDER_TYPE_REGISTRY.register("wrappers", key=NodeWrapper)
+RENDER_TYPE_REGISTRY.register("keys", key=Key)
 
 # 2. Render Strategy (Determines "How do we display its children?")
 #    True  = Grouped Rendering (Categorized by type, e.g. Node)
 #    False = Direct Rendering (Attribute/Key based, e.g. Expression)
 #    Default is False (Direct) for maximum flexibility.
-GROUPED_RENDER_TYPES = (Node,) 
+GROUPED_RENDER_TYPES = (NodeElement,)
 
 # 3. Category Config (Defines display order and titles for Grouped Rendering)
 #    (Category Name, Display Title)
 TYPE_CONFIG = [
     ("wrappers", "<wrappers>"),
+    ("keys", "{keys}"),
     ("nodes", "(nodes)"),
-    ("expressions", "(expressions)")
+    ("expressions", "(expressions)"),
 ]
+
 
 @dataclass
 class RenderResult:
@@ -58,13 +62,10 @@ def _build_lines(obj: Any) -> RenderResult:
     my_category = RENDER_TYPE_REGISTRY.lookup(type(obj), default=None)
 
     # 2. Get Children
-    try:
-        children_with_path = list(NODE_PYTREE_ENGINE.iter_with_path(
-            obj, 
-            is_leaf=lambda x, _: x is not obj
-        ))
-    except Exception:
-        return RenderResult([], my_category)
+    children_with_path = list(NODE_PYTREE_ENGINE.iter_with_path(
+        obj, 
+        is_leaf=lambda x, _: x is not obj
+    ))
 
     # 3. Process Children Recursively
     #    We collect BOTH classified dict (for Grouped) and flat list (for Direct)
@@ -74,8 +75,10 @@ def _build_lines(obj: Any) -> RenderResult:
     has_valid_children = False
 
     for path, child in children_with_path:
+        if not path:
+            continue
         child_res = _build_lines(child)
-        
+
         if child_res.category is not None:
             has_valid_children = True
             key_str = path[-1].codify("")
