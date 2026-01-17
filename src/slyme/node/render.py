@@ -112,8 +112,6 @@ def _build_render_lines(obj: Any) -> _RenderResult:
     lines = []
     if isinstance(obj, _GROUPED_RENDER_TYPES):
         lines = _render_grouped(classified_children)
-    elif my_category == "wrappers":
-        lines = _render_direct(flat_children, is_last_cat=False)
     else:
         lines = _render_direct(flat_children, is_last_cat=True)
 
@@ -136,13 +134,9 @@ def _render_grouped(classified_children: dict[str, list]) -> list[str]:
 
         connector = "│ "
         lines.append(f"{connector}{cat_title}")
-
-        if cat_name == "wrappers":
-            lines.extend(_render_wrapper_group(items))
-        else:
-            lines.extend(
-                _render_children_lines(items, is_last_cat=is_last_cat)
-            )
+        lines.extend(
+            _render_children_lines(items, is_last_cat=is_last_cat)
+        )
 
     return lines
 
@@ -176,17 +170,4 @@ def _render_children_lines(
             child_prefix = "    " if is_last and is_last_cat else "│   "
             for line in child_res.lines:
                 lines.append(f"{child_prefix}{line}")
-    return lines
-
-
-def _render_wrapper_group(
-    items: list[tuple[str, Any, _RenderResult]]
-) -> list[str]:
-    """
-    Special handling for wrappers to avoid showing container indices.
-    Simply appends the wrapper's content lines.
-    """
-    lines = []
-    for _, _, child_res in items:
-        lines.extend(child_res.lines)
     return lines
