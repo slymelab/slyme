@@ -104,12 +104,12 @@ def check_node_consistency(root: Node) -> None:
         is_expr = isinstance(obj, NodeExpression)
         is_wrapper = isinstance(obj, NodeWrapper)
 
-        # Iterate over attributes using the Engine's flatten logic.
+        # Iterate over attributes using the Engine's iter logic.
         # By setting is_leaf to (x is not obj), we force the engine to:
-        # 1. Flatten 'obj' (because obj is obj, so is_leaf=False) -> Calls _flatten_node_object
+        # 1. Yield 'obj' (because obj is obj, so is_leaf=False) -> Calls handler (e.g. _flatten_node_element)
         # 2. Treat any child (attribute value) as a leaf (because child is not obj, so is_leaf=True)
         # This gives us exactly the direct attributes of 'obj' without recursing deeper yet.
-        direct_attrs_with_path, _ = NODE_PYTREE_ENGINE.flatten_with_path(
+        direct_attrs_with_path = NODE_PYTREE_ENGINE.iter_with_path(
             obj,
             is_leaf=lambda x, _: x is not obj
         )
@@ -122,19 +122,29 @@ def check_node_consistency(root: Node) -> None:
             
             attr_name = path[0].key
 
-            # Step 1: Flatten the attribute value to inspect its content structure.
+            # Step 1: Iterate over the attribute value to inspect its content structure.
             # We use is_leaf=_is_node_element to stop traversal at nested Nodes/Exprs/Wrappers.
             # This allows us to inspect the "container structure" holding them.
-            leaves, _ = NODE_PYTREE_ENGINE.flatten(
+            leaves_iter = NODE_PYTREE_ENGINE.iter(
                 attr_value, 
                 is_leaf=lambda x, _: _is_node_element(x)
             )
 
-            # Categorize leaves
-            nodes = [x for x in leaves if isinstance(x, Node)]
-            exprs = [x for x in leaves if isinstance(x, NodeExpression)]
-            wrappers = [x for x in leaves if isinstance(x, NodeWrapper)]
-            others = [x for x in leaves if not _is_node_element(x)]
+            # Categorize leaves (Single pass optimization)
+            nodes = []
+            exprs = []
+            wrappers = []
+            others = []
+
+            for x in leaves_iter:
+                if isinstance(x, Node):
+                    nodes.append(x)
+                elif isinstance(x, NodeExpression):
+                    exprs.append(x)
+                elif isinstance(x, NodeWrapper):
+                    wrappers.append(x)
+                else:
+                    others.append(x)
 
             # Flags for presence
             has_node = len(nodes) > 0

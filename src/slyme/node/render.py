@@ -59,10 +59,10 @@ def _build_lines(obj: Any) -> RenderResult:
 
     # 2. Get Children
     try:
-        children_with_path, _ = NODE_PYTREE_ENGINE.flatten_with_path(
+        children_with_path = list(NODE_PYTREE_ENGINE.iter_with_path(
             obj, 
             is_leaf=lambda x, _: x is not obj
-        )
+        ))
     except Exception:
         return RenderResult([], my_category)
 
