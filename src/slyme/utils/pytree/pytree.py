@@ -52,18 +52,18 @@ def flatten_with_path(
     return default_pytree_engine.flatten_with_path(tree, is_leaf=is_leaf)
 
 
-def iter_flatten(
+def iter(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> Iterator[Any]:
-    """Alias for default_pytree_engine.iter_flatten."""
-    return default_pytree_engine.iter_flatten(tree, is_leaf=is_leaf)
+    """Alias for default_pytree_engine.iter."""
+    return default_pytree_engine.iter(tree, is_leaf=is_leaf)
 
 
-def iter_flatten_with_path(
+def iter_with_path(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> Iterator[tuple[KeyPath, Any]]:
-    """Alias for default_pytree_engine.iter_flatten_with_path."""
-    return default_pytree_engine.iter_flatten_with_path(tree, is_leaf=is_leaf)
+    """Alias for default_pytree_engine.iter_with_path."""
+    return default_pytree_engine.iter_with_path(tree, is_leaf=is_leaf)
 
 
 def unflatten(treedef: PyTreeDef, leaves: Iterable[Any]) -> Any:
@@ -110,8 +110,8 @@ __all__ = [
     # Helper Functions
     "flatten",
     "flatten_with_path",
-    "iter_flatten",
-    "iter_flatten_with_path",
+    "iter",
+    "iter_with_path",
     "unflatten",
     "map",
     "get_entry",

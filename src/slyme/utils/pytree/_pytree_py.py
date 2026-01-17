@@ -157,6 +157,7 @@ class TraverseAux:
     """
     Auxiliary data passed to `is_leaf` for context-aware pruning.
     """
+
     parent: Any
     path: KeyPath
 
@@ -165,6 +166,7 @@ class _IsLeafFunc(Protocol):
     """
     Protocol for functions that determine if a node is a leaf.
     """
+
     def __call__(self, node: Any, traverse_aux: TraverseAux, /) -> bool: ...
 
 
@@ -173,11 +175,15 @@ class _ResolverFunc(Protocol):
     Protocol for dynamic handler resolution.
     Accepts an auxiliary context object.
     """
-    def __call__(self, obj: Any, traverse_aux: TraverseAux, /) -> Union[_PyTreeHandler, None]: ...
+
+    def __call__(
+        self, obj: Any, traverse_aux: TraverseAux, /
+    ) -> Union[_PyTreeHandler, None]: ...
 
 
 class _LeafSinkFunc(Protocol):
     """Internal protocol for collecting leaves."""
+
     def __call__(self, leaf: Any, traverse_aux: TraverseAux, /) -> None: ...
 
 
@@ -323,7 +329,9 @@ class PyTreeEngine:
 
         self.register(dict, _flatten_dict, _unflatten_dict)
 
-    def _lookup_handler(self, obj: Any, traverse_aux: TraverseAux) -> Union[_PyTreeHandler, None]:
+    def _lookup_handler(
+        self, obj: Any, traverse_aux: TraverseAux
+    ) -> Union[_PyTreeHandler, None]:
         """
         Resolve handler via:
         1. Pre-resolvers (High Priority)
@@ -391,7 +399,7 @@ class PyTreeEngine:
         treedef = self._traverse(tree, initial_traverse_aux, _sink, is_leaf)
         return leaves_with_path, treedef
 
-    def iter_flatten(
+    def iter(
         self,
         tree: Any,
         *,
@@ -401,9 +409,11 @@ class PyTreeEngine:
         Iterate over leaves of a tree without creating a PyTreeDef.
         """
         initial_traverse_aux = TraverseAux(parent=None, path=())
-        yield from self._traverse_iter(tree, initial_traverse_aux, is_leaf, with_path=False)
+        yield from self._traverse_iter(
+            tree, initial_traverse_aux, is_leaf, with_path=False
+        )
 
-    def iter_flatten_with_path(
+    def iter_with_path(
         self,
         tree: Any,
         *,
@@ -413,7 +423,9 @@ class PyTreeEngine:
         Iterate over (path, leaf) tuples of a tree without creating a PyTreeDef.
         """
         initial_traverse_aux = TraverseAux(parent=None, path=())
-        yield from self._traverse_iter(tree, initial_traverse_aux, is_leaf, with_path=True)
+        yield from self._traverse_iter(
+            tree, initial_traverse_aux, is_leaf, with_path=True
+        )
 
     def _prepare_node(
         self,
@@ -461,8 +473,8 @@ class PyTreeEngine:
         is_leaf: Optional[_IsLeafFunc],
     ) -> PyTreeDef:
         """Recursive core for traversal."""
-        should_flatten, handler, children_iter, keys_iter, tree_aux = self._prepare_node(
-            entry, traverse_aux, is_leaf
+        should_flatten, handler, children_iter, keys_iter, tree_aux = (
+            self._prepare_node(entry, traverse_aux, is_leaf)
         )
 
         if should_flatten:
@@ -477,7 +489,9 @@ class PyTreeEngine:
                         f"Not enough keys provided in TreeAux for container {type(entry)}"
                     )
 
-                child_traverse_aux = TraverseAux(parent=entry, path=traverse_aux.path + (key,))
+                child_traverse_aux = TraverseAux(
+                    parent=entry, path=traverse_aux.path + (key,)
+                )
                 child_def = self._traverse(
                     child,
                     child_traverse_aux,
@@ -486,7 +500,9 @@ class PyTreeEngine:
                 )
                 child_defs.append(child_def)
 
-            return ContainerDef(type(entry), tree_aux, tuple(child_defs), handler.unflatten)
+            return ContainerDef(
+                type(entry), tree_aux, tuple(child_defs), handler.unflatten
+            )
         else:
             # Leaf.
             leaf_sink(entry, traverse_aux)
@@ -513,8 +529,10 @@ class PyTreeEngine:
                     raise ValueError(
                         f"Not enough keys provided in TreeAux for container {type(entry)}"
                     )
-                
-                child_traverse_aux = TraverseAux(parent=entry, path=traverse_aux.path + (key,))
+
+                child_traverse_aux = TraverseAux(
+                    parent=entry, path=traverse_aux.path + (key,)
+                )
                 yield from self._traverse_iter(
                     child,
                     child_traverse_aux,
