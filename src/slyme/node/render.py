@@ -62,6 +62,7 @@ def _get_node_header(obj: Any) -> str:
 def _build_render_lines(obj: Any) -> _RenderResult:
     """
     Recursively build render lines for the object structure.
+    Returns the lines representing the children of `obj`.
     """
     # 1. Determine Category
     my_category = RENDER_TYPE_REGISTRY.lookup(type(obj), default=None)
@@ -110,19 +111,21 @@ def _build_render_lines(obj: Any) -> _RenderResult:
     # 5. Dispatch Rendering Strategy
     lines = []
     if isinstance(obj, _GROUPED_RENDER_TYPES):
-        _render_grouped(lines, classified_children)
+        lines = _render_grouped(classified_children)
+    elif my_category == "wrappers":
+        lines = _render_direct(flat_children, is_last_cat=False)
     else:
-        _render_direct(lines, flat_children)
+        lines = _render_direct(flat_children, is_last_cat=True)
 
     return _RenderResult(lines, my_category)
 
 
-def _render_grouped(
-    target_lines: list[str], classified_children: dict[str, list]
-) -> None:
+def _render_grouped(classified_children: dict[str, list]) -> list[str]:
     """
     Strategy: Group children by their category (nodes, wrappers, etc.).
+    Returns a list of rendered lines.
     """
+    lines = []
     # Filter active categories based on config order
     active_cats = [(c, t) for c, t in _CATEGORY_CONFIG if classified_children.get(c)]
     count = len(active_cats)
@@ -131,47 +134,59 @@ def _render_grouped(
         is_last_cat = i == count - 1
         items = classified_children[cat_name]
 
-        connector = "└── " if is_last_cat else "├── "
-        target_lines.append(f"{connector}{cat_title}")
-
-        prefix = "    " if is_last_cat else "│   "
+        connector = "│ "
+        lines.append(f"{connector}{cat_title}")
 
         if cat_name == "wrappers":
-            _append_wrapper_group(target_lines, items, prefix)
+            lines.extend(_render_wrapper_group(items))
         else:
-            _append_children_lines(target_lines, items, prefix)
+            lines.extend(
+                _render_children_lines(items, is_last_cat=is_last_cat)
+            )
+
+    return lines
 
 
 def _render_direct(
-    target_lines: list[str], items: list[tuple[str, Any, _RenderResult]]
-) -> None:
+    items: list[tuple[str, Any, _RenderResult]], is_last_cat: bool = True
+) -> list[str]:
     """
     Strategy: Render children linearly.
     """
-    _append_children_lines(target_lines, items, prefix="")
+    return _render_children_lines(items, is_last_cat=is_last_cat)
 
 
-def _append_children_lines(
-    target_lines: list[str], items: list[tuple[str, Any, _RenderResult]], prefix: str
-) -> None:
+def _render_children_lines(
+    items: list[tuple[str, Any, _RenderResult]], is_last_cat: bool = True
+) -> list[str]:
+    """
+    Standard rendering of a list of children items.
+    Handles tree connectors (├──, └──) and indentation.
+    """
+    lines = []
     count = len(items)
     for i, (key_str, child, child_res) in enumerate(items):
         is_last = i == count - 1
-        connector = "└── " if is_last else "├── "
+        connector = "└── " if is_last and is_last_cat else "├── "
 
         child_header = _get_node_header(child)
-        target_lines.append(f"{prefix}{connector}{key_str} {child_header}")
+        lines.append(f"{connector}{key_str} {child_header}")
 
         if child_res.lines:
-            child_prefix = prefix + ("    " if is_last else "│   ")
+            child_prefix = "    " if is_last and is_last_cat else "│   "
             for line in child_res.lines:
-                target_lines.append(f"{child_prefix}{line}")
+                lines.append(f"{child_prefix}{line}")
+    return lines
 
 
-def _append_wrapper_group(
-    target_lines: list[str], items: list[tuple[str, Any, _RenderResult]], prefix: str
-) -> None:
-    """Special handling for wrappers to avoid showing container indices."""
+def _render_wrapper_group(
+    items: list[tuple[str, Any, _RenderResult]]
+) -> list[str]:
+    """
+    Special handling for wrappers to avoid showing container indices.
+    Simply appends the wrapper's content lines.
+    """
+    lines = []
     for _, _, child_res in items:
-        for line in child_res.lines:
-            target_lines.append(f"{prefix}{line}")
+        lines.extend(child_res.lines)
+    return lines
