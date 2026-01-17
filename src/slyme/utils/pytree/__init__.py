@@ -22,6 +22,8 @@ from .pytree import (
     # Functions
     flatten,
     flatten_with_path,
+    iter_flatten,
+    iter_flatten_with_path,
     unflatten,
     map,
     get_entry,
@@ -44,6 +46,8 @@ __all__ = [
     "PYTREE_ENGINE_REGISTRY",
     "flatten",
     "flatten_with_path",
+    "iter_flatten",
+    "iter_flatten_with_path",
     "unflatten",
     "map",
     "get_entry",

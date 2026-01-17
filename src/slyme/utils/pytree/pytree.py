@@ -2,7 +2,7 @@
 Public PyTree API with C-extension fallback support.
 """
 
-from collections.abc import Iterable, Callable
+from collections.abc import Iterable, Callable, Iterator
 from typing import Any, Optional
 from ._pytree_py import KeyPath
 
@@ -52,6 +52,20 @@ def flatten_with_path(
     return default_pytree_engine.flatten_with_path(tree, is_leaf=is_leaf)
 
 
+def iter_flatten(
+    tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
+) -> Iterator[Any]:
+    """Alias for default_pytree_engine.iter_flatten."""
+    return default_pytree_engine.iter_flatten(tree, is_leaf=is_leaf)
+
+
+def iter_flatten_with_path(
+    tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
+) -> Iterator[tuple[KeyPath, Any]]:
+    """Alias for default_pytree_engine.iter_flatten_with_path."""
+    return default_pytree_engine.iter_flatten_with_path(tree, is_leaf=is_leaf)
+
+
 def unflatten(treedef: PyTreeDef, leaves: Iterable[Any]) -> Any:
     """Alias for default_pytree_engine.unflatten."""
     return default_pytree_engine.unflatten(treedef, leaves)
@@ -96,6 +110,8 @@ __all__ = [
     # Helper Functions
     "flatten",
     "flatten_with_path",
+    "iter_flatten",
+    "iter_flatten_with_path",
     "unflatten",
     "map",
     "get_entry",

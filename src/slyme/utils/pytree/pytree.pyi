@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Callable
+from collections.abc import Iterable, Callable, Iterator
 from typing import Any, Optional
 from ._pytree_py import (
     PyTreeKey,
@@ -22,6 +22,12 @@ def flatten(
 def flatten_with_path(
     tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> tuple[list[tuple[KeyPath, Any]], PyTreeDef]: ...
+def iter_flatten(
+    tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
+) -> Iterator[Any]: ...
+def iter_flatten_with_path(
+    tree: Any, *, is_leaf: Optional[Callable[[Any], bool]] = None
+) -> Iterator[tuple[KeyPath, Any]]: ...
 def unflatten(treedef: PyTreeDef, leaves: Iterable[Any]) -> Any: ...
 def map(
     func: Callable[..., Any],
@@ -48,6 +54,8 @@ __all__ = [
     "PYTREE_ENGINE_REGISTRY",
     "flatten",
     "flatten_with_path",
+    "iter_flatten",
+    "iter_flatten_with_path",
     "unflatten",
     "map",
     "get_entry",
