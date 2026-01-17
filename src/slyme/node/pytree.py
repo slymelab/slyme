@@ -10,7 +10,7 @@ from slyme.utils.pytree import (
     PYTREE_ENGINE_REGISTRY,
 )
 from slyme.node.base import Node, NodeExpression, NodeElement
-from slyme.node.wrapper import NodeWrapper, NodeWrapperList
+from slyme.node.wrapper import NodeWrapper
 
 # =============================================================================
 # 1. Node Tree Engine & Registration
@@ -55,26 +55,9 @@ def _unflatten_node_element(children: Iterable[Any], tree_aux: PyTreeAux) -> Any
     return obj
 
 
-def _flatten_wrapper_list(obj: NodeWrapperList) -> tuple[Iterable[Any], PyTreeAux]:
-    """
-    Flatten logic for NodeWrapperList (treat as sequence).
-    """
-    # NodeWrapperList is a MutableSequenceProxy, so we iterate it directly.
-    return iter(obj), PyTreeAux()
-
-
-def _unflatten_wrapper_list(children: Iterable[NodeWrapper], tree_aux: PyTreeAux) -> Any:
-    """
-    Unflatten logic for NodeWrapperList.
-    """
-    # Reconstruct using the constructor which accepts an iterable
-    return tree_aux.cls(children)
-
-
 # Register handlers
 # Note: strict=False allows overwriting if re-imported
 NODE_PYTREE_ENGINE.register(NodeElement, _flatten_node_element, _unflatten_node_element, strict=False)
-NODE_PYTREE_ENGINE.register(NodeWrapperList, _flatten_wrapper_list, _unflatten_wrapper_list, strict=False)
 
 
 # =============================================================================

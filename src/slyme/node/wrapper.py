@@ -25,10 +25,12 @@ class NodeWrapper(NodeElement):
         """Core node wrapper API for custom operations."""
         yield
 
+    @contextmanager
     def __call__(self, ctx: Context, wrapped: Node) -> Generator:
         """A mixin method that wraps the generator returned by ``_execute_yield``."""
         try:
-            yield from self.wrap(ctx, wrapped)
+            with self.wrap(ctx, wrapped):
+                yield
         # directly raise
         except NodeException:
             raise
@@ -37,27 +39,3 @@ class NodeWrapper(NodeElement):
             raise NodeWrapperExceptionRecord(
                 exception_node=self, wrapped_node=wrapped, exception=e
             )
-
-
-class NodeWrapperList(MutableSequenceProxy[NodeWrapper]):
-    """Manages the storage and execution of a sequence of NodeWrappers.
-
-    Design Note:
-        - Flat Structure: Unlike `NodeComponent` which forms recursive graphs,
-          this collection is designed to remain flat.
-        - Complexity Control: Deeply nesting wrappers or collections is
-          strictly discouraged. A flat architecture limits stack depth and
-          ensures execution flow remains transparent, preventing excessive
-          debugging complexity.
-    """
-
-    def __call__(self, ctx: Context, wrapped: Node) -> None:
-        """"""
-        if len(self) == 0:
-            # Directly call `_execute`.
-            return wrapped.execute(ctx)
-        with GeneratorExecutorList(
-            wrapper(ctx, wrapped) for wrapper in self
-        ).stack_context_manager() as vals:
-            if not check_stop_flag(vals):
-                wrapped.execute(ctx)

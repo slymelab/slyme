@@ -1,209 +1,188 @@
-"""
-slyme node render utility.
-"""
-
-from typing import Any, Tuple, List, Dict
-from collections.abc import Sequence, Mapping
+from typing import Any, Optional
+from collections import defaultdict
+from dataclasses import dataclass
+from slyme.utils.registry import TypeRegistry
 from slyme.node.base import NodeElement, Node, NodeExpression
-from slyme.node.wrapper import NodeWrapper, NodeWrapperList
-from slyme.node.pytree import NODE_PYTREE_ENGINE, AttributeKey
+from slyme.node.wrapper import NodeWrapper
+from slyme.node.pytree import NODE_PYTREE_ENGINE
 
 __all__ = ["get_render_string"]
 
+# =============================================================================
+# Configuration & Registry
+# =============================================================================
+
+# 1. Category Registry (Determines "What is this object?")
+RENDER_TYPE_REGISTRY = TypeRegistry("render_category")
+RENDER_TYPE_REGISTRY.register("nodes", key=Node)
+RENDER_TYPE_REGISTRY.register("expressions", key=NodeExpression)
+RENDER_TYPE_REGISTRY.register("wrappers", key=NodeWrapper)
+
+# 2. Render Strategy (Determines "How do we display its children?")
+#    True  = Grouped Rendering (Categorized by type, e.g. Node)
+#    False = Direct Rendering (Attribute/Key based, e.g. Expression)
+#    Default is False (Direct) for maximum flexibility.
+GROUPED_RENDER_TYPES = (Node,) 
+
+# 3. Category Config (Defines display order and titles for Grouped Rendering)
+#    (Category Name, Display Title)
+TYPE_CONFIG = [
+    ("wrappers", "<wrappers>"),
+    ("nodes", "(nodes)"),
+    ("expressions", "(expressions)")
+]
+
+@dataclass
+class RenderResult:
+    lines: list[str]
+    category: Optional[str]
+
+
+# =============================================================================
+# Main Logic
+# =============================================================================
 
 def get_render_string(obj: Any) -> str:
-    """
-    Return the string representation of the node hierarchy.
-    """
-    lines = _build_lines(obj, prefix="", is_root=True)
-    return "\n".join(lines)
-
+    header = _get_node_header(obj)
+    res = _build_lines(obj)
+    final_lines = [header] + res.lines
+    return "\n".join(final_lines)
 
 def _get_node_header(obj: Any) -> str:
-    """
-    Generate the header string for a node, e.g., 'MyNode(name="foo")'.
-    Uses 'extra_repr' if available.
-    """
     type_name = type(obj).__name__
-    extra = ""
-    # 优先使用 extra_repr
-    if hasattr(obj, "extra_repr"):
-        extra = obj.extra_repr()
-    # 为容器提供简单的视觉提示
-    elif isinstance(obj, (list, tuple, NodeWrapperList)):
-        return "[]" if isinstance(obj, (list, NodeWrapperList)) else "()"
-    elif isinstance(obj, Mapping):
-        return "{}"
-    
+    extra = obj.extra_repr() if hasattr(obj, "extra_repr") else ""
     return f"{type_name}({extra})" if extra else type_name
 
+def _build_lines(obj: Any) -> RenderResult:
+    # 1. Determine Category
+    my_category = RENDER_TYPE_REGISTRY.lookup(type(obj), default=None)
 
-def _classify_children(
-    children_with_path: List[Tuple[Any, Any]]
-) -> Dict[str, List[Tuple[Any, Any]]]:
-    """
-    Classify children into 'wrappers', 'nodes', and 'expressions'.
-    Returns a dict of {category_name: list_of_(key, child)}.
-    """
-    categories = {
-        "wrappers": [],
-        "nodes": [],
-        "expressions": []
-    }
-
-    for path, child in children_with_path:
-        key = path[0] 
-        
-        # 1. Wrappers (Special handling for 'node_wrappers' attribute)
-        if (
-            isinstance(key, AttributeKey) 
-            and key.key == "node_wrappers" 
-            and isinstance(child, NodeWrapperList)
-        ):
-            if len(child) > 0:
-                categories["wrappers"].append((key, child))
-            continue
-
-        # 2. Check content type for Nodes and Expressions
-        content_type = _get_content_type(child)
-        
-        if content_type == "node":
-            categories["nodes"].append((key, child))
-        elif content_type == "expression":
-            categories["expressions"].append((key, child))
-        # else: ignore ordinary attributes
-
-    return categories
-
-
-def _get_content_type(obj: Any) -> str:
-    """
-    Determine if the object is or holds Nodes or Expressions.
-    Returns 'node', 'expression', or 'other'.
-    """
-    if isinstance(obj, Node):
-        return "node"
-    if isinstance(obj, NodeExpression):
-        return "expression"
-    
-    # Recursive check for containers
-    if isinstance(obj, (list, tuple, NodeWrapperList)):
-        for item in obj:
-            t = _get_content_type(item)
-            if t in ("node", "expression"):
-                return t
-        return "other"
-    
-    if isinstance(obj, Mapping):
-        for item in obj.values():
-            t = _get_content_type(item)
-            if t in ("node", "expression"):
-                return t
-        return "other"
-        
-    return "other"
-
-
-def _build_lines(obj: Any, prefix: str, is_root: bool = False) -> List[str]:
-    lines = []
-    
-    if is_root:
-        lines.append(_get_node_header(obj))
-
+    # 2. Get Children
     try:
         children_with_path, _ = NODE_PYTREE_ENGINE.flatten_with_path(
             obj, 
             is_leaf=lambda x, _: x is not obj
         )
     except Exception:
-        return lines
+        return RenderResult([], my_category)
 
-    # Case A: It is a Node -> Apply Categorization
-    if isinstance(obj, Node):
-        classified = _classify_children(children_with_path)
-        
-        # Order of categories to display
-        category_order = ["wrappers", "nodes", "expressions"]
-        
-        # Display styles map
-        category_styles = {
-            "wrappers": "<wrappers>",       # AOP/Stack style
-            "nodes": "(nodes)",             # Structural style
-            "expressions": "(expressions)"  # Functional style
-        }
-        
-        active_categories = [c for c in category_order if classified[c]]
-        count_cats = len(active_categories)
+    # 3. Process Children Recursively
+    #    We collect BOTH classified dict (for Grouped) and flat list (for Direct)
+    #    This incurs no extra cost as we iterate once.
+    classified = defaultdict(list)
+    processed_children = []
+    has_valid_children = False
 
-        for i, cat_name in enumerate(active_categories):
-            is_last_cat = (i == count_cats - 1)
-            cat_items = classified[cat_name]
-            
-            # Render Category Header
-            connector = "└── " if is_last_cat else "├── "
-            header_str = category_styles.get(cat_name, f"({cat_name})")
-            lines.append(f"{prefix}{connector}{header_str}")
-            
-            cat_prefix = prefix + ("    " if is_last_cat else "│   ")
-            
-            # --- Special Handling for Wrappers ---
-            if cat_name == "wrappers":
-                # Iterate over the NodeWrapperLists found (usually just one: .node_wrappers)
-                for _, wrapper_list in cat_items:
-                    # Manually flatten the list to get indices
-                    wrappers_iter, _ = NODE_PYTREE_ENGINE.flatten_with_path(
-                        wrapper_list, is_leaf=lambda x, _: x is not wrapper_list
-                    )
-                    wrappers = list(wrappers_iter)
-                    w_count = len(wrappers)
-                    
-                    for j, (w_key, w_child) in enumerate(wrappers):
-                        is_last_w = (j == w_count - 1)
-                        w_connector = "└── " if is_last_w else "├── "
-                        # [NEW] Restore Index: e.g. "[0]"
-                        w_key_str = w_key[-1].codify("") 
-                        w_header = _get_node_header(w_child)
-                        
-                        lines.append(f"{cat_prefix}{w_connector}{w_key_str} {w_header}")
-            
-            # --- Standard Handling for Nodes/Exprs ---
-            else:
-                item_count = len(cat_items)
-                for k, (k_key, k_child) in enumerate(cat_items):
-                    is_last_item = (k == item_count - 1)
-                    item_connector = "└── " if is_last_item else "├── "
-                    
-                    key_str = k_key.codify("")
-                    child_header = _get_node_header(k_child)
-                    
-                    lines.append(f"{cat_prefix}{item_connector}{key_str} {child_header}")
-                    
-                    # Recurse if needed
-                    if isinstance(k_child, (Node, list, tuple, dict, NodeWrapperList)):
-                        child_prefix = cat_prefix + ("    " if is_last_item else "│   ")
-                        lines.extend(_build_lines(k_child, child_prefix, is_root=False))
-
-    # Case B: Container inside a Node
-    elif isinstance(obj, (list, tuple, dict, NodeWrapperList)):
-        filtered_children = []
-        for path, child in children_with_path:
-            if not path: continue
-            # Keep items if they are Nodes/Exprs OR Wrappers (in case of nested wrapper lists)
-            if _get_content_type(child) != "other" or isinstance(child, (NodeWrapper, NodeWrapperList)):
-                 filtered_children.append((path[0], child))
+    for path, child in children_with_path:
+        child_res = _build_lines(child)
         
-        count = len(filtered_children)
-        for i, (key, child) in enumerate(filtered_children):
-            is_last = (i == count - 1)
-            connector = "└── " if is_last else "├── "
+        if child_res.category is not None:
+            has_valid_children = True
+            key_str = path[-1].codify("")
+            item = (key_str, child, child_res)
             
-            key_str = key.codify("")
-            child_header = _get_node_header(child)
-            
-            lines.append(f"{prefix}{connector}{key_str} {child_header}")
-            
-            if isinstance(child, (Node, list, tuple, dict, NodeWrapperList)):
-                child_prefix = prefix + ("    " if is_last else "│   ")
-                lines.extend(_build_lines(child, child_prefix, is_root=False))
+            classified[child_res.category].append(item)
+            processed_children.append(item)
 
-    return lines
+    # 4. Propagate Category (for Containers like list/dict)
+    if my_category is None and has_valid_children:
+        # Containers default to the category of their first content
+        # or fallback to a general category from config
+        for cat, _ in TYPE_CONFIG:
+            if cat in classified:
+                my_category = cat
+                break
+        if my_category is None:
+            my_category = list(classified.keys())[0]
+
+    if my_category is None:
+        return RenderResult([], None)
+
+    # 5. Dispatch Rendering Strategy
+    #    If it is a Node (or configured as Grouped), use Grouped Rendering.
+    #    Otherwise (Expression, Wrapper, List, Dict...), use Direct Rendering.
+    lines = []
+    if isinstance(obj, GROUPED_RENDER_TYPES):
+        _render_grouped(lines, classified)
+    else:
+        _render_direct(lines, processed_children)
+
+    return RenderResult(lines, my_category)
+
+
+# =============================================================================
+# Render Strategies
+# =============================================================================
+
+def _render_grouped(
+    target_lines: list[str], 
+    classified: dict[str, list]
+):
+    """
+    Strategy A: Group children by their category (nodes, wrappers, etc.).
+    Used for 'Bag-like' objects (e.g., Node).
+    """
+    active_configs = [(c, title) for c, title in TYPE_CONFIG if classified[c]]
+    count_cats = len(active_configs)
+
+    for i, (cat_name, cat_title) in enumerate(active_configs):
+        is_last_cat = (i == count_cats - 1)
+        cat_items = classified[cat_name]
+
+        connector = "└── " if is_last_cat else "├── "
+        target_lines.append(f"{connector}{cat_title}")
+        
+        cat_prefix = "    " if is_last_cat else "│   "
+
+        if cat_name == "wrappers":
+            _append_wrapper_group(target_lines, cat_items, cat_prefix)
+        else:
+            _append_children_lines(target_lines, cat_items, cat_prefix)
+
+
+def _render_direct(
+    target_lines: list[str], 
+    items: list[tuple[str, Any, RenderResult]]
+):
+    """
+    Strategy B: Render children linearly preserving attribute keys.
+    Used for 'Structure-like' objects (e.g., NodeExpression, Wrapper) and Containers.
+    """
+    _append_children_lines(target_lines, items, prefix="")
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def _append_children_lines(
+    target_lines: list[str],
+    items: list[tuple[str, Any, RenderResult]],
+    prefix: str
+):
+    count = len(items)
+    for i, (key_str, child, child_res) in enumerate(items):
+        is_last = (i == count - 1)
+        connector = "└── " if is_last else "├── "
+        
+        child_header = _get_node_header(child)
+        target_lines.append(f"{prefix}{connector}{key_str} {child_header}")
+
+        if child_res.lines:
+            child_prefix = prefix + ("    " if is_last else "│   ")
+            for line in child_res.lines:
+                target_lines.append(f"{child_prefix}{line}")
+
+
+def _append_wrapper_group(
+    target_lines: list[str],
+    items: list[tuple[str, Any, RenderResult]],
+    prefix: str
+):
+    """Flatten wrappers group to avoid showing container list indices."""
+    all_wrapper_lines = []
+    for _, _, child_res in items:
+        all_wrapper_lines.extend(child_res.lines)
+        
+    for line in all_wrapper_lines:
+        target_lines.append(f"{prefix}{line}")
