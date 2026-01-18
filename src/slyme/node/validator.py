@@ -2,9 +2,8 @@
 Node validation module, including dependency checking and structure consistency checking.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Union
-from typing_extensions import Self
 from collections.abc import Callable
 from slyme.context import Context
 from slyme.utils.registry import Registry, TypeRegistry
@@ -48,19 +47,6 @@ class NodeDependencyChecker:
 
 
 @dataclass
-class VanillaDependencyInfo:
-    """Strategy-specific data structure: Bag of Keys."""
-
-    requires: set[str] = field(default_factory=set)
-    produces: set[str] = field(default_factory=set)
-
-    def update(self, other: "VanillaDependencyInfo") -> Self:
-        self.requires.update(other.requires)
-        self.produces.update(other.produces)
-        return self
-
-
-@dataclass
 class VanillaDependencyReport:
     """Strategy-specific report."""
 
@@ -96,8 +82,9 @@ class VanillaDependencyChecker(NodeDependencyChecker):
         /,
         **kwargs,
     ) -> VanillaDependencyReport:
-        # 1. Collect dependencies (VanillaDependencyInfo) directly using NODE_PYTREE_ENGINE
-        info = VanillaDependencyInfo()
+        # 1. Collect dependencies directly using NODE_PYTREE_ENGINE
+        requires: set[str] = set()
+        produces: set[str] = set()
 
         # Flatten the node structure.
         # NODE_PYTREE_ENGINE is configured to handle NodeElement traversal.
@@ -106,23 +93,23 @@ class VanillaDependencyChecker(NodeDependencyChecker):
         for leaf in leaves:
             # NOTE: logic follows previous implementation assuming RequiresKey/ProducesKey exist.
             if isinstance(leaf, RequiresKey):  # type: ignore
-                info.requires.add(leaf.path)
+                requires.add(leaf.path)
             elif isinstance(leaf, ProducesKey):  # type: ignore
-                info.produces.add(leaf.path)
+                produces.add(leaf.path)
 
         # 2. Extract existing keys from Context
         context_data = ctx.collect_leaves()
         context_keys = set(context_data.keys())
 
         # 3. Calculate missing keys (Set arithmetic)
-        available_keys = info.produces | context_keys
-        missing_keys = info.requires - available_keys
+        available_keys = produces | context_keys
+        missing_keys = requires - available_keys
 
         return VanillaDependencyReport(
             missing_keys=missing_keys,
             context_keys=context_keys,
-            all_produced=info.produces,
-            all_required=info.requires,
+            all_produced=produces,
+            all_required=requires,
         )
 
 
