@@ -13,6 +13,7 @@ from typing import (
     Protocol,
     Optional,
     Literal,
+    cast,
 )
 from slyme.utils.registry import Registry, TypeRegistry
 
@@ -20,8 +21,6 @@ from slyme.utils.registry import Registry, TypeRegistry
 @dataclass(frozen=True)
 class PyTreeKey:
     """Base class for path entries."""
-
-    key: Any = 0
 
     def resolve(self, obj: Any) -> Any:
         """
@@ -47,18 +46,18 @@ class PyTreeKey:
 class SequenceKey(PyTreeKey):
     """Represents an index in a sequence (list, tuple)."""
 
-    key: int
+    index: int
 
     def resolve(self, obj: Any) -> Any:
         try:
-            return obj[self.key]
+            return obj[self.index]
         except (IndexError, TypeError) as e:
             raise KeyError(
-                f"Cannot access index {self.key} from object of type {type(obj).__name__}"
+                f"Cannot access index {self.index} from object of type {type(obj).__name__}"
             ) from e
 
     def codify(self, parent_expr: str) -> str:
-        return f"{parent_expr}[{self.key}]"
+        return f"{parent_expr}[{self.index}]"
 
 
 @dataclass(frozen=True)
@@ -83,18 +82,18 @@ class MappingKey(PyTreeKey):
 class AttributeKey(PyTreeKey):
     """Represents an attribute name (object)."""
 
-    key: str
+    name: str
 
     def resolve(self, obj: Any) -> Any:
         try:
-            return getattr(obj, self.key)
+            return getattr(obj, self.name)
         except AttributeError as e:
             raise KeyError(
-                f"Cannot access attribute {self.key!r} from object of type {type(obj).__name__}"
+                f"Cannot access attribute {self.name!r} from object of type {type(obj).__name__}"
             ) from e
 
     def codify(self, parent_expr: str) -> str:
-        return f"{parent_expr}.{self.key}"
+        return f"{parent_expr}.{self.name}"
 
 
 # Type Alias for Path
@@ -324,7 +323,7 @@ class PyTreeEngine:
             if tree_aux.keys is None:
                 raise ValueError("Missing keys in TreeAux for dict unflattening.")
             # Unwrap DictKey to get raw keys.
-            raw_keys = [k.key for k in tree_aux.keys]
+            raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.keys)]
             return dict(zip(raw_keys, children))
 
         self.register(dict, _flatten_dict, _unflatten_dict)
