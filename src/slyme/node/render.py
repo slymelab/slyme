@@ -4,7 +4,8 @@ Node rendering module.
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Union
+from slyme.utils.protocol import HasExtraRepr
 from slyme.utils.registry import TypeRegistry
 from slyme.utils.store import Field
 from slyme.node.base import NodeElement, Node, NodeExpression
@@ -68,7 +69,7 @@ def get_render_string(obj: Any) -> str:
     return "\n".join([header] + result.lines)
 
 
-def _get_node_header(obj: Any) -> str:
+def _get_node_header(obj: Union[Any, HasExtraRepr]) -> str:
     """Resolve the display header for a single object."""
     type_name = type(obj).__name__
     extra_repr: str = getattr(obj, "extra_repr", lambda: "")()
