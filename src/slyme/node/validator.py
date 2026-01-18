@@ -8,6 +8,7 @@ from collections.abc import Callable
 from slyme.context import Context
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.pytree import AttributeKey
+from slyme.utils.store import Field
 from slyme.node.base import (
     NodeElement,
     Node,
@@ -117,57 +118,65 @@ ValidatorFunc = Callable[[NodeElement, str, list[Any], str], None]
 VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_validation")
 
 
-@dataclass(frozen=True)
-class _LeafStats:
-    """Helper struct to hold scan results from a single pass."""
+# --- Leaf Scanning Logic ---
 
-    has_node: bool = False
-    has_expr: bool = False
-    has_wrapper: bool = False
-    has_other: bool = False
+# Configuration: Types that must be independently tracked and kept pure.
+# Any object belonging to these types (or their subclasses) is treated as a distinct category.
+_TRACKED_CATEGORIES = (Node, NodeExpression, NodeWrapper, Field)
+# Marker for any type not in the tracked categories.
+_OTHERS_MARKER = None
 
 
-def _scan_leaves(leaves: list[Any]) -> _LeafStats:
+def _scan_leaves(leaves: list[Any]) -> set[Union[type, None]]:
     """
-    Perform a single pass over leaves to determine content composition.
-    This optimizes performance by avoiding multiple list comprehensions.
+    Scan the leaves and return a set of categories found.
+
+    Returns:
+        A set containing:
+        - The specific tracked class (e.g., Node, Field) if found.
+        - _OTHERS_MARKER (None) if a non-tracked object is found.
     """
-    has_node = False
-    has_expr = False
-    has_wrapper = False
-    has_other = False
+    stats: set[Union[type, None]] = set()
 
     for leaf in leaves:
-        if isinstance(leaf, Node):
-            has_node = True
-        elif isinstance(leaf, NodeExpression):
-            has_expr = True
-        elif isinstance(leaf, NodeWrapper):
-            has_wrapper = True
-        elif not isinstance(leaf, NodeElement):
-            # If it's not a NodeElement at all, it's "other"
-            has_other = True
-        # Note: If we add more NodeElement subclasses in the future,
-        # they fall through here unless checked.
-        # But generally they should inherit from one of the above or be treated as generic elements.
+        found_category = False
+        for category in _TRACKED_CATEGORIES:
+            if isinstance(leaf, category):
+                stats.add(category)
+                found_category = True
+                break
 
-    return _LeafStats(has_node, has_expr, has_wrapper, has_other)
+        if not found_category:
+            stats.add(_OTHERS_MARKER)
+
+    return stats
 
 
-def _validate_purity(stats: _LeafStats, path_info: str) -> None:
-    """Common purity check logic used by all validators."""
-    # Rule: Container Purity (Cannot mix Node and Expression)
-    if stats.has_node and stats.has_expr:
+def _validate_purity(stats: set[Union[type, None]], path_info: str) -> None:
+    """
+    Enforce purity: A container can only hold elements of ONE tracked category,
+    OR purely untracked elements (Others).
+
+    Logic:
+        - {Node}: OK
+        - {Node, NodeExpression}: Error (Mixed tracked types)
+        - {Node, None}: Error (Tracked type mixed with Others)
+        - {None}: OK (Pure Others, internal mix of Others is allowed)
+        - {}: OK (Empty)
+    """
+    if len(stats) > 1:
+        # Construct readable error details
+        names = []
+        for cat in stats:
+            if cat is _OTHERS_MARKER:
+                names.append("Others")
+            else:
+                names.append(cat.__name__)
+
         raise NodeStructureError(
-            f"Mixed content at '{path_info}': " "Cannot mix Node and NodeExpression."
-        )
-
-    # Rule: Impure container (NodeElement mixed with other types)
-    # Only enforce if there are actual NodeElements present
-    if (stats.has_node or stats.has_expr) and stats.has_other:
-        raise NodeStructureError(
-            f"Impure container at '{path_info}': "
-            "Found Node/NodeExpression mixed with other types."
+            f"Mixed content at '{path_info}': "
+            f"Found mixed types {names}. Containers must be homogenous regarding "
+            f"Nodes, Expressions, Wrappers, and Fields."
         )
 
 
@@ -180,7 +189,7 @@ def _validate_node_structure(
     _validate_purity(stats, path_info)
 
     # Rule: NodeWrapper placement
-    if stats.has_wrapper:
+    if NodeWrapper in stats:
         if attr_name != "node_wrappers":
             raise NodeStructureError(
                 f"Invalid wrapper placement at '{path_info}': "
@@ -201,13 +210,13 @@ def _validate_terminal_structure(
     _validate_purity(stats, path_info)
 
     # Rule: Downward closure
-    if stats.has_node:
+    if Node in stats:
         raise NodeStructureError(
             f"Invalid containment at '{path_info}': "
             f"{type(obj).__name__} cannot hold Node."
         )
 
-    if stats.has_wrapper:
+    if NodeWrapper in stats:
         raise NodeStructureError(
             f"Invalid containment at '{path_info}': "
             f"{type(obj).__name__} cannot hold NodeWrapper."
