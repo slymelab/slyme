@@ -1,3 +1,0 @@
-from .protocol import (
-    Attribute,
-)
