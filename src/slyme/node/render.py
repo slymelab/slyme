@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Union
 from slyme.utils.protocol import HasExtraRepr
 from slyme.utils.registry import TypeRegistry
-from slyme.utils.store import Field
+from slyme.utils.store import Ref
 from .base import NodeElement, Node, NodeExpression, NODE_PYTREE_ENGINE
 from .wrapper import NodeWrapper
 
@@ -25,7 +25,7 @@ RENDER_TYPE_REGISTRY = TypeRegistry("render_category")
 RENDER_TYPE_REGISTRY.register("nodes", key=Node)
 RENDER_TYPE_REGISTRY.register("expressions", key=NodeExpression)
 RENDER_TYPE_REGISTRY.register("wrappers", key=NodeWrapper)
-RENDER_TYPE_REGISTRY.register("fields", key=Field)
+RENDER_TYPE_REGISTRY.register("refs", key=Ref)
 
 # Types that should use the "Grouped" rendering strategy.
 _GROUPED_RENDER_TYPES = (NodeElement,)
@@ -33,7 +33,7 @@ _GROUPED_RENDER_TYPES = (NodeElement,)
 # Configuration for grouped rendering: (Category Name, Display Title)
 _CATEGORY_CONFIG = [
     ("wrappers", "@wrappers"),
-    ("fields", "#fields"),
+    ("refs", "#refs"),
     ("expressions", "$expressions"),
     ("nodes", "(nodes)"),
 ]

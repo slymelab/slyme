@@ -6,18 +6,18 @@ from slyme.utils.constant import Missing
 from slyme.utils.collection import MutableSequenceProxy
 
 if TYPE_CHECKING:
-    from .store import Store, Field
+    from .store import Store, Ref
 _StoreHookT = TypeVar("_StoreHookT", bound="StoreHook")
 
 
 class StoreHook:
-    def on_getitem(self, instance: "Store", key: "Field", value: Any, /) -> None:
+    def on_getitem(self, instance: "Store", key: "Ref", value: Any, /) -> None:
         pass
 
     def on_setitem(
         self,
         instance: "Store",
-        key: "Field",
+        key: "Ref",
         old_value: Union[Missing, Any],
         new_value: Any,
         /,
@@ -25,20 +25,20 @@ class StoreHook:
         pass
 
     def on_delitem(
-        self, instance: "Store", key: "Field", old_value: Union[Missing, Any], /
+        self, instance: "Store", key: "Ref", old_value: Union[Missing, Any], /
     ) -> None:
         pass
 
 
 class StoreHookList(StoreHook, MutableSequenceProxy[_StoreHookT]):
-    def on_getitem(self, instance: "Store", key: "Field", value: Any, /) -> None:
+    def on_getitem(self, instance: "Store", key: "Ref", value: Any, /) -> None:
         for hook in self:
             hook.on_getitem(instance, key, value)
 
     def on_setitem(
         self,
         instance: "Store",
-        key: "Field",
+        key: "Ref",
         old_value: Union[Missing, Any],
         new_value: Any,
         /,
@@ -47,7 +47,7 @@ class StoreHookList(StoreHook, MutableSequenceProxy[_StoreHookT]):
             hook.on_setitem(instance, key, old_value, new_value)
 
     def on_delitem(
-        self, instance: "Store", key: "Field", old_value: Union[Missing, Any], /
+        self, instance: "Store", key: "Ref", old_value: Union[Missing, Any], /
     ) -> None:
         for hook in self:
             hook.on_delitem(instance, key, old_value)
@@ -58,7 +58,7 @@ class StoreHookList(StoreHook, MutableSequenceProxy[_StoreHookT]):
 class GetitemRecord:
     __slots__ = ("instance", "key", "value")
     instance: "Store"
-    key: "Field"
+    key: "Ref"
     value: Any
 
 
@@ -66,7 +66,7 @@ class GetitemRecord:
 class SetitemRecord:
     __slots__ = ("instance", "key", "old_value", "new_value")
     instance: "Store"
-    key: "Field"
+    key: "Ref"
     old_value: Any
     new_value: Any
 
@@ -75,7 +75,7 @@ class SetitemRecord:
 class DelitemRecord:
     __slots__ = ("instance", "key", "old_value")
     instance: "Store"
-    key: "Field"
+    key: "Ref"
     old_value: Any
 
 
@@ -84,13 +84,13 @@ class RecordHook(StoreHook):
         super().__init__()
         self.records: list[Union[GetitemRecord, SetitemRecord, DelitemRecord]] = []
 
-    def on_getitem(self, instance: "Store", key: "Field", value: Any, /) -> None:
+    def on_getitem(self, instance: "Store", key: "Ref", value: Any, /) -> None:
         self.records.append(GetitemRecord(instance, key, value))
 
     def on_setitem(
         self,
         instance: "Store",
-        key: "Field",
+        key: "Ref",
         old_value: Union[Missing, Any],
         new_value: Any,
         /,
@@ -98,6 +98,6 @@ class RecordHook(StoreHook):
         self.records.append(SetitemRecord(instance, key, old_value, new_value))
 
     def on_delitem(
-        self, instance: "Store", key: "Field", old_value: Union[Missing, Any], /
+        self, instance: "Store", key: "Ref", old_value: Union[Missing, Any], /
     ) -> None:
         self.records.append(DelitemRecord(instance, key, old_value))

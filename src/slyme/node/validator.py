@@ -8,7 +8,7 @@ from collections.abc import Callable
 from slyme.context import Context
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.pytree import AttributeKey
-from slyme.utils.store import Field
+from slyme.utils.store import Ref
 from slyme.node.base import (
     NodeElement,
     Node,
@@ -113,7 +113,7 @@ class NodeStructureError(TypeError):
 
 
 # Type definition for validation functions
-# Args: obj (container), attr_name (field name), leaves (content of field), path_info (for error msg)
+# Args: obj (container), attr_name, leaves, path_info (for error msg)
 ValidatorFunc = Callable[[NodeElement, str, list[Any], str], None]
 VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_validation")
 
@@ -122,7 +122,7 @@ VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_valid
 
 # Configuration: Types that must be independently tracked and kept pure.
 # Any object belonging to these types (or their subclasses) is treated as a distinct category.
-_TRACKED_CATEGORIES = (Node, NodeExpression, NodeWrapper, Field)
+_TRACKED_CATEGORIES = (Node, NodeExpression, NodeWrapper, Ref)
 # Marker for any type not in the tracked categories.
 _OTHERS_MARKER = None
 
@@ -133,7 +133,7 @@ def _scan_leaves(leaves: list[Any]) -> set[Union[type, None]]:
 
     Returns:
         A set containing:
-        - The specific tracked class (e.g., Node, Field) if found.
+        - The specific tracked class (e.g., Node, Ref) if found.
         - _OTHERS_MARKER (None) if a non-tracked object is found.
     """
     stats: set[Union[type, None]] = set()
@@ -176,7 +176,7 @@ def _validate_purity(stats: set[Union[type, None]], path_info: str) -> None:
         raise NodeStructureError(
             f"Mixed content at '{path_info}': "
             f"Found mixed types {names}. Containers must be homogenous regarding "
-            f"Nodes, Expressions, Wrappers, and Fields."
+            f"Nodes, Expressions, Wrappers, and Refs."
         )
 
 

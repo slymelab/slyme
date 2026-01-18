@@ -17,7 +17,7 @@ from .hook import StoreHook
 _T = TypeVar("_T")
 
 
-class Field(Generic[_T]):
+class Ref(Generic[_T]):
     """Immutable dotted key with cached hash and split parts."""
 
     @property
@@ -46,7 +46,7 @@ class Field(Generic[_T]):
         return self.hash
 
     def __eq__(self, other: Any) -> bool:
-        return isinstance(other, Field) and self.parts == other.parts
+        return isinstance(other, Ref) and self.parts == other.parts
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.extra_repr()})"
@@ -71,9 +71,9 @@ class _StoreEntry:
             data if data is not None else {}
         )
 
-    def __getitem__(self, key: Union[Field[_T], str]) -> _T:
+    def __getitem__(self, key: Union[Ref[_T], str]) -> _T:
         if isinstance(key, str):
-            key = Field(key)
+            key = Ref(key)
         # Result can be a _StoreEntry (subtree) or a raw leaf value.
         result: Any = self._resolve(key.parts)
         return result
@@ -122,16 +122,16 @@ class Store(_StoreEntry):
         super().__init__(data=data)
         self.hook = hook
 
-    def __getitem__(self, key: Union[Field[_T], str]) -> _T:
+    def __getitem__(self, key: Union[Ref[_T], str]) -> _T:
         value = super().__getitem__(key)
         if self.hook is not None:
             # Call hook
             self.hook.on_getitem(self, key, value)
         return value
 
-    def __setitem__(self, key: Union[Field[_T], str], value: _T) -> None:
+    def __setitem__(self, key: Union[Ref[_T], str], value: _T) -> None:
         if isinstance(key, str):
-            key = Field(key)
+            key = Ref(key)
         *dirs, last = key.parts
         entry = self._touch(dirs)
         
@@ -144,9 +144,9 @@ class Store(_StoreEntry):
         else:
             entry._data[last] = value
 
-    def __delitem__(self, key: Union[Field[_T], str]) -> None:
+    def __delitem__(self, key: Union[Ref[_T], str]) -> None:
         if isinstance(key, str):
-            key = Field(key)
+            key = Ref(key)
         *dirs, last = key.parts
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreEntry):
