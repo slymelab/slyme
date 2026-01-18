@@ -7,15 +7,17 @@ from typing import (
     TypeVar,
     Union,
     Literal,
+    cast,
 )
 from typing_extensions import Self
 from slyme.utils.constant import MISSING
+from slyme.utils.pytree import PyTreeEngine, PyTreeAux, MappingKey, PYTREE_ENGINE_REGISTRY
 from .hook import StoreHook
 
 _T = TypeVar("_T")
 
 
-class Key(Generic[_T]):
+class Field(Generic[_T]):
     """Immutable dotted key with cached hash and split parts."""
 
     @property
@@ -44,25 +46,13 @@ class Key(Generic[_T]):
         return self.hash
 
     def __eq__(self, other: Any) -> bool:
-        return isinstance(other, Key) and self.parts == other.parts
+        return isinstance(other, Field) and self.parts == other.parts
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({self.path!r})"
+        return f"{type(self).__name__}({self.extra_repr()})"
 
-
-class _Ref(Generic[_T]):
-    """Reference entry to distinguish any value."""
-
-    @property
-    def value(self) -> _T:
-        return self._value
-
-    def __init__(self, value: _T):
-        super().__init__()
-        self._value = value
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}(value={self.value!r})"
+    def extra_repr(self) -> str:
+        return f"path={self.path!r}"
 
 
 class _StoreEntry:
@@ -75,31 +65,33 @@ class _StoreEntry:
         return self
 
     def __init__(
-        self, data: Union[dict[str, Union["_StoreEntry", _Ref]], None] = None
+        self, data: Union[dict[str, Any], None] = None
     ) -> None:
-        self._data: dict[str, Union[_StoreEntry, _Ref]] = (
+        self._data: dict[str, Any] = (
             data if data is not None else {}
         )
 
-    def __getitem__(self, key: Union[Key[_T], str]) -> _T:
+    def __getitem__(self, key: Union[Field[_T], str]) -> _T:
         if isinstance(key, str):
-            key = Key(key)
-        # NOTE: Annotate to `Any` to pass the type checker.
-        result: Any = self._resolve(key.parts).value
+            key = Field(key)
+        # Result can be a _StoreEntry (subtree) or a raw leaf value.
+        result: Any = self._resolve(key.parts)
         return result
 
-    def _resolve(self, parts: Iterable[str]) -> Union["_StoreEntry", _Ref]:
-        """Resolve the path parts and get the final entry."""
-        entry: Union[_StoreEntry, _Ref] = self
+    def _resolve(self, parts: Iterable[str]) -> Any:
+        """Resolve the path parts and get the final entry or value."""
+        entry: Any = self
         for p in parts:
             if not isinstance(entry, _StoreEntry):
-                raise KeyError(f"Path {parts} not found")
+                # If we encounter a leaf value mid-path, it's a path error
+                # (blocking the traversal).
+                raise KeyError(f"Path {parts} blocked by leaf value at {p!r}")
             entry = entry._data[p]
         return entry
 
     def __repr__(self) -> str:
         sep = ", "
-        data_str = sep.join([f"{k}={v.value!r}" for k, v in self._data.items()])
+        data_str = sep.join([f"{k}={v!r}" for k, v in self._data.items()])
         return f"{type(self).__name__}({data_str})"
 
     def copy(self) -> Self:
@@ -125,56 +117,48 @@ class Store(_StoreEntry):
     def __init__(
         self,
         hook: Union[StoreHook, None] = None,
-        data: Union[dict[str, Union[_StoreEntry, _Ref]], None] = None,
+        data: Union[dict[str, Any], None] = None,
     ) -> None:
         super().__init__(data=data)
         self.hook = hook
 
-    def __getitem__(self, key: Union[Key[_T], str]) -> _T:
+    def __getitem__(self, key: Union[Field[_T], str]) -> _T:
         value = super().__getitem__(key)
         if self.hook is not None:
             # Call hook
             self.hook.on_getitem(self, key, value)
         return value
 
-    def __setitem__(self, key: Union[Key[_T], str], value: _T) -> None:
+    def __setitem__(self, key: Union[Field[_T], str], value: _T) -> None:
         if isinstance(key, str):
-            key = Key(key)
+            key = Field(key)
         *dirs, last = key.parts
         entry = self._touch(dirs)
+        
         if self.hook is not None:
             # Get the old value first
-            old_value = (
-                old.value
-                if (old := entry._data.get(last, None)) is not None
-                else MISSING
-            )
-            entry._data[last] = _Ref(value)
+            old_value = entry._data.get(last, MISSING)
+            entry._data[last] = value
             # Call hook
             self.hook.on_setitem(self, key, old_value, value)
         else:
-            # Directly set
-            entry._data[last] = _Ref(value)
+            entry._data[last] = value
 
-    def __delitem__(self, key: Union[Key[_T], str]) -> None:
+    def __delitem__(self, key: Union[Field[_T], str]) -> None:
         if isinstance(key, str):
-            key = Key(key)
+            key = Field(key)
         *dirs, last = key.parts
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreEntry):
             raise KeyError(f"Parent path not found for {key!r}")
+        
         if self.hook is not None:
             # Get the old value first
-            old_value = (
-                old.value
-                if (old := parent._data.get(last, None)) is not None
-                else MISSING
-            )
+            old_value = parent._data.get(last, MISSING)
             del parent._data[last]
             # Call hook
             self.hook.on_delitem(self, key, old_value)
         else:
-            # Directly delete
             del parent._data[last]
 
     def _touch(self, parts: Iterable[str]) -> _StoreEntry:
@@ -182,11 +166,12 @@ class Store(_StoreEntry):
         new entry if the entry not exists."""
         entry: _StoreEntry = self
         for p in parts:
-            nxt: Union[_StoreEntry, _Ref, None] = entry._data.get(p)
+            nxt: Any = entry._data.get(p)
             if nxt is None:
                 nxt = _StoreEntry()
                 entry._data[p] = nxt
             elif not isinstance(nxt, _StoreEntry):
+                # Conflict: path segment exists but is a leaf value
                 raise KeyError(f"Conflict: {p!r} is already a leaf value.")
             entry = nxt
         return entry
@@ -201,101 +186,118 @@ class Store(_StoreEntry):
             self.hook = prev_hook
 
     def diff(
-        self, other: "Store", strategy: Literal["ref", "is", "eq"] = "ref"
+        self, other: "Store", strategy: Literal["is", "eq"] = "is"
     ) -> _DiffResult:
-        """Compares this Store with another, identifying added, removed, and modified items.
+        """Compares this Store with another using PyTreeEngine.
 
         Args:
             other: The other Store instance to compare against.
-            strategy: The comparison strategy for leaf values (_Ref.value).
-                - "ref": Strict `_Ref` object identity (`is`).
-                - "is": Identity comparison of `_Ref.value` (`is`).
-                - "eq": Equality comparison of `_Ref.value` (`==`).
-
-        Returns:
-            `_DiffResult` instance containing three dictionaries:
-            - added: Items in `other` but not in `self`. (key -> other_value)
-            - removed: Items in `self` but not in `other`. (key -> self_value)
-            - modified: Items in both but with different values. (key -> (self_value, other_value))
+            strategy: The comparison strategy for leaf values.
+                - "is": Identity comparison (`is`).
+                - "eq": Equality comparison (`==`).
         """
-        if strategy not in ("ref", "is", "eq"):
+        if strategy not in ("is", "eq"):
             raise ValueError(f"Unknown diff strategy: {strategy!r}")
+
+        # Flatten both stores into {dot_path: value}
+        # PyTreeEngine ensures we only traverse _StoreEntry structures; 
+        # anything else is treated as a leaf.
+        leaves_self = self.collect_leaves()
+        leaves_other = other.collect_leaves()
 
         added: dict[str, Any] = {}
         removed: dict[str, Any] = {}
         modified: dict[str, tuple[Any, Any]] = {}
 
-        def _recursive_diff(
-            entry_self: Union["_StoreEntry", "_Ref"],
-            entry_other: Union["_StoreEntry", "_Ref"],
-            path_parts: tuple[str, ...],
-        ) -> None:
-            # Case 1: Both are internal entries (Containers)
-            if isinstance(entry_self, _StoreEntry) and isinstance(
-                entry_other, _StoreEntry
-            ):
-                keys_self = set(entry_self._data.keys())
-                keys_other = set(entry_other._data.keys())
-                # 1. Removed: Keys in self but not in other
-                for key in keys_self - keys_other:
-                    removed.update(
-                        self._collect_leaves(entry_self._data[key], path_parts + (key,))
-                    )
-                # 2. Added: Keys in other but not in self
-                for key in keys_other - keys_self:
-                    added.update(
-                        self._collect_leaves(
-                            entry_other._data[key], path_parts + (key,)
-                        )
-                    )
-                # 3. Common: Recurse on shared keys
-                for key in keys_self & keys_other:
-                    _recursive_diff(
-                        entry_self._data[key],
-                        entry_other._data[key],
-                        path_parts + (key,),
-                    )
-            # Case 2: Both are leaf entries (Refs)
-            elif isinstance(entry_self, _Ref) and isinstance(entry_other, _Ref):
-                val_self = entry_self.value
-                val_other = entry_other.value
-                is_different = False
-                if strategy == "ref":
-                    is_different = entry_self is not entry_other
-                elif strategy == "is":
-                    is_different = val_self is not val_other
-                elif strategy == "eq":
-                    is_different = val_self != val_other
-                if is_different:
-                    modified[".".join(path_parts)] = (val_self, val_other)
-            # Case 3: Type Mismatch (One is Container, one is Ref)
-            # Treat as "remove old tree" and "add new tree"
-            else:
-                removed.update(self._collect_leaves(entry_self, path_parts))
-                added.update(self._collect_leaves(entry_other, path_parts))
+        keys_self = set(leaves_self.keys())
+        keys_other = set(leaves_other.keys())
 
-        _recursive_diff(self, other, ())
+        # 1. Removed: In self but not in other
+        for k in keys_self - keys_other:
+            removed[k] = leaves_self[k]
+
+        # 2. Added: In other but not in self
+        for k in keys_other - keys_self:
+            added[k] = leaves_other[k]
+
+        # 3. Modified: In both, check values
+        for k in keys_self & keys_other:
+            val_self = leaves_self[k]
+            val_other = leaves_other[k]
+            
+            is_different = False
+            if strategy == "is":
+                is_different = val_self is not val_other
+            elif strategy == "eq":
+                is_different = val_self != val_other
+            
+            if is_different:
+                modified[k] = (val_self, val_other)
+
         return _DiffResult(added, removed, modified)
 
-    def _collect_leaves(
-        self,
-        entry: Union["_StoreEntry", "_Ref"],
-        path_prefix: tuple[str, ...],
-    ) -> dict[str, Any]:
-        """Helper to recursively find all leaf values from a starting entry."""
-        leaves: dict[str, Any] = {}
-
-        def _traverse(
-            entry: Union["_StoreEntry", "_Ref"], current_path: tuple[str, ...]
-        ) -> None:
-            if isinstance(entry, _Ref):
-                leaves[".".join(current_path)] = entry.value
-            elif isinstance(entry, _StoreEntry):
-                for name, child in entry._data.items():
-                    _traverse(child, current_path + (name,))
-
-        _traverse(entry, path_prefix)
+    def collect_leaves(self) -> dict[str, Any]:
+        """
+        Recursively find all leaf values using STORE_PYTREE_ENGINE.
+        Returns a dictionary mapping dotted paths to values.
+        """
+        leaves = {}
+        # PyTreeEngine yields (KeyPath, leaf_value) tuples.
+        for path, value in STORE_PYTREE_ENGINE.iter_with_path(self):
+            # Convert KeyPath (tuple of MappingKey) to dotted string
+            dot_path = ".".join(cast("MappingKey", k).key for k in path) # type: ignore
+            leaves[dot_path] = value
         return leaves
 
-    def collect_leaves(self) -> dict[str, Any]:
-        return self._collect_leaves(self, ())
+
+# --- PyTreeEngine Configuration ---
+
+STORE_PYTREE_ENGINE = PyTreeEngine("store_engine", register_defaults=False)
+PYTREE_ENGINE_REGISTRY.register(STORE_PYTREE_ENGINE, key="store_engine")
+
+
+def _flatten_store_entry(entry: _StoreEntry) -> tuple[Iterable[Any], PyTreeAux]:
+    """
+    Flatten handler for _StoreEntry.
+    Exposes keys in PyTreeAux for path tracking and values as children.
+    """
+    keys = tuple(entry._data.keys())
+    children = tuple(entry._data.values())
+    # Wrap keys in MappingKey for semantic path tracking (similar to dict)
+    rich_keys = tuple(MappingKey(k) for k in keys)
+    
+    return children, PyTreeAux(keys=rich_keys)
+
+
+def _unflatten_store_entry(children: Iterable[Any], aux: PyTreeAux) -> Any:
+    """
+    Unflatten handler to reconstruct _StoreEntry.
+    """
+    cls = aux.cls if aux.cls is not None else _StoreEntry
+    
+    if aux.keys is None:
+         raise ValueError("Missing keys in PyTreeAux for Store unflattening.")
+    
+    # Extract keys
+    keys = [cast("MappingKey", k).key for k in aux.keys] # type: ignore
+    
+    # Reconstruct instance
+    # Bypass __init__ to handle subclasses (like Store) generically if needed,
+    # or just use constructor if safe. Here we mimic generic pytree reconstruction.
+    obj = object.__new__(cls)
+    # Restore internal data
+    obj._data = dict(zip(keys, children))
+    
+    # Init hooks if it's a Store (default to None)
+    if isinstance(obj, Store):
+        obj.hook = None
+        
+    return obj
+
+
+# Register _StoreEntry (and Store via inheritance)
+STORE_PYTREE_ENGINE.register(
+    _StoreEntry, 
+    _flatten_store_entry, 
+    _unflatten_store_entry
+)
