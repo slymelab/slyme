@@ -55,4 +55,6 @@ class NodeExpressionExceptionRecord(NodeExceptionRecord):
         self.source_node = source_node
 
     def __str__(self) -> str:
-        return f"exception_wrapper: {self.exception_node}, source_node: {self.source_node}"
+        return (
+            f"exception_wrapper: {self.exception_node}, source_node: {self.source_node}"
+        )

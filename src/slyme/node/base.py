@@ -5,6 +5,7 @@ from typing import (
     Any,
     Generic,
     cast,
+    TYPE_CHECKING,
 )
 from contextlib import ExitStack
 from slyme.utils.constant import STOP
@@ -22,6 +23,9 @@ from .exception import (
     NodeException,
     NodeExpressionExceptionRecord,
 )
+
+if TYPE_CHECKING:
+    from .wrapper import NodeWrapper
 
 _R = TypeVar("_R")
 
@@ -158,6 +162,5 @@ class NodeExpression(NodeElement, Generic[_R]):
             raise NodeExpressionExceptionRecord(exception_node=self, exception=e)
 
 
-from .wrapper import NodeWrapper
 from .render import get_render_string
 from .validator import check_node_structure, DEPENDENCY_REGISTRY

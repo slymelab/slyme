@@ -28,8 +28,8 @@ class NodeWrapper(NodeElement):
     def __call__(self, ctx: Context, wrapped: Node) -> Generator:
         """A mixin method that wraps the generator returned by ``_execute_yield``."""
         try:
-            with self.wrap(ctx, wrapped):
-                yield
+            with self.wrap(ctx, wrapped) as val:
+                yield val
         # directly raise
         except NodeException:
             raise
