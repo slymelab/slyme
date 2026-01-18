@@ -22,7 +22,7 @@ __all__ = [
     "vanilla_dependency_check",
     "VanillaDependencyReport",
     "NodeStructureError",
-    "check_node_consistency",
+    "check_node_structure",
 ]
 
 # Registry definition for dependency checkers
@@ -223,7 +223,7 @@ def _validate_terminal_structure(
         )
 
 
-def check_node_consistency(root: Node) -> None:
+def check_node_structure(root: Node) -> None:
     """
     Validates the structural consistency of a Node tree.
     Dispatches validation logic to registered functions based on node type.

@@ -160,4 +160,4 @@ class NodeExpression(NodeElement, Generic[_R]):
 
 from .wrapper import NodeWrapper
 from .render import get_render_string
-from .validator import check_node_consistency, DEPENDENCY_REGISTRY
+from .validator import check_node_structure, DEPENDENCY_REGISTRY
