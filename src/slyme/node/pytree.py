@@ -2,20 +2,27 @@
 Node tree structure engine and validation logic.
 """
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any, Optional, cast
+
 from slyme.utils.pytree import (
-    PyTreeEngine,
-    PyTreeAux,
     AttributeKey,
+    PyTreeAux,
+    PyTreeEngine,
     PYTREE_ENGINE_REGISTRY,
 )
-from slyme.node.base import Node, NodeExpression, NodeElement
+from slyme.node.base import Node, NodeElement, NodeExpression
 from slyme.node.wrapper import NodeWrapper
 
-__all__ = ["NODE_PYTREE_ENGINE", "check_node_consistency", "NodeStructureError"]
+__all__ = [
+    "NODE_PYTREE_ENGINE",
+    "NodeStructureError",
+    "check_node_consistency",
+]
 
-NODE_PYTREE_ENGINE = PyTreeEngine("node_pytree")
-PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_pytree")
+# Register the node pytree engine.
+NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
+PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_engine")
 
 
 def _flatten_node_element(obj: NodeElement) -> tuple[Iterable[Any], PyTreeAux]:
@@ -25,12 +32,13 @@ def _flatten_node_element(obj: NodeElement) -> tuple[Iterable[Any], PyTreeAux]:
     Flattens the object's ``__dict__`` to expose attributes as children,
     using ``AttributeKey`` for semantic path tracking.
     """
-    # Directly access __dict__ to avoid getattr overhead and side effects.
+    # NOTE: Directly access __dict__ to avoid getattr overhead and potential
+    # side effects triggered by properties or descriptors.
     data = obj.__dict__
     keys = tuple(data.keys())
     children = tuple(data.values())
 
-    # Wrap keys in AttributeKey.
+    # Wrap keys in AttributeKey for path reconstruction.
     rich_keys = tuple(AttributeKey(k) for k in keys)
 
     return children, PyTreeAux(keys=rich_keys)
@@ -48,21 +56,26 @@ def _unflatten_node_element(children: Iterable[Any], tree_aux: PyTreeAux) -> Any
             "Missing class info in PyTreeAux for NodeElement unflattening."
         )
 
-    obj = object.__new__(cls)  # type: ignore
+    # NOTE: Bypass __init__ to creating a raw instance, strictly mimicking
+    # the behavior of generic serialization/deserialization.
+    obj: object = object.__new__(cls)  # type: ignore
 
     if tree_aux.keys is None:
         raise ValueError(f"Missing keys for unflattening {cls.__name__}")
 
     # Extract raw keys from AttributeKey to restore __dict__.
-    raw_keys = [k.key for k in tree_aux.keys]  # type: ignore
+    raw_keys = [cast("AttributeKey", k).name for k in tree_aux.keys]  # type: ignore
     obj.__dict__.update(zip(raw_keys, children))
     return obj
 
 
 # Register the handlers.
-# set strict=False to allow safe re-registration/overriding.
+# NOTE: Set strict=False to allow safe re-registration or overriding by subclasses.
 NODE_PYTREE_ENGINE.register(
-    NodeElement, _flatten_node_element, _unflatten_node_element, strict=False
+    NodeElement,
+    _flatten_node_element,
+    _unflatten_node_element,
+    strict=False,
 )
 
 
@@ -77,13 +90,14 @@ def check_node_consistency(root: Node) -> None:
     Validates the structural consistency of a Node tree.
 
     Enforces the following topology rules:
-    1.  **Type Constraint**: Nested structures must only contain ``Node`` or ``NodeExpression`` types.
-    2.  **Wrapper Placement**: ``NodeWrapper`` instances are only allowed within the
-        ``node_wrappers`` attribute of a ``Node``.
-    3.  **Containment Rules**: ``NodeExpression`` and ``NodeWrapper`` cannot contain
-        ``Node`` or ``NodeWrapper`` instances (downward closure).
-    4.  **Purity**: Containers (lists, dicts) must be homogeneous regarding ``Node``
-        and ``NodeExpression`` (cannot mix them, nor mix with other types).
+    1.  **Type Constraint**: Nested structures must only contain ``Node`` or
+        ``NodeExpression`` types.
+    2.  **Wrapper Placement**: ``NodeWrapper`` instances are only allowed within
+        the ``node_wrappers`` attribute of a ``Node``.
+    3.  **Containment Rules**: ``NodeExpression`` and ``NodeWrapper`` cannot
+        contain ``Node`` or ``NodeWrapper`` instances (downward closure).
+    4.  **Purity**: Containers (lists, dicts) must be homogeneous regarding
+        ``Node`` and ``NodeExpression`` (cannot mix them, nor mix with other types).
 
     Args:
         root: The root ``Node`` of the tree to validate.
@@ -96,7 +110,7 @@ def check_node_consistency(root: Node) -> None:
         raise TypeError(f"Root must be a Node, got {type(root)}")
 
     # Use a set to track visited objects and handle cyclic graphs.
-    visited = set()
+    visited: set[int] = set()
 
     def _is_node_element(obj: Any) -> bool:
         return isinstance(obj, (Node, NodeExpression, NodeWrapper))
@@ -116,7 +130,8 @@ def check_node_consistency(root: Node) -> None:
         is_wrapper = isinstance(obj, NodeWrapper)
 
         # Inspect immediate attributes using the engine.
-        # We stop the engine at `_is_node_element` to get the containers holding them.
+        # NOTE: We stop the engine at `_is_node_element` to get the containers
+        # holding them, rather than flattening the elements themselves.
         direct_attrs_with_path = [
             (p, c)
             for p, c in NODE_PYTREE_ENGINE.iter_with_path(
@@ -126,11 +141,11 @@ def check_node_consistency(root: Node) -> None:
         ]
 
         for path, attr_value in direct_attrs_with_path:
-            # path[0] should be AttributeKey for direct attributes.
+            # path[0] should be AttributeKey for direct attributes of NodeElement.
             if not isinstance(path[0], AttributeKey):
                 continue
 
-            attr_name = path[0].key
+            attr_name = path[0].name
             path_info = f"{type(obj).__name__}.{attr_name}"
 
             # Gather all children in this attribute structure.
@@ -152,7 +167,7 @@ def check_node_consistency(root: Node) -> None:
 
             # --- Rule Validation ---
 
-            # Rule: NodeWrapper restrictions
+            # Rule 1 & 2: NodeWrapper restrictions
             if has_wrapper:
                 if is_node:
                     if attr_name != "node_wrappers":
@@ -166,14 +181,14 @@ def check_node_consistency(root: Node) -> None:
                         f"{type(obj).__name__} cannot hold NodeWrapper."
                     )
 
-            # Rule: Downward closure (Node/Wrapper in Expr/Wrapper)
+            # Rule 3: Downward closure (Node/Wrapper in Expr/Wrapper)
             if (is_expr or is_wrapper) and has_node:
                 raise NodeStructureError(
                     f"Invalid containment at '{path_info}': "
                     f"{type(obj).__name__} cannot hold Node."
                 )
 
-            # Rule: Container Purity
+            # Rule 4: Container Purity
             if has_node or has_expr:
                 if has_node and has_expr:
                     raise NodeStructureError(

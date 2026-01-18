@@ -71,7 +71,7 @@ def get_render_string(obj: Any) -> str:
 def _get_node_header(obj: Any) -> str:
     """Resolve the display header for a single object."""
     type_name = type(obj).__name__
-    extra_repr = getattr(obj, "extra_repr", lambda: "")()
+    extra_repr: str = getattr(obj, "extra_repr", lambda: "")()
     return f"{type_name}({extra_repr})" if extra_repr else type_name
 
 
