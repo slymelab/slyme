@@ -1,13 +1,20 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Iterable
 from typing import (
     TypeVar,
-    Union,
     Any,
     Generic,
+    cast,
 )
+from contextlib import ExitStack
+from slyme.utils.constant import STOP
 from slyme.utils.collection.base import SequenceData
-from slyme.utils.store import StoreKeyMixin
+from slyme.utils.pytree import (
+    AttributeKey,
+    PyTreeAux,
+    PyTreeEngine,
+    PYTREE_ENGINE_REGISTRY,
+)
 from slyme.context import Context
 from .exception import (
     NodeTerminate,
@@ -19,7 +26,7 @@ from .exception import (
 _R = TypeVar("_R")
 
 
-class NodeElement(StoreKeyMixin, ABC):
+class NodeElement(ABC):
     """Base class for all node-related entities, integrating essential mixins.
 
     Design Note:
@@ -29,68 +36,75 @@ class NodeElement(StoreKeyMixin, ABC):
         that they may not require.
     """
 
-    pass
+    def __repr__(self) -> str:
+        return get_render_string(self)
+
+    def extra_repr(self) -> str:
+        return ""
 
 
-class NodeComponent(NodeElement):
-    """Base class for Node and AsyncNode."""
+# NOTE: Register the node pytree engine.
+NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
+PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_engine")
 
-    # Node search operations.
-    def get_by_class(
-        self, cls_info: Union[type, tuple[type, ...]], /, *, strategy: str = "depth"
-    ) -> tuple[_ComponentT, ...]:
-        """Get the nodes that are instances of ``cls``."""
-        return tuple(
-            self.composite_filter(
-                lambda node: isinstance(node, cls_info), strategy=strategy
-            )
+
+def _flatten_node_element(obj: NodeElement) -> tuple[Iterable[Any], PyTreeAux]:
+    """
+    Generic flatten handler for ``NodeElement`` subclasses.
+
+    Flattens the object's ``__dict__`` to expose attributes as children,
+    using ``AttributeKey`` for semantic path tracking.
+    """
+    # NOTE: Directly access __dict__ to avoid getattr overhead and potential
+    # side effects triggered by properties or descriptors.
+    data = obj.__dict__
+    keys = tuple(data.keys())
+    children = tuple(data.values())
+    # Wrap keys in AttributeKey for path reconstruction.
+    rich_keys = tuple(AttributeKey(k) for k in keys)
+    return children, PyTreeAux(keys=rich_keys)
+
+
+def _unflatten_node_element(children: Iterable[Any], tree_aux: PyTreeAux) -> Any:
+    """
+    Generic unflatten handler for ``NodeElement`` subclasses.
+
+    Restores the object state by bypassing ``__init__`` and directly updating ``__dict__``.
+    """
+    cls = tree_aux.cls
+    if cls is None:
+        raise ValueError(
+            "Missing class info in PyTreeAux for NodeElement unflattening."
         )
 
-    def get_by_filter(
-        self, func: Callable[[_ComponentT], bool], /, *, strategy: str = "depth"
-    ) -> tuple[_ComponentT, ...]:
-        """Get the nodes by the given filter function."""
-        return tuple(self.composite_filter(func, strategy=strategy))
+    # NOTE: Bypass __init__ to creating a raw instance, strictly mimicking
+    # the behavior of generic serialization/deserialization.
+    obj: object = object.__new__(cls)  # type: ignore
 
-    # Node render APIs.
-    def render(self, strategy: str = "vanilla", /, **kwargs) -> Any:
-        """
-        Render the node structure using the specified strategy.
-        """
-        render_cls = RENDER_REGISTRY.get(strategy)
-        if not render_cls:
-            raise ValueError(
-                f"Unknown render strategy: `{strategy}`. Available: {list(RENDER_REGISTRY.keys())}"
-            )
+    if tree_aux.keys is None:
+        raise ValueError(f"Missing keys for unflattening {cls.__name__}")
 
-        render = render_cls()
-        return render.render(self, **kwargs)
-
-    def _get_render_info(self) -> "RenderInfo":
-        """ """
-        return RenderInfo(
-            classname=resolve_instance_classname(self),
-            attr_dict={},
-        )
-
-    def check_dependency(self, ctx: Context, /, *, strategy: str = "vanilla", **kwargs):
-        """Check the dependency graph of the node structure."""
-        checker_cls = DEPENDENCY_REGISTRY.get(strategy)
-        if not checker_cls:
-            raise ValueError(
-                f"Unknown dependency check strategy: `{strategy}`. Available: {list(DEPENDENCY_REGISTRY.keys())}"
-            )
-
-        checker = checker_cls()
-        return checker.check(self, ctx, **kwargs)
+    # Extract raw keys from AttributeKey to restore __dict__.
+    raw_keys = [cast("AttributeKey", k).name for k in tree_aux.keys]  # type: ignore
+    obj.__dict__.update(zip(raw_keys, children))
+    return obj
 
 
-class Node(NodeComponent["Node"]):
+# Register the handlers.
+NODE_PYTREE_ENGINE.register(
+    NodeElement,
+    _flatten_node_element,
+    _unflatten_node_element,
+)
+
+
+# Custom base classes.
+class Node(NodeElement):
     """ """
 
     def __init__(self, /, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs):
         super().__init__(**kwargs)
-        self.node_wrappers = NodeWrapperList(children=node_wrappers)
+        self.node_wrappers = list(node_wrappers) if node_wrappers is not None else []
 
     # Core APIs.
     @abstractmethod
@@ -101,7 +115,15 @@ class Node(NodeComponent["Node"]):
     def __call__(self, ctx: Context) -> None:
         """Outer execute API."""
         try:
-            self.node_wrappers(ctx, self)
+            with ExitStack() as stack:
+                should_stop = False
+                for wrapper in self.node_wrappers:
+                    val = stack.enter_context(wrapper(ctx, self))
+                    if val is STOP:
+                        should_stop = True
+                        break
+                if not should_stop:
+                    self.execute(ctx)
         # Node Interrupt.
         except (
             NodeTerminate,
@@ -117,12 +139,6 @@ class Node(NodeComponent["Node"]):
         # Other Exception(s).
         except Exception as e:
             raise NodeExceptionRecord(exception_node=self, exception=e)
-
-    def _get_render_info(self) -> "RenderInfo":
-        render_info = super()._get_render_info()
-        if len(self.node_wrappers) > 0:
-            render_info.attr_dict["node_wrappers"] = self.node_wrappers
-        return render_info
 
 
 class NodeExpression(NodeElement, Generic[_R]):
@@ -142,6 +158,6 @@ class NodeExpression(NodeElement, Generic[_R]):
             raise NodeExpressionExceptionRecord(exception_node=self, exception=e)
 
 
-from .wrapper import NodeWrapper, NodeWrapperList
-from .render import RENDER_REGISTRY, RenderInfo
-from .dependency import DEPENDENCY_REGISTRY
+from .wrapper import NodeWrapper
+from .render import get_render_string
+from .validator import check_node_consistency, DEPENDENCY_REGISTRY

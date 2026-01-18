@@ -2,8 +2,7 @@ from abc import abstractmethod
 from contextlib import contextmanager
 from collections.abc import Generator
 from slyme.context import Context
-from slyme.utils.collection import MutableSequenceProxy
-from .base import NodeElement, Node, NodeExpression
+from .base import NodeElement, Node
 from .exception import (
     NodeException,
     NodeWrapperExceptionRecord,

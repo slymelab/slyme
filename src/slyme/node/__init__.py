@@ -1,8 +1,7 @@
-from .base import NodeElement, NodeComponent, Node, NodeExpression
+from .base import NodeElement, Node, NodeExpression
 from .wrapper import NodeWrapper
 
 __all__ = [
-    "NodeComponent",
     "NodeElement",
     "Node",
     "NodeExpression",

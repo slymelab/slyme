@@ -1,84 +1,131 @@
 """
-Node tree structure engine and validation logic.
+Node validation module, including dependency checking and structure consistency checking.
 """
 
-from collections.abc import Iterable
-from typing import Any, Optional, cast
-
-from slyme.utils.pytree import (
-    AttributeKey,
-    PyTreeAux,
-    PyTreeEngine,
-    PYTREE_ENGINE_REGISTRY,
+from dataclasses import dataclass, field
+from typing import Any
+from typing_extensions import Self
+from slyme.context import Context
+from slyme.utils.registry import Registry
+from slyme.utils.pytree import AttributeKey
+from slyme.node.base import (
+    NodeElement,
+    Node,
+    NodeExpression,
+    NODE_PYTREE_ENGINE,
 )
-from slyme.node.base import Node, NodeElement, NodeExpression
 from slyme.node.wrapper import NodeWrapper
 
+# [Assuming RequiresKey and ProducesKey are importable from slyme.utils.store or similar]
+# from slyme.utils.store import RequiresKey, ProducesKey
+
 __all__ = [
-    "NODE_PYTREE_ENGINE",
+    "DEPENDENCY_REGISTRY",
+    "NodeDependencyChecker",
+    "VanillaDependencyChecker",
+    "VanillaDependencyReport",
     "NodeStructureError",
     "check_node_consistency",
 ]
 
-# Register the node pytree engine.
-NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
-PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_engine")
-
-
-def _flatten_node_element(obj: NodeElement) -> tuple[Iterable[Any], PyTreeAux]:
-    """
-    Generic flatten handler for ``NodeElement`` subclasses.
-
-    Flattens the object's ``__dict__`` to expose attributes as children,
-    using ``AttributeKey`` for semantic path tracking.
-    """
-    # NOTE: Directly access __dict__ to avoid getattr overhead and potential
-    # side effects triggered by properties or descriptors.
-    data = obj.__dict__
-    keys = tuple(data.keys())
-    children = tuple(data.values())
-
-    # Wrap keys in AttributeKey for path reconstruction.
-    rich_keys = tuple(AttributeKey(k) for k in keys)
-
-    return children, PyTreeAux(keys=rich_keys)
-
-
-def _unflatten_node_element(children: Iterable[Any], tree_aux: PyTreeAux) -> Any:
-    """
-    Generic unflatten handler for ``NodeElement`` subclasses.
-
-    Restores the object state by bypassing ``__init__`` and directly updating ``__dict__``.
-    """
-    cls = tree_aux.cls
-    if cls is None:
-        raise ValueError(
-            "Missing class info in PyTreeAux for NodeElement unflattening."
-        )
-
-    # NOTE: Bypass __init__ to creating a raw instance, strictly mimicking
-    # the behavior of generic serialization/deserialization.
-    obj: object = object.__new__(cls)  # type: ignore
-
-    if tree_aux.keys is None:
-        raise ValueError(f"Missing keys for unflattening {cls.__name__}")
-
-    # Extract raw keys from AttributeKey to restore __dict__.
-    raw_keys = [cast("AttributeKey", k).name for k in tree_aux.keys]  # type: ignore
-    obj.__dict__.update(zip(raw_keys, children))
-    return obj
-
-
-# Register the handlers.
-# NOTE: Set strict=False to allow safe re-registration or overriding by subclasses.
-NODE_PYTREE_ENGINE.register(
-    NodeElement,
-    _flatten_node_element,
-    _unflatten_node_element,
-    strict=False,
+# Registry definition for dependency checkers
+DEPENDENCY_REGISTRY: Registry[type["NodeDependencyChecker"]] = Registry(
+    "node_dependency"
 )
 
 
+class NodeDependencyChecker:
+    """
+    Base class for dependency checkers.
+    """
+
+    def check(self, node: NodeElement, ctx: Context, /, **kwargs) -> Any:
+        """
+        Check the dependencies of the given node against the context.
+        """
+        raise NotImplementedError
+
+
+@dataclass
+class VanillaDependencyInfo:
+    """Strategy-specific data structure: Bag of Keys."""
+
+    requires: set[str] = field(default_factory=set)
+    produces: set[str] = field(default_factory=set)
+
+    def update(self, other: "VanillaDependencyInfo") -> Self:
+        self.requires.update(other.requires)
+        self.produces.update(other.produces)
+        return self
+
+
+@dataclass
+class VanillaDependencyReport:
+    """Strategy-specific report."""
+
+    missing_keys: set[str]
+    context_keys: set[str]
+    all_produced: set[str]
+    all_required: set[str]
+
+    @property
+    def valid(self) -> bool:
+        return len(self.missing_keys) == 0
+
+    @property
+    def message(self) -> str:
+        if self.valid:
+            return "Dependency Check Passed (Vanilla)."
+        return (
+            f"Dependency Check Failed (Vanilla).\n"
+            f"Missing Keys: {sorted(list(self.missing_keys))}"
+        )
+
+
+@DEPENDENCY_REGISTRY.register(key="vanilla")
+class VanillaDependencyChecker(NodeDependencyChecker):
+    """
+    A simple dependency checker that flattens the node to find required and produced keys.
+    """
+
+    def check(
+        self,
+        node: NodeElement,
+        ctx: Context,
+        /,
+        **kwargs,
+    ) -> VanillaDependencyReport:
+        # 1. Collect dependencies (VanillaDependencyInfo) directly using NODE_PYTREE_ENGINE
+        info = VanillaDependencyInfo()
+
+        # Flatten the node structure.
+        # NODE_PYTREE_ENGINE is configured to handle NodeElement traversal.
+        leaves, _ = NODE_PYTREE_ENGINE.flatten(node)
+
+        for leaf in leaves:
+            # NOTE: logic follows previous implementation assuming RequiresKey/ProducesKey exist.
+            if isinstance(leaf, RequiresKey):  # type: ignore
+                info.requires.add(leaf.path)
+            elif isinstance(leaf, ProducesKey):  # type: ignore
+                info.produces.add(leaf.path)
+
+        # 2. Extract existing keys from Context
+        context_data = ctx.collect_leaves()
+        context_keys = set(context_data.keys())
+
+        # 3. Calculate missing keys (Set arithmetic)
+        available_keys = info.produces | context_keys
+        missing_keys = info.requires - available_keys
+
+        return VanillaDependencyReport(
+            missing_keys=missing_keys,
+            context_keys=context_keys,
+            all_produced=info.produces,
+            all_required=info.requires,
+        )
+
+
+# Node Structure Consistency Check
 class NodeStructureError(TypeError):
     """Raised when the Node structure violates consistency rules."""
 
@@ -106,24 +153,13 @@ def check_node_consistency(root: Node) -> None:
         NodeStructureError: If any rule is violated.
         TypeError: If root is not a ``Node``.
     """
-    if not isinstance(root, Node):
-        raise TypeError(f"Root must be a Node, got {type(root)}")
-
-    # Use a set to track visited objects and handle cyclic graphs.
-    visited: set[int] = set()
-
-    def _is_node_element(obj: Any) -> bool:
-        return isinstance(obj, (Node, NodeExpression, NodeWrapper))
+    if not isinstance(root, NodeElement):
+        raise TypeError(f"Root must be a NodeElement, got {type(root)}")
 
     def _validate_recursive(obj: Any) -> None:
-        if id(obj) in visited:
-            return
-
         # Only validate known structural units.
-        if not _is_node_element(obj):
+        if not isinstance(obj, NodeElement):
             return
-
-        visited.add(id(obj))
 
         is_node = isinstance(obj, Node)
         is_expr = isinstance(obj, NodeExpression)
@@ -151,14 +187,14 @@ def check_node_consistency(root: Node) -> None:
             # Gather all children in this attribute structure.
             leaves = list(
                 NODE_PYTREE_ENGINE.iter(
-                    attr_value, is_leaf=lambda x, _: _is_node_element(x)
+                    attr_value, is_leaf=lambda x, _: isinstance(x, NodeElement)
                 )
             )
 
             nodes = [x for x in leaves if isinstance(x, Node)]
             exprs = [x for x in leaves if isinstance(x, NodeExpression)]
             wrappers = [x for x in leaves if isinstance(x, NodeWrapper)]
-            others = [x for x in leaves if not _is_node_element(x)]
+            others = [x for x in leaves if not isinstance(x, NodeElement)]
 
             has_node = bool(nodes)
             has_expr = bool(exprs)
@@ -201,7 +237,6 @@ def check_node_consistency(root: Node) -> None:
                         "Found Node/NodeExpression mixed with other types."
                     )
 
-            # --- Recursion ---
             for child in nodes + exprs + wrappers:
                 _validate_recursive(child)
 
