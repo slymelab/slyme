@@ -3,10 +3,11 @@ Node validation module, including dependency checking and structure consistency 
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Union
 from typing_extensions import Self
+from collections.abc import Callable
 from slyme.context import Context
-from slyme.utils.registry import Registry
+from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.pytree import AttributeKey
 from slyme.node.base import (
     NodeElement,
@@ -125,33 +126,132 @@ class VanillaDependencyChecker(NodeDependencyChecker):
         )
 
 
-# Node Structure Consistency Check
+# --- Node Structure Consistency Check ---
 class NodeStructureError(TypeError):
     """Raised when the Node structure violates consistency rules."""
-
     pass
+
+
+# Type definition for validation functions
+# Args: obj (container), attr_name (field name), leaves (content of field), path_info (for error msg)
+ValidatorFunc = Callable[[NodeElement, str, list[Any], str], None]
+VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_validation")
+
+
+@dataclass(frozen=True)
+class _LeafStats:
+    """Helper struct to hold scan results from a single pass."""
+    has_node: bool = False
+    has_expr: bool = False
+    has_wrapper: bool = False
+    has_other: bool = False
+
+
+def _scan_leaves(leaves: list[Any]) -> _LeafStats:
+    """
+    Perform a single pass over leaves to determine content composition.
+    This optimizes performance by avoiding multiple list comprehensions.
+    """
+    has_node = False
+    has_expr = False
+    has_wrapper = False
+    has_other = False
+
+    for leaf in leaves:
+        if isinstance(leaf, Node):
+            has_node = True
+        elif isinstance(leaf, NodeExpression):
+            has_expr = True
+        elif isinstance(leaf, NodeWrapper):
+            has_wrapper = True
+        elif not isinstance(leaf, NodeElement):
+            # If it's not a NodeElement at all, it's "other"
+            has_other = True
+        # Note: If we add more NodeElement subclasses in the future,
+        # they fall through here unless checked. 
+        # But generally they should inherit from one of the above or be treated as generic elements.
+
+    return _LeafStats(has_node, has_expr, has_wrapper, has_other)
+
+
+def _validate_purity(stats: _LeafStats, path_info: str) -> None:
+    """Common purity check logic used by all validators."""
+    # Rule: Container Purity (Cannot mix Node and Expression)
+    if stats.has_node and stats.has_expr:
+        raise NodeStructureError(
+            f"Mixed content at '{path_info}': "
+            "Cannot mix Node and NodeExpression."
+        )
+    
+    # Rule: Impure container (NodeElement mixed with other types)
+    # Only enforce if there are actual NodeElements present
+    if (stats.has_node or stats.has_expr) and stats.has_other:
+        raise NodeStructureError(
+            f"Impure container at '{path_info}': "
+            "Found Node/NodeExpression mixed with other types."
+        )
+
+
+@VALIDATION_REGISTRY.register(Node, key=Node)
+def _validate_node_structure(
+    obj: Node, attr_name: str, leaves: list[Any], path_info: str
+) -> None:
+    """Validator for Node instances."""
+    stats = _scan_leaves(leaves)
+    _validate_purity(stats, path_info)
+
+    # Rule: NodeWrapper placement
+    if stats.has_wrapper:
+        if attr_name != "node_wrappers":
+            raise NodeStructureError(
+                f"Invalid wrapper placement at '{path_info}': "
+                "NodeWrappers must be in 'node_wrappers'."
+            )
+
+
+@VALIDATION_REGISTRY.register(NodeExpression, key=NodeExpression)
+@VALIDATION_REGISTRY.register(NodeWrapper, key=NodeWrapper)
+def _validate_terminal_structure(
+    obj: Union[NodeExpression, NodeWrapper], attr_name: str, leaves: list[Any], path_info: str
+) -> None:
+    """Validator for NodeExpression and NodeWrapper (Terminal Structures)."""
+    stats = _scan_leaves(leaves)
+    _validate_purity(stats, path_info)
+
+    # Rule: Downward closure
+    if stats.has_node:
+        raise NodeStructureError(
+            f"Invalid containment at '{path_info}': "
+            f"{type(obj).__name__} cannot hold Node."
+        )
+    
+    if stats.has_wrapper:
+        raise NodeStructureError(
+            f"Invalid containment at '{path_info}': "
+            f"{type(obj).__name__} cannot hold NodeWrapper."
+        )
+
+
+@VALIDATION_REGISTRY.register(NodeElement, key=NodeElement)
+def _validate_common_element(
+    obj: NodeElement, attr_name: str, leaves: list[Any], path_info: str
+) -> None:
+    """Fallback validator for generic NodeElement subclasses."""
+    stats = _scan_leaves(leaves)
+    _validate_purity(stats, path_info)
+
+    # Generic elements usually shouldn't hold wrappers (Wrappers attach to Nodes)
+    if stats.has_wrapper:
+        raise NodeStructureError(
+            f"Invalid containment at '{path_info}': "
+            f"{type(obj).__name__} cannot hold NodeWrapper."
+        )
 
 
 def check_node_consistency(root: Node) -> None:
     """
     Validates the structural consistency of a Node tree.
-
-    Enforces the following topology rules:
-    1.  **Type Constraint**: Nested structures must only contain ``Node`` or
-        ``NodeExpression`` types.
-    2.  **Wrapper Placement**: ``NodeWrapper`` instances are only allowed within
-        the ``node_wrappers`` attribute of a ``Node``.
-    3.  **Containment Rules**: ``NodeExpression`` and ``NodeWrapper`` cannot
-        contain ``Node`` or ``NodeWrapper`` instances (downward closure).
-    4.  **Purity**: Containers (lists, dicts) must be homogeneous regarding
-        ``Node`` and ``NodeExpression`` (cannot mix them, nor mix with other types).
-
-    Args:
-        root: The root ``Node`` of the tree to validate.
-
-    Raises:
-        NodeStructureError: If any rule is violated.
-        TypeError: If root is not a ``Node``.
+    Dispatches validation logic to registered functions based on node type.
     """
     if not isinstance(root, NodeElement):
         raise TypeError(f"Root must be a NodeElement, got {type(root)}")
@@ -161,13 +261,11 @@ def check_node_consistency(root: Node) -> None:
         if not isinstance(obj, NodeElement):
             return
 
-        is_node = isinstance(obj, Node)
-        is_expr = isinstance(obj, NodeExpression)
-        is_wrapper = isinstance(obj, NodeWrapper)
+        # Lookup the validator function for this object type
+        # Uses inheritance lookup (e.g. subclass of Node uses _validate_node_structure)
+        validate_func = VALIDATION_REGISTRY.lookup(type(obj), default=None)
 
         # Inspect immediate attributes using the engine.
-        # NOTE: We stop the engine at `_is_node_element` to get the containers
-        # holding them, rather than flattening the elements themselves.
         direct_attrs_with_path = [
             (p, c)
             for p, c in NODE_PYTREE_ENGINE.iter_with_path(
@@ -177,7 +275,6 @@ def check_node_consistency(root: Node) -> None:
         ]
 
         for path, attr_value in direct_attrs_with_path:
-            # path[0] should be AttributeKey for direct attributes of NodeElement.
             if not isinstance(path[0], AttributeKey):
                 continue
 
@@ -191,53 +288,14 @@ def check_node_consistency(root: Node) -> None:
                 )
             )
 
-            nodes = [x for x in leaves if isinstance(x, Node)]
-            exprs = [x for x in leaves if isinstance(x, NodeExpression)]
-            wrappers = [x for x in leaves if isinstance(x, NodeWrapper)]
-            others = [x for x in leaves if not isinstance(x, NodeElement)]
+            # --- Dispatch Check Logic ---
+            if validate_func is not None:
+                validate_func(obj, attr_name, leaves, path_info)
 
-            has_node = bool(nodes)
-            has_expr = bool(exprs)
-            has_wrapper = bool(wrappers)
-            has_other = bool(others)
-
-            # --- Rule Validation ---
-
-            # Rule 1 & 2: NodeWrapper restrictions
-            if has_wrapper:
-                if is_node:
-                    if attr_name != "node_wrappers":
-                        raise NodeStructureError(
-                            f"Invalid wrapper placement at '{path_info}': "
-                            "NodeWrappers must be in 'node_wrappers'."
-                        )
-                else:
-                    raise NodeStructureError(
-                        f"Invalid containment at '{path_info}': "
-                        f"{type(obj).__name__} cannot hold NodeWrapper."
-                    )
-
-            # Rule 3: Downward closure (Node/Wrapper in Expr/Wrapper)
-            if (is_expr or is_wrapper) and has_node:
-                raise NodeStructureError(
-                    f"Invalid containment at '{path_info}': "
-                    f"{type(obj).__name__} cannot hold Node."
-                )
-
-            # Rule 4: Container Purity
-            if has_node or has_expr:
-                if has_node and has_expr:
-                    raise NodeStructureError(
-                        f"Mixed content at '{path_info}': "
-                        "Cannot mix Node and NodeExpression."
-                    )
-                if has_other:
-                    raise NodeStructureError(
-                        f"Impure container at '{path_info}': "
-                        "Found Node/NodeExpression mixed with other types."
-                    )
-
-            for child in nodes + exprs + wrappers:
-                _validate_recursive(child)
+            # --- Recursion ---
+            # Recursively validate valid NodeElement children
+            for child in leaves:
+                if isinstance(child, NodeElement):
+                    _validate_recursive(child)
 
     _validate_recursive(root)
