@@ -1,5 +1,6 @@
+import types
 from dataclasses import dataclass
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from typing import (
     Any,
@@ -8,13 +9,20 @@ from typing import (
     Union,
     Literal,
     cast,
+    Optional,
 )
 from typing_extensions import Self
 from slyme.utils.constant import MISSING
-from slyme.utils.pytree import PyTreeEngine, PyTreeAux, MappingKey, PYTREE_ENGINE_REGISTRY
+from slyme.utils.pytree import (
+    PyTreeEngine,
+    PyTreeAux,
+    MappingKey,
+    PYTREE_ENGINE_REGISTRY,
+)
 from .hook import StoreHook
 
 _T = TypeVar("_T")
+_EMPTY_METADATA = types.MappingProxyType({})
 
 
 class Ref(Generic[_T]):
@@ -24,23 +32,20 @@ class Ref(Generic[_T]):
     def path(self) -> str:
         return self._path
 
-    @property
-    def parts(self) -> tuple[str, ...]:
-        return self._parts
-
-    @property
-    def hash(self) -> int:
-        return self._hash
-
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, metadata: Optional[Mapping] = None) -> None:
         if not path:
             raise ValueError("Empty ref path")
         parts = tuple(path.split("."))
         if any(not p for p in parts):
             raise ValueError(f"Invalid ref path: {path!r}")
         self._path = path
-        self._parts = parts
-        self._hash = hash(parts)
+        self.parts = parts
+        self.hash = hash(parts)
+        self.metadata = (
+            types.MappingProxyType(metadata)
+            if metadata is not None
+            else _EMPTY_METADATA
+        )
 
     def __hash__(self) -> int:
         return self.hash
@@ -64,12 +69,8 @@ class _StoreEntry:
     def value(self) -> Self:
         return self
 
-    def __init__(
-        self, data: Union[dict[str, Any], None] = None
-    ) -> None:
-        self._data: dict[str, Any] = (
-            data if data is not None else {}
-        )
+    def __init__(self, data: Union[dict[str, Any], None] = None) -> None:
+        self._data: dict[str, Any] = data if data is not None else {}
 
     def __getitem__(self, ref: Union[Ref[_T], str]) -> _T:
         if isinstance(ref, str):
@@ -134,7 +135,7 @@ class Store(_StoreEntry):
             ref = Ref(ref)
         *dirs, last = ref.parts
         entry = self._touch(dirs)
-        
+
         if self.hook is not None:
             # Get the old value first
             old_value = entry._data.get(last, MISSING)
@@ -151,7 +152,7 @@ class Store(_StoreEntry):
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreEntry):
             raise KeyError(f"Parent path not found for {ref!r}")
-        
+
         if self.hook is not None:
             # Get the old value first
             old_value = parent._data.get(last, MISSING)
@@ -185,9 +186,7 @@ class Store(_StoreEntry):
         finally:
             self.hook = prev_hook
 
-    def diff(
-        self, other: "Store", strategy: Literal["is", "eq"] = "is"
-    ) -> _DiffResult:
+    def diff(self, other: "Store", strategy: Literal["is", "eq"] = "is") -> _DiffResult:
         """Compares this Store with another using PyTreeEngine.
 
         Args:
@@ -200,7 +199,7 @@ class Store(_StoreEntry):
             raise ValueError(f"Unknown diff strategy: {strategy!r}")
 
         # Flatten both stores into {dot_path: value}
-        # PyTreeEngine ensures we only traverse _StoreEntry structures; 
+        # PyTreeEngine ensures we only traverse _StoreEntry structures;
         # anything else is treated as a leaf.
         leaves_self = self.collect_leaves()
         leaves_other = other.collect_leaves()
@@ -224,13 +223,13 @@ class Store(_StoreEntry):
         for k in keys_self & keys_other:
             val_self = leaves_self[k]
             val_other = leaves_other[k]
-            
+
             is_different = False
             if strategy == "is":
                 is_different = val_self is not val_other
             elif strategy == "eq":
                 is_different = val_self != val_other
-            
+
             if is_different:
                 modified[k] = (val_self, val_other)
 
@@ -245,7 +244,7 @@ class Store(_StoreEntry):
         # PyTreeEngine yields (KeyPath, leaf_value) tuples.
         for path, value in STORE_PYTREE_ENGINE.iter_with_path(self):
             # Convert KeyPath (tuple of MappingKey) to dotted string
-            dot_path = ".".join(cast("MappingKey", k).key for k in path) # type: ignore
+            dot_path = ".".join(cast("MappingKey", k).key for k in path)  # type: ignore
             leaves[dot_path] = value
         return leaves
 
@@ -265,7 +264,7 @@ def _flatten_store_entry(entry: _StoreEntry) -> tuple[Iterable[Any], PyTreeAux]:
     children = tuple(entry._data.values())
     # Wrap keys in MappingKey for semantic path tracking (similar to dict)
     rich_keys = tuple(MappingKey(k) for k in keys)
-    
+
     return children, PyTreeAux(keys=rich_keys)
 
 
@@ -274,30 +273,26 @@ def _unflatten_store_entry(children: Iterable[Any], aux: PyTreeAux) -> Any:
     Unflatten handler to reconstruct _StoreEntry.
     """
     cls = aux.cls if aux.cls is not None else _StoreEntry
-    
+
     if aux.keys is None:
-         raise ValueError("Missing keys in PyTreeAux for Store unflattening.")
-    
+        raise ValueError("Missing keys in PyTreeAux for Store unflattening.")
+
     # Extract keys
-    keys = [cast("MappingKey", k).key for k in aux.keys] # type: ignore
-    
+    keys = [cast("MappingKey", k).key for k in aux.keys]  # type: ignore
+
     # Reconstruct instance
     # Bypass __init__ to handle subclasses (like Store) generically if needed,
     # or just use constructor if safe. Here we mimic generic pytree reconstruction.
     obj = object.__new__(cls)
     # Restore internal data
     obj._data = dict(zip(keys, children))
-    
+
     # Init hooks if it's a Store (default to None)
     if isinstance(obj, Store):
         obj.hook = None
-        
+
     return obj
 
 
 # Register _StoreEntry (and Store via inheritance)
-STORE_PYTREE_ENGINE.register(
-    _StoreEntry, 
-    _flatten_store_entry, 
-    _unflatten_store_entry
-)
+STORE_PYTREE_ENGINE.register(_StoreEntry, _flatten_store_entry, _unflatten_store_entry)
