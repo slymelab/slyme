@@ -3,7 +3,7 @@ Node validation module, including dependency checking and structure consistency 
 """
 
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any, Union, Protocol
 from collections.abc import Callable
 from slyme.context import Context
 from slyme.utils.registry import Registry, TypeRegistry
@@ -16,34 +16,28 @@ from slyme.node.base import (
 )
 from slyme.node.wrapper import NodeWrapper
 
-# [Assuming RequiresKey and ProducesKey are importable from slyme.utils.store or similar]
-# from slyme.utils.store import RequiresKey, ProducesKey
-
 __all__ = [
     "DEPENDENCY_REGISTRY",
-    "NodeDependencyChecker",
-    "VanillaDependencyChecker",
+    "vanilla_dependency_check",
     "VanillaDependencyReport",
     "NodeStructureError",
     "check_node_consistency",
 ]
 
 # Registry definition for dependency checkers
-DEPENDENCY_REGISTRY: Registry[type["NodeDependencyChecker"]] = Registry(
-    "node_dependency"
-)
+DEPENDENCY_REGISTRY: Registry["_NodeDependencyChecker"] = Registry("node_dependency")
 
 
-class NodeDependencyChecker:
+class _NodeDependencyChecker(Protocol):
     """
-    Base class for dependency checkers.
+    Protocol for dependency checkers.
     """
 
-    def check(self, node: NodeElement, ctx: Context, /, **kwargs) -> Any:
+    def __call__(self, node: NodeElement, ctx: Context, /, **kwargs) -> Any:
         """
         Check the dependencies of the given node against the context.
         """
-        raise NotImplementedError
+        ...
 
 
 @dataclass
@@ -70,52 +64,50 @@ class VanillaDependencyReport:
 
 
 @DEPENDENCY_REGISTRY.register(key="vanilla")
-class VanillaDependencyChecker(NodeDependencyChecker):
+def vanilla_dependency_check(
+    node: NodeElement,
+    ctx: Context,
+    /,
+    **kwargs,
+) -> VanillaDependencyReport:
     """
     A simple dependency checker that flattens the node to find required and produced keys.
     """
+    # 1. Collect dependencies directly using NODE_PYTREE_ENGINE
+    requires: set[str] = set()
+    produces: set[str] = set()
 
-    def check(
-        self,
-        node: NodeElement,
-        ctx: Context,
-        /,
-        **kwargs,
-    ) -> VanillaDependencyReport:
-        # 1. Collect dependencies directly using NODE_PYTREE_ENGINE
-        requires: set[str] = set()
-        produces: set[str] = set()
+    # Flatten the node structure.
+    # NODE_PYTREE_ENGINE is configured to handle NodeElement traversal.
+    leaves, _ = NODE_PYTREE_ENGINE.flatten(node)
 
-        # Flatten the node structure.
-        # NODE_PYTREE_ENGINE is configured to handle NodeElement traversal.
-        leaves, _ = NODE_PYTREE_ENGINE.flatten(node)
+    for leaf in leaves:
+        # TODO: NOTE: logic follows previous implementation assuming RequiresKey/ProducesKey exist.
+        if isinstance(leaf, RequiresKey):  # type: ignore
+            requires.add(leaf.path)
+        elif isinstance(leaf, ProducesKey):  # type: ignore
+            produces.add(leaf.path)
 
-        for leaf in leaves:
-            # NOTE: logic follows previous implementation assuming RequiresKey/ProducesKey exist.
-            if isinstance(leaf, RequiresKey):  # type: ignore
-                requires.add(leaf.path)
-            elif isinstance(leaf, ProducesKey):  # type: ignore
-                produces.add(leaf.path)
+    # 2. Extract existing keys from Context
+    context_data = ctx.collect_leaves()
+    context_keys = set(context_data.keys())
 
-        # 2. Extract existing keys from Context
-        context_data = ctx.collect_leaves()
-        context_keys = set(context_data.keys())
+    # 3. Calculate missing keys (Set arithmetic)
+    available_keys = produces | context_keys
+    missing_keys = requires - available_keys
 
-        # 3. Calculate missing keys (Set arithmetic)
-        available_keys = produces | context_keys
-        missing_keys = requires - available_keys
-
-        return VanillaDependencyReport(
-            missing_keys=missing_keys,
-            context_keys=context_keys,
-            all_produced=produces,
-            all_required=requires,
-        )
+    return VanillaDependencyReport(
+        missing_keys=missing_keys,
+        context_keys=context_keys,
+        all_produced=produces,
+        all_required=requires,
+    )
 
 
 # --- Node Structure Consistency Check ---
 class NodeStructureError(TypeError):
     """Raised when the Node structure violates consistency rules."""
+
     pass
 
 
@@ -128,6 +120,7 @@ VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_valid
 @dataclass(frozen=True)
 class _LeafStats:
     """Helper struct to hold scan results from a single pass."""
+
     has_node: bool = False
     has_expr: bool = False
     has_wrapper: bool = False
@@ -155,7 +148,7 @@ def _scan_leaves(leaves: list[Any]) -> _LeafStats:
             # If it's not a NodeElement at all, it's "other"
             has_other = True
         # Note: If we add more NodeElement subclasses in the future,
-        # they fall through here unless checked. 
+        # they fall through here unless checked.
         # But generally they should inherit from one of the above or be treated as generic elements.
 
     return _LeafStats(has_node, has_expr, has_wrapper, has_other)
@@ -166,10 +159,9 @@ def _validate_purity(stats: _LeafStats, path_info: str) -> None:
     # Rule: Container Purity (Cannot mix Node and Expression)
     if stats.has_node and stats.has_expr:
         raise NodeStructureError(
-            f"Mixed content at '{path_info}': "
-            "Cannot mix Node and NodeExpression."
+            f"Mixed content at '{path_info}': " "Cannot mix Node and NodeExpression."
         )
-    
+
     # Rule: Impure container (NodeElement mixed with other types)
     # Only enforce if there are actual NodeElements present
     if (stats.has_node or stats.has_expr) and stats.has_other:
@@ -179,7 +171,7 @@ def _validate_purity(stats: _LeafStats, path_info: str) -> None:
         )
 
 
-@VALIDATION_REGISTRY.register(Node, key=Node)
+@VALIDATION_REGISTRY.register(key=Node)
 def _validate_node_structure(
     obj: Node, attr_name: str, leaves: list[Any], path_info: str
 ) -> None:
@@ -196,10 +188,13 @@ def _validate_node_structure(
             )
 
 
-@VALIDATION_REGISTRY.register(NodeExpression, key=NodeExpression)
-@VALIDATION_REGISTRY.register(NodeWrapper, key=NodeWrapper)
+@VALIDATION_REGISTRY.register(key=NodeExpression)
+@VALIDATION_REGISTRY.register(key=NodeWrapper)
 def _validate_terminal_structure(
-    obj: Union[NodeExpression, NodeWrapper], attr_name: str, leaves: list[Any], path_info: str
+    obj: Union[NodeExpression, NodeWrapper],
+    attr_name: str,
+    leaves: list[Any],
+    path_info: str,
 ) -> None:
     """Validator for NodeExpression and NodeWrapper (Terminal Structures)."""
     stats = _scan_leaves(leaves)
@@ -211,23 +206,7 @@ def _validate_terminal_structure(
             f"Invalid containment at '{path_info}': "
             f"{type(obj).__name__} cannot hold Node."
         )
-    
-    if stats.has_wrapper:
-        raise NodeStructureError(
-            f"Invalid containment at '{path_info}': "
-            f"{type(obj).__name__} cannot hold NodeWrapper."
-        )
 
-
-@VALIDATION_REGISTRY.register(NodeElement, key=NodeElement)
-def _validate_common_element(
-    obj: NodeElement, attr_name: str, leaves: list[Any], path_info: str
-) -> None:
-    """Fallback validator for generic NodeElement subclasses."""
-    stats = _scan_leaves(leaves)
-    _validate_purity(stats, path_info)
-
-    # Generic elements usually shouldn't hold wrappers (Wrappers attach to Nodes)
     if stats.has_wrapper:
         raise NodeStructureError(
             f"Invalid containment at '{path_info}': "
