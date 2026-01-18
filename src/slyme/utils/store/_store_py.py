@@ -30,7 +30,19 @@ class Ref(Generic[_T]):
 
     @property
     def path(self) -> str:
-        return self._path
+        return self.__dict__["path"]
+
+    @property
+    def parts(self) -> tuple[str, ...]:
+        return self.__dict__["parts"]
+
+    @property
+    def hash(self) -> int:
+        return self.__dict__["hash"]
+
+    @property
+    def metadata(self) -> Mapping[Any, Any]:
+        return self.__dict__["metadata"]
 
     def __init__(self, path: str, metadata: Optional[Mapping] = None) -> None:
         if not path:
@@ -38,10 +50,10 @@ class Ref(Generic[_T]):
         parts = tuple(path.split("."))
         if any(not p for p in parts):
             raise ValueError(f"Invalid ref path: {path!r}")
-        self._path = path
-        self.parts = parts
-        self.hash = hash(parts)
-        self.metadata = (
+        self.__dict__["path"] = path
+        self.__dict__["parts"] = parts
+        self.__dict__["hash"] = hash(parts)
+        self.__dict__["metadata"] = (
             types.MappingProxyType(metadata)
             if metadata is not None
             else _EMPTY_METADATA
@@ -57,17 +69,13 @@ class Ref(Generic[_T]):
         return f"{type(self).__name__}({self.extra_repr()})"
 
     def extra_repr(self) -> str:
-        return f"path={self.path!r}"
+        return f"path={self.path!r}, metadata={self.metadata!r}"
 
 
 class _StoreEntry:
     """Inner store entry.
     NOTE: `_StoreEntry` can only be modified through `Store` for consistency.
     """
-
-    @property
-    def value(self) -> Self:
-        return self
 
     def __init__(self, data: Union[dict[str, Any], None] = None) -> None:
         self._data: dict[str, Any] = data if data is not None else {}
