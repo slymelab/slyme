@@ -18,7 +18,7 @@ _T = TypeVar("_T")
 
 
 class Ref(Generic[_T]):
-    """Immutable dotted key with cached hash and split parts."""
+    """Immutable dotted ref with cached hash and split parts."""
 
     @property
     def path(self) -> str:
@@ -34,10 +34,10 @@ class Ref(Generic[_T]):
 
     def __init__(self, path: str) -> None:
         if not path:
-            raise ValueError("Empty key path")
+            raise ValueError("Empty ref path")
         parts = tuple(path.split("."))
         if any(not p for p in parts):
-            raise ValueError(f"Invalid key path: {path!r}")
+            raise ValueError(f"Invalid ref path: {path!r}")
         self._path = path
         self._parts = parts
         self._hash = hash(parts)
@@ -71,11 +71,11 @@ class _StoreEntry:
             data if data is not None else {}
         )
 
-    def __getitem__(self, key: Union[Ref[_T], str]) -> _T:
-        if isinstance(key, str):
-            key = Ref(key)
+    def __getitem__(self, ref: Union[Ref[_T], str]) -> _T:
+        if isinstance(ref, str):
+            ref = Ref(ref)
         # Result can be a _StoreEntry (subtree) or a raw leaf value.
-        result: Any = self._resolve(key.parts)
+        result: Any = self._resolve(ref.parts)
         return result
 
     def _resolve(self, parts: Iterable[str]) -> Any:
@@ -122,17 +122,17 @@ class Store(_StoreEntry):
         super().__init__(data=data)
         self.hook = hook
 
-    def __getitem__(self, key: Union[Ref[_T], str]) -> _T:
-        value = super().__getitem__(key)
+    def __getitem__(self, ref: Union[Ref[_T], str]) -> _T:
+        value = super().__getitem__(ref)
         if self.hook is not None:
             # Call hook
-            self.hook.on_getitem(self, key, value)
+            self.hook.on_getitem(self, ref, value)
         return value
 
-    def __setitem__(self, key: Union[Ref[_T], str], value: _T) -> None:
-        if isinstance(key, str):
-            key = Ref(key)
-        *dirs, last = key.parts
+    def __setitem__(self, ref: Union[Ref[_T], str], value: _T) -> None:
+        if isinstance(ref, str):
+            ref = Ref(ref)
+        *dirs, last = ref.parts
         entry = self._touch(dirs)
         
         if self.hook is not None:
@@ -140,24 +140,24 @@ class Store(_StoreEntry):
             old_value = entry._data.get(last, MISSING)
             entry._data[last] = value
             # Call hook
-            self.hook.on_setitem(self, key, old_value, value)
+            self.hook.on_setitem(self, ref, old_value, value)
         else:
             entry._data[last] = value
 
-    def __delitem__(self, key: Union[Ref[_T], str]) -> None:
-        if isinstance(key, str):
-            key = Ref(key)
-        *dirs, last = key.parts
+    def __delitem__(self, ref: Union[Ref[_T], str]) -> None:
+        if isinstance(ref, str):
+            ref = Ref(ref)
+        *dirs, last = ref.parts
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreEntry):
-            raise KeyError(f"Parent path not found for {key!r}")
+            raise KeyError(f"Parent path not found for {ref!r}")
         
         if self.hook is not None:
             # Get the old value first
             old_value = parent._data.get(last, MISSING)
             del parent._data[last]
             # Call hook
-            self.hook.on_delitem(self, key, old_value)
+            self.hook.on_delitem(self, ref, old_value)
         else:
             del parent._data[last]
 

@@ -11,13 +11,13 @@ _StoreHookT = TypeVar("_StoreHookT", bound="StoreHook")
 
 
 class StoreHook:
-    def on_getitem(self, instance: "Store", key: "Ref", value: Any, /) -> None:
+    def on_getitem(self, instance: "Store", ref: "Ref", value: Any, /) -> None:
         pass
 
     def on_setitem(
         self,
         instance: "Store",
-        key: "Ref",
+        ref: "Ref",
         old_value: Union[Missing, Any],
         new_value: Any,
         /,
@@ -25,57 +25,57 @@ class StoreHook:
         pass
 
     def on_delitem(
-        self, instance: "Store", key: "Ref", old_value: Union[Missing, Any], /
+        self, instance: "Store", ref: "Ref", old_value: Union[Missing, Any], /
     ) -> None:
         pass
 
 
 class StoreHookList(StoreHook, MutableSequenceProxy[_StoreHookT]):
-    def on_getitem(self, instance: "Store", key: "Ref", value: Any, /) -> None:
+    def on_getitem(self, instance: "Store", ref: "Ref", value: Any, /) -> None:
         for hook in self:
-            hook.on_getitem(instance, key, value)
+            hook.on_getitem(instance, ref, value)
 
     def on_setitem(
         self,
         instance: "Store",
-        key: "Ref",
+        ref: "Ref",
         old_value: Union[Missing, Any],
         new_value: Any,
         /,
     ) -> None:
         for hook in self:
-            hook.on_setitem(instance, key, old_value, new_value)
+            hook.on_setitem(instance, ref, old_value, new_value)
 
     def on_delitem(
-        self, instance: "Store", key: "Ref", old_value: Union[Missing, Any], /
+        self, instance: "Store", ref: "Ref", old_value: Union[Missing, Any], /
     ) -> None:
         for hook in self:
-            hook.on_delitem(instance, key, old_value)
+            hook.on_delitem(instance, ref, old_value)
 
 
 # Record hook
 @dataclass(frozen=True)
 class GetitemRecord:
-    __slots__ = ("instance", "key", "value")
+    __slots__ = ("instance", "ref", "value")
     instance: "Store"
-    key: "Ref"
+    ref: "Ref"
     value: Any
 
 
 @dataclass(frozen=True)
 class SetitemRecord:
-    __slots__ = ("instance", "key", "old_value", "new_value")
+    __slots__ = ("instance", "ref", "old_value", "new_value")
     instance: "Store"
-    key: "Ref"
+    ref: "Ref"
     old_value: Any
     new_value: Any
 
 
 @dataclass(frozen=True)
 class DelitemRecord:
-    __slots__ = ("instance", "key", "old_value")
+    __slots__ = ("instance", "ref", "old_value")
     instance: "Store"
-    key: "Ref"
+    ref: "Ref"
     old_value: Any
 
 
@@ -84,20 +84,20 @@ class RecordHook(StoreHook):
         super().__init__()
         self.records: list[Union[GetitemRecord, SetitemRecord, DelitemRecord]] = []
 
-    def on_getitem(self, instance: "Store", key: "Ref", value: Any, /) -> None:
-        self.records.append(GetitemRecord(instance, key, value))
+    def on_getitem(self, instance: "Store", ref: "Ref", value: Any, /) -> None:
+        self.records.append(GetitemRecord(instance, ref, value))
 
     def on_setitem(
         self,
         instance: "Store",
-        key: "Ref",
+        ref: "Ref",
         old_value: Union[Missing, Any],
         new_value: Any,
         /,
     ) -> None:
-        self.records.append(SetitemRecord(instance, key, old_value, new_value))
+        self.records.append(SetitemRecord(instance, ref, old_value, new_value))
 
     def on_delitem(
-        self, instance: "Store", key: "Ref", old_value: Union[Missing, Any], /
+        self, instance: "Store", ref: "Ref", old_value: Union[Missing, Any], /
     ) -> None:
-        self.records.append(DelitemRecord(instance, key, old_value))
+        self.records.append(DelitemRecord(instance, ref, old_value))
