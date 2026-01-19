@@ -9,7 +9,7 @@ from typing import (
 )
 from contextlib import ExitStack
 from slyme.utils.constant import STOP
-from slyme.utils.collection.base import SequenceData
+from slyme.utils.collection import SequenceData
 from slyme.utils.pytree import (
     AttributeKey,
     PyTreeAux,
@@ -105,6 +105,7 @@ NODE_PYTREE_ENGINE.register(
 # Custom base classes.
 class Node(NodeElement):
     """ """
+    # TODO: Helper function for nodes/expressions/refs/check_structure/check_dependency, etc.
 
     def __init__(self, /, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs):
         super().__init__(**kwargs)

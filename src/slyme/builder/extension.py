@@ -1,32 +1,18 @@
 from abc import ABC, abstractmethod
 from typing import TypeVar, Generic
-from slyme.utils.collection import MutableSequenceProxy
+from slyme.node import Node
 
-_ContextT = TypeVar("_ContextT")
-_BuilderExtensionT = TypeVar("_BuilderExtensionT")
+_NodeT = TypeVar("_NodeT", bound=Node)
 
 
-class BuilderExtension(ABC, Generic[_ContextT]):
+class BuilderExtension(ABC, Generic[_NodeT]):
     """
-    Extension for custom handler build.
+    Extension for custom node build.
     """
 
     @abstractmethod
-    def apply(self, ctx: _ContextT, node):
+    def apply(self, node: _NodeT) -> _NodeT:
         """
-        Build operations before and after ``build`` is called.
-        TODO: 只保留 after hook
+        Build operations after ``_build`` is called.
         """
-        yield
-
-
-class BuilderExtensionList(
-    MutableSequenceProxy[_BuilderExtensionT],
-    ABC,
-    Generic[_ContextT, _BuilderExtensionT],
-):
-    """
-    Extension container that calls extensions.
-    """
-    # TODO
-    pass
+        pass
