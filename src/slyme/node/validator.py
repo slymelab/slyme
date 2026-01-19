@@ -5,10 +5,10 @@ Node validation module, including dependency checking and structure consistency 
 from dataclasses import dataclass
 from typing import Any, Union, Protocol
 from collections.abc import Callable
-from slyme.context import Context
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.pytree import AttributeKey
 from slyme.utils.store import Ref
+from slyme.context import Context, Dep, DEP
 from slyme.node.base import (
     NodeElement,
     Node,
@@ -80,14 +80,16 @@ def vanilla_dependency_check(
 
     # Flatten the node structure.
     # NODE_PYTREE_ENGINE is configured to handle NodeElement traversal.
-    leaves, _ = NODE_PYTREE_ENGINE.flatten(node)
+    leaves = tuple(NODE_PYTREE_ENGINE.iter(node))
 
     for leaf in leaves:
-        # TODO: NOTE: logic follows previous implementation assuming RequiresKey/ProducesKey exist.
-        if isinstance(leaf, RequiresKey):  # type: ignore
-            requires.add(leaf.path)
-        elif isinstance(leaf, ProducesKey):  # type: ignore
-            produces.add(leaf.path)
+        if isinstance(leaf, Ref):
+            dep_mode = leaf.metadata.get(DEP, Dep.NONE)
+            path = leaf.path
+            if dep_mode & Dep.READ:
+                requires.add(path)
+            if dep_mode & Dep.WRITE:
+                produces.add(path)
 
     # 2. Extract existing keys from Context
     context_data = ctx.collect_leaves()
