@@ -8,6 +8,7 @@ from typing import (
     Union,
     TypeVar,
     overload,
+    cast,
 )
 from .collection import MutableMappingProxy
 from .constant import MISSING, Missing
@@ -69,13 +70,13 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         *,
         key: Union[_KT, Missing] = MISSING,
         strict: Union[bool, Missing] = MISSING,
-    ) -> _VT2:
+    ) -> Union[Callable[[_VT2], _VT2], _VT2]:
         """
         Register an item. Can be used as a decorator or a normal method.
         """
         def decorator(_obj: _VT2) -> _VT2:
             # Call the core register method.
-            self._register(_obj, key, strict)
+            self._register(cast("_VT", _obj), key, strict)
             return _obj
 
         if obj is MISSING:
@@ -218,7 +219,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         """
         mro = inspect.getmro(key)
         if reverse:
-            mro = reversed(mro)
+            mro = tuple(reversed(mro))
         for base in mro:
             if base in self:
                 return base
