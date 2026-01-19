@@ -47,7 +47,7 @@ class VanillaDependencyReport:
 
     missing_keys: set[str]
     context_keys: set[str]
-    all_produced: set[str]
+    all_provided: set[str]
     all_required: set[str]
 
     @property
@@ -72,11 +72,11 @@ def vanilla_dependency_check(
     **kwargs,
 ) -> VanillaDependencyReport:
     """
-    A simple dependency checker that flattens the node to find required and produced keys.
+    A simple dependency checker that flattens the node to find required and provided keys.
     """
     # 1. Collect dependencies directly using NODE_PYTREE_ENGINE
     requires: set[str] = set()
-    produces: set[str] = set()
+    provides: set[str] = set()
 
     # Flatten the node structure.
     # NODE_PYTREE_ENGINE is configured to handle NodeElement traversal.
@@ -86,23 +86,23 @@ def vanilla_dependency_check(
         if isinstance(leaf, Ref):
             dep_mode = leaf.metadata.get(DEP, Dep.NONE)
             path = leaf.path
-            if dep_mode & Dep.READ:
+            if dep_mode & Dep.REQUIRE:
                 requires.add(path)
-            if dep_mode & Dep.WRITE:
-                produces.add(path)
+            if dep_mode & Dep.PROVIDE:
+                provides.add(path)
 
     # 2. Extract existing keys from Context
     context_data = ctx.collect_leaves()
     context_keys = set(context_data.keys())
 
     # 3. Calculate missing keys (Set arithmetic)
-    available_keys = produces | context_keys
+    available_keys = provides | context_keys
     missing_keys = requires - available_keys
 
     return VanillaDependencyReport(
         missing_keys=missing_keys,
         context_keys=context_keys,
-        all_produced=produces,
+        all_provided=provides,
         all_required=requires,
     )
 

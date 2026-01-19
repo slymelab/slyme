@@ -16,8 +16,8 @@ class Dep(Flag):
 
     NONE = 0
 
-    READ = auto()
-    WRITE = auto()
+    REQUIRE = auto()
+    PROVIDE = auto()
 
     # Syntactic Sugar
-    READ_WRITE = READ | WRITE
+    REQUIRE_PROVIDE = REQUIRE | PROVIDE
