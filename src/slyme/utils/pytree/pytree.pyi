@@ -35,7 +35,7 @@ def tree_map(
     *,
     is_leaf: Optional[Callable[[Any], bool]] = None,
 ) -> Any: ...
-def get_entry(tree: Any, path: KeyPath) -> Any: ...
+def get_element(tree: Any, path: KeyPath) -> Any: ...
 def codify_path(path: KeyPath, root_name: str = "tree") -> str: ...
 
 __all__ = [
@@ -58,6 +58,6 @@ __all__ = [
     "tree_iter_with_path",
     "tree_unflatten",
     "tree_map",
-    "get_entry",
+    "get_element",
     "codify_path",
 ]

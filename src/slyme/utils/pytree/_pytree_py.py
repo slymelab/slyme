@@ -22,9 +22,9 @@ from slyme.utils.registry import Registry, TypeRegistry
 class PyTreeKey:
     """Base class for path elements."""
 
-    def resolve(self, obj: Any) -> Any:
+    def resolve(self, element: Any) -> Any:
         """
-        Resolve the key against the given object to retrieve the child.
+        Resolve the key against the given element to retrieve the child.
         Acts as the 'Getter' logic in Lens.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement resolve.")
@@ -48,12 +48,12 @@ class SequenceKey(PyTreeKey):
 
     index: int
 
-    def resolve(self, obj: Any) -> Any:
+    def resolve(self, element: Any) -> Any:
         try:
-            return obj[self.index]
+            return element[self.index]
         except (IndexError, TypeError) as e:
             raise KeyError(
-                f"Cannot access index {self.index} from object of type {type(obj).__name__}"
+                f"Cannot access index {self.index} from element of type {type(element).__name__}"
             ) from e
 
     def codify(self, parent_expr: str) -> str:
@@ -66,12 +66,12 @@ class MappingKey(PyTreeKey):
 
     key: Hashable
 
-    def resolve(self, obj: Any) -> Any:
+    def resolve(self, element: Any) -> Any:
         try:
-            return obj[self.key]
+            return element[self.key]
         except (KeyError, TypeError) as e:
             raise KeyError(
-                f"Cannot access key {self.key!r} from object of type {type(obj).__name__}"
+                f"Cannot access key {self.key!r} from element of type {type(element).__name__}"
             ) from e
 
     def codify(self, parent_expr: str) -> str:
@@ -84,12 +84,12 @@ class AttributeKey(PyTreeKey):
 
     name: str
 
-    def resolve(self, obj: Any) -> Any:
+    def resolve(self, element: Any) -> Any:
         try:
-            return getattr(obj, self.name)
+            return getattr(element, self.name)
         except AttributeError as e:
             raise KeyError(
-                f"Cannot access attribute {self.name!r} from object of type {type(obj).__name__}"
+                f"Cannot access attribute {self.name!r} from element of type {type(element).__name__}"
             ) from e
 
     def codify(self, parent_expr: str) -> str:
@@ -134,7 +134,7 @@ class _FlattenFunc(Protocol):
         - aux_data: Contains metadata and optional keys for path tracking.
     """
 
-    def __call__(self, obj: Any, /) -> tuple[Iterable[Any], PyTreeAux]: ...
+    def __call__(self, element: Any, /) -> tuple[Iterable[Any], PyTreeAux]: ...
 
 
 class _UnflattenFunc(Protocol):
@@ -195,7 +195,7 @@ class PyTreeDef:
         Public API: Reconstruct the object from this structure and leaves.
         """
         leaves_iter = iter(leaves)
-        obj = self._build(leaves_iter)
+        element = self._build(leaves_iter)
 
         try:
             next(leaves_iter)
@@ -203,7 +203,7 @@ class PyTreeDef:
         except StopIteration:
             pass
 
-        return obj
+        return element
 
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
         """Internal recursive driver."""
@@ -281,7 +281,7 @@ class PyTreeEngine:
         Register a dynamic resolver function.
 
         Args:
-            resolver: A function taking an object and returning a Handler or None.
+            resolver: A function taking an element and returning a Handler or None.
             priority:
                 - 'pre': Checked BEFORE the core TypeRegistry. Used to override
                   default behaviors or intercept specific instances.
@@ -565,9 +565,9 @@ class PyTreeEngine:
         return self.unflatten(treedef, new_leaves)
 
     @staticmethod
-    def get_entry(tree: Any, path: KeyPath) -> Any:
+    def get_element(tree: Any, path: KeyPath) -> Any:
         """
-        Retrieve an entry from the tree using a specific path (Runtime Lens).
+        Retrieve an element from the tree using a specific path (Runtime Lens).
         """
         current = tree
         for i, key in enumerate(path):

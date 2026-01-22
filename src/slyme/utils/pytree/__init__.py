@@ -26,7 +26,7 @@ from .pytree import (
     tree_iter_with_path,
     tree_unflatten,
     tree_map,
-    get_entry,
+    get_element,
     codify_path,
 )
 
@@ -50,6 +50,6 @@ __all__ = [
     "tree_iter_with_path",
     "tree_unflatten",
     "tree_map",
-    "get_entry",
+    "get_element",
     "codify_path",
 ]

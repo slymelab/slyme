@@ -81,9 +81,9 @@ def tree_map(
     return default_pytree_engine.map(func, tree, is_leaf=is_leaf)
 
 
-def get_entry(tree: Any, path: KeyPath) -> Any:
-    """Alias for default_pytree_engine.get_entry."""
-    return default_pytree_engine.get_entry(tree, path)
+def get_element(tree: Any, path: KeyPath) -> Any:
+    """Alias for default_pytree_engine.get_element."""
+    return default_pytree_engine.get_element(tree, path)
 
 
 def codify_path(path: KeyPath, root_name: str = "tree") -> str:
@@ -114,6 +114,6 @@ __all__ = [
     "tree_iter_with_path",
     "tree_unflatten",
     "tree_map",
-    "get_entry",
+    "get_element",
     "codify_path",
 ]
