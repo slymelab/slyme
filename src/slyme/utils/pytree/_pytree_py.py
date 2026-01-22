@@ -20,7 +20,7 @@ from slyme.utils.registry import Registry, TypeRegistry
 
 @dataclass(frozen=True)
 class PyTreeKey:
-    """Base class for path entries."""
+    """Base class for path elements."""
 
     def resolve(self, obj: Any) -> Any:
         """
@@ -154,7 +154,7 @@ class _PyTreeHandler:
 @dataclass(frozen=True)
 class TraverseAux:
     """
-    Auxiliary data passed to `is_leaf` for context-aware pruning.
+    Auxiliary data during traversal.
     """
 
     parent: Any
@@ -163,20 +163,20 @@ class TraverseAux:
 
 class _IsLeafFunc(Protocol):
     """
-    Protocol for functions that determine if a node is a leaf.
+    Protocol for functions that determine if an element is a leaf.
     """
 
-    def __call__(self, node: Any, traverse_aux: TraverseAux, /) -> bool: ...
+    def __call__(self, element: Any, traverse_aux: TraverseAux, /) -> bool: ...
 
 
 class _ResolverFunc(Protocol):
     """
     Protocol for dynamic handler resolution.
-    Accepts an auxiliary context object.
+    Accepts an auxiliary object.
     """
 
     def __call__(
-        self, obj: Any, traverse_aux: TraverseAux, /
+        self, element: Any, traverse_aux: TraverseAux, /
     ) -> Union[_PyTreeHandler, None]: ...
 
 
@@ -329,7 +329,7 @@ class PyTreeEngine:
         self.register(dict, _flatten_dict, _unflatten_dict)
 
     def _lookup_handler(
-        self, obj: Any, traverse_aux: TraverseAux
+        self, element: Any, traverse_aux: TraverseAux
     ) -> Union[_PyTreeHandler, None]:
         """
         Resolve handler via:
@@ -339,12 +339,12 @@ class PyTreeEngine:
         """
         # 1. Try Pre-resolvers
         for resolver in self._pre_resolvers:
-            handler = resolver(obj, traverse_aux)
+            handler = resolver(element, traverse_aux)
             if handler is not None:
                 return handler
 
         # 2. Try Type Registry
-        cls = type(obj)
+        cls = type(element)
         handler = None
         if self.allow_inheritance:
             handler = self._registry.lookup(cls, default=None)
@@ -356,7 +356,7 @@ class PyTreeEngine:
 
         # 3. Try Post-resolvers
         for resolver in self._post_resolvers:
-            handler = resolver(obj, traverse_aux)
+            handler = resolver(element, traverse_aux)
             if handler is not None:
                 return handler
 
@@ -426,34 +426,34 @@ class PyTreeEngine:
             tree, initial_traverse_aux, is_leaf, with_path=True
         )
 
-    def _prepare_node(
+    def _prepare_element(
         self,
-        entry: Any,
+        element: Any,
         traverse_aux: TraverseAux,
         is_leaf: Optional[_IsLeafFunc],
     ) -> tuple[bool, Optional[_PyTreeHandler], Iterable[Any], Iterator[Any], PyTreeAux]:
         """
-        Helper to check if a node should be flattened and prepare iterators.
+        Helper to check if an element should be flattened and prepare iterators.
         Returns: (should_flatten, handler, children_iter, keys_iter, tree_aux)
         """
         # should_flatten check
-        should_flatten = is_leaf is None or not is_leaf(entry, traverse_aux)
+        should_flatten = is_leaf is None or not is_leaf(element, traverse_aux)
         handler = None
         if should_flatten:
-            handler = self._lookup_handler(entry, traverse_aux)
+            handler = self._lookup_handler(element, traverse_aux)
             should_flatten = handler is not None
 
         if not should_flatten:
             # Return defaults for non-flattenable
             return False, None, [], iter([]), PyTreeAux()
 
-        children_iter, tree_aux = handler.flatten(entry)
+        children_iter, tree_aux = handler.flatten(element)
 
         # Auto fill tree_aux info
         # TODO: Maybe refactor this into a function when the
         # auto fill logic grows.
         if tree_aux.cls is None:
-            tree_aux = replace(tree_aux, cls=type(entry))
+            tree_aux = replace(tree_aux, cls=type(element))
 
         # Resolve Keys for Path Tracking.
         if tree_aux.keys is not None:
@@ -466,14 +466,14 @@ class PyTreeEngine:
 
     def _traverse(
         self,
-        entry: Any,
+        element: Any,
         traverse_aux: TraverseAux,
         leaf_sink: _LeafSinkFunc,
         is_leaf: Optional[_IsLeafFunc],
     ) -> PyTreeDef:
         """Recursive core for traversal."""
         should_flatten, handler, children_iter, keys_iter, tree_aux = (
-            self._prepare_node(entry, traverse_aux, is_leaf)
+            self._prepare_element(element, traverse_aux, is_leaf)
         )
 
         if should_flatten:
@@ -485,11 +485,11 @@ class PyTreeEngine:
                 except StopIteration:
                     # Should not happen if aux.keys matches children length.
                     raise ValueError(
-                        f"Not enough keys provided in TreeAux for container {type(entry)}"
+                        f"Not enough keys provided in TreeAux for container {type(element)}"
                     )
 
                 child_traverse_aux = TraverseAux(
-                    parent=entry, path=traverse_aux.path + (key,)
+                    parent=element, path=traverse_aux.path + (key,)
                 )
                 child_def = self._traverse(
                     child,
@@ -500,23 +500,23 @@ class PyTreeEngine:
                 child_defs.append(child_def)
 
             return ContainerDef(
-                type(entry), tree_aux, tuple(child_defs), handler.unflatten
+                type(element), tree_aux, tuple(child_defs), handler.unflatten
             )
         else:
             # Leaf.
-            leaf_sink(entry, traverse_aux)
+            leaf_sink(element, traverse_aux)
             return LeafDef()
 
     def _traverse_iter(
         self,
-        entry: Any,
+        element: Any,
         traverse_aux: TraverseAux,
         is_leaf: Optional[_IsLeafFunc],
         with_path: bool,
     ) -> Iterator[Any]:
         """Recursive core for iterator traversal."""
-        should_flatten, _, children_iter, keys_iter, _ = self._prepare_node(
-            entry, traverse_aux, is_leaf
+        should_flatten, _, children_iter, keys_iter, _ = self._prepare_element(
+            element, traverse_aux, is_leaf
         )
 
         if should_flatten:
@@ -526,11 +526,11 @@ class PyTreeEngine:
                 except StopIteration:
                     # Should not happen if aux.keys matches children length.
                     raise ValueError(
-                        f"Not enough keys provided in TreeAux for container {type(entry)}"
+                        f"Not enough keys provided in TreeAux for container {type(element)}"
                     )
 
                 child_traverse_aux = TraverseAux(
-                    parent=entry, path=traverse_aux.path + (key,)
+                    parent=element, path=traverse_aux.path + (key,)
                 )
                 yield from self._traverse_iter(
                     child,
@@ -541,9 +541,9 @@ class PyTreeEngine:
         else:
             # Leaf.
             if with_path:
-                yield (traverse_aux.path, entry)
+                yield (traverse_aux.path, element)
             else:
-                yield entry
+                yield element
 
     @staticmethod
     def unflatten(treedef: "PyTreeDef", leaves: Iterable[Any]) -> Any:

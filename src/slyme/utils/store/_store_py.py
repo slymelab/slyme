@@ -72,9 +72,9 @@ class Ref(Generic[_T]):
         return f"path={self.path!r}, metadata={self.metadata!r}"
 
 
-class _StoreEntry:
-    """Inner store entry.
-    NOTE: `_StoreEntry` can only be modified through `Store` for consistency.
+class _StoreElement:
+    """Inner store element.
+    NOTE: `_StoreElement` can only be modified through `Store` for consistency.
     """
 
     def __init__(self, data: Union[dict[str, Any], None] = None) -> None:
@@ -83,20 +83,20 @@ class _StoreEntry:
     def __getitem__(self, ref: Union[Ref[_T], str]) -> _T:
         if isinstance(ref, str):
             ref = Ref(ref)
-        # Result can be a _StoreEntry (subtree) or a raw leaf value.
+        # Result can be a _StoreElement (subtree) or a raw leaf value.
         result: Any = self._resolve(ref.parts)
         return result
 
     def _resolve(self, parts: Iterable[str]) -> Any:
-        """Resolve the path parts and get the final entry or value."""
-        entry: Any = self
+        """Resolve the path parts and get the final element or value."""
+        element: Any = self
         for p in parts:
-            if not isinstance(entry, _StoreEntry):
+            if not isinstance(element, _StoreElement):
                 # If we encounter a leaf value mid-path, it's a path error
                 # (blocking the traversal).
                 raise KeyError(f"Path {parts} blocked by leaf value at {p!r}")
-            entry = entry._data[p]
-        return entry
+            element = element._data[p]
+        return element
 
     def __repr__(self) -> str:
         sep = ", "
@@ -106,7 +106,7 @@ class _StoreEntry:
     def copy(self) -> Self:
         return type(self)(
             data={
-                k: (v.copy() if isinstance(v, _StoreEntry) else v)
+                k: (v.copy() if isinstance(v, _StoreElement) else v)
                 for k, v in self._data.items()
             }
         )
@@ -120,7 +120,7 @@ class _DiffResult:
     modified: dict[str, tuple[Any, Any]]  # {key: (self_value, other_value)}
 
 
-class Store(_StoreEntry):
+class Store(_StoreElement):
     """Dotted-attribute-style nested store."""
 
     def __init__(
@@ -142,23 +142,23 @@ class Store(_StoreEntry):
         if isinstance(ref, str):
             ref = Ref(ref)
         *dirs, last = ref.parts
-        entry = self._touch(dirs)
+        element = self._touch(dirs)
 
         if self.hook is not None:
             # Get the old value first
-            old_value = entry._data.get(last, MISSING)
-            entry._data[last] = value
+            old_value = element._data.get(last, MISSING)
+            element._data[last] = value
             # Call hook
             self.hook.on_setitem(self, ref, old_value, value)
         else:
-            entry._data[last] = value
+            element._data[last] = value
 
     def __delitem__(self, ref: Union[Ref[_T], str]) -> None:
         if isinstance(ref, str):
             ref = Ref(ref)
         *dirs, last = ref.parts
         parent = self._resolve(dirs)
-        if not isinstance(parent, _StoreEntry):
+        if not isinstance(parent, _StoreElement):
             raise KeyError(f"Parent path not found for {ref!r}")
 
         if self.hook is not None:
@@ -170,20 +170,20 @@ class Store(_StoreEntry):
         else:
             del parent._data[last]
 
-    def _touch(self, parts: Iterable[str]) -> _StoreEntry:
-        """Recursively resolve the store entries along the path, and create a
-        new entry if the entry not exists."""
-        entry: _StoreEntry = self
+    def _touch(self, parts: Iterable[str]) -> _StoreElement:
+        """Recursively resolve the store elements along the path, and create a
+        new element if the element not exists."""
+        element: _StoreElement = self
         for p in parts:
-            nxt: Any = entry._data.get(p)
+            nxt: Any = element._data.get(p)
             if nxt is None:
-                nxt = _StoreEntry()
-                entry._data[p] = nxt
-            elif not isinstance(nxt, _StoreEntry):
+                nxt = _StoreElement()
+                element._data[p] = nxt
+            elif not isinstance(nxt, _StoreElement):
                 # Conflict: path segment exists but is a leaf value
                 raise KeyError(f"Conflict: {p!r} is already a leaf value.")
-            entry = nxt
-        return entry
+            element = nxt
+        return element
 
     @contextmanager
     def with_hook(self, hook: StoreHook):
@@ -207,7 +207,7 @@ class Store(_StoreEntry):
             raise ValueError(f"Unknown diff strategy: {strategy!r}")
 
         # Flatten both stores into {dot_path: value}
-        # PyTreeEngine ensures we only traverse _StoreEntry structures;
+        # PyTreeEngine ensures we only traverse _StoreElement structures;
         # anything else is treated as a leaf.
         leaves_self = self.collect_leaves()
         leaves_other = other.collect_leaves()
@@ -263,24 +263,24 @@ STORE_PYTREE_ENGINE = PyTreeEngine("store_engine", register_defaults=False)
 PYTREE_ENGINE_REGISTRY.register(STORE_PYTREE_ENGINE, key="store_engine")
 
 
-def _flatten_store_entry(entry: _StoreEntry) -> tuple[Iterable[Any], PyTreeAux]:
+def _flatten_store_element(element: _StoreElement) -> tuple[Iterable[Any], PyTreeAux]:
     """
-    Flatten handler for _StoreEntry.
+    Flatten handler for _StoreElement.
     Exposes keys in PyTreeAux for path tracking and values as children.
     """
-    keys = tuple(entry._data.keys())
-    children = tuple(entry._data.values())
+    keys = tuple(element._data.keys())
+    children = tuple(element._data.values())
     # Wrap keys in MappingKey for semantic path tracking (similar to dict)
     rich_keys = tuple(MappingKey(k) for k in keys)
 
     return children, PyTreeAux(keys=rich_keys)
 
 
-def _unflatten_store_entry(children: Iterable[Any], aux: PyTreeAux) -> Any:
+def _unflatten_store_element(children: Iterable[Any], aux: PyTreeAux) -> Any:
     """
-    Unflatten handler to reconstruct _StoreEntry.
+    Unflatten handler to reconstruct _StoreElement.
     """
-    cls = aux.cls if aux.cls is not None else _StoreEntry
+    cls = aux.cls if aux.cls is not None else _StoreElement
 
     if aux.keys is None:
         raise ValueError("Missing keys in PyTreeAux for Store unflattening.")
@@ -291,16 +291,18 @@ def _unflatten_store_entry(children: Iterable[Any], aux: PyTreeAux) -> Any:
     # Reconstruct instance
     # Bypass __init__ to handle subclasses (like Store) generically if needed,
     # or just use constructor if safe. Here we mimic generic pytree reconstruction.
-    obj = object.__new__(cls)
+    element = object.__new__(cls)
     # Restore internal data
-    obj._data = dict(zip(keys, children))
+    element._data = dict(zip(keys, children))
 
     # Init hooks if it's a Store (default to None)
-    if isinstance(obj, Store):
-        obj.hook = None
+    if isinstance(element, Store):
+        element.hook = None
 
-    return obj
+    return element
 
 
-# Register _StoreEntry (and Store via inheritance)
-STORE_PYTREE_ENGINE.register(_StoreEntry, _flatten_store_entry, _unflatten_store_entry)
+# Register _StoreElement (and Store via inheritance)
+STORE_PYTREE_ENGINE.register(
+    _StoreElement, _flatten_store_element, _unflatten_store_element
+)
