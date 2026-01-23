@@ -25,6 +25,27 @@ _T = TypeVar("_T")
 _EMPTY_METADATA = types.MappingProxyType({})
 
 
+class StoreConfig:
+    repr_indent: str = "    "
+    repr_newline: str = "\n"
+    repr_suffix: str = ","
+    repr_last_suffix: str = ","
+
+    @classmethod
+    def set_compact_repr(cls):
+        cls.repr_indent = ""
+        cls.repr_newline = ""
+        cls.repr_suffix = ", "
+        cls.repr_last_suffix = ""
+
+    @classmethod
+    def set_pretty_repr(cls):
+        cls.repr_indent = "    "
+        cls.repr_newline = "\n"
+        cls.repr_suffix = ","
+        cls.repr_last_suffix = ","
+
+
 class Ref(Generic[_T]):
     """Immutable dotted ref with cached hash and split parts."""
 
@@ -77,12 +98,10 @@ class _StoreElement:
     NOTE: `_StoreElement` can only be modified through `Store` for consistency.
     """
 
-    def __init__(self, data: Union[dict[str, Any], None] = None) -> None:
-        self._data: dict[str, Any] = data if data is not None else {}
+    def __init__(self, /, **data: Any) -> None:
+        self._data: dict[str, Any] = data
 
-    def __getitem__(self, ref: Union[Ref[_T], str]) -> _T:
-        if isinstance(ref, str):
-            ref = Ref(ref)
+    def __getitem__(self, ref: Ref[_T]) -> _T:
         # Result can be a _StoreElement (subtree) or a raw leaf value.
         result: Any = self._resolve(ref.parts)
         return result
@@ -99,13 +118,31 @@ class _StoreElement:
         return element
 
     def __repr__(self) -> str:
-        sep = ", "
-        data_str = sep.join([f"{k}={v!r}" for k, v in self._data.items()])
-        return f"{type(self).__name__}({data_str})"
+        name = type(self).__name__
+        if not self._data:
+            return f"{name}()"
+        lines = [f"{name}({StoreConfig.repr_newline}"]
+        count = len(self._data)
+        for i, (key, value) in enumerate(self._data.items()):
+            value_lines = repr(value).splitlines(keepends=True)
+            head = (
+                value_lines[0] if value_lines else repr("")
+            )  # NOTE: repr(value) may return ""
+            lines.append(f"{StoreConfig.repr_indent}{key}={head}")
+            for line in value_lines[1:]:
+                lines.append(f"{StoreConfig.repr_indent}{line}")
+            if i == count - 1:
+                lines.append(
+                    f"{StoreConfig.repr_last_suffix}{StoreConfig.repr_newline}"
+                )
+            else:
+                lines.append(f"{StoreConfig.repr_suffix}{StoreConfig.repr_newline}")
+        lines.append(")")
+        return "".join(lines)
 
     def copy(self) -> Self:
         return type(self)(
-            data={
+            **{
                 k: (v.copy() if isinstance(v, _StoreElement) else v)
                 for k, v in self._data.items()
             }
@@ -123,24 +160,18 @@ class _DiffResult:
 class Store(_StoreElement):
     """Dotted-attribute-style nested store."""
 
-    def __init__(
-        self,
-        hook: Union[StoreHook, None] = None,
-        data: Union[dict[str, Any], None] = None,
-    ) -> None:
-        super().__init__(data=data)
-        self.hook = hook
+    def __init__(self, /, **data: Any) -> None:
+        super().__init__(**data)
+        self.hook: Union[StoreHook, None] = None
 
-    def __getitem__(self, ref: Union[Ref[_T], str]) -> _T:
+    def __getitem__(self, ref: Ref[_T]) -> _T:
         value = super().__getitem__(ref)
         if self.hook is not None:
             # Call hook
             self.hook.on_getitem(self, ref, value)
         return value
 
-    def __setitem__(self, ref: Union[Ref[_T], str], value: _T) -> None:
-        if isinstance(ref, str):
-            ref = Ref(ref)
+    def __setitem__(self, ref: Ref[_T], value: _T) -> None:
         *dirs, last = ref.parts
         element = self._touch(dirs)
 
@@ -153,9 +184,7 @@ class Store(_StoreElement):
         else:
             element._data[last] = value
 
-    def __delitem__(self, ref: Union[Ref[_T], str]) -> None:
-        if isinstance(ref, str):
-            ref = Ref(ref)
+    def __delitem__(self, ref: Ref[_T]) -> None:
         *dirs, last = ref.parts
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreElement):

@@ -13,30 +13,30 @@ from .wrapper import NodeWrapper
 
 __all__ = ["get_render_string"]
 
-# Tree rendering constants
-TREE_BRANCH = "├── "
-TREE_LAST = "└── "
-TREE_VERTICAL = "│   "
-TREE_SPACER = "    "
-GROUP_CONNECTOR = "│ => "
-
 # Registry to determine the category of an object during rendering.
-RENDER_TYPE_REGISTRY = TypeRegistry("render_category")
+RENDER_TYPE_REGISTRY = TypeRegistry[Any, str]("render_category")
 RENDER_TYPE_REGISTRY.register("nodes", key=Node)
 RENDER_TYPE_REGISTRY.register("expressions", key=NodeExpression)
 RENDER_TYPE_REGISTRY.register("wrappers", key=NodeWrapper)
 RENDER_TYPE_REGISTRY.register("refs", key=Ref)
 
-# Types that should use the "Grouped" rendering strategy.
-_GROUPED_RENDER_TYPES = (NodeElement,)
 
-# Configuration for grouped rendering: (Category Name, Display Title)
-_CATEGORY_CONFIG = [
-    ("wrappers", "@wrappers"),
-    ("refs", "#refs"),
-    ("expressions", "$expressions"),
-    ("nodes", "(nodes)"),
-]
+# Tree rendering config
+class RenderConfig:
+    tree_branch: str = "├── "
+    tree_last: str = "└── "
+    tree_vertical: str = "│   "
+    tree_spacer: str = "    "
+    group_connector: str = "│ => "
+    # Types that should use the "Grouped" rendering strategy.
+    _grouped_render_types: tuple[type, ...] = (NodeElement,)
+    # Configuration for grouped rendering: (Category Name, Display Title)
+    _category_config: tuple[tuple[str, str], ...] = (
+        ("wrappers", "@wrappers"),
+        ("refs", "#refs"),
+        ("expressions", "$expressions"),
+        ("nodes", "(nodes)"),
+    )
 
 
 @dataclass
@@ -116,7 +116,7 @@ def _build_render_lines(obj: Any) -> _RenderResult:
 
     # 5. Dispatch Rendering Strategy
     lines = []
-    if isinstance(obj, _GROUPED_RENDER_TYPES):
+    if isinstance(obj, RenderConfig._grouped_render_types):
         lines = _render_grouped(flat_children)
     else:
         lines = _render_direct(flat_children)
@@ -136,22 +136,23 @@ def _render_grouped(items: list[_RenderItem]) -> list[str]:
 
     lines = []
     # Filter active categories based on config order
-    active_cats = [(c, t) for c, t in _CATEGORY_CONFIG if classified_children.get(c)]
+    active_cats = [
+        (c, t) for c, t in RenderConfig._category_config if classified_children.get(c)
+    ]
     count = len(active_cats)
 
     for i, (cat_name, cat_title) in enumerate(active_cats):
-        is_last_cat = i == count - 1
         cat_items = classified_children[cat_name]
 
         # Determine the connector/prefix style for the LAST item in this group.
-        if is_last_cat:
-            last_connector = TREE_LAST
-            last_prefix = TREE_SPACER
+        if i == count - 1:
+            last_connector = RenderConfig.tree_last
+            last_prefix = RenderConfig.tree_spacer
         else:
-            last_connector = TREE_BRANCH
-            last_prefix = TREE_VERTICAL
+            last_connector = RenderConfig.tree_branch
+            last_prefix = RenderConfig.tree_vertical
 
-        lines.append(f"{GROUP_CONNECTOR}{cat_title}")
+        lines.append(f"{RenderConfig.group_connector}{cat_title}")
         lines.extend(_render_children_lines(cat_items, last_connector, last_prefix))
 
     return lines
@@ -162,7 +163,9 @@ def _render_direct(items: list[_RenderItem]) -> list[str]:
     Strategy: Render children linearly.
     """
     # Direct rendering implies no subsequent groups, so the last item always terminates.
-    return _render_children_lines(items, TREE_LAST, TREE_SPACER)
+    return _render_children_lines(
+        items, RenderConfig.tree_last, RenderConfig.tree_spacer
+    )
 
 
 def _render_children_lines(
@@ -180,15 +183,13 @@ def _render_children_lines(
     lines = []
     count = len(items)
     for i, item in enumerate(items):
-        is_last = i == count - 1
-
         # Select connector and prefix based on position
-        if is_last:
+        if i == count - 1:
             connector = last_connector
             prefix = last_prefix
         else:
-            connector = TREE_BRANCH
-            prefix = TREE_VERTICAL
+            connector = RenderConfig.tree_branch
+            prefix = RenderConfig.tree_vertical
 
         child_header = _get_node_header(item.child)
         lines.append(f"{connector}{item.key} {child_header}")
