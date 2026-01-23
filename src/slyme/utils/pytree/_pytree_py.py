@@ -589,8 +589,5 @@ class PyTreeEngine:
         return expr
 
 
-# Register the default pytree engine.
-default_pytree_engine = PyTreeEngine("default")
 # Global registry to manage Tree instances.
 PYTREE_ENGINE_REGISTRY: Registry[PyTreeEngine] = Registry("pytree_engine")
-PYTREE_ENGINE_REGISTRY.register(default_pytree_engine, key="default")
