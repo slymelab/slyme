@@ -49,12 +49,7 @@ class SequenceKey(PyTreeKey):
     index: int
 
     def resolve(self, element: Any) -> Any:
-        try:
-            return element[self.index]
-        except (IndexError, TypeError) as e:
-            raise KeyError(
-                f"Cannot access index {self.index} from element of type {type(element).__name__}"
-            ) from e
+        return element[self.index]
 
     def codify(self, parent_expr: str) -> str:
         return f"{parent_expr}[{self.index}]"
@@ -67,12 +62,7 @@ class MappingKey(PyTreeKey):
     key: Hashable
 
     def resolve(self, element: Any) -> Any:
-        try:
-            return element[self.key]
-        except (KeyError, TypeError) as e:
-            raise KeyError(
-                f"Cannot access key {self.key!r} from element of type {type(element).__name__}"
-            ) from e
+        return element[self.key]
 
     def codify(self, parent_expr: str) -> str:
         return f"{parent_expr}[{repr(self.key)}]"
@@ -85,12 +75,7 @@ class AttributeKey(PyTreeKey):
     name: str
 
     def resolve(self, element: Any) -> Any:
-        try:
-            return getattr(element, self.name)
-        except AttributeError as e:
-            raise KeyError(
-                f"Cannot access attribute {self.name!r} from element of type {type(element).__name__}"
-            ) from e
+        return getattr(element, self.name)
 
     def codify(self, parent_expr: str) -> str:
         return f"{parent_expr}.{self.name}"
