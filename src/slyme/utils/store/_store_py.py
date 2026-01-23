@@ -18,10 +18,12 @@ from slyme.utils.pytree import (
     PyTreeAux,
     MappingKey,
     PYTREE_ENGINE_REGISTRY,
+    KeyPath,
 )
 from .hook import StoreHook
 
 _T = TypeVar("_T")
+_T2 = TypeVar("_T2")
 _EMPTY_METADATA = types.MappingProxyType({})
 
 
@@ -58,6 +60,10 @@ class Ref(Generic[_T]):
         return self.__dict__["parts"]
 
     @property
+    def lens(self) -> KeyPath:
+        return self.__dict__["lens"]
+
+    @property
     def hash(self) -> int:
         return self.__dict__["hash"]
 
@@ -65,7 +71,9 @@ class Ref(Generic[_T]):
     def metadata(self) -> Mapping[Any, Any]:
         return self.__dict__["metadata"]
 
-    def __init__(self, path: str, metadata: Optional[Mapping] = None) -> None:
+    def __init__(
+        self, path: str, /, *, lens: KeyPath = (), metadata: Optional[Mapping] = None
+    ) -> None:
         if not path:
             raise ValueError("Empty ref path")
         parts = tuple(path.split("."))
@@ -73,24 +81,38 @@ class Ref(Generic[_T]):
             raise ValueError(f"Invalid ref path: {path!r}")
         self.__dict__["path"] = path
         self.__dict__["parts"] = parts
-        self.__dict__["hash"] = hash(parts)
+        self.__dict__["lens"] = lens
+        self.__dict__["hash"] = hash((parts, lens))  # NOTE: hash both parts and lens
         self.__dict__["metadata"] = (
             types.MappingProxyType(metadata)
             if metadata is not None
             else _EMPTY_METADATA
         )
 
+    def resolve(self, pytree) -> _T:
+        return PyTreeEngine.get_element(pytree, self.lens)
+
     def __hash__(self) -> int:
         return self.hash
 
     def __eq__(self, other: Any) -> bool:
-        return isinstance(other, Ref) and self.parts == other.parts
+        return (
+            isinstance(other, Ref)
+            and self.parts == other.parts
+            and self.lens == other.lens
+        )
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.extra_repr()})"
 
     def extra_repr(self) -> str:
-        return f"path={self.path!r}, metadata={self.metadata!r}"
+        return f"path={self.path!r}, lens_expr={PyTreeEngine.codify_path(self.lens)}, metadata={self.metadata!r}"
+
+
+class _StorePathError(KeyError):
+    """Internal exception raised when a path cannot be resolved in the store."""
+
+    pass
 
 
 class _StoreElement:
@@ -104,7 +126,21 @@ class _StoreElement:
     def __getitem__(self, ref: Ref[_T]) -> _T:
         # Result can be a _StoreElement (subtree) or a raw leaf value.
         result: Any = self._resolve(ref.parts)
-        return result
+        return ref.resolve(result)
+
+    def get(self, ref: Ref[_T], default: _T2 = None) -> Union[_T, _T2]:
+        try:
+            return self[ref]
+        except _StorePathError:
+            return default
+
+    def __contains__(self, ref: Ref[_T]) -> bool:
+        try:
+            self._resolve(ref.parts)
+        except _StorePathError:
+            return False
+        else:
+            return True
 
     def _resolve(self, parts: Iterable[str]) -> Any:
         """Resolve the path parts and get the final element or value."""
@@ -113,8 +149,11 @@ class _StoreElement:
             if not isinstance(element, _StoreElement):
                 # If we encounter a leaf value mid-path, it's a path error
                 # (blocking the traversal).
-                raise KeyError(f"Path {parts} blocked by leaf value at {p!r}")
-            element = element._data[p]
+                raise _StorePathError(f"Path {parts} blocked by leaf value at {p!r}")
+            try:
+                element = element._data[p]
+            except KeyError:
+                raise _StorePathError(p) from None
         return element
 
     def __repr__(self) -> str:
@@ -188,7 +227,7 @@ class Store(_StoreElement):
         *dirs, last = ref.parts
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreElement):
-            raise KeyError(f"Parent path not found for {ref!r}")
+            raise _StorePathError(f"Parent path not found for {ref!r}")
 
         if self.hook is not None:
             # Get the old value first
@@ -210,7 +249,7 @@ class Store(_StoreElement):
                 element._data[p] = nxt
             elif not isinstance(nxt, _StoreElement):
                 # Conflict: path segment exists but is a leaf value
-                raise KeyError(f"Conflict: {p!r} is already a leaf value.")
+                raise _StorePathError(f"Conflict: {p!r} is already a leaf value.")
             element = nxt
         return element
 

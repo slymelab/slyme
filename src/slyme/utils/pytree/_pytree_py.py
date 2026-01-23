@@ -579,7 +579,7 @@ class PyTreeEngine:
         return current
 
     @staticmethod
-    def codify_path(path: KeyPath, root_name: str = "tree") -> str:
+    def codify_path(path: KeyPath, root_name: str = "$") -> str:
         """
         Generate the Python code string corresponding to the path.
         """
