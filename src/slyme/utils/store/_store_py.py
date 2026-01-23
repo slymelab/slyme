@@ -243,8 +243,8 @@ class Store(_StoreElement):
         new element if the element not exists."""
         element: _StoreElement = self
         for p in parts:
-            nxt: Any = element._data.get(p)
-            if nxt is None:
+            nxt: Any = element._data.get(p, MISSING)
+            if nxt is MISSING:
                 nxt = _StoreElement()
                 element._data[p] = nxt
             elif not isinstance(nxt, _StoreElement):
