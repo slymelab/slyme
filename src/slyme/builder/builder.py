@@ -21,29 +21,24 @@ class Builder(ABC, Generic[_NodeT]):
         )
 
     @abstractmethod
-    def _build(self) -> _NodeT:
+    def build(self) -> _NodeT:
         """
         Build the node structure.
         """
         pass
 
-    def build(self, check_structure: bool = True) -> _NodeT:
+    def __call__(self, check_structure: bool = True) -> _NodeT:
         """
         Perform a complete build operation for building node structure.
         """
-        node = self._build()
+        node = self.build()
         if node is None:
             raise ValueError(
-                f"The `_build` method of {type(self).__name__} returned None. "
+                f"The `build` method of {type(self).__name__} returned None. "
                 "Did you forget to return the constructed Node?"
             )
         for extension in self.extensions:
-            node = extension.apply(node)
-            if node is None:
-                raise ValueError(
-                    f"Extension {type(extension).__name__}.apply returned None. "
-                    "Extensions must explicitly return the node instance."
-                )
+            node = extension(node)
         if check_structure:
             check_node_structure(node)
         return node

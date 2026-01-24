@@ -13,6 +13,15 @@ class BuilderExtension(ABC, Generic[_NodeT]):
     @abstractmethod
     def apply(self, node: _NodeT) -> _NodeT:
         """
-        Build operations after ``_build`` is called.
+        Build operations after ``build`` is called.
         """
         pass
+
+    def __call__(self, node: _NodeT) -> _NodeT:
+        node = self.apply(node)
+        if node is None:
+            raise ValueError(
+                f"Extension {type(self).__name__}.apply returned None. "
+                "Extensions must explicitly return the node instance."
+            )
+        return node
