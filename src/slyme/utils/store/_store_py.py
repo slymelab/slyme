@@ -10,6 +10,7 @@ from typing import (
     Literal,
     cast,
     Optional,
+    overload,
 )
 from typing_extensions import Self
 from slyme.utils.constant import MISSING
@@ -128,7 +129,11 @@ class _StoreElement:
         result: Any = self._resolve(ref.parts)
         return ref.resolve(result)
 
-    def get(self, ref: Ref[_T], default: _T2 = None) -> Union[_T, _T2]:
+    @overload
+    def get(self, ref: Ref[_T], default: None = None) -> Union[_T, None]: ...
+    @overload
+    def get(self, ref: Ref[_T], default: _T2) -> Union[_T, _T2]: ...
+    def get(self, ref: Ref[_T], default: Optional[_T2] = None) -> Union[_T, _T2, None]:
         try:
             return self[ref]
         except _StorePathError:
