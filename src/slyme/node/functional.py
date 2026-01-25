@@ -5,6 +5,7 @@ Functional API for slyme nodes.
 import inspect
 from functools import wraps, partial
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import (
     TypeVar,
     ParamSpec,
@@ -14,6 +15,7 @@ from typing import (
     Generator,
     Union,
     overload,
+    Optional,
 )
 from slyme.utils.constant import Missing, MISSING
 from slyme.node import Node, NodeExpression, NodeWrapper
@@ -112,29 +114,94 @@ def _process_kwargs(
     return final_kwargs
 
 
+@dataclass(frozen=True)
+class _FunctionalConfig:
+    func: Callable
+    kw_params: list[inspect.Parameter]
+    cm_factory: Optional[Callable] = None
+
+
+class _FunctionalNode(Node):
+    def __init__(self, config: _FunctionalConfig, /, **kwargs):
+        self._config = config
+        # 1. Validate & Fill Defaults
+        kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
+
+        # 2. Extract Super Args (Explicit Logic for Node)
+        super_kwargs = {}
+        # Node supports 'node_wrappers'. We explicitly look for it.
+        if "node_wrappers" in kwargs:
+            super_kwargs["node_wrappers"] = kwargs.pop("node_wrappers")
+
+        # 3. Super Init
+        super().__init__(**super_kwargs)
+
+        # 4. Bind remaining attributes (All validation/defaults handled in step 1)
+        for name, val in kwargs.items():
+            setattr(self, name, val)
+
+    def execute(self, ctx: Context, /) -> None:
+        config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
+        return self._config.func(ctx, **config_kwargs)
+
+
+class _FunctionalExpression(NodeExpression):
+    def __init__(self, config: _FunctionalConfig, /, **kwargs):
+        self._config = config
+        # 1. Validate & Fill Defaults
+        kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
+
+        # 3. Super Init (NodeExpression usually doesn't take node_wrappers)
+        super().__init__()
+
+        # 4. Bind remaining attributes
+        for name, val in kwargs.items():
+            setattr(self, name, val)
+
+    def evaluate(self, ctx: Context, /) -> Any:
+        config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
+        return self._config.func(ctx, **config_kwargs)
+
+
+class _FunctionalWrapper(NodeWrapper):
+    def __init__(self, config: _FunctionalConfig, /, **kwargs):
+        self._config = config
+        # 1. Validate & Fill Defaults
+        kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
+
+        # 3. Super Init (NodeWrapper usually doesn't take node_wrappers)
+        super().__init__()
+
+        # 4. Bind remaining attributes
+        for name, val in kwargs.items():
+            setattr(self, name, val)
+
+    @contextmanager
+    def wrap(self, ctx: Context, wrapped: Node, /) -> Generator[None, None, None]:
+        config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
+        factory = (
+            self._config.cm_factory if self._config.cm_factory else self._config.func
+        )
+        with factory(ctx, wrapped, **config_kwargs):
+            yield
+
+
 def _create_factory(
-    func: Callable, cls: type, public_sig: inspect.Signature
+    cls: type, config: _FunctionalConfig, public_sig: inspect.Signature
 ) -> Callable:
     """
     Creates the factory function that looks like the original function but returns a class instance.
     """
 
-    @wraps(func)
+    @wraps(config.func)
     def factory(**kwargs):
-        return cls(**kwargs)
+        return cls(config, **kwargs)
 
     # Masquerade the signature
     factory.__signature__ = public_sig  # type: ignore
     # Backdoor for testing
     factory.cls = cls  # type: ignore
     return factory
-
-
-def _copy_metadata(cls: type, func: Callable) -> None:
-    cls.__name__ = func.__name__
-    cls.__qualname__ = func.__qualname__
-    cls.__module__ = func.__module__
-    cls.__doc__ = func.__doc__
 
 
 # --- Functional Decorators ---
@@ -156,30 +223,8 @@ def _node(func: NodeFunc[P], /) -> Callable[P, Node]:
             f"but found {len(pos_params)}."
         )
 
-    class FunctionalNode(Node):
-        def __init__(self, /, **kwargs):
-            # 1. Validate & Fill Defaults
-            kwargs = _process_kwargs(func.__name__, kw_params, kwargs)
-
-            # 2. Extract Super Args (Explicit Logic for Node)
-            super_kwargs = {}
-            # Node supports 'node_wrappers'. We explicitly look for it.
-            if "node_wrappers" in kwargs:
-                super_kwargs["node_wrappers"] = kwargs.pop("node_wrappers")
-
-            # 3. Super Init
-            super().__init__(**super_kwargs)
-
-            # 4. Bind remaining attributes (All validation/defaults handled in step 1)
-            for name, val in kwargs.items():
-                setattr(self, name, val)
-
-        def execute(self, ctx: Context, /) -> None:
-            config_kwargs = {p.name: getattr(self, p.name) for p in kw_params}
-            return func(ctx, **config_kwargs)
-
-    _copy_metadata(FunctionalNode, func)
-    return _create_factory(func, FunctionalNode, public_sig)
+    config = _FunctionalConfig(func=func, kw_params=kw_params)
+    return _create_factory(_FunctionalNode, config, public_sig)
 
 
 @overload
@@ -208,24 +253,8 @@ def _expression(func: ExpressionFunc[P, R], /) -> Callable[P, NodeExpression[R]]
             f"but found {len(pos_params)}."
         )
 
-    class FunctionalExpression(NodeExpression):
-        def __init__(self, /, **kwargs):
-            # 1. Validate & Fill Defaults
-            kwargs = _process_kwargs(func.__name__, kw_params, kwargs)
-
-            # 3. Super Init (NodeExpression usually doesn't take node_wrappers)
-            super().__init__()
-
-            # 4. Bind remaining attributes
-            for name, val in kwargs.items():
-                setattr(self, name, val)
-
-        def evaluate(self, ctx: Context, /) -> R:
-            config_kwargs = {p.name: getattr(self, p.name) for p in kw_params}
-            return func(ctx, **config_kwargs)
-
-    _copy_metadata(FunctionalExpression, func)
-    return _create_factory(func, FunctionalExpression, public_sig)
+    config = _FunctionalConfig(func=func, kw_params=kw_params)
+    return _create_factory(_FunctionalExpression, config, public_sig)
 
 
 @overload
@@ -258,27 +287,8 @@ def _wrapper(func: WrapperFunc[P], /) -> Callable[P, NodeWrapper]:
         )
 
     _cm_factory = contextmanager(func)
-
-    class FunctionalWrapper(NodeWrapper):
-        def __init__(self, /, **kwargs):
-            # 1. Validate & Fill Defaults
-            kwargs = _process_kwargs(func.__name__, kw_params, kwargs)
-
-            # 3. Super Init (NodeWrapper usually doesn't take node_wrappers)
-            super().__init__()
-
-            # 4. Bind remaining attributes
-            for name, val in kwargs.items():
-                setattr(self, name, val)
-
-        @contextmanager
-        def wrap(self, ctx: Context, wrapped: Node, /) -> Generator[None, None, None]:
-            config_kwargs = {p.name: getattr(self, p.name) for p in kw_params}
-            with _cm_factory(ctx, wrapped, **config_kwargs):
-                yield
-
-    _copy_metadata(FunctionalWrapper, func)
-    return _create_factory(func, FunctionalWrapper, public_sig)
+    config = _FunctionalConfig(func=func, kw_params=kw_params, cm_factory=_cm_factory)
+    return _create_factory(_FunctionalWrapper, config, public_sig)
 
 
 @overload
