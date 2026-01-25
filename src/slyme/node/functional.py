@@ -155,6 +155,9 @@ class _FunctionalNode(Node):
         config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
         return self._config.func(ctx, **config_kwargs)
 
+    def type_repr(self) -> str:
+        return self._config.func.__name__
+
 
 class _FunctionalExpression(NodeExpression):
     def __init__(self, config: _ExpressionConfig, /, **kwargs):
@@ -172,6 +175,9 @@ class _FunctionalExpression(NodeExpression):
     def evaluate(self, ctx: Context, /) -> Any:
         config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
         return self._config.func(ctx, **config_kwargs)
+
+    def type_repr(self) -> str:
+        return self._config.func.__name__
 
 
 class _FunctionalWrapper(NodeWrapper):
@@ -192,6 +198,9 @@ class _FunctionalWrapper(NodeWrapper):
         config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
         with self._config.cm_factory(ctx, wrapped, **config_kwargs):
             yield
+
+    def type_repr(self) -> str:
+        return self._config.func.__name__
 
 
 # Union type for configs

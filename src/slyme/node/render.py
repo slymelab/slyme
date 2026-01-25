@@ -5,7 +5,7 @@ Node rendering module.
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Optional, Union
-from slyme.utils.protocol import HasExtraRepr
+from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
 from slyme.utils.registry import TypeRegistry
 from slyme.utils.store import Ref
 from .base import NodeElement, Node, NodeExpression, NODE_PYTREE_ENGINE
@@ -68,10 +68,16 @@ def get_render_string(obj: Any) -> str:
     return "\n".join([header] + result.lines)
 
 
-def _get_node_header(obj: Union[Any, HasExtraRepr]) -> str:
+def _get_node_header(obj: Union[Any, HasExtraRepr, HasTypeRepr]) -> str:
     """Resolve the display header for a single object."""
-    type_name = type(obj).__name__
-    extra_repr: str = getattr(obj, "extra_repr", lambda: "")()
+    if isinstance(obj, HasTypeRepr):
+        type_name = obj.type_repr()
+    else:
+        type_name = type(obj).__name__
+    if isinstance(obj, HasExtraRepr):
+        extra_repr = obj.extra_repr()
+    else:
+        extra_repr = ""
     return f"{type_name}({extra_repr})" if extra_repr else type_name
 
 

@@ -46,6 +46,9 @@ class NodeElement(ABC):
     def extra_repr(self) -> str:
         return ""
 
+    def type_repr(self) -> str:
+        return type(self).__name__
+
 
 # NOTE: Register the node pytree engine.
 NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
