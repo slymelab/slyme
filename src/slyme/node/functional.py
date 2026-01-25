@@ -4,7 +4,7 @@ Functional API for slyme nodes.
 
 import inspect
 from functools import wraps, partial
-from contextlib import contextmanager
+from contextlib import contextmanager, AbstractContextManager
 from dataclasses import dataclass
 from typing import (
     TypeVar,
@@ -29,6 +29,10 @@ __all__ = [
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _T = TypeVar("_T")
+NodeFunc = Callable[Concatenate[Context, _P], None]
+ExpressionFunc = Callable[Concatenate[Context, _P], _R]
+WrapperFunc = Callable[Concatenate[Context, Node, _P], Generator[Any, None, None]]
+WrapperCMFactory = Callable[Concatenate[Context, Node, _P], AbstractContextManager[Any]]
 
 
 @dataclass(frozen=True)
@@ -126,21 +130,21 @@ def _process_kwargs(
 
 @dataclass(frozen=True)
 class _NodeConfig:
-    func: Callable
+    func: NodeFunc
     kw_params: list[inspect.Parameter]
 
 
 @dataclass(frozen=True)
 class _ExpressionConfig:
-    func: Callable
+    func: ExpressionFunc
     kw_params: list[inspect.Parameter]
 
 
 @dataclass(frozen=True)
 class _WrapperConfig:
-    func: Callable
+    func: WrapperFunc
     kw_params: list[inspect.Parameter]
-    cm_factory: Callable
+    cm_factory: WrapperCMFactory
 
 
 class _FunctionalNode(Node):
@@ -176,7 +180,7 @@ class _FunctionalExpression(NodeExpression):
         # 1. Validate & Fill Defaults
         kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
 
-        # 3. Super Init (NodeExpression usually doesn't take node_wrappers)
+        # 3. Super Init
         super().__init__()
 
         # 4. Bind remaining attributes
@@ -197,7 +201,7 @@ class _FunctionalWrapper(NodeWrapper):
         # 1. Validate & Fill Defaults
         kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
 
-        # 3. Super Init (NodeWrapper usually doesn't take node_wrappers)
+        # 3. Super Init
         super().__init__()
 
         # 4. Bind remaining attributes
@@ -207,8 +211,8 @@ class _FunctionalWrapper(NodeWrapper):
     @contextmanager
     def wrap(self, ctx: Context, wrapped: Node, /) -> Generator[None, None, None]:
         config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
-        with self._config.cm_factory(ctx, wrapped, **config_kwargs):
-            yield
+        with self._config.cm_factory(ctx, wrapped, **config_kwargs) as val:
+            yield val
 
     def type_repr(self) -> str:
         return self._config.func.__name__
@@ -234,12 +238,6 @@ def _create_factory(
     # Backdoor for testing
     factory.cls = cls
     return factory
-
-
-# --- Functional Decorators ---
-NodeFunc = Callable[Concatenate[Context, _P], None]
-ExpressionFunc = Callable[Concatenate[Context, _P], _R]
-WrapperFunc = Callable[Concatenate[Context, Node, _P], Generator[Any, None, None]]
 
 
 def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
