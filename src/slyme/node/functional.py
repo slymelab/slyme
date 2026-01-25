@@ -157,7 +157,7 @@ def _node(func: NodeFunc[P], /) -> Callable[P, Node]:
         )
 
     class FunctionalNode(Node):
-        def __init__(self, **kwargs):
+        def __init__(self, /, **kwargs):
             # 1. Validate & Fill Defaults
             kwargs = _process_kwargs(func.__name__, kw_params, kwargs)
 
@@ -174,7 +174,7 @@ def _node(func: NodeFunc[P], /) -> Callable[P, Node]:
             for name, val in kwargs.items():
                 setattr(self, name, val)
 
-        def execute(self, ctx: Context) -> None:
+        def execute(self, ctx: Context, /) -> None:
             config_kwargs = {p.name: getattr(self, p.name) for p in kw_params}
             return func(ctx, **config_kwargs)
 
@@ -209,7 +209,7 @@ def _expression(func: ExpressionFunc[P, R], /) -> Callable[P, NodeExpression[R]]
         )
 
     class FunctionalExpression(NodeExpression):
-        def __init__(self, **kwargs):
+        def __init__(self, /, **kwargs):
             # 1. Validate & Fill Defaults
             kwargs = _process_kwargs(func.__name__, kw_params, kwargs)
 
@@ -220,7 +220,7 @@ def _expression(func: ExpressionFunc[P, R], /) -> Callable[P, NodeExpression[R]]
             for name, val in kwargs.items():
                 setattr(self, name, val)
 
-        def evaluate(self, ctx: Context) -> R:
+        def evaluate(self, ctx: Context, /) -> R:
             config_kwargs = {p.name: getattr(self, p.name) for p in kw_params}
             return func(ctx, **config_kwargs)
 
@@ -260,7 +260,7 @@ def _wrapper(func: WrapperFunc[P], /) -> Callable[P, NodeWrapper]:
     _cm_factory = contextmanager(func)
 
     class FunctionalWrapper(NodeWrapper):
-        def __init__(self, **kwargs):
+        def __init__(self, /, **kwargs):
             # 1. Validate & Fill Defaults
             kwargs = _process_kwargs(func.__name__, kw_params, kwargs)
 
@@ -272,7 +272,7 @@ def _wrapper(func: WrapperFunc[P], /) -> Callable[P, NodeWrapper]:
                 setattr(self, name, val)
 
         @contextmanager
-        def wrap(self, ctx: Context, wrapped: Node) -> Generator[None, None, None]:
+        def wrap(self, ctx: Context, wrapped: Node, /) -> Generator[None, None, None]:
             config_kwargs = {p.name: getattr(self, p.name) for p in kw_params}
             with _cm_factory(ctx, wrapped, **config_kwargs):
                 yield
