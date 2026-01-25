@@ -209,7 +209,7 @@ class _FunctionalWrapper(NodeWrapper):
             setattr(self, name, val)
 
     @contextmanager
-    def wrap(self, ctx: Context, wrapped: Node, /) -> Generator[None, None, None]:
+    def wrap(self, ctx: Context, wrapped: Node, /) -> Generator[Any, None, None]:
         config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
         with self._config.cm_factory(ctx, wrapped, **config_kwargs) as val:
             yield val
