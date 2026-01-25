@@ -13,6 +13,7 @@ from typing import (
     Any,
     Generator,
     Union,
+    overload,
 )
 from slyme.utils.constant import Missing, MISSING
 from slyme.node import Node, NodeExpression, NodeWrapper
@@ -181,9 +182,13 @@ def _node(func: NodeFunc[P], /) -> Callable[P, Node]:
     return _create_factory(func, FunctionalNode, public_sig)
 
 
+@overload
+def node(func: Missing = MISSING, /) -> Callable[[NodeFunc[P]], Callable[P, Node]]: ...
+@overload
+def node(func: NodeFunc[P], /) -> Callable[P, Node]: ...
 def node(
     func: Union[NodeFunc[P], Missing] = MISSING, /
-):
+) -> Union[Callable[[NodeFunc[P]], Callable[P, Node]], Callable[P, Node]]:
     if func is MISSING:
         return partial(_node)
     else:
@@ -223,9 +228,16 @@ def _expression(func: ExpressionFunc[P, R], /) -> Callable[P, NodeExpression[R]]
     return _create_factory(func, FunctionalExpression, public_sig)
 
 
+@overload
 def expression(
-    func: Union[ExpressionFunc[P, R], Missing] = MISSING, /
-):
+    func: Missing = MISSING, /
+) -> Callable[[ExpressionFunc[P, R]], Callable[P, NodeExpression[R]]]: ...
+@overload
+def expression(func: ExpressionFunc[P, R], /) -> Callable[P, NodeExpression[R]]: ...
+def expression(func: Union[ExpressionFunc[P, R], Missing] = MISSING, /) -> Union[
+    Callable[[ExpressionFunc[P, R]], Callable[P, NodeExpression[R]]],
+    Callable[P, NodeExpression[R]],
+]:
     if func is MISSING:
         return partial(_expression)
     else:
@@ -269,7 +281,17 @@ def _wrapper(func: WrapperFunc[P], /) -> Callable[P, NodeWrapper]:
     return _create_factory(func, FunctionalWrapper, public_sig)
 
 
-def wrapper(func: Union[WrapperFunc[P], Missing] = MISSING, /):
+@overload
+def wrapper(
+    func: Missing = MISSING, /
+) -> Callable[[WrapperFunc[P]], Callable[P, NodeWrapper]]: ...
+@overload
+def wrapper(func: WrapperFunc[P], /) -> Callable[P, NodeWrapper]: ...
+def wrapper(
+    func: Union[WrapperFunc[P], Missing] = MISSING, /
+) -> Union[
+    Callable[[WrapperFunc[P]], Callable[P, NodeWrapper]], Callable[P, NodeWrapper]
+]:
     if func is MISSING:
         return partial(_wrapper)
     else:
