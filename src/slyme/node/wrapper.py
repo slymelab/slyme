@@ -20,12 +20,12 @@ class NodeWrapper(NodeElement):
 
     @abstractmethod
     @contextmanager
-    def wrap(self, ctx: Context, wrapped: Node) -> Generator:
+    def wrap(self, ctx: Context, wrapped: Node, /) -> Generator:
         """Core node wrapper API for custom operations."""
         yield
 
     @contextmanager
-    def __call__(self, ctx: Context, wrapped: Node) -> Generator:
+    def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
         """A mixin method that wraps the generator returned by ``_execute_yield``."""
         try:
             with self.wrap(ctx, wrapped) as val:

@@ -105,19 +105,22 @@ NODE_PYTREE_ENGINE.register(
 # Custom base classes.
 class Node(NodeElement):
     """ """
+
     # TODO: Helper function for nodes/expressions/refs/check_structure/check_dependency, etc.
 
-    def __init__(self, /, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs):
+    def __init__(
+        self, /, *, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs
+    ):
         super().__init__(**kwargs)
         self.node_wrappers = list(node_wrappers) if node_wrappers is not None else []
 
     # Core APIs.
     @abstractmethod
-    def execute(self, ctx: Context) -> None:
+    def execute(self, ctx: Context, /) -> None:
         """Custom execution operations."""
         pass
 
-    def __call__(self, ctx: Context) -> None:
+    def __call__(self, ctx: Context, /) -> None:
         """Outer execute API."""
         try:
             with ExitStack() as stack:
@@ -149,10 +152,10 @@ class Node(NodeElement):
 class NodeExpression(NodeElement, Generic[_R]):
 
     @abstractmethod
-    def evaluate(self, ctx: Context) -> _R:
+    def evaluate(self, ctx: Context, /) -> _R:
         pass
 
-    def __call__(self, ctx: Context) -> _R:
+    def __call__(self, ctx: Context, /) -> _R:
         try:
             return self.evaluate(ctx)
         # directly raise
