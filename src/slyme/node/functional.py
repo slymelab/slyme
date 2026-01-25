@@ -15,7 +15,6 @@ from typing import (
     Generator,
     Union,
     overload,
-    Optional,
 )
 from slyme.utils.constant import Missing, MISSING
 from slyme.node import Node, NodeExpression, NodeWrapper
@@ -115,14 +114,26 @@ def _process_kwargs(
 
 
 @dataclass(frozen=True)
-class _FunctionalConfig:
+class _NodeConfig:
     func: Callable
     kw_params: list[inspect.Parameter]
-    cm_factory: Optional[Callable] = None
+
+
+@dataclass(frozen=True)
+class _ExpressionConfig:
+    func: Callable
+    kw_params: list[inspect.Parameter]
+
+
+@dataclass(frozen=True)
+class _WrapperConfig:
+    func: Callable
+    kw_params: list[inspect.Parameter]
+    cm_factory: Callable
 
 
 class _FunctionalNode(Node):
-    def __init__(self, config: _FunctionalConfig, /, **kwargs):
+    def __init__(self, config: _NodeConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Fill Defaults
         kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
@@ -146,7 +157,7 @@ class _FunctionalNode(Node):
 
 
 class _FunctionalExpression(NodeExpression):
-    def __init__(self, config: _FunctionalConfig, /, **kwargs):
+    def __init__(self, config: _ExpressionConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Fill Defaults
         kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
@@ -164,7 +175,7 @@ class _FunctionalExpression(NodeExpression):
 
 
 class _FunctionalWrapper(NodeWrapper):
-    def __init__(self, config: _FunctionalConfig, /, **kwargs):
+    def __init__(self, config: _WrapperConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Fill Defaults
         kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
@@ -179,15 +190,16 @@ class _FunctionalWrapper(NodeWrapper):
     @contextmanager
     def wrap(self, ctx: Context, wrapped: Node, /) -> Generator[None, None, None]:
         config_kwargs = {p.name: getattr(self, p.name) for p in self._config.kw_params}
-        factory = (
-            self._config.cm_factory if self._config.cm_factory else self._config.func
-        )
-        with factory(ctx, wrapped, **config_kwargs):
+        with self._config.cm_factory(ctx, wrapped, **config_kwargs):
             yield
 
 
+# Union type for configs
+_Config = Union[_NodeConfig, _ExpressionConfig, _WrapperConfig]
+
+
 def _create_factory(
-    cls: type, config: _FunctionalConfig, public_sig: inspect.Signature
+    cls: type, config: _Config, public_sig: inspect.Signature
 ) -> Callable:
     """
     Creates the factory function that looks like the original function but returns a class instance.
@@ -198,9 +210,9 @@ def _create_factory(
         return cls(config, **kwargs)
 
     # Masquerade the signature
-    factory.__signature__ = public_sig  # type: ignore
+    factory.__signature__ = public_sig
     # Backdoor for testing
-    factory.cls = cls  # type: ignore
+    factory.cls = cls
     return factory
 
 
@@ -223,7 +235,7 @@ def _node(func: NodeFunc[P], /) -> Callable[P, Node]:
             f"but found {len(pos_params)}."
         )
 
-    config = _FunctionalConfig(func=func, kw_params=kw_params)
+    config = _NodeConfig(func=func, kw_params=kw_params)
     return _create_factory(_FunctionalNode, config, public_sig)
 
 
@@ -253,7 +265,7 @@ def _expression(func: ExpressionFunc[P, R], /) -> Callable[P, NodeExpression[R]]
             f"but found {len(pos_params)}."
         )
 
-    config = _FunctionalConfig(func=func, kw_params=kw_params)
+    config = _ExpressionConfig(func=func, kw_params=kw_params)
     return _create_factory(_FunctionalExpression, config, public_sig)
 
 
@@ -287,7 +299,7 @@ def _wrapper(func: WrapperFunc[P], /) -> Callable[P, NodeWrapper]:
         )
 
     _cm_factory = contextmanager(func)
-    config = _FunctionalConfig(func=func, kw_params=kw_params, cm_factory=_cm_factory)
+    config = _WrapperConfig(func=func, kw_params=kw_params, cm_factory=_cm_factory)
     return _create_factory(_FunctionalWrapper, config, public_sig)
 
 
