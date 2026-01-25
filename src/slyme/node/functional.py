@@ -1,10 +1,9 @@
 """
 Functional API for slyme nodes.
-Allows defining Nodes, Expressions, and Wrappers using decorated functions with strict signature constraints.
 """
 
 import inspect
-import functools
+from functools import wraps, partial
 from contextlib import contextmanager
 from typing import (
     TypeVar,
@@ -13,7 +12,9 @@ from typing import (
     Callable,
     Any,
     Generator,
+    Union,
 )
+from slyme.utils.constant import Missing, MISSING
 from slyme.node import Node, NodeExpression, NodeWrapper
 from slyme.context import Context
 
@@ -23,13 +24,8 @@ __all__ = [
     "wrapper",
 ]
 
-# --- Type Hints Helpers ---
-
 P = ParamSpec("P")
 R = TypeVar("R")
-
-
-# --- Shared Inspection Utilities ---
 
 
 def _analyze_signature(
@@ -122,7 +118,7 @@ def _create_factory(
     Creates the factory function that looks like the original function but returns a class instance.
     """
 
-    @functools.wraps(func)
+    @wraps(func)
     def factory(**kwargs):
         return cls(**kwargs)
 
@@ -141,9 +137,12 @@ def _copy_metadata(cls: type, func: Callable) -> None:
 
 
 # --- Functional Decorators ---
+NodeFunc = Callable[Concatenate[Context, P], None]
+ExpressionFunc = Callable[Concatenate[Context, P], R]
+WrapperFunc = Callable[Concatenate[Context, Node, P], Generator[Any, None, None]]
 
 
-def node(func: Callable[Concatenate[Context, P], None]) -> Callable[P, Node]:
+def _node(func: NodeFunc[P], /) -> Callable[P, Node]:
     """
     Decorator to convert a function into a Node factory.
     Requires exactly 1 POSITIONAL_ONLY argument: ctx.
@@ -182,9 +181,16 @@ def node(func: Callable[Concatenate[Context, P], None]) -> Callable[P, Node]:
     return _create_factory(func, FunctionalNode, public_sig)
 
 
-def expression(
-    func: Callable[Concatenate[Context, P], R],
-) -> Callable[P, NodeExpression[R]]:
+def node(
+    func: Union[NodeFunc[P], Missing] = MISSING, /
+):
+    if func is MISSING:
+        return partial(_node)
+    else:
+        return _node(func)
+
+
+def _expression(func: ExpressionFunc[P, R], /) -> Callable[P, NodeExpression[R]]:
     """
     Decorator to convert a function into a NodeExpression factory.
     Requires exactly 1 POSITIONAL_ONLY argument: ctx.
@@ -217,9 +223,16 @@ def expression(
     return _create_factory(func, FunctionalExpression, public_sig)
 
 
-def wrapper(
-    func: Callable[Concatenate[Context, Node, P], Generator[Any, None, None]],
-) -> Callable[P, NodeWrapper]:
+def expression(
+    func: Union[ExpressionFunc[P, R], Missing] = MISSING, /
+):
+    if func is MISSING:
+        return partial(_expression)
+    else:
+        return _expression(func)
+
+
+def _wrapper(func: WrapperFunc[P], /) -> Callable[P, NodeWrapper]:
     """
     Decorator to convert a generator function into a NodeWrapper factory.
     Requires exactly 2 POSITIONAL_ONLY arguments: ctx, wrapped.
@@ -254,3 +267,10 @@ def wrapper(
 
     _copy_metadata(FunctionalWrapper, func)
     return _create_factory(func, FunctionalWrapper, public_sig)
+
+
+def wrapper(func: Union[WrapperFunc[P], Missing] = MISSING, /):
+    if func is MISSING:
+        return partial(_wrapper)
+    else:
+        return _wrapper(func)
