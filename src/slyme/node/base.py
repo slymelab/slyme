@@ -1,13 +1,12 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from typing import (
     TypeVar,
     Any,
     Generic,
     cast,
-    TYPE_CHECKING,
 )
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from slyme.utils.constant import STOP
 from slyme.utils.collection import SequenceData
 from slyme.utils.pytree import (
@@ -22,10 +21,8 @@ from .exception import (
     NodeExceptionRecord,
     NodeException,
     NodeExpressionExceptionRecord,
+    NodeWrapperExceptionRecord,
 )
-
-if TYPE_CHECKING:
-    from .wrapper import NodeWrapper
 
 _R = TypeVar("_R")
 
@@ -167,6 +164,37 @@ class NodeExpression(NodeElement, Generic[_R]):
         # wrap other Exception
         except Exception as e:
             raise NodeExpressionExceptionRecord(exception_node=self, exception=e)
+
+
+class NodeWrapper(NodeElement):
+    """Defines the interface for auxiliary logic attached to a Node.
+
+    Design Note:
+        NodeWrappers are not considered "first-class citizens" of the primary
+        graph topology. Instead, they serve as supplementary components that
+        decorate, intercept, or augment the execution flow of their host Node.
+    """
+
+    @abstractmethod
+    @contextmanager
+    def wrap(self, ctx: Context, wrapped: Node, /) -> Generator:
+        """Core node wrapper API for custom operations."""
+        yield
+
+    @contextmanager
+    def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
+        """A mixin method that wraps the generator returned by ``_execute_yield``."""
+        try:
+            with self.wrap(ctx, wrapped) as val:
+                yield val
+        # directly raise
+        except NodeException:
+            raise
+        # wrap other Exception
+        except Exception as e:
+            raise NodeWrapperExceptionRecord(
+                exception_node=self, wrapped_node=wrapped, exception=e
+            )
 
 
 from .render import get_render_string

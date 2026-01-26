@@ -17,8 +17,8 @@ from typing import (
     overload,
 )
 from slyme.utils.constant import Missing, MISSING
-from slyme.node import Node, NodeExpression, NodeWrapper
 from slyme.context import Context
+from .base import Node, NodeExpression, NodeWrapper
 
 __all__ = [
     "node",

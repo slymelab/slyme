@@ -13,9 +13,9 @@ from slyme.node.base import (
     NodeElement,
     Node,
     NodeExpression,
+    NodeWrapper,
     NODE_PYTREE_ENGINE,
 )
-from slyme.node.wrapper import NodeWrapper
 
 __all__ = [
     "DEPENDENCY_REGISTRY",
