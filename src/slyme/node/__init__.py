@@ -1,4 +1,4 @@
-from .base import NodeElement, Node, NodeExpression, NodeWrapper
+from .base import NodeElement, Node, NodeExpression, NodeWrapper, STOP
 from .validator import (
     check_node_structure,
     DEPENDENCY_REGISTRY,
@@ -12,6 +12,7 @@ __all__ = [
     "Node",
     "NodeExpression",
     "NodeWrapper",
+    "STOP",
     "check_node_structure",
     "DEPENDENCY_REGISTRY",
     "vanilla_dependency_check",

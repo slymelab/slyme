@@ -3,6 +3,7 @@ A convenient registry util that dynamically retrieves items based on keys.
 """
 
 import inspect
+from enum import Enum
 from collections.abc import Callable, Iterable
 from typing import (
     Union,
@@ -11,12 +12,13 @@ from typing import (
     cast,
 )
 from .collection import MutableMappingProxy
-from .constant import MISSING, Missing
 
 _T = TypeVar("_T")
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 _VT2 = TypeVar("_VT2")
+_Missing = Enum("Missing", ["MARK"])
+_MISSING = _Missing.MARK
 
 
 class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
@@ -30,46 +32,46 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
 
     def __init__(
         self,
-        namespace: Union[str, Missing] = MISSING,
+        namespace: Union[str, _Missing] = _MISSING,
         /,
         *,
         strict: bool = True,
     ):
         super().__init__()
-        self.namespace = repr(self) if namespace is MISSING else namespace
+        self.namespace = repr(self) if namespace is _MISSING else namespace
         self.strict = strict
 
-    def _resolve_strict(self, strict: Union[bool, Missing] = MISSING):
+    def _resolve_strict(self, strict: Union[bool, _Missing] = _MISSING):
         """
         Parse the given ``strict`` value. If ``strict`` is ``MISSING``, then
         return ``self.strict`` (i.e., the config of the registry), else
         directly return ``strict`` (which will override the registry config
         when registering a specific item).
         """
-        return strict if strict is not MISSING else self.strict
+        return strict if strict is not _MISSING else self.strict
 
     @overload
     def register(
         self,
-        obj: Missing = MISSING,
+        obj: _Missing = _MISSING,
         *,
-        key: Union[_KT, Missing] = MISSING,
-        strict: Union[bool, Missing] = MISSING,
+        key: Union[_KT, _Missing] = _MISSING,
+        strict: Union[bool, _Missing] = _MISSING,
     ) -> Callable[[_VT2], _VT2]: ...
     @overload
     def register(
         self,
         obj: _VT2,
         *,
-        key: Union[_KT, Missing] = MISSING,
-        strict: Union[bool, Missing] = MISSING,
+        key: Union[_KT, _Missing] = _MISSING,
+        strict: Union[bool, _Missing] = _MISSING,
     ) -> _VT2: ...
     def register(
         self,
-        obj: Union[_VT2, Missing] = MISSING,
+        obj: Union[_VT2, _Missing] = _MISSING,
         *,
-        key: Union[_KT, Missing] = MISSING,
-        strict: Union[bool, Missing] = MISSING,
+        key: Union[_KT, _Missing] = _MISSING,
+        strict: Union[bool, _Missing] = _MISSING,
     ) -> Union[Callable[[_VT2], _VT2], _VT2]:
         """
         Register an item. Can be used as a decorator or a normal method.
@@ -79,12 +81,12 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
             self._register(cast("_VT", _obj), key, strict)
             return _obj
 
-        if obj is MISSING:
+        if obj is _MISSING:
             return decorator
         else:
             return decorator(obj)
 
-    def unregister(self, key: _KT, *, strict: Union[bool, Missing] = MISSING) -> None:
+    def unregister(self, key: _KT, *, strict: Union[bool, _Missing] = _MISSING) -> None:
         """
         Unregister an item by its key.
         """
@@ -96,13 +98,13 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
                 raise
 
     def _register(
-        self, obj: _VT, key: Union[_KT, Missing], strict: Union[bool, Missing]
+        self, obj: _VT, key: Union[_KT, _Missing], strict: Union[bool, _Missing]
     ) -> None:
         """
         Core register method. Can be overridden by subclasses for extended features.
         """
         strict = self._resolve_strict(strict)
-        if key is MISSING:
+        if key is _MISSING:
             # The key should be explicitly specified or be properly handled by subclasses,
             # so it should never be ``MISSING`` here.
             raise ValueError(
@@ -136,16 +138,16 @@ class Registry(GeneralRegistry[str, _VT]):
     """
 
     def _register(
-        self, obj: _VT, key: Union[str, Missing], strict: Union[bool, Missing]
+        self, obj: _VT, key: Union[str, _Missing], strict: Union[bool, _Missing]
     ) -> None:
         """
         Core register method. If ``key`` is not specified, get the ``__name__`` of
         ``obj`` as ``key``.
         """
-        if key is MISSING:
+        if key is _MISSING:
             # Try to get the ``__name__`` of ``obj`` if ``key`` is not specified.
-            key = getattr(obj, "__name__", MISSING)
-        if key is MISSING:
+            key = getattr(obj, "__name__", _MISSING)
+        if key is _MISSING:
             raise ValueError(
                 f"Registry cannot correctly infer the ``key`` when registering "
                 f"``{repr(obj)}`` in registry {self.namespace}. Neither is the ``key`` "
@@ -162,7 +164,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
 
     def __init__(
         self,
-        namespace: Union[str, Missing] = MISSING,
+        namespace: Union[str, _Missing] = _MISSING,
         /,
         *,
         strict: bool = True,
@@ -171,7 +173,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         super().__init__(namespace, strict=strict)
         self.orthogonal = orthogonal
 
-    def _register(self, obj: _VT, key: type[_KT], strict: Union[bool, Missing]) -> None:
+    def _register(self, obj: _VT, key: type[_KT], strict: Union[bool, _Missing]) -> None:
         if not isinstance(key, type):
             raise TypeError(f"TypeRegistry key must be a class, got {type(key)}.")
         # Check orthogonal.
@@ -227,7 +229,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
 
     @overload
     def lookup(
-        self, key: type[_KT], default: Missing = MISSING, *, reverse: bool = False
+        self, key: type[_KT], default: _Missing = _MISSING, *, reverse: bool = False
     ) -> _VT: ...
     @overload
     def lookup(
@@ -236,7 +238,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
     def lookup(
         self,
         key: type[_KT],
-        default: Union[Missing, _VT, _T] = MISSING,
+        default: Union[_Missing, _VT, _T] = _MISSING,
         *,
         reverse: bool = False,
     ) -> Union[_VT, _T]:
@@ -250,7 +252,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         found_cls_key = self.lookup_cls(key, reverse=reverse)
         if found_cls_key is not None:
             return self[found_cls_key]
-        if default is MISSING:
+        if default is _MISSING:
             raise KeyError(f"{key} cannot be correctly resolved in {self.namespace}.")
         return default
 

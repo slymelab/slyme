@@ -4,6 +4,7 @@ Functional API for slyme nodes.
 
 import inspect
 import types
+from enum import Enum
 from functools import wraps, partial
 from contextlib import contextmanager, AbstractContextManager
 from dataclasses import dataclass
@@ -22,7 +23,6 @@ from typing import (
     get_args,
     Mapping,
 )
-from slyme.utils.constant import Missing, MISSING
 from slyme.context import Context
 from .base import Node, NodeExpression, NodeWrapper
 
@@ -41,8 +41,8 @@ ExpressionFunc = Callable[Concatenate[Context, _P], _R]
 WrapperFunc = Callable[Concatenate[Context, Node, _P], Generator[Any, None, None]]
 WrapperCMFactory = Callable[Concatenate[Context, Node, _P], AbstractContextManager[Any]]
 
-# Private sentinel to strictly distinguish "Not Provided" from "User Provided MISSING/None"
-_NOT_PROVIDED = object()
+_Missing = Enum("Missing", ["MARK"])
+_MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True)
@@ -51,38 +51,29 @@ class Param:
     Dependency injection metadata for functional node parameters.
     """
 
-    default: Union[Any, Missing] = MISSING
-    default_factory: Union[Callable[[], Any], Missing] = MISSING
+    default: Union[Any, _Missing] = _MISSING
+    default_factory: Union[Callable[[], Any], _Missing] = _MISSING
 
     def __post_init__(self):
-        if self.default is not MISSING and self.default_factory is not MISSING:
+        if self.default is not _MISSING and self.default_factory is not _MISSING:
             raise ValueError(
                 "Cannot specify both `default` and `default_factory` in Param."
             )
 
-    def resolve(self, value: Any = _NOT_PROVIDED) -> Any:
+    def resolve(self, value: Any = _MISSING) -> Any:
         """
         Resolve the final value for the parameter.
-        
-        Args:
-            value: The value provided by the user. If NOT provided, 
-                   the sentinel `_NOT_PROVIDED` is passed.
-
-        Note:
-            If the user explicitly passes `MISSING` (slyme.utils.constant.MISSING),
-            it is treated as a valid value and returned as-is, adhering to the principle
-            that explicit user input overrides defaults.
         """
         # 1. User provided value takes precedence (even if it is None or MISSING).
-        if value is not _NOT_PROVIDED:
+        if value is not _MISSING:
             return value
 
         # 2. Check static default.
-        if self.default is not MISSING:
+        if self.default is not _MISSING:
             return self.default
 
         # 3. Check default factory.
-        if self.default_factory is not MISSING:
+        if self.default_factory is not _MISSING:
             return self.default_factory()
 
         # 4. No value provided and no default available.
@@ -234,14 +225,14 @@ def _process_kwargs(
         
         # Check existence using standard python dict behavior
         is_provided = name in kwargs
-        user_value = kwargs[name] if is_provided else _NOT_PROVIDED
+        user_value = kwargs[name] if is_provided else _MISSING
         
-        default_container = defaults.get(name, MISSING)
+        default_container = defaults.get(name, _MISSING)
 
         # Case A: Default is a Param object -> Resolve it
         if isinstance(default_container, Param):
             try:
-                # Pass user value (or _NOT_PROVIDED) to resolve logic
+                # Pass user value (or MISSING) to resolve logic
                 final_kwargs[name] = default_container.resolve(user_value)
             except Exception as e:
                 raise ValueError(
@@ -249,7 +240,7 @@ def _process_kwargs(
                 ) from e
 
         # Case B: Default is a standard value (and not MISSING)
-        elif default_container is not MISSING:
+        elif default_container is not _MISSING:
             # Only use standard default if user did NOT provide a value.
             # If user provided None or MISSING explicitly, we respect it.
             if not is_provided:
@@ -409,14 +400,14 @@ def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
 
 @overload
 def node(
-    func: Missing = MISSING, /
+    func: _Missing = _MISSING, /
 ) -> Callable[[NodeFunc[_P]], Callable[_P, Node]]: ...
 @overload
 def node(func: NodeFunc[_P], /) -> Callable[_P, Node]: ...
 def node(
-    func: Union[NodeFunc[_P], Missing] = MISSING, /
+    func: Union[NodeFunc[_P], _Missing] = _MISSING, /
 ) -> Union[Callable[[NodeFunc[_P]], Callable[_P, Node]], Callable[_P, Node]]:
-    if func is MISSING:
+    if func is _MISSING:
         return partial(_node)
     else:
         return _node(func)
@@ -443,15 +434,15 @@ def _expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[
 
 @overload
 def expression(
-    func: Missing = MISSING, /
+    func: _Missing = _MISSING, /
 ) -> Callable[[ExpressionFunc[_P, _R]], Callable[_P, NodeExpression[_R]]]: ...
 @overload
 def expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[_R]]: ...
-def expression(func: Union[ExpressionFunc[_P, _R], Missing] = MISSING, /) -> Union[
+def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
     Callable[[ExpressionFunc[_P, _R]], Callable[_P, NodeExpression[_R]]],
     Callable[_P, NodeExpression[_R]],
 ]:
-    if func is MISSING:
+    if func is _MISSING:
         return partial(_expression)
     else:
         return _expression(func)
@@ -482,16 +473,16 @@ def _wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]:
 
 @overload
 def wrapper(
-    func: Missing = MISSING, /
+    func: _Missing = _MISSING, /
 ) -> Callable[[WrapperFunc[_P]], Callable[_P, NodeWrapper]]: ...
 @overload
 def wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]: ...
 def wrapper(
-    func: Union[WrapperFunc[_P], Missing] = MISSING, /
+    func: Union[WrapperFunc[_P], _Missing] = _MISSING, /
 ) -> Union[
     Callable[[WrapperFunc[_P]], Callable[_P, NodeWrapper]], Callable[_P, NodeWrapper]
 ]:
-    if func is MISSING:
+    if func is _MISSING:
         return partial(_wrapper)
     else:
         return _wrapper(func)

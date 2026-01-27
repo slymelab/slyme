@@ -1,4 +1,5 @@
 import types
+from enum import Enum
 from dataclasses import dataclass
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
@@ -13,7 +14,6 @@ from typing import (
     overload,
 )
 from typing_extensions import Self
-from slyme.utils.constant import MISSING
 from slyme.utils.pytree import (
     PyTreeEngine,
     PyTreeAux,
@@ -26,6 +26,8 @@ from .hook import StoreHook
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
 _EMPTY_METADATA = types.MappingProxyType({})
+Missing = Enum("Missing", ["MARK"])
+MISSING = Missing.MARK
 
 
 class StoreConfig:

@@ -2,11 +2,10 @@
 
 from dataclasses import dataclass
 from typing import Union, Any, TYPE_CHECKING, TypeVar
-from slyme.utils.constant import Missing
 from slyme.utils.collection import MutableSequenceProxy
 
 if TYPE_CHECKING:
-    from .store import Store, Ref
+    from .store import Store, Ref, Missing
 _StoreHookT = TypeVar("_StoreHookT", bound="StoreHook")
 
 
@@ -18,14 +17,14 @@ class StoreHook:
         self,
         instance: "Store",
         ref: "Ref",
-        old_value: Union[Missing, Any],
+        old_value: Union["Missing", Any],
         new_value: Any,
         /,
     ) -> None:
         pass
 
     def on_delitem(
-        self, instance: "Store", ref: "Ref", old_value: Union[Missing, Any], /
+        self, instance: "Store", ref: "Ref", old_value: Union["Missing", Any], /
     ) -> None:
         pass
 
@@ -39,7 +38,7 @@ class StoreHookList(StoreHook, MutableSequenceProxy[_StoreHookT]):
         self,
         instance: "Store",
         ref: "Ref",
-        old_value: Union[Missing, Any],
+        old_value: Union["Missing", Any],
         new_value: Any,
         /,
     ) -> None:
@@ -47,7 +46,7 @@ class StoreHookList(StoreHook, MutableSequenceProxy[_StoreHookT]):
             hook.on_setitem(instance, ref, old_value, new_value)
 
     def on_delitem(
-        self, instance: "Store", ref: "Ref", old_value: Union[Missing, Any], /
+        self, instance: "Store", ref: "Ref", old_value: Union["Missing", Any], /
     ) -> None:
         for hook in self:
             hook.on_delitem(instance, ref, old_value)
@@ -91,13 +90,13 @@ class RecordHook(StoreHook):
         self,
         instance: "Store",
         ref: "Ref",
-        old_value: Union[Missing, Any],
+        old_value: Union["Missing", Any],
         new_value: Any,
         /,
     ) -> None:
         self.records.append(SetitemRecord(instance, ref, old_value, new_value))
 
     def on_delitem(
-        self, instance: "Store", ref: "Ref", old_value: Union[Missing, Any], /
+        self, instance: "Store", ref: "Ref", old_value: Union["Missing", Any], /
     ) -> None:
         self.records.append(DelitemRecord(instance, ref, old_value))

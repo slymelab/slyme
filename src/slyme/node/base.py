@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from enum import Enum
 from collections.abc import Generator, Iterable
 from typing import (
     TypeVar,
@@ -7,7 +8,6 @@ from typing import (
     cast,
 )
 from contextlib import ExitStack, contextmanager
-from slyme.utils.constant import STOP
 from slyme.utils.collection import SequenceData
 from slyme.utils.pytree import (
     AttributeKey,
@@ -25,6 +25,8 @@ from .exception import (
 )
 
 _R = TypeVar("_R")
+Stop = Enum("Stop", ["MARK"])
+STOP = Stop.MARK
 
 
 class NodeElement(ABC):
