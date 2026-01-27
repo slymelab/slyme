@@ -7,8 +7,7 @@ from typing import Any, Union, Protocol
 from collections.abc import Callable
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.pytree import AttributeKey
-from slyme.utils.store import Ref
-from slyme.context import Context, Dep, DEP
+from slyme.context import Context, Dep, DEP, Ref
 from slyme.node.base import (
     NodeElement,
     Node,

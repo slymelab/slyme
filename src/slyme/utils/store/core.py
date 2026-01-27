@@ -71,11 +71,11 @@ class Ref(Generic[_T]):
         return self.__dict__["hash"]
 
     @property
-    def metadata(self) -> Mapping[Any, Any]:
+    def metadata(self) -> Mapping[str, Any]:
         return self.__dict__["metadata"]
 
     def __init__(
-        self, path: str, /, *, lens: KeyPath = (), metadata: Optional[Mapping] = None
+        self, path: str, /, *, lens: KeyPath = (), metadata: Optional[Mapping[str, Any]] = None
     ) -> None:
         if not path:
             raise ValueError("Empty ref path")
@@ -94,6 +94,12 @@ class Ref(Generic[_T]):
 
     def resolve(self, pytree) -> _T:
         return PyTreeEngine.get_element(pytree, self.lens)
+
+    def update_metadata(self, metadata: Mapping[str, Any]) -> Self:
+        """Returns a new Ref with updated metadata (merging with existing)."""
+        new_metadata = dict(self.metadata)
+        new_metadata.update(metadata)
+        return type(self)(self.path, lens=self.lens, metadata=new_metadata)
 
     def __hash__(self) -> int:
         return self.hash

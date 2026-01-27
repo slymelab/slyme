@@ -20,14 +20,16 @@ from typing import (
     get_origin,
     get_args,
     Mapping,
+    Optional,
 )
 from typing_extensions import ParamSpec, Concatenate
 from slyme.utils.common import enrich_exception
-from slyme.context import Context
+from slyme.context import Context, Ref
 from .base import Node, NodeExpression, NodeWrapper
 
 __all__ = [
     "Spec",
+    "RefSpec",
     "node",
     "expression",
     "wrapper",
@@ -71,6 +73,33 @@ class Spec:
         if self.default_factory is not _MISSING:
             return self.default_factory()
         raise ValueError("Missing required parameter.")
+
+
+@dataclass(frozen=True)
+class RefSpec(Spec):
+    """
+    Specialized Spec for Ref parameters, allowing metadata injection and type enforcement.
+    """
+    metadata: Optional[Mapping[str, Any]] = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.metadata is not None:
+            object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
+
+    def resolve(self, value: Union[_Missing, Ref] = _MISSING) -> Ref:
+        # 1. Resolve the value using the base Spec logic (handling defaults)
+        value = super().resolve(value)
+        # 2. Type check: Ensure the resolved value is strictly a Ref
+        if not isinstance(value, Ref):
+            raise TypeError(
+                f"The resolved value for this parameter must be an instance of 'Ref', "
+                f"but got '{type(value).__name__}'."
+            )
+        # 3. Metadata injection: Update the Ref's metadata if specified in Spec
+        if self.metadata is not None:
+            return value.update_metadata(self.metadata)
+        return value
 
 
 @dataclass(frozen=True)
