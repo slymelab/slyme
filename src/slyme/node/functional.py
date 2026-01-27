@@ -47,8 +47,9 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
+# Spec Definitions
 @dataclass(frozen=True)
-class Spec:
+class _Spec:
     """
     Dependency injection metadata for functional node parameters.
     """
@@ -76,7 +77,7 @@ class Spec:
 
 
 @dataclass(frozen=True)
-class RefSpec(Spec):
+class _RefSpec(_Spec):
     """
     Specialized Spec for Ref parameters, allowing metadata injection and type enforcement.
     """
@@ -102,16 +103,46 @@ class RefSpec(Spec):
         return value
 
 
+# Spec Functions
+def Spec(
+    default: Union[Any, _Missing] = _MISSING,
+    default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
+) -> Any:
+    """
+    Factory function for creating a _Spec instance.
+    Returns Any to bypass type checker errors when assigned as a default value.
+    """
+    return _Spec(default=default, default_factory=default_factory)
+
+
+def RefSpec(
+    default: Union[Any, _Missing] = _MISSING,
+    default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
+    *,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> Any:
+    """
+    Factory function for creating a _RefSpec instance.
+    Returns Any to bypass type checker errors when assigned as a default value.
+    """
+    return _RefSpec(
+        default=default, 
+        default_factory=default_factory, 
+        metadata=metadata
+    )
+
+
+# Inspect operations.
 @dataclass(frozen=True)
 class _SignatureAnalysis:
     pos_only_params: list[inspect.Parameter]
     kw_only_params: list[inspect.Parameter]
     public_signature: inspect.Signature
-    specs: Mapping[str, Spec]
+    specs: Mapping[str, _Spec]
 
 
-def _resolve_spec(param: inspect.Parameter, hint: Any) -> Union[Spec, _Missing]:
-    spec_obj: Union[_Missing, Spec] = _MISSING
+def _resolve_spec(param: inspect.Parameter, hint: Any) -> Union[_Spec, _Missing]:
+    spec_obj: Union[_Missing, _Spec] = _MISSING
     # 1. Check for Annotated
     if get_origin(hint) is Annotated:
         # NOTE: For now we only support Annotated[T, Spec],
@@ -123,7 +154,7 @@ def _resolve_spec(param: inspect.Parameter, hint: Any) -> Union[Spec, _Missing]:
                 f"Currently, only a single `Spec` metadata is allowed, but found {len(args) - 1} items."
             )
         candidate = args[1]
-        if not isinstance(candidate, Spec):
+        if not isinstance(candidate, _Spec):
             raise TypeError(
                 f"Invalid Annotated metadata for parameter '{param.name}'."
                 f"Expected explicit `Spec` instance, but got {type(candidate).__name__}. "
@@ -141,12 +172,12 @@ def _resolve_spec(param: inspect.Parameter, hint: Any) -> Union[Spec, _Missing]:
                 f"Please remove the standard default value assignment."
             )
         return spec_obj
-    elif isinstance(param.default, Spec):
+    elif isinstance(param.default, _Spec):
         # Spec is specified through func default value.
         return param.default
     elif param.default is not inspect.Parameter.empty:
         # Create a new Spec using default value.
-        return Spec(default=param.default)
+        return _Spec(default=param.default)
     else:
         return _MISSING
 
@@ -173,7 +204,7 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
     pos_only_params = []
     kw_only_params = []
     public_params = []  # Used for factory signature
-    specs: dict[str, Spec] = {}
+    specs: dict[str, _Spec] = {}
 
     type_hints = get_type_hints(func, include_extras=True)
 
@@ -211,7 +242,7 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
 
 def _process_kwargs(
     kw_params: list[inspect.Parameter],
-    specs: Mapping[str, Spec],
+    specs: Mapping[str, _Spec],
     kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """
@@ -255,24 +286,25 @@ def _process_kwargs(
 class _NodeConfig:
     func: NodeFunc
     kw_params: list[inspect.Parameter]
-    specs: Mapping[str, Spec]
+    specs: Mapping[str, _Spec]
 
 
 @dataclass(frozen=True)
 class _ExpressionConfig:
     func: ExpressionFunc
     kw_params: list[inspect.Parameter]
-    specs: Mapping[str, Spec]
+    specs: Mapping[str, _Spec]
 
 
 @dataclass(frozen=True)
 class _WrapperConfig:
     func: WrapperFunc
     kw_params: list[inspect.Parameter]
-    specs: Mapping[str, Spec]
+    specs: Mapping[str, _Spec]
     cm_factory: WrapperCMFactory
 
 
+# Node Elements
 class _FunctionalNode(Node):
     def __init__(self, config: _NodeConfig, /, **kwargs):
         self._config = config
@@ -362,6 +394,7 @@ def _create_factory(
     return factory
 
 
+# Decorators
 def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
     """
     Decorator to convert a function into a Node factory.
