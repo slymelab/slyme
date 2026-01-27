@@ -1,6 +1,7 @@
 import logging
 from functools import wraps
-from typing import TypeVar, ParamSpec, Concatenate, Callable
+from typing import TypeVar, Callable
+from typing_extensions import ParamSpec, Concatenate
 
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")

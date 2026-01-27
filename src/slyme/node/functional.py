@@ -10,8 +10,6 @@ from contextlib import contextmanager, AbstractContextManager
 from dataclasses import dataclass
 from typing import (
     TypeVar,
-    ParamSpec,
-    Concatenate,
     Callable,
     Any,
     Generator,
@@ -23,6 +21,7 @@ from typing import (
     get_args,
     Mapping,
 )
+from typing_extensions import ParamSpec, Concatenate
 from slyme.context import Context
 from .base import Node, NodeExpression, NodeWrapper
 
@@ -43,6 +42,23 @@ WrapperCMFactory = Callable[Concatenate[Context, Node, _P], AbstractContextManag
 
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
+
+
+@contextmanager
+def _error_scope(
+    info: str,
+    exc_types: Union[type[Exception], tuple[type[Exception], ...]] = (
+        TypeError,
+        ValueError,
+    ),
+) -> Generator[None, None, None]:
+    """
+    Context manager to enrich validation errors with context info.
+    """
+    try:
+        yield
+    except exc_types as e:
+        raise type(e)(f"{e} {info}") from e
 
 
 @dataclass(frozen=True)
@@ -147,25 +163,28 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
     specs: dict[str, Spec] = {}
 
     type_hints = get_type_hints(func, include_extras=True)
+
     for p in params:
-        if p.kind == inspect.Parameter.POSITIONAL_ONLY:
-            pos_only_params.append(p)
-        elif p.kind == inspect.Parameter.KEYWORD_ONLY:
-            kw_only_params.append(p)
-            public_params.append(p)
-            # Spec Resolution Logic
-            spec = _resolve_spec(p, type_hints.get(p.name))
-            if spec is not _MISSING:
-                specs[p.name] = spec
-        else:
-            # Strictly forbid ordinary arguments (*args, **kwargs, or args without / or *)
-            kind_name = str(p.kind)
-            raise TypeError(
-                f"Function '{func.__name__}' has an invalid parameter '{p.name}' of kind {kind_name}. "
-                f"Functional nodes strict rules:\n"
-                f"  1. Runtime args (e.g. ctx) must be POSITIONAL_ONLY (before '/').\n"
-                f"  2. Config args must be KEYWORD_ONLY (after '*')."
-            )
+        # Use error scope for each parameter to provide fine-grained context
+        with _error_scope(f"in definition of '{func.__name__}'"):
+            if p.kind == inspect.Parameter.POSITIONAL_ONLY:
+                pos_only_params.append(p)
+            elif p.kind == inspect.Parameter.KEYWORD_ONLY:
+                kw_only_params.append(p)
+                public_params.append(p)
+                # Spec Resolution Logic
+                spec = _resolve_spec(p, type_hints.get(p.name))
+                if spec is not _MISSING:
+                    specs[p.name] = spec
+            else:
+                # Strictly forbid ordinary arguments (*args, **kwargs, or args without / or *)
+                kind_name = str(p.kind)
+                raise TypeError(
+                    f"Invalid parameter '{p.name}' of kind {kind_name}. "
+                    f"Functional nodes strict rules:\n"
+                    f"  1. Runtime args (e.g. ctx) must be POSITIONAL_ONLY (before '/').\n"
+                    f"  2. Config args must be KEYWORD_ONLY (after '*')."
+                )
 
     # The factory signature should hide the runtime args.
     public_signature = sig.replace(parameters=public_params)
@@ -178,7 +197,6 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
 
 
 def _process_kwargs(
-    instance_name: str,
     kw_params: list[inspect.Parameter],
     specs: Mapping[str, Spec],
     kwargs: dict[str, Any],
@@ -199,7 +217,7 @@ def _process_kwargs(
     unknown_args = input_names - allowed_names
     if unknown_args:
         raise TypeError(
-            f"Got unexpected keyword argument(s) {list(unknown_args)} for '{instance_name}'. "
+            f"Got unexpected keyword argument(s) {list(unknown_args)}. "
             f"Allowed arguments: {list(allowed_names)}."
         )
 
@@ -210,13 +228,13 @@ def _process_kwargs(
         # Apply Spec.
         value = kwargs.get(name, _MISSING)
         if name in specs:
-            value = specs[name].resolve(value)
+            with _error_scope(f"for parameter '{name}'"):
+                value = specs[name].resolve(value)
+
         if value is not _MISSING:
             final_kwargs[name] = value
         else:
-            raise ValueError(
-                f"Missing required configuration argument '{name}' for '{instance_name}'."
-            )
+            raise ValueError(f"Missing required configuration argument '{name}'.")
     return final_kwargs
 
 
@@ -246,9 +264,8 @@ class _FunctionalNode(Node):
     def __init__(self, config: _NodeConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Apply Specs
-        kwargs = _process_kwargs(
-            config.func.__name__, config.kw_params, config.specs, kwargs
-        )
+        with _error_scope(f"for '{config.func.__name__}'"):
+            kwargs = _process_kwargs(config.kw_params, config.specs, kwargs)
         # 2. Extract Super Args (Explicit Logic for Node)
         super_kwargs = {}
         # Node supports "node_wrappers". We explicitly look for it.
@@ -272,9 +289,8 @@ class _FunctionalExpression(NodeExpression):
     def __init__(self, config: _ExpressionConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Apply Specs
-        kwargs = _process_kwargs(
-            config.func.__name__, config.kw_params, config.specs, kwargs
-        )
+        with _error_scope(f"for '{config.func.__name__}'"):
+            kwargs = _process_kwargs(config.kw_params, config.specs, kwargs)
         # 2. Super Init
         super().__init__()
         # 3. Bind remaining attributes
@@ -293,9 +309,8 @@ class _FunctionalWrapper(NodeWrapper):
     def __init__(self, config: _WrapperConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Apply Specs
-        kwargs = _process_kwargs(
-            config.func.__name__, config.kw_params, config.specs, kwargs
-        )
+        with _error_scope(f"for '{config.func.__name__}'"):
+            kwargs = _process_kwargs(config.kw_params, config.specs, kwargs)
         # 2. Super Init
         super().__init__()
         # 3. Bind remaining attributes
