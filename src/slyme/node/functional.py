@@ -22,6 +22,7 @@ from typing import (
     Mapping,
 )
 from typing_extensions import ParamSpec, Concatenate
+from slyme.utils.common import enrich_exception
 from slyme.context import Context
 from .base import Node, NodeExpression, NodeWrapper
 
@@ -42,23 +43,6 @@ WrapperCMFactory = Callable[Concatenate[Context, Node, _P], AbstractContextManag
 
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
-
-
-@contextmanager
-def _error_scope(
-    info: str,
-    exc_types: Union[type[Exception], tuple[type[Exception], ...]] = (
-        TypeError,
-        ValueError,
-    ),
-) -> Generator[None, None, None]:
-    """
-    Context manager to enrich validation errors with context info.
-    """
-    try:
-        yield
-    except exc_types as e:
-        raise type(e)(f"{e} {info}") from e
 
 
 @dataclass(frozen=True)
@@ -166,7 +150,7 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
 
     for p in params:
         # Use error scope for each parameter to provide fine-grained context
-        with _error_scope(f"in definition of '{func.__name__}'"):
+        with enrich_exception(f"in definition of '{func.__name__}'"):
             if p.kind == inspect.Parameter.POSITIONAL_ONLY:
                 pos_only_params.append(p)
             elif p.kind == inspect.Parameter.KEYWORD_ONLY:
@@ -228,7 +212,7 @@ def _process_kwargs(
         # Apply Spec.
         value = kwargs.get(name, _MISSING)
         if name in specs:
-            with _error_scope(f"for parameter '{name}'"):
+            with enrich_exception(f"for parameter '{name}'"):
                 value = specs[name].resolve(value)
 
         if value is not _MISSING:
@@ -264,7 +248,7 @@ class _FunctionalNode(Node):
     def __init__(self, config: _NodeConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Apply Specs
-        with _error_scope(f"for '{config.func.__name__}'"):
+        with enrich_exception(f"for '{config.func.__name__}'"):
             kwargs = _process_kwargs(config.kw_params, config.specs, kwargs)
         # 2. Extract Super Args (Explicit Logic for Node)
         super_kwargs = {}
@@ -289,7 +273,7 @@ class _FunctionalExpression(NodeExpression):
     def __init__(self, config: _ExpressionConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Apply Specs
-        with _error_scope(f"for '{config.func.__name__}'"):
+        with enrich_exception(f"for '{config.func.__name__}'"):
             kwargs = _process_kwargs(config.kw_params, config.specs, kwargs)
         # 2. Super Init
         super().__init__()
@@ -309,7 +293,7 @@ class _FunctionalWrapper(NodeWrapper):
     def __init__(self, config: _WrapperConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Apply Specs
-        with _error_scope(f"for '{config.func.__name__}'"):
+        with enrich_exception(f"for '{config.func.__name__}'"):
             kwargs = _process_kwargs(config.kw_params, config.specs, kwargs)
         # 2. Super Init
         super().__init__()

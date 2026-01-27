@@ -127,3 +127,33 @@ def make_params_hashable(
 
 # NOTE: Other module blocks should be placed below (including the related
 # imports) in order to avoid possible circular imports.
+import sys
+from contextlib import contextmanager
+from collections.abc import Generator
+
+
+class EnrichedRuntimeError(RuntimeError):
+    pass
+
+
+@contextmanager
+def enrich_exception(
+    info: str,
+    exc_types: Union[type[Exception], tuple[type[Exception], ...]] = Exception,
+) -> Generator[None, None, None]:
+    """
+    Context manager to enrich exceptions with context info.
+    """
+    try:
+        yield
+    except exc_types as e:
+        # Strategy 1: Modern Python (Preferred)
+        if sys.version_info >= (3, 11):
+            e.add_note(info)
+            raise
+
+        # Strategy 2: Legacy / Compatibility
+        # Construct the new message
+        new_msg = f"{e} ({info})"
+        # Crucial: chain the exceptions to keep the original stack trace visible
+        raise EnrichedRuntimeError(new_msg) from e
