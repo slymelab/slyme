@@ -5,7 +5,7 @@ from .validator import (
     vanilla_dependency_check,
     VanillaDependencyReport,
 )
-from .functional import node, wrapper, expression, Spec, RefSpec
+from .functional import node, wrapper, expression, spec, ref_spec
 
 __all__ = [
     "NodeElement",
@@ -20,6 +20,6 @@ __all__ = [
     "node",
     "wrapper",
     "expression",
-    "Spec",
-    "RefSpec",
+    "spec",
+    "ref_spec",
 ]
