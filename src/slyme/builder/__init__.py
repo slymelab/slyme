@@ -1,4 +1,4 @@
-from .builder import Builder
+from .base import Builder
 from .extension import BuilderExtension
 
 __all__ = [

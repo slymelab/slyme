@@ -1,4 +1,4 @@
-from .store import Store, Ref, StoreConfig, Missing, MISSING
+from .core import Store, Ref, StoreConfig, Missing, MISSING
 
 __all__ = [
     "Store",

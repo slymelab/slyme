@@ -2,7 +2,7 @@
 slyme pytree utility module.
 """
 
-from .pytree import (
+from .core import (
     # Types & Keys
     KeyPath,
     PyTreeKey,
