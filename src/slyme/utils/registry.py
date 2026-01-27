@@ -17,7 +17,7 @@ _T = TypeVar("_T")
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 _VT2 = TypeVar("_VT2")
-_Missing = Enum("Missing", ["MARK"])
+_Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 

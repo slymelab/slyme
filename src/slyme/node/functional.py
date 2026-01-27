@@ -27,7 +27,7 @@ from slyme.context import Context
 from .base import Node, NodeExpression, NodeWrapper
 
 __all__ = [
-    "Param",
+    "Spec",
     "node",
     "expression",
     "wrapper",
@@ -41,12 +41,12 @@ ExpressionFunc = Callable[Concatenate[Context, _P], _R]
 WrapperFunc = Callable[Concatenate[Context, Node, _P], Generator[Any, None, None]]
 WrapperCMFactory = Callable[Concatenate[Context, Node, _P], AbstractContextManager[Any]]
 
-_Missing = Enum("Missing", ["MARK"])
+_Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True)
-class Param:
+class Spec:
     """
     Dependency injection metadata for functional node parameters.
     """
@@ -57,26 +57,19 @@ class Param:
     def __post_init__(self):
         if self.default is not _MISSING and self.default_factory is not _MISSING:
             raise ValueError(
-                "Cannot specify both `default` and `default_factory` in Param."
+                "Cannot specify both `default` and `default_factory` in Spec."
             )
 
     def resolve(self, value: Any = _MISSING) -> Any:
         """
         Resolve the final value for the parameter.
         """
-        # 1. User provided value takes precedence (even if it is None or MISSING).
         if value is not _MISSING:
             return value
-
-        # 2. Check static default.
         if self.default is not _MISSING:
             return self.default
-
-        # 3. Check default factory.
         if self.default_factory is not _MISSING:
             return self.default_factory()
-
-        # 4. No value provided and no default available.
         raise ValueError("Missing required parameter.")
 
 
@@ -85,8 +78,48 @@ class _SignatureAnalysis:
     pos_only_params: list[inspect.Parameter]
     kw_only_params: list[inspect.Parameter]
     public_signature: inspect.Signature
-    # Mapping of parameter name to its default value (Param instance or raw value)
-    defaults: Mapping[str, Any]
+    specs: Mapping[str, Spec]
+
+
+def _resolve_spec(param: inspect.Parameter, hint: Any) -> Union[Spec, _Missing]:
+    spec_obj: Union[_Missing, Spec] = _MISSING
+    # 1. Check for Annotated
+    if get_origin(hint) is Annotated:
+        # NOTE: For now we only support Annotated[T, Spec],
+        # and we will consider relaxing this restriction if needed.
+        args = get_args(hint)
+        if len(args) != 2:
+            raise TypeError(
+                f"Invalid Annotated metadata for parameter '{param.name}'."
+                f"Currently, only a single `Spec` metadata is allowed, but found {len(args) - 1} items."
+            )
+        candidate = args[1]
+        if not isinstance(candidate, Spec):
+            raise TypeError(
+                f"Invalid Annotated metadata for parameter '{param.name}'."
+                f"Expected explicit `Spec` instance, but got {type(candidate).__name__}. "
+                f"Other metadata types are strictly forbidden (for now)."
+            )
+        spec_obj = candidate
+
+    # 2. Conflict Check and Collection
+    if spec_obj is not _MISSING:
+        # If Spec is defined in Annotated, strictly forbid standard default values.
+        if param.default is not inspect.Parameter.empty:
+            raise TypeError(
+                f"Parameter '{param.name}' has a semantic conflict. "
+                f"It defines a `Spec` in `Annotated` but also has a standard default value. "
+                f"Please remove the standard default value assignment."
+            )
+        return spec_obj
+    elif isinstance(param.default, Spec):
+        # Spec is specified through func default value.
+        return param.default
+    elif param.default is not inspect.Parameter.empty:
+        # Create a new Spec using default value.
+        return Spec(default=param.default)
+    else:
+        return _MISSING
 
 
 def _analyze_signature(func: Callable) -> _SignatureAnalysis:
@@ -99,7 +132,7 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
         1. pos_only_params: Runtime args (e.g. ctx).
         2. kw_only_params: Configuration args (e.g. *, ref_a=...).
         3. public_signature: A simplified signature for the factory function.
-        4. defaults: A mapping of param names to their defaults (Param obj or raw value).
+        4. specs: A mapping of Spec objects.
 
     Raises:
         TypeError: If forbidden parameter kinds are found, semantic conflicts occur,
@@ -108,68 +141,22 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
 
-    # Try to resolve type hints including Annotated extras
-    try:
-        type_hints = get_type_hints(func, include_extras=True)
-    except Exception:
-        # Fallback if type resolution fails
-        type_hints = {}
-
     pos_only_params = []
     kw_only_params = []
     public_params = []  # Used for factory signature
-    defaults = {}
+    specs: dict[str, Spec] = {}
 
+    type_hints = get_type_hints(func, include_extras=True)
     for p in params:
         if p.kind == inspect.Parameter.POSITIONAL_ONLY:
             pos_only_params.append(p)
         elif p.kind == inspect.Parameter.KEYWORD_ONLY:
             kw_only_params.append(p)
             public_params.append(p)
-
-            # --- Param / Default Value Resolution Logic ---
-            param_obj = None
-            hint = type_hints.get(p.name)
-
-            # 1. Check for Annotated
-            if get_origin(hint) is Annotated:
-                # args[0] is the type, args[1:] are the metadata
-                args = get_args(hint)
-                metadata = args[1:]
-                
-                # Strict Mode:
-                # If metadata exists, it MUST contain exactly one item,
-                # and that item MUST be an instance of Param.
-                if metadata:
-                    if len(metadata) > 1:
-                        raise TypeError(
-                            f"Invalid Annotated metadata for parameter '{p.name}' in '{func.__name__}'. "
-                            f"Currently, only a single `Param` metadata is allowed, but found {len(metadata)} items."
-                        )
-                    
-                    candidate = metadata[0]
-                    if not isinstance(candidate, Param):
-                        raise TypeError(
-                            f"Invalid Annotated metadata for parameter '{p.name}' in '{func.__name__}'. "
-                            f"Expected explicit `Param` instance, but got {type(candidate).__name__}. "
-                            f"Other metadata types are strictly forbidden."
-                        )
-                    param_obj = candidate
-
-            # 2. Conflict Check and Collection
-            if param_obj is not None:
-                # If Param is defined in Annotated, strictly forbid standard default values.
-                if p.default is not inspect.Parameter.empty:
-                    raise TypeError(
-                        f"Parameter '{p.name}' in '{func.__name__}' has a semantic conflict. "
-                        f"It defines a `Param` in `Annotated` but also has a standard default value. "
-                        f"Please remove the standard default value assignment."
-                    )
-                defaults[p.name] = param_obj
-            elif p.default is not inspect.Parameter.empty:
-                # Fallback to standard default value
-                defaults[p.name] = p.default
-
+            # Spec Resolution Logic
+            spec = _resolve_spec(p, type_hints.get(p.name))
+            if spec is not _MISSING:
+                specs[p.name] = spec
         else:
             # Strictly forbid ordinary arguments (*args, **kwargs, or args without / or *)
             kind_name = str(p.kind)
@@ -180,28 +167,27 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
                 f"  2. Config args must be KEYWORD_ONLY (after '*')."
             )
 
-    # The factory signature should hide the runtime args (ctx)
+    # The factory signature should hide the runtime args.
     public_signature = sig.replace(parameters=public_params)
-
     return _SignatureAnalysis(
         pos_only_params=pos_only_params,
         kw_only_params=kw_only_params,
         public_signature=public_signature,
-        defaults=types.MappingProxyType(defaults),
+        specs=types.MappingProxyType(specs),
     )
 
 
 def _process_kwargs(
     instance_name: str,
     kw_params: list[inspect.Parameter],
-    defaults: Mapping[str, Any],
+    specs: Mapping[str, Spec],
     kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Validate and process kwargs with enhanced Param support:
+    Validate and process kwargs with enhanced Spec support:
     1. Check for unexpected arguments (strict subset).
     2. Check for missing required arguments.
-    3. Inject default values (Standard or Param-resolved).
+    3. Inject Spec-resolved values.
 
     Returns:
         The fully populated kwargs dictionary ready for binding.
@@ -217,44 +203,20 @@ def _process_kwargs(
             f"Allowed arguments: {list(allowed_names)}."
         )
 
-    # 2. Process required arguments & Inject defaults
-    final_kwargs = kwargs.copy()
-
+    # 2. Apply Specs
+    final_kwargs = {}
     for param in kw_params:
         name = param.name
-        
-        # Check existence using standard python dict behavior
-        is_provided = name in kwargs
-        user_value = kwargs[name] if is_provided else _MISSING
-        
-        default_container = defaults.get(name, _MISSING)
-
-        # Case A: Default is a Param object -> Resolve it
-        if isinstance(default_container, Param):
-            try:
-                # Pass user value (or MISSING) to resolve logic
-                final_kwargs[name] = default_container.resolve(user_value)
-            except Exception as e:
-                raise ValueError(
-                    f"Error resolving parameter '{name}' for '{instance_name}': {e}"
-                ) from e
-
-        # Case B: Default is a standard value (and not MISSING)
-        elif default_container is not _MISSING:
-            # Only use standard default if user did NOT provide a value.
-            # If user provided None or MISSING explicitly, we respect it.
-            if not is_provided:
-                final_kwargs[name] = default_container
-            # else: user provided value is already in final_kwargs
-
-        # Case C: No default exists (standard required argument)
+        # Apply Spec.
+        value = kwargs.get(name, _MISSING)
+        if name in specs:
+            value = specs[name].resolve(value)
+        if value is not _MISSING:
+            final_kwargs[name] = value
         else:
-            if not is_provided:
-                raise ValueError(
-                    f"Missing required configuration argument '{name}' for '{instance_name}'."
-                )
-            # else: user provided value is already in final_kwargs
-
+            raise ValueError(
+                f"Missing required configuration argument '{name}' for '{instance_name}'."
+            )
     return final_kwargs
 
 
@@ -262,42 +224,39 @@ def _process_kwargs(
 class _NodeConfig:
     func: NodeFunc
     kw_params: list[inspect.Parameter]
-    defaults: Mapping[str, Any]
+    specs: Mapping[str, Spec]
 
 
 @dataclass(frozen=True)
 class _ExpressionConfig:
     func: ExpressionFunc
     kw_params: list[inspect.Parameter]
-    defaults: Mapping[str, Any]
+    specs: Mapping[str, Spec]
 
 
 @dataclass(frozen=True)
 class _WrapperConfig:
     func: WrapperFunc
     kw_params: list[inspect.Parameter]
-    defaults: Mapping[str, Any]
+    specs: Mapping[str, Spec]
     cm_factory: WrapperCMFactory
 
 
 class _FunctionalNode(Node):
     def __init__(self, config: _NodeConfig, /, **kwargs):
         self._config = config
-        # 1. Validate & Fill Defaults
+        # 1. Validate & Apply Specs
         kwargs = _process_kwargs(
-            config.func.__name__, config.kw_params, config.defaults, kwargs
+            config.func.__name__, config.kw_params, config.specs, kwargs
         )
-
         # 2. Extract Super Args (Explicit Logic for Node)
         super_kwargs = {}
-        # Node supports 'node_wrappers'. We explicitly look for it.
+        # Node supports "node_wrappers". We explicitly look for it.
         if "node_wrappers" in kwargs:
             super_kwargs["node_wrappers"] = kwargs.pop("node_wrappers")
-
         # 3. Super Init
         super().__init__(**super_kwargs)
-
-        # 4. Bind remaining attributes (All validation/defaults handled in step 1)
+        # 4. Bind remaining attributes
         for name, val in kwargs.items():
             setattr(self, name, val)
 
@@ -312,15 +271,13 @@ class _FunctionalNode(Node):
 class _FunctionalExpression(NodeExpression):
     def __init__(self, config: _ExpressionConfig, /, **kwargs):
         self._config = config
-        # 1. Validate & Fill Defaults
+        # 1. Validate & Apply Specs
         kwargs = _process_kwargs(
-            config.func.__name__, config.kw_params, config.defaults, kwargs
+            config.func.__name__, config.kw_params, config.specs, kwargs
         )
-
-        # 3. Super Init
+        # 2. Super Init
         super().__init__()
-
-        # 4. Bind remaining attributes
+        # 3. Bind remaining attributes
         for name, val in kwargs.items():
             setattr(self, name, val)
 
@@ -335,15 +292,13 @@ class _FunctionalExpression(NodeExpression):
 class _FunctionalWrapper(NodeWrapper):
     def __init__(self, config: _WrapperConfig, /, **kwargs):
         self._config = config
-        # 1. Validate & Fill Defaults
+        # 1. Validate & Apply Specs
         kwargs = _process_kwargs(
-            config.func.__name__, config.kw_params, config.defaults, kwargs
+            config.func.__name__, config.kw_params, config.specs, kwargs
         )
-
-        # 3. Super Init
+        # 2. Super Init
         super().__init__()
-
-        # 4. Bind remaining attributes
+        # 3. Bind remaining attributes
         for name, val in kwargs.items():
             setattr(self, name, val)
 
@@ -393,7 +348,7 @@ def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
         )
 
     config = _NodeConfig(
-        func=func, kw_params=analysis.kw_only_params, defaults=analysis.defaults
+        func=func, kw_params=analysis.kw_only_params, specs=analysis.specs
     )
     return _create_factory(_FunctionalNode, config, analysis.public_signature)
 
@@ -427,7 +382,7 @@ def _expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[
         )
 
     config = _ExpressionConfig(
-        func=func, kw_params=analysis.kw_only_params, defaults=analysis.defaults
+        func=func, kw_params=analysis.kw_only_params, specs=analysis.specs
     )
     return _create_factory(_FunctionalExpression, config, analysis.public_signature)
 
@@ -465,7 +420,7 @@ def _wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]:
     config = _WrapperConfig(
         func=func,
         kw_params=analysis.kw_only_params,
-        defaults=analysis.defaults,
+        specs=analysis.specs,
         cm_factory=_cm_factory,
     )
     return _create_factory(_FunctionalWrapper, config, analysis.public_signature)
