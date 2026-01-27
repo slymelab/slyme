@@ -7,6 +7,7 @@ from typing import (
     Generic,
     cast,
 )
+from typing_extensions import Self
 from contextlib import ExitStack, contextmanager
 from slyme.utils.collection import SequenceData
 from slyme.utils.pytree import (
@@ -121,6 +122,13 @@ class Node(NodeElement):
     def execute(self, ctx: Context, /) -> None:
         """Custom execution operations."""
         pass
+
+    def add_wrappers(self, *wrappers: "NodeWrapper") -> Self:
+        """
+        Add node wrappers to the node.
+        """
+        self.node_wrappers.extend(wrappers)
+        return self
 
     def __call__(self, ctx: Context, /) -> None:
         """Outer execute API."""
