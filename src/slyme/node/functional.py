@@ -41,6 +41,9 @@ ExpressionFunc = Callable[Concatenate[Context, _P], _R]
 WrapperFunc = Callable[Concatenate[Context, Node, _P], Generator[Any, None, None]]
 WrapperCMFactory = Callable[Concatenate[Context, Node, _P], AbstractContextManager[Any]]
 
+# Private sentinel to strictly distinguish "Not Provided" from "User Provided MISSING/None"
+_NOT_PROVIDED = object()
+
 
 @dataclass(frozen=True)
 class Param:
@@ -57,12 +60,21 @@ class Param:
                 "Cannot specify both `default` and `default_factory` in Param."
             )
 
-    def resolve(self, value: Union[Any, Missing] = MISSING) -> Any:
+    def resolve(self, value: Any = _NOT_PROVIDED) -> Any:
         """
         Resolve the final value for the parameter.
+        
+        Args:
+            value: The value provided by the user. If NOT provided, 
+                   the sentinel `_NOT_PROVIDED` is passed.
+
+        Note:
+            If the user explicitly passes `MISSING` (slyme.utils.constant.MISSING),
+            it is treated as a valid value and returned as-is, adhering to the principle
+            that explicit user input overrides defaults.
         """
-        # 1. User provided value takes precedence.
-        if value is not MISSING:
+        # 1. User provided value takes precedence (even if it is None or MISSING).
+        if value is not _NOT_PROVIDED:
             return value
 
         # 2. Check static default.
@@ -89,7 +101,7 @@ class _SignatureAnalysis:
 def _analyze_signature(func: Callable) -> _SignatureAnalysis:
     """
     Analyze the function signature to separate runtime parameters and config parameters.
-    Also resolves Annotated Param metadata.
+    Also resolves Annotated Param metadata with strict validation.
 
     Returns:
         A _SignatureAnalysis object containing:
@@ -99,7 +111,8 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
         4. defaults: A mapping of param names to their defaults (Param obj or raw value).
 
     Raises:
-        TypeError: If forbidden parameter kinds are found or semantic conflicts occur.
+        TypeError: If forbidden parameter kinds are found, semantic conflicts occur,
+                   or Annotated metadata is invalid.
     """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
@@ -108,7 +121,7 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
     try:
         type_hints = get_type_hints(func, include_extras=True)
     except Exception:
-        # Fallback if type resolution fails (e.g. partially defined types)
+        # Fallback if type resolution fails
         type_hints = {}
 
     pos_only_params = []
@@ -127,12 +140,30 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
             param_obj = None
             hint = type_hints.get(p.name)
 
-            # 1. Check for Annotated[T, Param(...)]
+            # 1. Check for Annotated
             if get_origin(hint) is Annotated:
-                for arg in get_args(hint):
-                    if isinstance(arg, Param):
-                        param_obj = arg
-                        break
+                # args[0] is the type, args[1:] are the metadata
+                args = get_args(hint)
+                metadata = args[1:]
+                
+                # Strict Mode:
+                # If metadata exists, it MUST contain exactly one item,
+                # and that item MUST be an instance of Param.
+                if metadata:
+                    if len(metadata) > 1:
+                        raise TypeError(
+                            f"Invalid Annotated metadata for parameter '{p.name}' in '{func.__name__}'. "
+                            f"Currently, only a single `Param` metadata is allowed, but found {len(metadata)} items."
+                        )
+                    
+                    candidate = metadata[0]
+                    if not isinstance(candidate, Param):
+                        raise TypeError(
+                            f"Invalid Annotated metadata for parameter '{p.name}' in '{func.__name__}'. "
+                            f"Expected explicit `Param` instance, but got {type(candidate).__name__}. "
+                            f"Other metadata types are strictly forbidden."
+                        )
+                    param_obj = candidate
 
             # 2. Conflict Check and Collection
             if param_obj is not None:
@@ -200,13 +231,17 @@ def _process_kwargs(
 
     for param in kw_params:
         name = param.name
-        user_value = kwargs.get(name, MISSING)
+        
+        # Check existence using standard python dict behavior
+        is_provided = name in kwargs
+        user_value = kwargs[name] if is_provided else _NOT_PROVIDED
+        
         default_container = defaults.get(name, MISSING)
 
         # Case A: Default is a Param object -> Resolve it
         if isinstance(default_container, Param):
             try:
-                # Pass user value (or MISSING) to resolve logic
+                # Pass user value (or _NOT_PROVIDED) to resolve logic
                 final_kwargs[name] = default_container.resolve(user_value)
             except Exception as e:
                 raise ValueError(
@@ -215,13 +250,15 @@ def _process_kwargs(
 
         # Case B: Default is a standard value (and not MISSING)
         elif default_container is not MISSING:
-            if user_value is MISSING:
+            # Only use standard default if user did NOT provide a value.
+            # If user provided None or MISSING explicitly, we respect it.
+            if not is_provided:
                 final_kwargs[name] = default_container
             # else: user provided value is already in final_kwargs
 
         # Case C: No default exists (standard required argument)
         else:
-            if user_value is MISSING:
+            if not is_provided:
                 raise ValueError(
                     f"Missing required configuration argument '{name}' for '{instance_name}'."
                 )
