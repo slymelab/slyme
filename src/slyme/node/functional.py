@@ -3,6 +3,7 @@ Functional API for slyme nodes.
 """
 
 import inspect
+import types
 from functools import wraps, partial
 from contextlib import contextmanager, AbstractContextManager
 from dataclasses import dataclass
@@ -15,12 +16,18 @@ from typing import (
     Generator,
     Union,
     overload,
+    Annotated,
+    get_type_hints,
+    get_origin,
+    get_args,
+    Mapping,
 )
 from slyme.utils.constant import Missing, MISSING
 from slyme.context import Context
 from .base import Node, NodeExpression, NodeWrapper
 
 __all__ = [
+    "Param",
     "node",
     "expression",
     "wrapper",
@@ -36,31 +43,78 @@ WrapperCMFactory = Callable[Concatenate[Context, Node, _P], AbstractContextManag
 
 
 @dataclass(frozen=True)
+class Param:
+    """
+    Dependency injection metadata for functional node parameters.
+    """
+
+    default: Union[Any, Missing] = MISSING
+    default_factory: Union[Callable[[], Any], Missing] = MISSING
+
+    def __post_init__(self):
+        if self.default is not MISSING and self.default_factory is not MISSING:
+            raise ValueError(
+                "Cannot specify both `default` and `default_factory` in Param."
+            )
+
+    def resolve(self, value: Union[Any, Missing] = MISSING) -> Any:
+        """
+        Resolve the final value for the parameter.
+        """
+        # 1. User provided value takes precedence.
+        if value is not MISSING:
+            return value
+
+        # 2. Check static default.
+        if self.default is not MISSING:
+            return self.default
+
+        # 3. Check default factory.
+        if self.default_factory is not MISSING:
+            return self.default_factory()
+
+        # 4. No value provided and no default available.
+        raise ValueError("Missing required parameter.")
+
+
+@dataclass(frozen=True)
 class _SignatureAnalysis:
     pos_only_params: list[inspect.Parameter]
     kw_only_params: list[inspect.Parameter]
     public_signature: inspect.Signature
+    # Mapping of parameter name to its default value (Param instance or raw value)
+    defaults: Mapping[str, Any]
 
 
 def _analyze_signature(func: Callable) -> _SignatureAnalysis:
     """
     Analyze the function signature to separate runtime parameters and config parameters.
+    Also resolves Annotated Param metadata.
 
     Returns:
         A _SignatureAnalysis object containing:
         1. pos_only_params: Runtime args (e.g. ctx).
         2. kw_only_params: Configuration args (e.g. *, ref_a=...).
         3. public_signature: A simplified signature for the factory function.
+        4. defaults: A mapping of param names to their defaults (Param obj or raw value).
 
     Raises:
-        TypeError: If forbidden parameter kinds are found.
+        TypeError: If forbidden parameter kinds are found or semantic conflicts occur.
     """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
 
+    # Try to resolve type hints including Annotated extras
+    try:
+        type_hints = get_type_hints(func, include_extras=True)
+    except Exception:
+        # Fallback if type resolution fails (e.g. partially defined types)
+        type_hints = {}
+
     pos_only_params = []
     kw_only_params = []
     public_params = []  # Used for factory signature
+    defaults = {}
 
     for p in params:
         if p.kind == inspect.Parameter.POSITIONAL_ONLY:
@@ -68,6 +122,32 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
         elif p.kind == inspect.Parameter.KEYWORD_ONLY:
             kw_only_params.append(p)
             public_params.append(p)
+
+            # --- Param / Default Value Resolution Logic ---
+            param_obj = None
+            hint = type_hints.get(p.name)
+
+            # 1. Check for Annotated[T, Param(...)]
+            if get_origin(hint) is Annotated:
+                for arg in get_args(hint):
+                    if isinstance(arg, Param):
+                        param_obj = arg
+                        break
+
+            # 2. Conflict Check and Collection
+            if param_obj is not None:
+                # If Param is defined in Annotated, strictly forbid standard default values.
+                if p.default is not inspect.Parameter.empty:
+                    raise TypeError(
+                        f"Parameter '{p.name}' in '{func.__name__}' has a semantic conflict. "
+                        f"It defines a `Param` in `Annotated` but also has a standard default value. "
+                        f"Please remove the standard default value assignment."
+                    )
+                defaults[p.name] = param_obj
+            elif p.default is not inspect.Parameter.empty:
+                # Fallback to standard default value
+                defaults[p.name] = p.default
+
         else:
             # Strictly forbid ordinary arguments (*args, **kwargs, or args without / or *)
             kind_name = str(p.kind)
@@ -80,21 +160,26 @@ def _analyze_signature(func: Callable) -> _SignatureAnalysis:
 
     # The factory signature should hide the runtime args (ctx)
     public_signature = sig.replace(parameters=public_params)
+
     return _SignatureAnalysis(
         pos_only_params=pos_only_params,
         kw_only_params=kw_only_params,
         public_signature=public_signature,
+        defaults=types.MappingProxyType(defaults),
     )
 
 
 def _process_kwargs(
-    instance_name: str, kw_params: list[inspect.Parameter], kwargs: dict[str, Any]
+    instance_name: str,
+    kw_params: list[inspect.Parameter],
+    defaults: Mapping[str, Any],
+    kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Validate and process kwargs:
+    Validate and process kwargs with enhanced Param support:
     1. Check for unexpected arguments (strict subset).
     2. Check for missing required arguments.
-    3. Inject default values for missing optional arguments.
+    3. Inject default values (Standard or Param-resolved).
 
     Returns:
         The fully populated kwargs dictionary ready for binding.
@@ -111,19 +196,36 @@ def _process_kwargs(
         )
 
     # 2. Process required arguments & Inject defaults
-    # We construct a new dict to ensure cleanliness (though modifying in-place is also an option)
     final_kwargs = kwargs.copy()
 
     for param in kw_params:
         name = param.name
-        if name not in final_kwargs:
-            if param.default is inspect.Parameter.empty:
+        user_value = kwargs.get(name, MISSING)
+        default_container = defaults.get(name, MISSING)
+
+        # Case A: Default is a Param object -> Resolve it
+        if isinstance(default_container, Param):
+            try:
+                # Pass user value (or MISSING) to resolve logic
+                final_kwargs[name] = default_container.resolve(user_value)
+            except Exception as e:
+                raise ValueError(
+                    f"Error resolving parameter '{name}' for '{instance_name}': {e}"
+                ) from e
+
+        # Case B: Default is a standard value (and not MISSING)
+        elif default_container is not MISSING:
+            if user_value is MISSING:
+                final_kwargs[name] = default_container
+            # else: user provided value is already in final_kwargs
+
+        # Case C: No default exists (standard required argument)
+        else:
+            if user_value is MISSING:
                 raise ValueError(
                     f"Missing required configuration argument '{name}' for '{instance_name}'."
                 )
-            else:
-                # Inject default value
-                final_kwargs[name] = param.default
+            # else: user provided value is already in final_kwargs
 
     return final_kwargs
 
@@ -132,18 +234,21 @@ def _process_kwargs(
 class _NodeConfig:
     func: NodeFunc
     kw_params: list[inspect.Parameter]
+    defaults: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
 class _ExpressionConfig:
     func: ExpressionFunc
     kw_params: list[inspect.Parameter]
+    defaults: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
 class _WrapperConfig:
     func: WrapperFunc
     kw_params: list[inspect.Parameter]
+    defaults: Mapping[str, Any]
     cm_factory: WrapperCMFactory
 
 
@@ -151,7 +256,9 @@ class _FunctionalNode(Node):
     def __init__(self, config: _NodeConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Fill Defaults
-        kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
+        kwargs = _process_kwargs(
+            config.func.__name__, config.kw_params, config.defaults, kwargs
+        )
 
         # 2. Extract Super Args (Explicit Logic for Node)
         super_kwargs = {}
@@ -178,7 +285,9 @@ class _FunctionalExpression(NodeExpression):
     def __init__(self, config: _ExpressionConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Fill Defaults
-        kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
+        kwargs = _process_kwargs(
+            config.func.__name__, config.kw_params, config.defaults, kwargs
+        )
 
         # 3. Super Init
         super().__init__()
@@ -199,7 +308,9 @@ class _FunctionalWrapper(NodeWrapper):
     def __init__(self, config: _WrapperConfig, /, **kwargs):
         self._config = config
         # 1. Validate & Fill Defaults
-        kwargs = _process_kwargs(config.func.__name__, config.kw_params, kwargs)
+        kwargs = _process_kwargs(
+            config.func.__name__, config.kw_params, config.defaults, kwargs
+        )
 
         # 3. Super Init
         super().__init__()
@@ -253,7 +364,9 @@ def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
             f"but found {len(analysis.pos_only_params)}."
         )
 
-    config = _NodeConfig(func=func, kw_params=analysis.kw_only_params)
+    config = _NodeConfig(
+        func=func, kw_params=analysis.kw_only_params, defaults=analysis.defaults
+    )
     return _create_factory(_FunctionalNode, config, analysis.public_signature)
 
 
@@ -285,7 +398,9 @@ def _expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[
             f"but found {len(analysis.pos_only_params)}."
         )
 
-    config = _ExpressionConfig(func=func, kw_params=analysis.kw_only_params)
+    config = _ExpressionConfig(
+        func=func, kw_params=analysis.kw_only_params, defaults=analysis.defaults
+    )
     return _create_factory(_FunctionalExpression, config, analysis.public_signature)
 
 
@@ -320,7 +435,10 @@ def _wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]:
 
     _cm_factory = contextmanager(func)
     config = _WrapperConfig(
-        func=func, kw_params=analysis.kw_only_params, cm_factory=_cm_factory
+        func=func,
+        kw_params=analysis.kw_only_params,
+        defaults=analysis.defaults,
+        cm_factory=_cm_factory,
     )
     return _create_factory(_FunctionalWrapper, config, analysis.public_signature)
 
