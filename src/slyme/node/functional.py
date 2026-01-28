@@ -5,7 +5,7 @@ Functional API for slyme nodes.
 import inspect
 import types
 from enum import Enum
-from functools import wraps, partial
+from functools import partial, update_wrapper
 from contextlib import contextmanager, AbstractContextManager
 from dataclasses import dataclass
 from typing import (
@@ -21,6 +21,7 @@ from typing import (
     get_args,
     Mapping,
     Optional,
+    Generic,
 )
 from typing_extensions import ParamSpec, Concatenate
 from slyme.utils.common import enrich_exception
@@ -376,22 +377,62 @@ class _FunctionalWrapper(NodeWrapper):
 _Config = Union[_NodeConfig, _ExpressionConfig, _WrapperConfig]
 
 
-def _create_factory(
-    cls: type[_T], config: _Config, public_sig: inspect.Signature
-) -> Callable[..., _T]:
+class _FunctionalFactory(Generic[_T]):
     """
-    Creates the factory function that looks like the original function but returns a class instance.
+    Factory class for creating functional node instances.
+    Provides scope binding and parameter resolution features.
     """
 
-    @wraps(config.func)
-    def factory(**kwargs):
-        return cls(config, **kwargs)
+    def __init__(
+        self, cls: type[_T], config: _Config, public_sig: inspect.Signature
+    ) -> None:
+        self._cls = cls
+        self._config = config
+        self._public_sig = public_sig
 
-    # Masquerade the signature
-    factory.__signature__ = public_sig
-    # Backdoor for testing
-    factory.cls = cls
-    return factory
+        # Metadata Masquerade
+        # Update standard metadata (name, doc, module, etc.) from the original function
+        update_wrapper(self, config.func)
+        # Manually overwrite the signature to the public config signature
+        # (hiding the runtime 'ctx' argument)
+        self.__signature__ = public_sig
+
+    def __call__(self, **kwargs) -> _T:
+        """
+        Create the node instance using keyword arguments.
+        Behaves like the original factory function.
+        """
+        return self._cls(self._config, **kwargs)
+
+    def bind(self, *scopes: Mapping[str, Any], **overrides) -> _T:
+        """
+        Create the node instance by binding parameters from scopes and overrides.
+
+        Resolution Order:
+        1. Overrides (highest priority)
+        2. Scopes (searched from last to first)
+        3. Default values (handled during instantiation)
+
+        This allows multiple nodes to share common configuration scopes while
+        permitting specific overrides.
+        """
+        # 1. Start with explicit overrides
+        final_kwargs = dict(overrides)
+
+        # 2. Iterate through required parameters defined in the config
+        # We only look for parameters that the node actually accepts.
+        for param in self._config.kw_params:
+            name = param.name
+            # If already provided by overrides, skip
+            if name in final_kwargs:
+                continue
+            # Look in scopes (reverse order: last scope has higher priority)
+            for scope in reversed(scopes):
+                if name in scope:
+                    final_kwargs[name] = scope[name]
+                    break
+        # 3. Invoke standard creation logic
+        return self(**final_kwargs)
 
 
 # Decorators
@@ -411,7 +452,7 @@ def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
     config = _NodeConfig(
         func=func, kw_params=analysis.kw_only_params, specs=analysis.specs
     )
-    return _create_factory(_FunctionalNode, config, analysis.public_signature)
+    return _FunctionalFactory(_FunctionalNode, config, analysis.public_signature)
 
 
 @overload
@@ -445,7 +486,7 @@ def _expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[
     config = _ExpressionConfig(
         func=func, kw_params=analysis.kw_only_params, specs=analysis.specs
     )
-    return _create_factory(_FunctionalExpression, config, analysis.public_signature)
+    return _FunctionalFactory(_FunctionalExpression, config, analysis.public_signature)
 
 
 @overload
@@ -484,7 +525,7 @@ def _wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]:
         specs=analysis.specs,
         cm_factory=_cm_factory,
     )
-    return _create_factory(_FunctionalWrapper, config, analysis.public_signature)
+    return _FunctionalFactory(_FunctionalWrapper, config, analysis.public_signature)
 
 
 @overload

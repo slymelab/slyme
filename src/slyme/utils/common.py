@@ -154,4 +154,4 @@ def enrich_exception(
             e.args = (f"{e.args[0]} ({info})", *e.args[1:])
         else:
             e.args = (*e.args, f"({info})")
-        raise e
+        raise
