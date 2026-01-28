@@ -132,10 +132,6 @@ from contextlib import contextmanager
 from collections.abc import Generator
 
 
-class EnrichedRuntimeError(RuntimeError):
-    pass
-
-
 @contextmanager
 def enrich_exception(
     info: str,
@@ -154,6 +150,8 @@ def enrich_exception(
 
         # Strategy 2: Legacy / Compatibility
         # Construct the new message
-        new_msg = f"{e} ({info})"
-        # Crucial: chain the exceptions to keep the original stack trace visible
-        raise EnrichedRuntimeError(new_msg) from e
+        if len(e.args) > 0 and isinstance(e.args[0], str):
+            e.args = (f"{e.args[0]} ({info})", *e.args[1:])
+        else:
+            e.args = (*e.args, f"({info})")
+        raise e
