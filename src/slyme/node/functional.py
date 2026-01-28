@@ -82,6 +82,7 @@ class RefSpec(Spec):
     """
     Specialized Spec for Ref parameters, allowing metadata injection and type enforcement.
     """
+
     metadata: Optional[Mapping[str, Any]] = None
 
     def __post_init__(self):
@@ -126,11 +127,7 @@ def ref_spec(
     Factory function for creating a _RefSpec instance.
     Returns Any to bypass type checker errors when assigned as a default value.
     """
-    return RefSpec(
-        default=default, 
-        default_factory=default_factory, 
-        metadata=metadata
-    )
+    return RefSpec(default=default, default_factory=default_factory, metadata=metadata)
 
 
 # Inspect operations.
@@ -377,7 +374,7 @@ class _FunctionalWrapper(NodeWrapper):
 _Config = Union[_NodeConfig, _ExpressionConfig, _WrapperConfig]
 
 
-class _FunctionalFactory(Generic[_T]):
+class _FunctionalFactory(Generic[_T, _P]):
     """
     Factory class for creating functional node instances.
     Provides scope binding and parameter resolution features.
@@ -386,25 +383,57 @@ class _FunctionalFactory(Generic[_T]):
     def __init__(
         self, cls: type[_T], config: _Config, public_sig: inspect.Signature
     ) -> None:
+        # Metadata Masquerade
+        # Update standard metadata (name, doc, module, etc.) from the original function
+        # NOTE: This must be done BEFORE setting instance attributes (like self._cls)
+        # to ensure that if `config.func` happens to have conflicting attribute names,
+        # they do not overwrite the critical attributes of the factory instance.
+        update_wrapper(self, config.func)
         self._cls = cls
         self._config = config
         self._public_sig = public_sig
-
-        # Metadata Masquerade
-        # Update standard metadata (name, doc, module, etc.) from the original function
-        update_wrapper(self, config.func)
         # Manually overwrite the signature to the public config signature
         # (hiding the runtime 'ctx' argument)
         self.__signature__ = public_sig
 
-    def __call__(self, **kwargs) -> _T:
+    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> _T:
         """
         Create the node instance using keyword arguments.
         Behaves like the original factory function.
         """
         return self._cls(self._config, **kwargs)
 
-    def bind(self, *scopes: Mapping[str, Any], **overrides) -> _T:
+    # NOTE: Define explicit overloads for common args (0-3 scopes) to prevent
+    # Type Checkers from downgrading `overrides` to `Any` due to current ParamSpec
+    # limitations on representing Keyword-Only Arguments.
+    @overload
+    def bind(self, /, *_: _P.args, **overrides: _P.kwargs) -> _T: ...
+    @overload
+    def bind(
+        self, scope1: Mapping[str, Any], /, *_: _P.args, **overrides: _P.kwargs
+    ) -> _T: ...
+    @overload
+    def bind(
+        self,
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
+    ) -> _T: ...
+    @overload
+    def bind(
+        self,
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        scope3: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
+    ) -> _T: ...
+    @overload
+    def bind(self, /, *scopes: Mapping[str, Any], **overrides: Any) -> _T: ...
+    def bind(self, /, *scopes: Mapping[str, Any], **overrides: Any) -> _T:
         """
         Create the node instance by binding parameters from scopes and overrides.
 
@@ -436,7 +465,7 @@ class _FunctionalFactory(Generic[_T]):
 
 
 # Decorators
-def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
+def _node(func: NodeFunc[_P], /) -> _FunctionalFactory[Node, _P]:
     """
     Decorator to convert a function into a Node factory.
     Requires exactly 1 POSITIONAL_ONLY argument: ctx.
@@ -458,19 +487,23 @@ def _node(func: NodeFunc[_P], /) -> Callable[_P, Node]:
 @overload
 def node(
     func: _Missing = _MISSING, /
-) -> Callable[[NodeFunc[_P]], Callable[_P, Node]]: ...
+) -> Callable[[NodeFunc[_P]], _FunctionalFactory[Node, _P]]: ...
 @overload
-def node(func: NodeFunc[_P], /) -> Callable[_P, Node]: ...
+def node(func: NodeFunc[_P], /) -> _FunctionalFactory[Node, _P]: ...
 def node(
     func: Union[NodeFunc[_P], _Missing] = _MISSING, /
-) -> Union[Callable[[NodeFunc[_P]], Callable[_P, Node]], Callable[_P, Node]]:
+) -> Union[
+    Callable[[NodeFunc[_P]], _FunctionalFactory[Node, _P]], _FunctionalFactory[Node, _P]
+]:
     if func is _MISSING:
         return partial(_node)
     else:
         return _node(func)
 
 
-def _expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[_R]]:
+def _expression(
+    func: ExpressionFunc[_P, _R], /
+) -> _FunctionalFactory[NodeExpression[_R], _P]:
     """
     Decorator to convert a function into a NodeExpression factory.
     Requires exactly 1 POSITIONAL_ONLY argument: ctx.
@@ -492,12 +525,14 @@ def _expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[
 @overload
 def expression(
     func: _Missing = _MISSING, /
-) -> Callable[[ExpressionFunc[_P, _R]], Callable[_P, NodeExpression[_R]]]: ...
+) -> Callable[[ExpressionFunc[_P, _R]], _FunctionalFactory[NodeExpression[_R], _P]]: ...
 @overload
-def expression(func: ExpressionFunc[_P, _R], /) -> Callable[_P, NodeExpression[_R]]: ...
+def expression(
+    func: ExpressionFunc[_P, _R], /
+) -> _FunctionalFactory[NodeExpression[_R], _P]: ...
 def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
-    Callable[[ExpressionFunc[_P, _R]], Callable[_P, NodeExpression[_R]]],
-    Callable[_P, NodeExpression[_R]],
+    Callable[[ExpressionFunc[_P, _R]], _FunctionalFactory[NodeExpression[_R], _P]],
+    _FunctionalFactory[NodeExpression[_R], _P],
 ]:
     if func is _MISSING:
         return partial(_expression)
@@ -505,7 +540,7 @@ def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> U
         return _expression(func)
 
 
-def _wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]:
+def _wrapper(func: WrapperFunc[_P], /) -> _FunctionalFactory[NodeWrapper, _P]:
     """
     Decorator to convert a generator function into a NodeWrapper factory.
     Requires exactly 2 POSITIONAL_ONLY arguments: ctx, wrapped.
@@ -531,13 +566,12 @@ def _wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]:
 @overload
 def wrapper(
     func: _Missing = _MISSING, /
-) -> Callable[[WrapperFunc[_P]], Callable[_P, NodeWrapper]]: ...
+) -> Callable[[WrapperFunc[_P]], _FunctionalFactory[NodeWrapper, _P]]: ...
 @overload
-def wrapper(func: WrapperFunc[_P], /) -> Callable[_P, NodeWrapper]: ...
-def wrapper(
-    func: Union[WrapperFunc[_P], _Missing] = _MISSING, /
-) -> Union[
-    Callable[[WrapperFunc[_P]], Callable[_P, NodeWrapper]], Callable[_P, NodeWrapper]
+def wrapper(func: WrapperFunc[_P], /) -> _FunctionalFactory[NodeWrapper, _P]: ...
+def wrapper(func: Union[WrapperFunc[_P], _Missing] = _MISSING, /) -> Union[
+    Callable[[WrapperFunc[_P]], _FunctionalFactory[NodeWrapper, _P]],
+    _FunctionalFactory[NodeWrapper, _P],
 ]:
     if func is _MISSING:
         return partial(_wrapper)
