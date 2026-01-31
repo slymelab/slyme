@@ -132,43 +132,6 @@ class _StoreElement:
     def __init__(self, /, **data: Any) -> None:
         self._data: dict[str, Any] = data
 
-    def __getitem__(self, ref: Ref[_T]) -> _T:
-        # Result can be a _StoreElement (subtree) or a raw leaf value.
-        result: Any = self._resolve(ref.parts)
-        return ref.resolve(result)
-
-    @overload
-    def get(self, ref: Ref[_T], default: None = None) -> Union[_T, None]: ...
-    @overload
-    def get(self, ref: Ref[_T], default: _T2) -> Union[_T, _T2]: ...
-    def get(self, ref: Ref[_T], default: Optional[_T2] = None) -> Union[_T, _T2, None]:
-        try:
-            return self[ref]
-        except _StorePathError:
-            return default
-
-    def __contains__(self, ref: Ref[_T]) -> bool:
-        try:
-            self._resolve(ref.parts)
-        except _StorePathError:
-            return False
-        else:
-            return True
-
-    def _resolve(self, parts: Iterable[str]) -> Any:
-        """Resolve the path parts and get the final element or value."""
-        element: Any = self
-        for p in parts:
-            if not isinstance(element, _StoreElement):
-                # If we encounter a leaf value mid-path, it's a path error
-                # (blocking the traversal).
-                raise _StorePathError(f"Path {parts} blocked by leaf value at {p!r}")
-            try:
-                element = element._data[p]
-            except KeyError:
-                raise _StorePathError(p) from None
-        return element
-
     def __repr__(self) -> str:
         name = type(self).__name__
         if not self._data:
@@ -217,11 +180,44 @@ class Store(_StoreElement):
         self.hook: Union[StoreHook, None] = None
 
     def __getitem__(self, ref: Ref[_T]) -> _T:
-        value = super().__getitem__(ref)
+        # Result can be a _StoreElement (subtree) or a raw leaf value.
+        value = ref.resolve(self._resolve(ref.parts))
         if self.hook is not None:
             # Call hook
             self.hook.on_getitem(self, ref, value)
         return value
+
+    @overload
+    def get(self, ref: Ref[_T], default: None = None) -> Union[_T, None]: ...
+    @overload
+    def get(self, ref: Ref[_T], default: _T2) -> Union[_T, _T2]: ...
+    def get(self, ref: Ref[_T], default: Optional[_T2] = None) -> Union[_T, _T2, None]:
+        try:
+            return self[ref]
+        except _StorePathError:
+            return default
+
+    def __contains__(self, ref: Ref[_T]) -> bool:
+        try:
+            self._resolve(ref.parts)
+        except _StorePathError:
+            return False
+        else:
+            return True
+
+    def _resolve(self, parts: Iterable[str]) -> Any:
+        """Resolve the path parts and get the final element or value."""
+        element: Any = self
+        for p in parts:
+            if not isinstance(element, _StoreElement):
+                # If we encounter a leaf value mid-path, it's a path error
+                # (blocking the traversal).
+                raise _StorePathError(f"Path {parts} blocked by leaf value at {p!r}")
+            try:
+                element = element._data[p]
+            except KeyError:
+                raise _StorePathError(p) from None
+        return element
 
     def __setitem__(self, ref: Ref[_T], value: _T) -> None:
         *dirs, last = ref.parts
