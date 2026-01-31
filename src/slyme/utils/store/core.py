@@ -179,25 +179,34 @@ class Store(_StoreElement):
         super().__init__(**data)
         self.hook: Union[StoreHook, None] = None
 
-    def __getitem__(self, ref: Ref[_T]) -> _T:
-        # Result can be a _StoreElement (subtree) or a raw leaf value.
-        value = ref.resolve(self._resolve(ref.parts))
-        if self.hook is not None:
-            # Call hook
-            self.hook.on_getitem(self, ref, value)
-        return value
-
     @overload
-    def get(self, ref: Ref[_T], default: None = None) -> Union[_T, None]: ...
+    def get(self, ref: Ref[_T]) -> _T: ...
     @overload
     def get(self, ref: Ref[_T], default: _T2) -> Union[_T, _T2]: ...
-    def get(self, ref: Ref[_T], default: Optional[_T2] = None) -> Union[_T, _T2, None]:
+    def get(
+        self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING
+    ) -> Union[_T, _T2]:
+        """
+        Get a value from the store.
+
+        If `default` is not provided (MISSING), strictly resolves the reference and
+        raises `_StorePathError` if not found (similar to `__getitem__`).
+        If `default` is provided, returns it upon failure (similar to `dict.get`).
+        """
         try:
-            return self[ref]
+            # Result can be a _StoreElement (subtree) or a raw leaf value.
+            value = ref.resolve(self._resolve(ref.parts))
+            if self.hook is not None:
+                # Call hook
+                self.hook.on_getitem(self, ref, value)
+            return value
         except _StorePathError:
+            if default is MISSING:
+                raise
             return default
 
-    def __contains__(self, ref: Ref[_T]) -> bool:
+    def exists(self, ref: Ref[_T]) -> bool:
+        """Check if a reference exists in the store."""
         try:
             self._resolve(ref.parts)
         except _StorePathError:
@@ -219,7 +228,8 @@ class Store(_StoreElement):
                 raise _StorePathError(p) from None
         return element
 
-    def __setitem__(self, ref: Ref[_T], value: _T) -> None:
+    def set(self, ref: Ref[_T], value: _T) -> None:
+        """Set a value in the store."""
         *dirs, last = ref.parts
         element = self._touch(dirs)
 
@@ -232,7 +242,8 @@ class Store(_StoreElement):
         else:
             element._data[last] = value
 
-    def __delitem__(self, ref: Ref[_T]) -> None:
+    def delete(self, ref: Ref[_T]) -> None:
+        """Delete a value from the store."""
         *dirs, last = ref.parts
         parent = self._resolve(dirs)
         if not isinstance(parent, _StoreElement):
