@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from typing import (
@@ -52,51 +52,28 @@ class StoreConfig:
         cls.repr_last_suffix = ","
 
 
+@dataclass(frozen=True, repr=False, eq=False)
 class Ref(Generic[_T]):
     """Immutable dotted ref with cached hash and split parts."""
 
-    @property
-    def path(self) -> str:
-        return self.__dict__["path"]
+    path: str
+    lens: KeyPath = ()
+    metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_METADATA)
+    parts: tuple[str, ...] = field(init=False)
+    hash: int = field(init=False)
 
-    @property
-    def parts(self) -> tuple[str, ...]:
-        return self.__dict__["parts"]
-
-    @property
-    def lens(self) -> KeyPath:
-        return self.__dict__["lens"]
-
-    @property
-    def hash(self) -> int:
-        return self.__dict__["hash"]
-
-    @property
-    def metadata(self) -> Mapping[str, Any]:
-        return self.__dict__["metadata"]
-
-    def __init__(
-        self,
-        path: str,
-        /,
-        *,
-        lens: KeyPath = (),
-        metadata: Optional[Mapping[str, Any]] = None,
-    ) -> None:
-        if not path:
+    def __post_init__(self) -> None:
+        if not self.path:
             raise ValueError("Empty ref path")
-        parts = tuple(path.split("."))
+        parts = tuple(self.path.split("."))
         if any(not p for p in parts):
-            raise ValueError(f"Invalid ref path: {path!r}")
-        self.__dict__["path"] = path
-        self.__dict__["parts"] = parts
-        self.__dict__["lens"] = lens
-        self.__dict__["hash"] = hash((parts, lens))  # NOTE: hash both parts and lens
-        self.__dict__["metadata"] = (
-            types.MappingProxyType(metadata)
-            if metadata is not None
-            else _EMPTY_METADATA
-        )
+            raise ValueError(f"Invalid ref path: {self.path!r}")
+
+        # Bypass frozen=True to set calculated fields
+        object.__setattr__(self, "parts", parts)
+        object.__setattr__(self, "hash", hash((parts, self.lens)))
+        if not isinstance(self.metadata, types.MappingProxyType):
+            object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
 
     def resolve(self, pytree) -> _T:
         return PyTreeEngine.get_element(pytree, self.lens)
