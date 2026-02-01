@@ -1,7 +1,7 @@
 import types
 from enum import Enum
 from dataclasses import dataclass
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from typing import (
     Any,
@@ -11,6 +11,7 @@ from typing import (
     Literal,
     cast,
     Optional,
+    overload,
 )
 from typing_extensions import Self
 from slyme.utils.pytree import (
@@ -51,11 +52,7 @@ class StoreConfig:
 
 
 class Ref(Generic[_T]):
-    """
-    Immutable dotted ref with cached hash and split parts.
-    
-    Supports empty path ("") to represent the root/self.
-    """
+    """Immutable dotted ref with cached hash and split parts."""
 
     @property
     def path(self) -> str:
@@ -78,24 +75,17 @@ class Ref(Generic[_T]):
         return self.__dict__["metadata"]
 
     def __init__(
-        self,
-        path: str,
-        /,
-        *,
-        lens: KeyPath = (),
-        metadata: Optional[Mapping[str, Any]] = None,
+        self, path: str, /, *, lens: KeyPath = (), metadata: Optional[Mapping[str, Any]] = None
     ) -> None:
-        if path == "":
-            parts = ()
-        else:
-            parts = tuple(path.split("."))
-            if any(not p for p in parts):
-                raise ValueError(f"Invalid ref path: {path!r}")
-
+        if not path:
+            raise ValueError("Empty ref path")
+        parts = tuple(path.split("."))
+        if any(not p for p in parts):
+            raise ValueError(f"Invalid ref path: {path!r}")
         self.__dict__["path"] = path
         self.__dict__["parts"] = parts
         self.__dict__["lens"] = lens
-        self.__dict__["hash"] = hash((parts, lens))
+        self.__dict__["hash"] = hash((parts, lens))  # NOTE: hash both parts and lens
         self.__dict__["metadata"] = (
             types.MappingProxyType(metadata)
             if metadata is not None
@@ -128,9 +118,50 @@ class Ref(Generic[_T]):
         return f"path={self.path!r}, lens_expr={PyTreeEngine.codify_path(self.lens)}, metadata={self.metadata!r}"
 
 
-class StorePathError(KeyError):
+class _StorePathError(KeyError):
     """Internal exception raised when a path cannot be resolved in the store."""
+
     pass
+
+
+class _StoreElement:
+    """Inner store element.
+    NOTE: `_StoreElement` can only be modified through `Store` for consistency.
+    """
+
+    def __init__(self, /, **data: Any) -> None:
+        self._data: dict[str, Any] = data
+
+    def __repr__(self) -> str:
+        name = type(self).__name__
+        if not self._data:
+            return f"{name}()"
+        lines = [f"{name}({StoreConfig.repr_newline}"]
+        count = len(self._data)
+        for i, (key, value) in enumerate(self._data.items()):
+            value_lines = repr(value).splitlines(keepends=True)
+            head = (
+                value_lines[0] if value_lines else repr("")
+            )  # NOTE: repr(value) may return ""
+            lines.append(f"{StoreConfig.repr_indent}{key}={head}")
+            for line in value_lines[1:]:
+                lines.append(f"{StoreConfig.repr_indent}{line}")
+            if i == count - 1:
+                lines.append(
+                    f"{StoreConfig.repr_last_suffix}{StoreConfig.repr_newline}"
+                )
+            else:
+                lines.append(f"{StoreConfig.repr_suffix}{StoreConfig.repr_newline}")
+        lines.append(")")
+        return "".join(lines)
+
+    def copy(self) -> Self:
+        return type(self)(
+            **{
+                k: (v.copy() if isinstance(v, _StoreElement) else v)
+                for k, v in self._data.items()
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -141,70 +172,121 @@ class _DiffResult:
     modified: dict[str, tuple[Any, Any]]  # {key: (self_value, other_value)}
 
 
-class StoreElement:
-    """
-    Base class for all store elements.
-    
-    It defines a minimal, explicit interface for data access.
-    Magic methods (dict mixins) are intentionally avoided to ensure forward
-    compatibility with future Async/IO-bound implementations.
-    """
+class Store(_StoreElement):
+    """Dotted-attribute-style nested store."""
 
-    # --- Core Interface ---
+    def __init__(self, /, **data: Any) -> None:
+        super().__init__(**data)
+        self.hook: Union[StoreHook, None] = None
 
+    @overload
+    def get(self, ref: Ref[_T]) -> _T: ...
+    @overload
+    def get(self, ref: Ref[_T], default: _T2) -> Union[_T, _T2]: ...
     def get(
         self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING
     ) -> Union[_T, _T2]:
-        """Get value or view at ref."""
-        raise NotImplementedError
+        """
+        Get a value from the store.
 
-    def set(self, ref: Ref[_T], value: _T) -> None:
-        """Set value at ref."""
-        raise NotImplementedError
-
-    def delete(self, ref: Ref[_T]) -> None:
-        """Delete value at ref."""
-        raise NotImplementedError
+        If `default` is not provided (MISSING), strictly resolves the reference and
+        raises `_StorePathError` if not found (similar to `__getitem__`).
+        If `default` is provided, returns it upon failure (similar to `dict.get`).
+        """
+        try:
+            # Result can be a _StoreElement (subtree) or a raw leaf value.
+            value = ref.resolve(self._resolve(ref.parts))
+            if self.hook is not None:
+                # Call hook
+                self.hook.on_getitem(self, ref, value)
+            return value
+        except _StorePathError:
+            if default is MISSING:
+                raise
+            return default
 
     def exists(self, ref: Ref[_T]) -> bool:
-        """Check if ref exists."""
-        raise NotImplementedError
+        """Check if a reference exists in the store."""
+        try:
+            self._resolve(ref.parts)
+        except _StorePathError:
+            return False
+        else:
+            return True
 
-    def is_leaf(self, ref: Ref[_T]) -> bool:
-        """Check if ref points to a user data leaf (not a container/view)."""
-        raise NotImplementedError
+    def _resolve(self, parts: Iterable[str]) -> Any:
+        """Resolve the path parts and get the final element or value."""
+        element: Any = self
+        for p in parts:
+            if not isinstance(element, _StoreElement):
+                # If we encounter a leaf value mid-path, it's a path error
+                # (blocking the traversal).
+                raise _StorePathError(f"Path {parts} blocked by leaf value at {p!r}")
+            try:
+                element = element._data[p]
+            except KeyError:
+                raise _StorePathError(p) from None
+        return element
 
-    def iter_keys(self, ref: Ref) -> Iterator[str]:
-        """
-        Iterate over the keys of the children at the given ref.
-        If ref is root (empty), iterate over own children.
-        """
-        raise NotImplementedError
-    
-    @classmethod
-    def from_children(cls, children: dict[str, Any]) -> Self:
-        """
-        Factory method to reconstruct the element from a dictionary of children.
-        Used by PyTreeEngine for snapshot restoration.
-        """
-        raise NotImplementedError
+    def set(self, ref: Ref[_T], value: _T) -> None:
+        """Set a value in the store."""
+        *dirs, last = ref.parts
+        element = self._touch(dirs)
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Recursive conversion to dict using PyTreeEngine.
-        This effectively snapshots the store content.
-        """
-        leaves = {}
-        for path, value in STORE_PYTREE_ENGINE.iter_with_path(self):
-            dot_path = ".".join(cast("MappingKey", k).key for k in path)
-            leaves[dot_path] = value
-        return leaves
+        if self.hook is not None:
+            # Get the old value first
+            old_value = element._data.get(last, MISSING)
+            element._data[last] = value
+            # Call hook
+            self.hook.on_setitem(self, ref, old_value, value)
+        else:
+            element._data[last] = value
 
-    def diff(self, other: "StoreElement", strategy: Literal["is", "eq"] = "is") -> _DiffResult:
-        """Compares this StoreElement with another using PyTreeEngine.
+    def delete(self, ref: Ref[_T]) -> None:
+        """Delete a value from the store."""
+        *dirs, last = ref.parts
+        parent = self._resolve(dirs)
+        if not isinstance(parent, _StoreElement):
+            raise _StorePathError(f"Parent path not found for {ref!r}")
+
+        if self.hook is not None:
+            # Get the old value first
+            old_value = parent._data.get(last, MISSING)
+            del parent._data[last]
+            # Call hook
+            self.hook.on_delitem(self, ref, old_value)
+        else:
+            del parent._data[last]
+
+    def _touch(self, parts: Iterable[str]) -> _StoreElement:
+        """Recursively resolve the store elements along the path, and create a
+        new element if the element not exists."""
+        element: _StoreElement = self
+        for p in parts:
+            nxt: Any = element._data.get(p, MISSING)
+            if nxt is MISSING:
+                nxt = _StoreElement()
+                element._data[p] = nxt
+            elif not isinstance(nxt, _StoreElement):
+                # Conflict: path segment exists but is a leaf value
+                raise _StorePathError(f"Conflict: {p!r} is already a leaf value.")
+            element = nxt
+        return element
+
+    @contextmanager
+    def with_hook(self, hook: StoreHook):
+        prev_hook = self.hook
+        self.hook = hook
+        try:
+            yield
+        finally:
+            self.hook = prev_hook
+
+    def diff(self, other: "Store", strategy: Literal["is", "eq"] = "is") -> _DiffResult:
+        """Compares this Store with another using PyTreeEngine.
 
         Args:
-            other: The other StoreElement instance to compare against.
+            other: The other Store instance to compare against.
             strategy: The comparison strategy for leaf values.
                 - "is": Identity comparison (`is`).
                 - "eq": Equality comparison (`==`).
@@ -212,8 +294,11 @@ class StoreElement:
         if strategy not in ("is", "eq"):
             raise ValueError(f"Unknown diff strategy: {strategy!r}")
 
-        leaves_self = self.to_dict()
-        leaves_other = other.to_dict()
+        # Flatten both stores into {dot_path: value}
+        # PyTreeEngine ensures we only traverse _StoreElement structures;
+        # anything else is treated as a leaf.
+        leaves_self = self.collect_leaves()
+        leaves_other = other.collect_leaves()
 
         added: dict[str, Any] = {}
         removed: dict[str, Any] = {}
@@ -246,313 +331,18 @@ class StoreElement:
 
         return _DiffResult(added, removed, modified)
 
-    def __repr__(self) -> str:
-        """Generic tree representation using iter_keys and get."""
-        try:
-            # Manually fetch immediate children for display
-            keys = list(self.iter_keys(Ref("")))
-            children = {k: self.get(Ref(k)) for k in keys}
-        except Exception:
-            return f"{type(self).__name__}(<repr failed>)"
-
-        name = type(self).__name__
-        if not children:
-            return f"{name}()"
-
-        lines = [f"{name}({StoreConfig.repr_newline}"]
-        count = len(children)
-        for i, (key, value) in enumerate(children.items()):
-            value_lines = repr(value).splitlines(keepends=True)
-            head = value_lines[0] if value_lines else repr("")
-            lines.append(f"{StoreConfig.repr_indent}{key}={head}")
-            for line in value_lines[1:]:
-                lines.append(f"{StoreConfig.repr_indent}{line}")
-
-            suffix = StoreConfig.repr_last_suffix if i == count - 1 else StoreConfig.repr_suffix
-            lines.append(f"{suffix}{StoreConfig.repr_newline}")
-        lines.append(")")
-        return "".join(lines)
-
-
-class StoreBackend(StoreElement):
-    """Base class for storage backends."""
-    pass
-
-
-class MemoryBackend(StoreBackend):
-    """Backend implementation using a standard dictionary."""
-
-    def __init__(self, data: Optional[dict[str, Any]] = None):
-        self._data = data if data is not None else {}
-
-    def _resolve_container(self, parts: tuple[str, ...], create: bool = False) -> Any:
-        curr = self._data
-        for i, part in enumerate(parts):
-            if part not in curr:
-                if create:
-                    curr[part] = {}
-                else:
-                    raise StorePathError(part)
-            curr = curr[part]
-            # Ensure we don't traverse into a leaf value as if it were a container
-            if not isinstance(curr, dict) and i < len(parts) - 1:
-                 raise StorePathError(f"Segment {part} is a leaf, cannot traverse into.")
-        return curr
-
-    def get(self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING) -> Union[_T, _T2]:
-        try:
-            if not ref.parts:
-                return self # type: ignore
-            
-            parent = self._resolve_container(ref.parts[:-1])
-            key = ref.parts[-1]
-            
-            if key not in parent:
-                raise StorePathError(key)
-            return parent[key]
-        except StorePathError:
-            if default is MISSING:
-                raise
-            return default
-
-    def set(self, ref: Ref[_T], value: _T) -> None:
-        if not ref.parts:
-            if isinstance(value, MemoryBackend):
-                self._data = value._data
-                return
-            elif isinstance(value, dict):
-                self._data = value
-                return
-            raise ValueError("Cannot set root of backend to a non-dict value directly.")
-
-        parent = self._resolve_container(ref.parts[:-1], create=True)
-        parent[ref.parts[-1]] = value
-
-    def delete(self, ref: Ref[_T]) -> None:
-        if not ref.parts:
-            self._data.clear()
-            return
-        parent = self._resolve_container(ref.parts[:-1])
-        key = ref.parts[-1]
-        if key not in parent:
-             raise StorePathError(key)
-        del parent[key]
-
-    def exists(self, ref: Ref[_T]) -> bool:
-        try:
-            self.get(ref)
-            return True
-        except StorePathError:
-            return False
-
-    def is_leaf(self, ref: Ref[_T]) -> bool:
-        try:
-            val = self.get(ref)
-            return not isinstance(val, dict)
-        except StorePathError:
-            return False
-
-    def iter_keys(self, ref: Ref) -> Iterator[str]:
-        try:
-            val = self.get(ref)
-            if isinstance(val, dict):
-                return iter(val.keys())
-            if isinstance(val, MemoryBackend):
-                return iter(val._data.keys())
-            return iter([]) 
-        except StorePathError:
-            return iter([])
-
-    @classmethod
-    def from_children(cls, children: dict[str, Any]) -> Self:
-        return cls(children)
-
-
-class StoreView(StoreElement):
-    """
-    A lightweight proxy view into the Store.
-    Delegates all operations to the root Store to ensure Hooks are triggered.
-    """
-
-    def __init__(self, root: "Store", path: str):
-        self._root = root
-        self._path = path
-
-    def _make_abs_ref(self, rel_ref: Ref) -> Ref:
-        prefix = self._path
-        if not rel_ref.path:
-            return Ref(prefix, lens=rel_ref.lens, metadata=rel_ref.metadata)
-        abs_path = f"{prefix}.{rel_ref.path}" if prefix else rel_ref.path
-        return Ref(abs_path, lens=rel_ref.lens, metadata=rel_ref.metadata)
-
-    def get(self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING) -> Union[_T, _T2]:
-        return self._root.get(self._make_abs_ref(ref), default)
-
-    def set(self, ref: Ref[_T], value: _T) -> None:
-        self._root.set(self._make_abs_ref(ref), value)
-
-    def delete(self, ref: Ref[_T]) -> None:
-        self._root.delete(self._make_abs_ref(ref))
-
-    def exists(self, ref: Ref[_T]) -> bool:
-        return self._root.exists(self._make_abs_ref(ref))
-
-    def is_leaf(self, ref: Ref[_T]) -> bool:
-        return self._root.is_leaf(self._make_abs_ref(ref))
-
-    def iter_keys(self, ref: Ref) -> Iterator[str]:
-        return self._root.iter_keys(self._make_abs_ref(ref))
-
-    @classmethod
-    def from_children(cls, children: dict[str, Any]) -> StoreElement:
+    def collect_leaves(self) -> dict[str, Any]:
         """
-        Materializes the View into a MemoryBackend when unflattened.
+        Recursively find all leaf values using STORE_PYTREE_ENGINE.
+        Returns a dictionary mapping dotted paths to values.
         """
-        return MemoryBackend(children)
-
-
-class Store(StoreElement):
-    """
-    The root Store object.
-    Manages backends routing and the global hook.
-    """
-    
-    def __init__(self, hook: Optional[StoreHook] = None):
-        self._backends: dict[str, StoreBackend] = {}
-        self.hook: Optional[StoreHook] = hook
-
-    def mount(self, prefix: str, backend: StoreBackend) -> None:
-        if "." in prefix or not prefix:
-            raise ValueError("Backends must be mounted at the top level (e.g. 'mnt').")
-        self._backends[prefix] = backend
-
-    def _get_backend(self, part: str) -> tuple[StoreBackend, bool]:
-        if part in self._backends:
-            return self._backends[part], True
-        # Lazy creation of MemoryBackend
-        backend = MemoryBackend()
-        self._backends[part] = backend
-        return backend, True
-
-    def get(self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING) -> Union[_T, _T2]:
-        try:
-            if not ref.parts:
-                return self # type: ignore
-
-            root_key = ref.parts[0]
-            if root_key not in self._backends:
-                 raise StorePathError(root_key)
-            
-            backend = self._backends[root_key]
-            backend_path = ".".join(ref.parts[1:])
-            
-            if not backend_path:
-                value = backend
-                is_structure = True 
-            else:
-                backend_ref = Ref(backend_path)
-                value = backend.get(backend_ref)
-                is_structure = not backend.is_leaf(backend_ref)
-
-            if self.hook is not None:
-                self.hook.on_getitem(self, ref, value)
-
-            if is_structure:
-                return cast(_T, StoreView(self, ref.path))
-            
-            return value
-
-        except StorePathError:
-            if default is MISSING:
-                raise
-            return default
-
-    def set(self, ref: Ref[_T], value: _T) -> None:
-        if not ref.parts:
-             raise ValueError("Cannot overwrite the entire Store root.")
-        
-        root_key = ref.parts[0]
-        backend, _ = self._get_backend(root_key)
-        backend_path = ".".join(ref.parts[1:])
-        
-        # NOTE: Skipping old_value fetch for now to avoid overhead
-        old_value = MISSING 
-        
-        if not backend_path:
-             raise ValueError(f"Cannot overwrite the root of backend '{root_key}'.")
-        
-        backend.set(Ref(backend_path), value)
-        
-        if self.hook is not None:
-            self.hook.on_setitem(self, ref, old_value, value)
-
-    def delete(self, ref: Ref[_T]) -> None:
-        if not ref.parts:
-            raise ValueError("Cannot delete Store root.")
-        
-        root_key = ref.parts[0]
-        if root_key not in self._backends:
-            raise StorePathError(root_key)
-            
-        backend = self._backends[root_key]
-        backend_path = ".".join(ref.parts[1:])
-        
-        if not backend_path:
-            del self._backends[root_key]
-        else:
-            backend.delete(Ref(backend_path))
-            
-        if self.hook is not None:
-            self.hook.on_delitem(self, ref, MISSING)
-
-    def exists(self, ref: Ref[_T]) -> bool:
-        if not ref.parts: return True
-        root_key = ref.parts[0]
-        if root_key not in self._backends: return False
-        backend = self._backends[root_key]
-        backend_path = ".".join(ref.parts[1:])
-        if not backend_path: return True
-        return backend.exists(Ref(backend_path))
-
-    def is_leaf(self, ref: Ref[_T]) -> bool:
-        if not ref.parts: return False
-        root_key = ref.parts[0]
-        if root_key not in self._backends: return False
-        backend = self._backends[root_key]
-        backend_path = ".".join(ref.parts[1:])
-        if not backend_path: return False
-        return backend.is_leaf(Ref(backend_path))
-    
-    def iter_keys(self, ref: Ref) -> Iterator[str]:
-        if not ref.parts:
-            return iter(self._backends.keys())
-        
-        root_key = ref.parts[0]
-        if root_key not in self._backends:
-            return iter([])
-        
-        backend = self._backends[root_key]
-        backend_path = ".".join(ref.parts[1:])
-        return backend.iter_keys(Ref(backend_path))
-
-    @classmethod
-    def from_children(cls, children: dict[str, Any]) -> Self:
-        store = cls()
-        for k, v in children.items():
-            if isinstance(v, StoreBackend):
-                store.mount(k, v)
-            elif isinstance(v, dict):
-                store.mount(k, MemoryBackend(v))
-        return store
-
-    @contextmanager
-    def with_hook(self, hook: StoreHook):
-        prev_hook = self.hook
-        self.hook = hook
-        try:
-            yield
-        finally:
-            self.hook = prev_hook
+        leaves = {}
+        # PyTreeEngine yields (KeyPath, leaf_value) tuples.
+        for path, value in STORE_PYTREE_ENGINE.iter_with_path(self):
+            # Convert KeyPath (tuple of MappingKey) to dotted string
+            dot_path = ".".join(cast("MappingKey", k).key for k in path)  # type: ignore
+            leaves[dot_path] = value
+        return leaves
 
 
 # --- PyTreeEngine Configuration ---
@@ -561,36 +351,46 @@ STORE_PYTREE_ENGINE = PyTreeEngine("store_engine", register_defaults=False)
 PYTREE_ENGINE_REGISTRY.register(STORE_PYTREE_ENGINE, key="store_engine")
 
 
-def _flatten_store_element(element: StoreElement) -> tuple[Iterable[Any], PyTreeAux]:
+def _flatten_store_element(element: _StoreElement) -> tuple[Iterable[Any], PyTreeAux]:
     """
-    Generic flattener using StoreElement's iter_keys/get interface.
+    Flatten handler for _StoreElement.
+    Exposes keys in PyTreeAux for path tracking and values as children.
     """
-    try:
-        keys = tuple(element.iter_keys(Ref("")))
-    except NotImplementedError:
-        keys = ()
-        
-    children = tuple(element.get(Ref(k)) for k in keys)
+    keys = tuple(element._data.keys())
+    children = tuple(element._data.values())
+    # Wrap keys in MappingKey for semantic path tracking (similar to dict)
     rich_keys = tuple(MappingKey(k) for k in keys)
-    return children, PyTreeAux(keys=rich_keys, cls=type(element))
+
+    return children, PyTreeAux(keys=rich_keys)
 
 
 def _unflatten_store_element(children: Iterable[Any], aux: PyTreeAux) -> Any:
     """
-    Generic unflattener using StoreElement's factory interface.
+    Unflatten handler to reconstruct _StoreElement.
     """
-    if aux.cls is None or not issubclass(aux.cls, StoreElement):
-        raise ValueError("Invalid class in PyTreeAux for StoreElement unflattening.")
-    
+    cls = aux.cls if aux.cls is not None else _StoreElement
+
     if aux.keys is None:
-        return aux.cls.from_children({})
+        raise ValueError("Missing keys in PyTreeAux for Store unflattening.")
 
-    keys = [cast("MappingKey", k).key for k in aux.keys]
-    children_dict = dict(zip(keys, children))
-    return aux.cls.from_children(children_dict)
+    # Extract keys
+    keys = [cast("MappingKey", k).key for k in aux.keys]  # type: ignore
+
+    # Reconstruct instance
+    # Bypass __init__ to handle subclasses (like Store) generically if needed,
+    # or just use constructor if safe. Here we mimic generic pytree reconstruction.
+    element = object.__new__(cls)
+    # Restore internal data
+    element._data = dict(zip(keys, children))
+
+    # Init hooks if it's a Store (default to None)
+    if isinstance(element, Store):
+        element.hook = None
+
+    return element
 
 
-# Register ONCE for the base class, and all subclasses inherit this logic.
+# Register _StoreElement (and Store via inheritance)
 STORE_PYTREE_ENGINE.register(
-    StoreElement, _flatten_store_element, _unflatten_store_element
+    _StoreElement, _flatten_store_element, _unflatten_store_element
 )
