@@ -76,7 +76,12 @@ class Ref(Generic[_T]):
         return self.__dict__["metadata"]
 
     def __init__(
-        self, path: str, /, *, lens: KeyPath = (), metadata: Optional[Mapping[str, Any]] = None
+        self,
+        path: str,
+        /,
+        *,
+        lens: KeyPath = (),
+        metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if not path:
             raise ValueError("Empty ref path")
@@ -198,7 +203,7 @@ class StoreElement(ABC):
             head = (
                 value_lines[0] if value_lines else repr("")
             )  # NOTE: repr(value) may return ""
-            lines.append(f"{StoreConfig.repr_indent}{key}={head}")
+            lines.append(f"{StoreConfig.repr_indent}{key!r}: {head}")
             for line in value_lines[1:]:
                 lines.append(f"{StoreConfig.repr_indent}{line}")
             if i == count - 1:
@@ -210,7 +215,9 @@ class StoreElement(ABC):
         lines.append(")")
         return "".join(lines)
 
-    def diff(self, other: "StoreElement", strategy: Literal["is", "eq"] = "is") -> _DiffResult:
+    def diff(
+        self, other: "StoreElement", strategy: Literal["is", "eq"] = "is"
+    ) -> _DiffResult:
         """Compares this StoreElement with another using PyTreeEngine."""
         if strategy not in ("is", "eq"):
             raise ValueError(f"Unknown diff strategy: {strategy!r}")
@@ -261,8 +268,10 @@ class StoreElement(ABC):
 class Store(StoreElement):
     """Dotted-attribute-style nested store."""
 
-    def __init__(self, /, **data: Any) -> None:
-        self._data: _InternalDict = _InternalDict(data)
+    def __init__(self, data: Optional[dict[str, Any]] = None) -> None:
+        self._data: _InternalDict = (
+            _InternalDict(data) if data is not None else _InternalDict()
+        )
         self.hook: Union[StoreHook, None] = None
 
     @overload
@@ -338,7 +347,7 @@ class Store(StoreElement):
     def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
         if ref is None:
             return self._data.keys()
-        
+
         # Directly resolve internal element to avoid creating intermediate StoreView
         element = self._resolve_internal(ref.parts)
         return element.keys()
@@ -379,15 +388,15 @@ class Store(StoreElement):
         current: Any = self._data
         for p in parts:
             if not isinstance(current, _InternalDict):
-                 raise _StorePathError(f"Path blocked by leaf value.")
+                raise _StorePathError(f"Path blocked by leaf value.")
             try:
                 current = current[p]
             except KeyError:
                 raise _StorePathError(p) from None
 
         if not isinstance(current, _InternalDict):
-             # Should be covered by loop check, but for end result:
-             raise _StorePathError("Path resolved to a leaf, expected internal element.")
+            # Should be covered by loop check, but for end result:
+            raise _StorePathError("Path resolved to a leaf, expected internal element.")
         return current
 
     def _touch(self, parts: Iterable[str]) -> _InternalDict:
@@ -407,7 +416,9 @@ class Store(StoreElement):
         if isinstance(element, StoreView):
             # Optimization: directly copy the internal dict from the view's source
             # We access the internal dict via resolution to ensure freshness
-            return self._deep_copy_internal(element._store._resolve_internal(element._parts))
+            return self._deep_copy_internal(
+                element._store._resolve_internal(element._parts)
+            )
         elif isinstance(element, Store):
             return self._deep_copy_internal(element._data)
         else:
@@ -416,7 +427,9 @@ class Store(StoreElement):
 
     def _deep_copy_internal(self, obj: Any) -> Any:
         if isinstance(obj, _InternalDict):
-            return _InternalDict({k: self._deep_copy_internal(v) for k, v in obj.items()})
+            return _InternalDict(
+                {k: self._deep_copy_internal(v) for k, v in obj.items()}
+            )
         return obj
 
     def _dict_to_internal(self, d: dict) -> _InternalDict:
@@ -444,12 +457,14 @@ class StoreView(StoreElement):
             # Point to self
             path = ".".join(self._parts)
             return Ref(path)
-            
+
         new_parts = self._parts + ref.parts
         new_path = ".".join(new_parts)
         return type(ref)(new_path, lens=ref.lens, metadata=ref.metadata)
 
-    def get(self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING) -> Union[_T, _T2]:
+    def get(
+        self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING
+    ) -> Union[_T, _T2]:
         return self._store.get(self._adjust_ref(ref), default)
 
     def set(self, ref: Ref[_T], value: _T) -> None:
@@ -462,8 +477,6 @@ class StoreView(StoreElement):
         return self._store.exists(self._adjust_ref(ref))
 
     def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
-        # Delegate to store using adjusted ref.
-        # This avoids StoreView needing to fetch internal dict itself.
         return self._store.keys(self._adjust_ref(ref))
 
 
@@ -480,7 +493,7 @@ def _flatten_store_element(element: StoreElement) -> tuple[Iterable[Any], PyTree
     keys = tuple(element.keys())
     # Retrieve children using public API to ensure StoreViews are created for nested structures
     children = [element.get(Ref(k)) for k in keys]
-    rich_keys = tuple(MappingKey(k) for k in keys)
+    rich_keys = tuple(MappingKey(k) for k in keys)  # FIXME: MappingKey is wrong here.
 
     return children, PyTreeAux(keys=rich_keys)
 
@@ -495,6 +508,7 @@ def _unflatten_store_element(children: Iterable[Any], aux: PyTreeAux) -> Any:
 
     keys = [cast("MappingKey", k).key for k in aux.keys]
 
+    # FIXME: Store() is wrong.
     s = Store()
     for k, child in zip(keys, children):
         s.set(Ref(k), child)
