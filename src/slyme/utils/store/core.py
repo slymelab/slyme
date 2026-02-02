@@ -101,13 +101,13 @@ class Ref(Generic[_T]):
         return f"path={self.path!r}, lens_expr={PyTreeEngine.codify_path(self.lens)}, metadata={self.metadata!r}"
 
 
-class _StorePathError(KeyError):
+class StorePathError(KeyError):
     """Internal exception raised when a path cannot be resolved in the store."""
 
     pass
 
 
-class _InternalDict(dict):
+class StoreDict(dict):
     """
     Internal dictionary implementation used to distinguish structural elements
     from user-provided dictionary values.
@@ -117,7 +117,7 @@ class _InternalDict(dict):
 
 
 @dataclass(frozen=True)
-class _DiffResult:
+class DiffResult:
     __slots__ = ("added", "removed", "modified")
     added: dict[str, Any]  # {key: other_value}
     removed: dict[str, Any]  # {key: self_value}
@@ -165,13 +165,16 @@ class StoreElement(ABC):
                 data[key] = value
         return data
 
+    def type_repr(self) -> str:
+        return type(self).__name__
+
     def __repr__(self) -> str:
-        name = type(self).__name__
+        name = self.type_repr()
         keys = list(self.keys())
         if not keys:
             return f"{name}()"
 
-        lines = [f"{name}({StoreConfig.repr_newline}"]
+        lines = [f"{name}({{{StoreConfig.repr_newline}"]
         count = len(keys)
         for i, key in enumerate(keys):
             # Use get to retrieve value (which might be StoreView or leaf)
@@ -189,12 +192,12 @@ class StoreElement(ABC):
                 )
             else:
                 lines.append(f"{StoreConfig.repr_suffix}{StoreConfig.repr_newline}")
-        lines.append(")")
+        lines.append("})")
         return "".join(lines)
 
     def diff(
         self, other: "StoreElement", strategy: Literal["is", "eq"] = "is"
-    ) -> _DiffResult:
+    ) -> DiffResult:
         """Compares this StoreElement with another using PyTreeEngine."""
         if strategy not in ("is", "eq"):
             raise ValueError(f"Unknown diff strategy: {strategy!r}")
@@ -228,7 +231,7 @@ class StoreElement(ABC):
             if is_different:
                 modified[k] = (val_self, val_other)
 
-        return _DiffResult(added, removed, modified)
+        return DiffResult(added, removed, modified)
 
     def collect_leaves(self) -> dict[str, Any]:
         """
@@ -246,8 +249,8 @@ class Store(StoreElement):
     """Dotted-attribute-style nested store."""
 
     def __init__(self, data: Optional[dict[str, Any]] = None) -> None:
-        self._data: _InternalDict = (
-            _InternalDict(data) if data is not None else _InternalDict()
+        self._data: StoreDict = (
+            StoreDict(data) if data is not None else StoreDict()
         )
         self.hook: Union[StoreHook, None] = None
 
@@ -267,7 +270,7 @@ class Store(StoreElement):
             if self.hook is not None:
                 self.hook.on_getitem(self, ref, value)
             return value
-        except _StorePathError:
+        except StorePathError:
             if default is MISSING:
                 raise
             return default
@@ -275,7 +278,7 @@ class Store(StoreElement):
     def exists(self, ref: Ref[_T]) -> bool:
         try:
             self._resolve_element(ref.parts)
-        except _StorePathError:
+        except StorePathError:
             return False
         else:
             return True
@@ -290,7 +293,7 @@ class Store(StoreElement):
         if self.hook is not None:
             # Get old value, checking if it is structure or leaf
             raw_old = element.get(last, MISSING)
-            if isinstance(raw_old, _InternalDict):
+            if isinstance(raw_old, StoreDict):
                 # If old value is structural, wrap in StoreView for the hook
                 # to maintain "Element" abstraction
                 old_value = StoreView(self, tuple(dirs) + (last,))
@@ -309,9 +312,9 @@ class Store(StoreElement):
         if self.hook is not None:
             raw_old = parent.get(last, MISSING)
             if raw_old is MISSING:
-                raise _StorePathError(last)
+                raise StorePathError(last)
 
-            if isinstance(raw_old, _InternalDict):
+            if isinstance(raw_old, StoreDict):
                 old_value = StoreView(self, tuple(dirs) + (last,))
             else:
                 old_value = raw_old
@@ -348,43 +351,43 @@ class Store(StoreElement):
         path_acc = []
 
         for p in parts:
-            if not isinstance(current, _InternalDict):
-                raise _StorePathError(f"Path blocked by leaf value.")
+            if not isinstance(current, StoreDict):
+                raise StorePathError(f"Path blocked by leaf value.")
             try:
                 current = current[p]
                 path_acc.append(p)
             except KeyError:
-                raise _StorePathError(p) from None
+                raise StorePathError(p) from None
 
-        if isinstance(current, _InternalDict):
+        if isinstance(current, StoreDict):
             return StoreView(self, tuple(path_acc))
         return current
 
-    def _resolve_internal(self, parts: Iterable[str]) -> _InternalDict:
+    def _resolve_internal(self, parts: Iterable[str]) -> StoreDict:
         """Resolve path strictly expecting internal dicts."""
         current: Any = self._data
         for p in parts:
-            if not isinstance(current, _InternalDict):
-                raise _StorePathError(f"Path blocked by leaf value.")
+            if not isinstance(current, StoreDict):
+                raise StorePathError(f"Path blocked by leaf value.")
             try:
                 current = current[p]
             except KeyError:
-                raise _StorePathError(p) from None
+                raise StorePathError(p) from None
 
-        if not isinstance(current, _InternalDict):
+        if not isinstance(current, StoreDict):
             # Should be covered by loop check, but for end result:
-            raise _StorePathError("Path resolved to a leaf, expected internal element.")
+            raise StorePathError("Path resolved to a leaf, expected internal element.")
         return current
 
-    def _touch(self, parts: Iterable[str]) -> _InternalDict:
-        element: _InternalDict = self._data
+    def _touch(self, parts: Iterable[str]) -> StoreDict:
+        element: StoreDict = self._data
         for p in parts:
             nxt = element.get(p, MISSING)
             if nxt is MISSING:
-                nxt = _InternalDict()
+                nxt = StoreDict()
                 element[p] = nxt
-            elif not isinstance(nxt, _InternalDict):
-                raise _StorePathError(f"Conflict: {p!r} is already a leaf value.")
+            elif not isinstance(nxt, StoreDict):
+                raise StorePathError(f"Conflict: {p!r} is already a leaf value.")
             element = nxt
         return element
 
@@ -403,14 +406,14 @@ class Store(StoreElement):
             return self._dict_to_internal(element.to_dict())
 
     def _deep_copy_internal(self, obj: Any) -> Any:
-        if isinstance(obj, _InternalDict):
-            return _InternalDict(
+        if isinstance(obj, StoreDict):
+            return StoreDict(
                 {k: self._deep_copy_internal(v) for k, v in obj.items()}
             )
         return obj
 
-    def _dict_to_internal(self, d: dict) -> _InternalDict:
-        res = _InternalDict()
+    def _dict_to_internal(self, d: dict) -> StoreDict:
+        res = StoreDict()
         for k, v in d.items():
             if isinstance(v, dict):
                 res[k] = self._dict_to_internal(v)
@@ -455,6 +458,11 @@ class StoreView(StoreElement):
 
     def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
         return self._store.keys(self._adjust_ref(ref))
+
+    def type_repr(self) -> str:
+        # NOTE: `StoreView` is actually a view of `StoreDict`,
+        # so we use `StoreDict.__name__` as type repr.
+        return StoreDict.__name__
 
 
 # --- PyTreeEngine Configuration ---
