@@ -42,7 +42,6 @@ from .exception import (
     NodeExpressionExceptionRecord,
     NodeWrapperExceptionRecord,
 )
-from .render import get_render_string
 
 __all__ = [
     "spec",
@@ -337,14 +336,14 @@ class Node(NodeElement):
         *,
         func: NodeFunc,
         specs: Mapping[str, Spec],
-        node_wrappers: Optional[Iterable["NodeWrapper"]] = None,
+        wrappers: Optional[Iterable["NodeWrapper"]] = None,
         kwargs: dict[str, Any],
     ):
         super().__init__(func=func, specs=specs, kwargs=kwargs)
-        self.node_wrappers = list(node_wrappers) if node_wrappers is not None else []
+        self.wrappers = list(wrappers) if wrappers is not None else []
 
     def add_wrappers(self, *wrappers: "NodeWrapper") -> Self:
-        self.node_wrappers.extend(wrappers)
+        self.wrappers.extend(wrappers)
         return self
 
     def __call__(self, ctx: Context, /) -> Context:
@@ -354,7 +353,7 @@ class Node(NodeElement):
         try:
             with ExitStack() as stack:
                 should_stop = False
-                for wrapper in self.node_wrappers:
+                for wrapper in self.wrappers:
                     val = stack.enter_context(wrapper(ctx, self))
                     if val is STOP:
                         should_stop = True
@@ -467,11 +466,11 @@ def _unflatten_node_element(children: Iterable[Any], aux: PyTreeAux) -> Any:
 def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
     """
     Specific flatten for Node.
-    Expands node_wrappers + kwargs.
+    Expands wrappers + kwargs.
     """
     # 1. Wrappers
-    children = [obj.node_wrappers]
-    rich_keys = [AttributeKey("node_wrappers")]
+    children = [obj.wrappers]
+    rich_keys = [AttributeKey("wrappers")]
 
     # 2. Kwargs
     for k, v in obj.kwargs.items():
@@ -493,8 +492,8 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Any:
     keys_iter = iter(aux.keys)
 
     # 1. Wrappers
-    _ = next(keys_iter)  # AttributeKey("node_wrappers")
-    node_wrappers = next(children_iter)
+    _ = next(keys_iter)
+    wrappers = next(children_iter)
 
     # 2. Kwargs
     kwargs = {}
@@ -506,7 +505,7 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Any:
     return Node(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
-        node_wrappers=node_wrappers,
+        wrappers=wrappers,
         kwargs=kwargs,
     )
 
@@ -541,8 +540,8 @@ class FunctionalFactory(Generic[_T, _P]):
 
         # Determine extra args based on class
         extra_args = {}
-        if self._cls is Node and "node_wrappers" in final_kwargs:
-            extra_args["node_wrappers"] = final_kwargs.pop("node_wrappers")
+        if self._cls is Node and "wrappers" in final_kwargs:
+            extra_args["wrappers"] = final_kwargs.pop("wrappers")
 
         return self._cls(
             func=self._func, specs=self._specs, kwargs=final_kwargs, **extra_args
@@ -653,3 +652,6 @@ def wrapper(func: Union[WrapperFunc[_P], _Missing] = _MISSING, /) -> Union[
         return partial(_wrapper)
     else:
         return _wrapper(func)
+
+
+from .render import get_render_string

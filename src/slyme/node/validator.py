@@ -8,7 +8,7 @@ from collections.abc import Callable
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.pytree import AttributeKey
 from slyme.context import Context, Dep, DEP, Ref
-from slyme.node.base import (
+from .core import (
     NodeElement,
     Node,
     NodeExpression,
