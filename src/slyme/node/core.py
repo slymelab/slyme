@@ -4,11 +4,10 @@ Core node module, consolidating base definitions and functional APIs.
 
 import inspect
 import types
-from abc import abstractmethod
 from enum import Enum
 from functools import partial, update_wrapper
 from contextlib import contextmanager, AbstractContextManager, ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import (
     TypeVar,
     Callable,
@@ -28,8 +27,6 @@ from typing import (
 )
 from typing_extensions import ParamSpec, Concatenate, Self
 from slyme.utils.common import enrich_exception
-from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
-from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import (
     PyTreeEngine,
     PYTREE_ENGINE_REGISTRY,
@@ -37,7 +34,7 @@ from slyme.utils.pytree import (
     AttributeKey,
     MappingKey,
 )
-from slyme.context import Context, Ref, DEP, Dep
+from slyme.context import Context, Ref
 from .exception import (
     NodeTerminate,
     NodeExceptionRecord,
@@ -46,7 +43,6 @@ from .exception import (
     NodeWrapperExceptionRecord,
 )
 from .render import get_render_string
-from .validator import check_node_structure, DEPENDENCY_REGISTRY
 
 __all__ = [
     "spec",
@@ -347,17 +343,11 @@ class Node(NodeElement):
         super().__init__(func=func, specs=specs, kwargs=kwargs)
         self.node_wrappers = list(node_wrappers) if node_wrappers is not None else []
 
-    def execute(self, ctx: Context, /) -> None:
-        """
-        Directly executes the wrapped function with stored kwargs.
-        """
-        self.func(ctx, **self.kwargs)
-
     def add_wrappers(self, *wrappers: "NodeWrapper") -> Self:
         self.node_wrappers.extend(wrappers)
         return self
 
-    def __call__(self, ctx: Context, /) -> None:
+    def __call__(self, ctx: Context, /) -> Context:
         """
         Outer execute API with wrapper handling.
         """
@@ -400,9 +390,6 @@ class NodeExpression(NodeElement, Generic[_R]):
     ):
         super().__init__(func=func, specs=specs, kwargs=kwargs)
 
-    def evaluate(self, ctx: Context, /) -> _R:
-        return self.func(ctx, **self.kwargs)
-
     def __call__(self, ctx: Context, /) -> _R:
         try:
             # Inline execution
@@ -428,11 +415,6 @@ class NodeWrapper(NodeElement):
     ):
         super().__init__(func=func, specs=specs, kwargs=kwargs)
         self.cm_factory = contextmanager(func)
-
-    @contextmanager
-    def wrap(self, ctx: Context, wrapped: Node, /) -> Generator:
-        with self.cm_factory(ctx, wrapped, **self.kwargs) as val:
-            yield val
 
     @contextmanager
     def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
@@ -541,39 +523,6 @@ NODE_PYTREE_ENGINE.register(
 
 
 # --- Functional Factory & Decorators ---
-
-
-class _FunctionalFactory(Generic[_T, _P]):
-    """
-    Factory class for creating functional node instances.
-    """
-
-    def __init__(self, cls: type[_T], analysis: _SignatureAnalysis) -> None:
-        update_wrapper(
-            self, analysis.specs
-        )  # Use any object, just to hold context if needed, but really we want to wrap the original func which isn't available here directly in init params if we don't pass it.
-        # Actually we need to wrap the factory with the original function's metadata
-        # But here we don't have 'func' in signature.
-        # Let's assume the decorator handles the wrapping, or we pass func in.
-        # To match previous logic, we rely on the caller to update_wrapper if needed
-        # OR we change signature to take `func`.
-        # The previous code did: update_wrapper(self, config.func).
-        # We'll adapt:
-        self._cls = cls
-        self._analysis = analysis
-        self.__signature__ = analysis.public_signature
-
-    def _create(self, **kwargs) -> _T:
-        # Common creation logic
-        # 1. Validate & Apply Specs
-        # We need the function object. It's not in analysis.
-        # Let's assume we need to change __init__ to accept func.
-        raise NotImplementedError("Should not be called directly without func context.")
-
-    # We need to restructure this slightly to hold the func.
-    # Re-defining __init__ to be cleaner.
-
-
 class FunctionalFactory(Generic[_T, _P]):
     def __init__(self, cls: type[_T], func: Callable, analysis: _SignatureAnalysis):
         update_wrapper(self, func)

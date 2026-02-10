@@ -137,7 +137,7 @@ class StoreDict(dict):
         self,
         updates: dict[tuple[str, ...], Any],
         drops: set[tuple[str, ...]],
-    ) -> Any:
+    ) -> "StoreDict":
         """
         Core recursive Copy-On-Write (COW) algorithm for simultaneous updates and drops.
 
