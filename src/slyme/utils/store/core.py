@@ -345,7 +345,7 @@ class StoreElement(ABC):
         return leaves
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class Store(StoreElement):
     """
     Immutable Store implementation with efficient Copy-On-Write (COW) updates.
@@ -383,6 +383,8 @@ class Store(StoreElement):
     ) -> Union[_T, _T2]:
         try:
             val = self._resolve(ref.parts)
+            if isinstance(val, StoreDict):
+                return StoreView(self, ref.parts)
             return ref.resolve(val)
         except StorePathError:
             if default is MISSING:
@@ -475,7 +477,7 @@ class Store(StoreElement):
         return self.mutate(drops=[ref])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class StoreView(StoreElement):
     """
     Read-only view of a subtree within a Store.
