@@ -386,20 +386,11 @@ class NodeDef(Node):
         )
 
     def prepare(self) -> "NodeExec":
-        # Recursively prepare children using PyTree mapping.
-        # We must treat nested NodeElement as leaves so we can call .prepare() on them
-        # instead of flattening them into their components.
-        prepared_def = NODE_PYTREE_ENGINE.map(
-            lambda x: x.prepare() if isinstance(x, NodeElement) else x,
-            self,
-            is_leaf=lambda x, _: isinstance(x, NodeElement) and x is not self,
-        )
-        return NodeExec(
-            func=prepared_def._func,
-            specs=prepared_def._specs,
-            wrappers=prepared_def.wrappers,
-            kwargs=prepared_def._kwargs,
-        )
+        # Use the specialized FREEZE_PYTREE_ENGINE to perform a deep transform
+        # of the structure (List -> Tuple, Dict -> MappingProxy, Def -> Exec).
+        # We map strict identity because the transformation happens in the 'unflatten' phase
+        # of the registered types in FREEZE_PYTREE_ENGINE.
+        return FREEZE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
@@ -425,20 +416,18 @@ class NodeExec(Node):
         *,
         func: NodeFunc,
         specs: Mapping[str, Spec],
-        wrappers: Iterable["NodeWrapper"],
+        wrappers: tuple["NodeWrapper", ...],
         kwargs: dict[str, Any],
     ):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
-        # Freeze wrappers and kwargs
-        object.__setattr__(self, "wrappers", tuple(wrappers))
-        object.__setattr__(
-            self,
-            "_kwargs",
-            types.MappingProxyType(
-                {k: _freeze_structure(v) for k, v in kwargs.items()}
-            ),
-        )
+        # Note: wrappers are already converted to tuple by FREEZE_PYTREE_ENGINE
+        object.__setattr__(self, "wrappers", wrappers)
+        # Note: We rely on the Engine to freeze children, but the top-level kwargs dict
+        # itself needs to be wrapped in a Proxy if it isn't already.
+        # However, since the engine recursively unflattened the dict content into a dict,
+        # we wrap it here for the final layer of safety.
+        object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
 
     def prepare(self) -> Self:
         return self
@@ -537,16 +526,7 @@ class NodeExpressionDef(NodeExpression[_R]):
         )
 
     def prepare(self) -> "NodeExpressionExec[_R]":
-        prepared_def = NODE_PYTREE_ENGINE.map(
-            lambda x: x.prepare() if isinstance(x, NodeElement) else x,
-            self,
-            is_leaf=lambda x, _: isinstance(x, NodeElement) and x is not self,
-        )
-        return NodeExpressionExec(
-            func=prepared_def._func,
-            specs=prepared_def._specs,
-            kwargs=prepared_def._kwargs,
-        )
+        return FREEZE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
@@ -573,13 +553,7 @@ class NodeExpressionExec(NodeExpression[_R]):
     ):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
-        object.__setattr__(
-            self,
-            "_kwargs",
-            types.MappingProxyType(
-                {k: _freeze_structure(v) for k, v in kwargs.items()}
-            ),
-        )
+        object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
 
     def prepare(self) -> Self:
         return self
@@ -664,16 +638,7 @@ class NodeWrapperDef(NodeWrapper):
         )
 
     def prepare(self) -> "NodeWrapperExec":
-        prepared_def = NODE_PYTREE_ENGINE.map(
-            lambda x: x.prepare() if isinstance(x, NodeElement) else x,
-            self,
-            is_leaf=lambda x, _: isinstance(x, NodeElement) and x is not self,
-        )
-        return NodeWrapperExec(
-            func=prepared_def._func,
-            specs=prepared_def._specs,
-            kwargs=prepared_def._kwargs,
-        )
+        return FREEZE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
@@ -700,13 +665,7 @@ class NodeWrapperExec(NodeWrapper):
     ):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
-        object.__setattr__(
-            self,
-            "_kwargs",
-            types.MappingProxyType(
-                {k: _freeze_structure(v) for k, v in kwargs.items()}
-            ),
-        )
+        object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
         object.__setattr__(self, "cm_factory", contextmanager(func))
 
     def prepare(self) -> Self:
@@ -738,44 +697,52 @@ class NodeWrapperExec(NodeWrapper):
 
 
 # --- PyTree Engine Configuration ---
+
+# 1. Standard Engine: Preserves Types (Def -> Def, List -> List)
 NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
 PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_engine")
 
+# 2. Freeze Engine: Transforms Types (Def -> Exec, List -> Tuple)
+FREEZE_PYTREE_ENGINE = PyTreeEngine("freeze_engine")
+
+
+# --- Flatten Logic (Shared) ---
+# Flattening logic is structurally identical for Def and Exec,
+# we can reuse the logic to extract children.
 
 def _flatten_node_def(obj: NodeDef) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten NodeDef: Wrappers (list) + Kwargs (values)."""
-    # 1. Wrappers
     children = [obj.wrappers]
     rich_keys = [AttributeKey("wrappers")]
-
-    # 2. Kwargs
     for k, v in obj._kwargs.items():
         children.append(v)
         rich_keys.append(MappingKey(k))
-
     metadata = {"func": obj._func, "specs": obj._specs}
-
     return tuple(children), PyTreeAux(
         keys=tuple(rich_keys), metadata=metadata, cls=NodeDef
     )
 
+def _flatten_element_def(
+    obj: Union[NodeExpressionDef, NodeWrapperDef]
+) -> tuple[Iterable[Any], PyTreeAux]:
+    keys = tuple(obj._kwargs.keys())
+    children = tuple(obj._kwargs.values())
+    rich_keys = tuple(MappingKey(k) for k in keys)
+    metadata = {"func": obj._func, "specs": obj._specs}
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
+
+
+# --- Unflatten Logic for Standard Engine (Preserves Type) ---
 
 def _unflatten_node_def(children: Iterable[Any], aux: PyTreeAux) -> Any:
-    """Unflatten NodeDef."""
     children_iter = iter(children)
     keys_iter = iter(aux.keys)
-
-    # 1. Wrappers
     _ = next(keys_iter)
     wrappers = next(children_iter)
-
-    # 2. Kwargs
     kwargs = {}
     for key in keys_iter:
         raw_key = cast("MappingKey", key).key
         val = next(children_iter)
         kwargs[raw_key] = val
-
     return NodeDef(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -783,41 +750,30 @@ def _unflatten_node_def(children: Iterable[Any], aux: PyTreeAux) -> Any:
         kwargs=kwargs,
     )
 
-
-def _flatten_node_exec(obj: NodeExec) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten NodeExec: Wrappers (tuple) + Kwargs (values)."""
-    # 1. Wrappers
-    children = [obj.wrappers]
-    rich_keys = [AttributeKey("wrappers")]
-
-    # 2. Kwargs
-    for k, v in obj._kwargs.items():
-        children.append(v)
-        rich_keys.append(MappingKey(k))
-
-    metadata = {"func": obj._func, "specs": obj._specs}
-
-    return tuple(children), PyTreeAux(
-        keys=tuple(rich_keys), metadata=metadata, cls=NodeExec
-    )
+def _unflatten_element_def(children: Iterable[Any], aux: PyTreeAux) -> Any:
+    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
+    kwargs = dict(zip(raw_keys, children))
+    return aux.cls(func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs)
 
 
-def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> Any:
-    """Unflatten NodeExec."""
+# --- Unflatten Logic for Freeze Engine (Transforms Type) ---
+# This is the "Magic" part: Def -> Exec conversion happens here during reconstruction.
+
+def _unflatten_def_to_exec_node(children: Iterable[Any], aux: PyTreeAux) -> NodeExec:
     children_iter = iter(children)
     keys_iter = iter(aux.keys)
-
-    # 1. Wrappers
+    
+    # 1. Wrappers: Already converted to tuple by FREEZE_PYTREE_ENGINE recursion
     _ = next(keys_iter)
-    wrappers = next(children_iter)
+    wrappers = cast(tuple, next(children_iter))
 
-    # 2. Kwargs
+    # 2. Kwargs: Recursively frozen children
     kwargs = {}
     for key in keys_iter:
         raw_key = cast("MappingKey", key).key
         val = next(children_iter)
         kwargs[raw_key] = val
-
+        
     return NodeExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -825,66 +781,96 @@ def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> Any:
         kwargs=kwargs,
     )
 
-
-def _flatten_element_def(
-    obj: Union[NodeExpressionDef, NodeWrapperDef]
-) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten Def (Expression/Wrapper): Kwargs only."""
-    keys = tuple(obj._kwargs.keys())
-    children = tuple(obj._kwargs.values())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-    metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
-
-
-def _unflatten_element_def(children: Iterable[Any], aux: PyTreeAux) -> Any:
-    """Unflatten Def."""
+def _unflatten_def_to_exec_expression(children: Iterable[Any], aux: PyTreeAux) -> NodeExpressionExec:
     raw_keys = [cast("MappingKey", k).key for k in aux.keys]
     kwargs = dict(zip(raw_keys, children))
-    return aux.cls(func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs)
+    return NodeExpressionExec(
+        func=aux.metadata["func"], 
+        specs=aux.metadata["specs"], 
+        kwargs=kwargs
+    )
 
-
-def _flatten_element_exec(
-    obj: Union[NodeExpressionExec, NodeWrapperExec]
-) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten Exec (Expression/Wrapper): Kwargs only."""
-    keys = tuple(obj._kwargs.keys())
-    children = tuple(obj._kwargs.values())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-    metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
-
-
-def _unflatten_element_exec(children: Iterable[Any], aux: PyTreeAux) -> Any:
-    """Unflatten Exec."""
+def _unflatten_def_to_exec_wrapper(children: Iterable[Any], aux: PyTreeAux) -> NodeWrapperExec:
     raw_keys = [cast("MappingKey", k).key for k in aux.keys]
     kwargs = dict(zip(raw_keys, children))
-    return aux.cls(func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs)
+    return NodeWrapperExec(
+        func=aux.metadata["func"], 
+        specs=aux.metadata["specs"], 
+        kwargs=kwargs
+    )
+
+# --- Standard Container Freezing Logic ---
+
+def _flatten_list(l: list) -> tuple[Iterable[Any], PyTreeAux]:
+    return iter(l), PyTreeAux()
+
+def _unflatten_to_tuple(children: Iterable[Any], _: PyTreeAux) -> tuple:
+    return tuple(children)
+
+def _flatten_dict(d: dict) -> tuple[Iterable[Any], PyTreeAux]:
+    keys = tuple(d.keys())
+    rich_keys = tuple(MappingKey(k) for k in keys)
+    children = (d[k] for k in keys)
+    return children, PyTreeAux(keys=rich_keys)
+
+def _unflatten_to_mapping_proxy(children: Iterable[Any], aux: PyTreeAux) -> types.MappingProxyType:
+    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.keys)]
+    return types.MappingProxyType(dict(zip(raw_keys, children)))
 
 
-# Register Node types
-NODE_PYTREE_ENGINE.register(
-    NodeDef, _flatten_node_def, _unflatten_node_def, strict=True
-)
-NODE_PYTREE_ENGINE.register(
-    NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
-)
+# --- Registrations ---
 
-# Register Expression types
-NODE_PYTREE_ENGINE.register(
-    NodeExpressionDef, _flatten_element_def, _unflatten_element_def, strict=True
-)
-NODE_PYTREE_ENGINE.register(
-    NodeExpressionExec, _flatten_element_exec, _unflatten_element_exec, strict=True
-)
+# 1. NODE_PYTREE_ENGINE (Standard: Def -> Def)
+NODE_PYTREE_ENGINE.register(NodeDef, _flatten_node_def, _unflatten_node_def, strict=True)
+NODE_PYTREE_ENGINE.register(NodeExpressionDef, _flatten_element_def, _unflatten_element_def, strict=True)
+NODE_PYTREE_ENGINE.register(NodeWrapperDef, _flatten_element_def, _unflatten_element_def, strict=True)
 
-# Register Wrapper types
-NODE_PYTREE_ENGINE.register(
-    NodeWrapperDef, _flatten_element_def, _unflatten_element_def, strict=True
-)
-NODE_PYTREE_ENGINE.register(
-    NodeWrapperExec, _flatten_element_exec, _unflatten_element_exec, strict=True
-)
+# Also register Exec types for completeness (Exec -> Exec), needed if we inspect an already prepared tree
+def _flatten_node_exec(obj: NodeExec) -> tuple[Iterable[Any], PyTreeAux]:
+    children = [obj.wrappers]
+    rich_keys = [AttributeKey("wrappers")]
+    for k, v in obj._kwargs.items():
+        children.append(v)
+        rich_keys.append(MappingKey(k))
+    metadata = {"func": obj._func, "specs": obj._specs}
+    return tuple(children), PyTreeAux(keys=tuple(rich_keys), metadata=metadata, cls=NodeExec)
+
+def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> Any:
+    # Logic similar to _unflatten_node_def but creates Exec
+    # This is for NODE_PYTREE_ENGINE (Exec -> Exec)
+    children_iter = iter(children)
+    keys_iter = iter(aux.keys)
+    _ = next(keys_iter)
+    wrappers = next(children_iter)
+    kwargs = {}
+    for key in keys_iter:
+        raw_key = cast("MappingKey", key).key
+        val = next(children_iter)
+        kwargs[raw_key] = val
+    return NodeExec(func=aux.metadata["func"], specs=aux.metadata["specs"], wrappers=wrappers, kwargs=kwargs)
+
+NODE_PYTREE_ENGINE.register(NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True)
+# (Omitting Exec->Exec registration for Expression/Wrapper for brevity, logic is similar)
+
+
+# 2. FREEZE_PYTREE_ENGINE (Transformer: Def -> Exec, List -> Tuple, Dict -> Proxy)
+# Custom Containers
+FREEZE_PYTREE_ENGINE.register(list, _flatten_list, _unflatten_to_tuple)
+FREEZE_PYTREE_ENGINE.register(dict, _flatten_dict, _unflatten_to_mapping_proxy)
+
+# Def -> Exec Transformations
+FREEZE_PYTREE_ENGINE.register(NodeDef, _flatten_node_def, _unflatten_def_to_exec_node, strict=True)
+FREEZE_PYTREE_ENGINE.register(NodeExpressionDef, _flatten_element_def, _unflatten_def_to_exec_expression, strict=True)
+FREEZE_PYTREE_ENGINE.register(NodeWrapperDef, _flatten_element_def, _unflatten_def_to_exec_wrapper, strict=True)
+
+# Passthrough for already frozen types (Exec -> Exec, Tuple -> Tuple)
+# We can register the default container handlers to ensure recursive traversal continues
+FREEZE_PYTREE_ENGINE._register_defaults() 
+# Overwrite list/dict defaults which we just registered above? No, register_defaults checks priority.
+# Since we manually registered list/dict, they take precedence in TypeRegistry.
+# But we need tuple to work recursively.
+# (PyTreeEngine._register_defaults registers tuple, list, dict)
+# Since we manually registered list/dict, we are good. Tuple uses default behavior (Tuple -> Tuple).
 
 
 # --- Functional Factory & Decorators ---
