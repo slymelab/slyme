@@ -4,14 +4,15 @@ A convenient registry util that dynamically retrieves items based on keys.
 
 import inspect
 from enum import Enum
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import (
     Union,
     TypeVar,
     overload,
     cast,
+    Generic,
+    Any,
 )
-from .collection import MutableMappingProxy
 
 _T = TypeVar("_T")
 _KT = TypeVar("_KT")
@@ -21,7 +22,7 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
-class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
+class GeneralRegistry(Generic[_KT, _VT]):
     """
     A general registry whose type of keys can be any specified value.
 
@@ -37,9 +38,9 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         *,
         strict: bool = True,
     ):
-        super().__init__()
         self.namespace = repr(self) if namespace is _MISSING else namespace
         self.strict = strict
+        self._data: dict[_KT, _VT] = {}
 
     def _resolve_strict(self, strict: Union[bool, _Missing] = _MISSING):
         """
@@ -92,7 +93,7 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
         """
         strict = self._resolve_strict(strict)
         try:
-            super().__delitem__(key)
+            del self._data[key]
         except KeyError:
             if strict:
                 raise
@@ -111,25 +112,47 @@ class GeneralRegistry(MutableMappingProxy[_KT, _VT]):
                 f"Error when registering ``{repr(obj)}`` in registry ``{self.namespace}``. "
                 f"Key cannot be ``MISSING``. Check the key setting."
             )
-        if key in self and strict:
+        if key in self._data and strict:
             raise ValueError(
                 f"Key ``{key}`` already exists in registry ``{self.namespace}``."
             )
         # Register ``obj`` with ``key``.
-        super().__setitem__(key, obj)
+        self._data[key] = obj
 
-    def __setitem__(self, key: _KT, value: _VT) -> None:
-        """
-        Override __setitem__ to enforce registration logic.
-        This prevents users from bypassing checks by doing `registry[key] = value`.
-        """
-        self.register(value, key=key)
+    @overload
+    def get(self, key: _KT, default: _Missing = _MISSING) -> _VT: ...
+    @overload
+    def get(self, key: _KT, default: Union[_VT, _T]) -> Union[_VT, _T]: ...
+    def get(
+        self, key: _KT, default: Union[_VT, _T, _Missing] = _MISSING
+    ) -> Union[_VT, _T]:
+        if default is _MISSING:
+            return self._data[key]
+        return self._data.get(key, cast(Union[_VT, _T], default))
 
-    def __delitem__(self, key: _KT) -> None:
-        """
-        Override __delitem__ to enforce unregistration logic.
-        """
-        self.unregister(key)
+    def keys(self) -> Iterable[_KT]:
+        return self._data.keys()
+
+    def values(self) -> Iterable[_VT]:
+        return self._data.values()
+
+    def items(self) -> Iterable[tuple[_KT, _VT]]:
+        return self._data.items()
+
+    def __contains__(self, key: Any) -> bool:
+        return key in self._data
+
+    def __iter__(self) -> Iterator[_KT]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}<{hex(id(self))}>"
+            f"{self._data!r}"
+        )
 
 
 class Registry(GeneralRegistry[str, _VT]):
@@ -251,7 +274,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         """
         found_cls_key = self.lookup_cls(key, reverse=reverse)
         if found_cls_key is not None:
-            return self[found_cls_key]
+            return self.get(found_cls_key)
         if default is _MISSING:
             raise KeyError(f"{key} cannot be correctly resolved in {self.namespace}.")
         return default
@@ -273,7 +296,7 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         Yield all **registered** values whose keys are superclasses of the given ``key``.
         """
         for cls_key in self.lookup_all_cls(key):
-            yield self[cls_key]
+            yield self.get(cls_key)
 
     def collect_cls(self, base_cls: type[_KT]) -> Iterable[type[_KT]]:
         """
@@ -291,4 +314,4 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         Includes ``base_cls`` itself if it is registered.
         """
         for cls_key in self.collect_cls(base_cls):
-            yield self[cls_key]
+            yield self.get(cls_key)

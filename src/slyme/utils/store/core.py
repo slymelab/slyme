@@ -233,6 +233,7 @@ class StoreElement(ABC):
     """
     Abstract base class for store-related entities (Store, StoreView).
     """
+
     __slots__ = ()
 
     @abstractmethod
