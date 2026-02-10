@@ -5,11 +5,11 @@ from typing import (
     TypeVar,
     Any,
     Generic,
+    Optional,
     cast,
 )
 from typing_extensions import Self
 from contextlib import ExitStack, contextmanager
-from slyme.utils.collection import SequenceData
 from slyme.utils.pytree import (
     AttributeKey,
     PyTreeAux,
@@ -112,7 +112,7 @@ class Node(NodeElement):
     # TODO: Helper function for nodes/expressions/refs/check_structure/check_dependency, etc.
 
     def __init__(
-        self, /, *, node_wrappers: SequenceData["NodeWrapper"] = None, **kwargs
+        self, /, *, node_wrappers: Optional[Iterable["NodeWrapper"]] = None, **kwargs
     ):
         super().__init__(**kwargs)
         self.node_wrappers = list(node_wrappers) if node_wrappers is not None else []

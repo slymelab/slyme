@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 from collections.abc import Iterable, Mapping
 from typing import (
     Any,
@@ -27,6 +27,7 @@ _T2 = TypeVar("_T2")
 _EMPTY_METADATA = types.MappingProxyType({})
 Missing = Enum("Missing", ["MARK"])
 MISSING = Missing.MARK
+StoreData = Optional[Union[Mapping[str, Any], "StoreDict"]]
 
 
 class StoreConfig:
@@ -232,6 +233,7 @@ class StoreElement(ABC):
     """
     Abstract base class for store-related entities (Store, StoreView).
     """
+    __slots__ = ()
 
     @abstractmethod
     def get(
@@ -343,28 +345,31 @@ class StoreElement(ABC):
         return leaves
 
 
+@dataclass(frozen=True)
 class Store(StoreElement):
     """
     Immutable Store implementation with efficient Copy-On-Write (COW) updates.
     Wraps a root `StoreDict`.
     """
 
-    def __init__(
-        self, data: Optional[Union[Mapping[str, Any], StoreDict]] = None
-    ) -> None:
+    _root: StoreDict = field(init=False)
+    data: InitVar[StoreData] = None
+
+    def __post_init__(self, data: StoreData) -> None:
         if data is None:
-            self._root: StoreDict = StoreDict()
+            root = StoreDict()
         elif isinstance(data, StoreDict):
-            self._root = data
+            root = data
         else:
             # Shallow conversion strictly for the top level.
             # Trusts user input for deep structure.
-            self._root = StoreDict(data)
+            root = StoreDict(data)
+        object.__setattr__(self, "_root", root)
 
     @classmethod
     def _from_store_dict(cls, root: StoreDict) -> "Store":
         obj = object.__new__(cls)
-        obj._root = root
+        object.__setattr__(obj, "_root", root)
         return obj
 
     # --- Read Operations ---
@@ -470,14 +475,14 @@ class Store(StoreElement):
         return self.mutate(drops=[ref])
 
 
+@dataclass(frozen=True)
 class StoreView(StoreElement):
     """
     Read-only view of a subtree within a Store.
     """
 
-    def __init__(self, store: Store, parts: tuple[str, ...]):
-        self._store = store
-        self._parts = parts
+    _store: Store
+    _parts: tuple[str, ...]
 
     def _adjust_ref(self, ref: Optional[Ref[_T]]) -> Ref[_T]:
         if ref is None:
@@ -500,9 +505,6 @@ class StoreView(StoreElement):
 
     def to_store_dict(self, ref: Optional[Ref[_T]] = None) -> StoreDict:
         return self._store.to_store_dict(self._adjust_ref(ref))
-
-    def type_repr(self) -> str:
-        return "Store"
 
 
 # --- PyTreeEngine Configuration ---
