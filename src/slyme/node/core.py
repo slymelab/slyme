@@ -4,6 +4,7 @@ Core node module, consolidating base definitions and functional APIs.
 
 import inspect
 import types
+from abc import ABC, abstractmethod
 from enum import Enum
 from functools import partial, update_wrapper
 from contextlib import contextmanager, AbstractContextManager, ExitStack
@@ -51,8 +52,14 @@ __all__ = [
     "wrapper",
     "NodeElement",
     "Node",
+    "NodeDef",
+    "NodeExec",
     "NodeExpression",
+    "NodeExpressionDef",
+    "NodeExpressionExec",
     "NodeWrapper",
+    "NodeWrapperDef",
+    "NodeWrapperExec",
     "STOP",
     "NODE_PYTREE_ENGINE",
 ]
@@ -279,30 +286,87 @@ def _process_kwargs(
     return final_kwargs
 
 
+def _freeze_structure(value: Any) -> Any:
+    """Helper to shallowly freeze dicts and lists into immutable equivalents."""
+    if isinstance(value, dict):
+        return types.MappingProxyType(value)
+    if isinstance(value, list):
+        return tuple(value)
+    return value
+
+
 # --- Node Class Definitions ---
 
 
-class NodeElement:
+class NodeElement(ABC):
     """
     Base class for all node-related entities.
-    Constructed directly via factory functions.
+    Abstract definition that separates API from implementation.
+    """
+
+    _func: Callable
+    _specs: Mapping[str, Spec]
+    _kwargs: dict[str, Any]
+
+    @abstractmethod
+    def prepare(self) -> "NodeElement":
+        """
+        Prepare the node for execution.
+        Converts the Definition structure into an Execution structure.
+        """
+        pass
+
+    def __repr__(self) -> str:
+        return get_render_string(self)
+
+    def extra_repr(self) -> str:
+        return ""
+
+    def type_repr(self) -> str:
+        return self._func.__name__
+
+
+# --- Node Family ---
+
+
+class Node(NodeElement):
+    """
+    Abstract base class for NodeDef and NodeExec.
+    """
+
+    _func: NodeFunc
+    wrappers: Union[list["NodeWrapper"], tuple["NodeWrapper", ...]]
+
+    @abstractmethod
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def __call__(self, ctx: Context, /) -> Context:
+        pass
+
+    def __getitem__(self, key: str) -> Any:
+        return self._kwargs[key]
+
+
+class NodeDef(Node):
+    """
+    Mutable definition of a Node. Allows modification during build time.
     """
 
     def __init__(
         self,
         /,
         *,
-        func: Callable,
+        func: NodeFunc,
         specs: Mapping[str, Spec],
+        wrappers: Optional[Iterable["NodeWrapper"]] = None,
         kwargs: dict[str, Any],
     ):
-        self._func = func
-        self._specs = specs
-        # NOTE: kwargs must already be processed/resolved by _process_kwargs
-        self._kwargs = kwargs
-
-    def __getitem__(self, key: str) -> Any:
-        return self._kwargs[key]
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
+        object.__setattr__(self, "wrappers", list(wrappers) if wrappers else [])
+        object.__setattr__(self, "_kwargs", kwargs)
 
     def __setitem__(self, key: str, value: Any) -> None:
         if key not in self._specs:
@@ -315,19 +379,44 @@ class NodeElement:
         for k, v in kwargs.items():
             self[k] = v
 
-    def __repr__(self) -> str:
-        return get_render_string(self)
+    def __call__(self, ctx: Context, /) -> Context:
+        raise RuntimeError(
+            f"Cannot execute {type(self).__name__}. "
+            f"Please call `.prepare()` to obtain a generic `{NodeExec.__name__}` first."
+        )
 
-    def extra_repr(self) -> str:
-        return ""
+    def prepare(self) -> "NodeExec":
+        # Recursively prepare children using PyTree mapping.
+        # We must treat nested NodeElement as leaves so we can call .prepare() on them
+        # instead of flattening them into their components.
+        prepared_def = NODE_PYTREE_ENGINE.map(
+            lambda x: x.prepare() if isinstance(x, NodeElement) else x,
+            self,
+            is_leaf=lambda x, _: isinstance(x, NodeElement) and x is not self,
+        )
+        return NodeExec(
+            func=prepared_def._func,
+            specs=prepared_def._specs,
+            wrappers=prepared_def.wrappers,
+            kwargs=prepared_def._kwargs,
+        )
 
-    def type_repr(self) -> str:
-        return self._func.__name__
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "wrappers":
+            object.__setattr__(self, name, value)
+        else:
+            raise AttributeError(
+                f"Cannot set attribute '{name}' on {type(self).__name__}. "
+                "Only 'wrappers' can be modified."
+            )
 
 
-class Node(NodeElement):
+class NodeExec(Node):
     """
-    Standard executable Node.
+    Immutable execution version of a Node.
     """
 
     def __init__(
@@ -336,20 +425,36 @@ class Node(NodeElement):
         *,
         func: NodeFunc,
         specs: Mapping[str, Spec],
-        wrappers: Optional[Iterable["NodeWrapper"]] = None,
+        wrappers: Iterable["NodeWrapper"],
         kwargs: dict[str, Any],
     ):
-        super().__init__(func=func, specs=specs, kwargs=kwargs)
-        self.wrappers = list(wrappers) if wrappers is not None else []
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
+        # Freeze wrappers and kwargs
+        object.__setattr__(self, "wrappers", tuple(wrappers))
+        object.__setattr__(
+            self,
+            "_kwargs",
+            types.MappingProxyType(
+                {k: _freeze_structure(v) for k, v in kwargs.items()}
+            ),
+        )
 
-    def add_wrappers(self, *wrappers: "NodeWrapper") -> Self:
-        self.wrappers.extend(wrappers)
+    def prepare(self) -> Self:
         return self
 
+    def __setitem__(self, key: str, value: Any) -> None:
+        raise TypeError(
+            f"{type(self).__name__} is immutable and does not support item assignment."
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise TypeError(f"{type(self).__name__} is immutable.")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise TypeError(f"{type(self).__name__} is immutable.")
+
     def __call__(self, ctx: Context, /) -> Context:
-        """
-        Outer execute API with wrapper handling.
-        """
         try:
             with ExitStack() as stack:
                 should_stop = False
@@ -372,11 +477,34 @@ class Node(NodeElement):
         # General Exceptions
         except Exception as e:
             raise NodeExceptionRecord(exception_node=self, exception=e)
+        return ctx
+
+
+# --- Expression Family ---
 
 
 class NodeExpression(NodeElement, Generic[_R]):
     """
-    Node that returns a value.
+    Abstract base class for NodeExpressionDef and NodeExpressionExec.
+    """
+
+    _func: ExpressionFunc
+
+    @abstractmethod
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def __call__(self, ctx: Context, /) -> _R:
+        pass
+
+    def __getitem__(self, key: str) -> Any:
+        return self._kwargs[key]
+
+
+class NodeExpressionDef(NodeExpression[_R]):
+    """
+    Mutable definition of a NodeExpression.
     """
 
     def __init__(
@@ -387,7 +515,85 @@ class NodeExpression(NodeElement, Generic[_R]):
         specs: Mapping[str, Spec],
         kwargs: dict[str, Any],
     ):
-        super().__init__(func=func, specs=specs, kwargs=kwargs)
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
+        object.__setattr__(self, "_kwargs", kwargs)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if key not in self._specs:
+            raise KeyError(
+                f"Invalid key '{key}'. Parameters must be defined in the specs."
+            )
+        self._kwargs[key] = value
+
+    def update(self, **kwargs: Any) -> None:
+        for k, v in kwargs.items():
+            self[k] = v
+
+    def __call__(self, ctx: Context, /) -> _R:
+        raise RuntimeError(
+            f"Cannot execute {type(self).__name__}. "
+            f"Please call `.prepare()` to obtain a generic `{NodeExpressionExec.__name__}` first."
+        )
+
+    def prepare(self) -> "NodeExpressionExec[_R]":
+        prepared_def = NODE_PYTREE_ENGINE.map(
+            lambda x: x.prepare() if isinstance(x, NodeElement) else x,
+            self,
+            is_leaf=lambda x, _: isinstance(x, NodeElement) and x is not self,
+        )
+        return NodeExpressionExec(
+            func=prepared_def._func,
+            specs=prepared_def._specs,
+            kwargs=prepared_def._kwargs,
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(
+            f"Cannot set attribute '{name}' on {type(self).__name__}. "
+            "Internal structure is protected."
+        )
+
+
+class NodeExpressionExec(NodeExpression[_R]):
+    """
+    Immutable execution version of a NodeExpression.
+    """
+
+    def __init__(
+        self,
+        /,
+        *,
+        func: ExpressionFunc,
+        specs: Mapping[str, Spec],
+        kwargs: dict[str, Any],
+    ):
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
+        object.__setattr__(
+            self,
+            "_kwargs",
+            types.MappingProxyType(
+                {k: _freeze_structure(v) for k, v in kwargs.items()}
+            ),
+        )
+
+    def prepare(self) -> Self:
+        return self
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        raise TypeError(
+            f"{type(self).__name__} is immutable and does not support item assignment."
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise TypeError(f"{type(self).__name__} is immutable.")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise TypeError(f"{type(self).__name__} is immutable.")
 
     def __call__(self, ctx: Context, /) -> _R:
         try:
@@ -399,9 +605,32 @@ class NodeExpression(NodeElement, Generic[_R]):
             raise NodeExpressionExceptionRecord(exception_node=self, exception=e)
 
 
+# --- Wrapper Family ---
+
+
 class NodeWrapper(NodeElement):
     """
-    Auxiliary wrapper logic for Nodes.
+    Abstract base class for NodeWrapperDef and NodeWrapperExec.
+    """
+
+    _func: WrapperFunc
+    cm_factory: Callable[..., AbstractContextManager]
+
+    @abstractmethod
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
+        pass
+
+    def __getitem__(self, key: str) -> Any:
+        return self._kwargs[key]
+
+
+class NodeWrapperDef(NodeWrapper):
+    """
+    Mutable definition of a NodeWrapper.
     """
 
     def __init__(
@@ -412,8 +641,87 @@ class NodeWrapper(NodeElement):
         specs: Mapping[str, Spec],
         kwargs: dict[str, Any],
     ):
-        super().__init__(func=func, specs=specs, kwargs=kwargs)
-        self.cm_factory = contextmanager(func)
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
+        object.__setattr__(self, "_kwargs", kwargs)
+        object.__setattr__(self, "cm_factory", contextmanager(func))
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if key not in self._specs:
+            raise KeyError(
+                f"Invalid key '{key}'. Parameters must be defined in the specs."
+            )
+        self._kwargs[key] = value
+
+    def update(self, **kwargs: Any) -> None:
+        for k, v in kwargs.items():
+            self[k] = v
+
+    def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
+        raise RuntimeError(
+            f"Cannot execute {type(self).__name__}. "
+            f"Please call `.prepare()` to obtain a generic `{NodeWrapperExec.__name__}` first."
+        )
+
+    def prepare(self) -> "NodeWrapperExec":
+        prepared_def = NODE_PYTREE_ENGINE.map(
+            lambda x: x.prepare() if isinstance(x, NodeElement) else x,
+            self,
+            is_leaf=lambda x, _: isinstance(x, NodeElement) and x is not self,
+        )
+        return NodeWrapperExec(
+            func=prepared_def._func,
+            specs=prepared_def._specs,
+            kwargs=prepared_def._kwargs,
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(
+            f"Cannot set attribute '{name}' on {type(self).__name__}. "
+            "Internal structure is protected."
+        )
+
+
+class NodeWrapperExec(NodeWrapper):
+    """
+    Immutable execution version of a NodeWrapper.
+    """
+
+    def __init__(
+        self,
+        /,
+        *,
+        func: WrapperFunc,
+        specs: Mapping[str, Spec],
+        kwargs: dict[str, Any],
+    ):
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
+        object.__setattr__(
+            self,
+            "_kwargs",
+            types.MappingProxyType(
+                {k: _freeze_structure(v) for k, v in kwargs.items()}
+            ),
+        )
+        object.__setattr__(self, "cm_factory", contextmanager(func))
+
+    def prepare(self) -> Self:
+        return self
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        raise TypeError(
+            f"{type(self).__name__} is immutable and does not support item assignment."
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise TypeError(f"{type(self).__name__} is immutable.")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise TypeError(f"{type(self).__name__} is immutable.")
 
     @contextmanager
     def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
@@ -434,40 +742,8 @@ NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
 PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_engine")
 
 
-def _flatten_node_element(obj: NodeElement) -> tuple[Iterable[Any], PyTreeAux]:
-    """
-    Generic flatten for NodeElement (NodeWrapper, NodeExpression).
-    Expands kwargs as children.
-    """
-    keys = tuple(obj._kwargs.keys())
-    children = tuple(obj._kwargs.values())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-
-    metadata = {"func": obj._func, "specs": obj._specs}
-
-    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
-
-
-def _unflatten_node_element(children: Iterable[Any], aux: PyTreeAux) -> Any:
-    """
-    Generic unflatten for NodeElement.
-    """
-    if aux.cls is None or aux.keys is None:
-        raise ValueError("Missing info in PyTreeAux for NodeElement unflattening.")
-
-    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
-    kwargs = dict(zip(raw_keys, children))
-
-    return aux.cls(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
-    )
-
-
-def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
-    """
-    Specific flatten for Node.
-    Expands wrappers + kwargs.
-    """
+def _flatten_node_def(obj: NodeDef) -> tuple[Iterable[Any], PyTreeAux]:
+    """Flatten NodeDef: Wrappers (list) + Kwargs (values)."""
     # 1. Wrappers
     children = [obj.wrappers]
     rich_keys = [AttributeKey("wrappers")]
@@ -480,14 +756,12 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
     metadata = {"func": obj._func, "specs": obj._specs}
 
     return tuple(children), PyTreeAux(
-        keys=tuple(rich_keys), metadata=metadata, cls=Node
+        keys=tuple(rich_keys), metadata=metadata, cls=NodeDef
     )
 
 
-def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Any:
-    """
-    Specific unflatten for Node.
-    """
+def _unflatten_node_def(children: Iterable[Any], aux: PyTreeAux) -> Any:
+    """Unflatten NodeDef."""
     children_iter = iter(children)
     keys_iter = iter(aux.keys)
 
@@ -502,7 +776,7 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Any:
         val = next(children_iter)
         kwargs[raw_key] = val
 
-    return Node(
+    return NodeDef(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
         wrappers=wrappers,
@@ -510,14 +784,106 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Any:
     )
 
 
-# Register strictly (no inheritance, specific handlers)
-NODE_PYTREE_ENGINE.register(Node, _flatten_node, _unflatten_node, strict=True)
-# NodeElement logic serves NodeExpression and NodeWrapper
+def _flatten_node_exec(obj: NodeExec) -> tuple[Iterable[Any], PyTreeAux]:
+    """Flatten NodeExec: Wrappers (tuple) + Kwargs (values)."""
+    # 1. Wrappers
+    children = [obj.wrappers]
+    rich_keys = [AttributeKey("wrappers")]
+
+    # 2. Kwargs
+    for k, v in obj._kwargs.items():
+        children.append(v)
+        rich_keys.append(MappingKey(k))
+
+    metadata = {"func": obj._func, "specs": obj._specs}
+
+    return tuple(children), PyTreeAux(
+        keys=tuple(rich_keys), metadata=metadata, cls=NodeExec
+    )
+
+
+def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> Any:
+    """Unflatten NodeExec."""
+    children_iter = iter(children)
+    keys_iter = iter(aux.keys)
+
+    # 1. Wrappers
+    _ = next(keys_iter)
+    wrappers = next(children_iter)
+
+    # 2. Kwargs
+    kwargs = {}
+    for key in keys_iter:
+        raw_key = cast("MappingKey", key).key
+        val = next(children_iter)
+        kwargs[raw_key] = val
+
+    return NodeExec(
+        func=aux.metadata["func"],
+        specs=aux.metadata["specs"],
+        wrappers=wrappers,
+        kwargs=kwargs,
+    )
+
+
+def _flatten_element_def(
+    obj: Union[NodeExpressionDef, NodeWrapperDef]
+) -> tuple[Iterable[Any], PyTreeAux]:
+    """Flatten Def (Expression/Wrapper): Kwargs only."""
+    keys = tuple(obj._kwargs.keys())
+    children = tuple(obj._kwargs.values())
+    rich_keys = tuple(MappingKey(k) for k in keys)
+    metadata = {"func": obj._func, "specs": obj._specs}
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
+
+
+def _unflatten_element_def(children: Iterable[Any], aux: PyTreeAux) -> Any:
+    """Unflatten Def."""
+    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
+    kwargs = dict(zip(raw_keys, children))
+    return aux.cls(func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs)
+
+
+def _flatten_element_exec(
+    obj: Union[NodeExpressionExec, NodeWrapperExec]
+) -> tuple[Iterable[Any], PyTreeAux]:
+    """Flatten Exec (Expression/Wrapper): Kwargs only."""
+    keys = tuple(obj._kwargs.keys())
+    children = tuple(obj._kwargs.values())
+    rich_keys = tuple(MappingKey(k) for k in keys)
+    metadata = {"func": obj._func, "specs": obj._specs}
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
+
+
+def _unflatten_element_exec(children: Iterable[Any], aux: PyTreeAux) -> Any:
+    """Unflatten Exec."""
+    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
+    kwargs = dict(zip(raw_keys, children))
+    return aux.cls(func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs)
+
+
+# Register Node types
 NODE_PYTREE_ENGINE.register(
-    NodeExpression, _flatten_node_element, _unflatten_node_element, strict=True
+    NodeDef, _flatten_node_def, _unflatten_node_def, strict=True
 )
 NODE_PYTREE_ENGINE.register(
-    NodeWrapper, _flatten_node_element, _unflatten_node_element, strict=True
+    NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
+)
+
+# Register Expression types
+NODE_PYTREE_ENGINE.register(
+    NodeExpressionDef, _flatten_element_def, _unflatten_element_def, strict=True
+)
+NODE_PYTREE_ENGINE.register(
+    NodeExpressionExec, _flatten_element_exec, _unflatten_element_exec, strict=True
+)
+
+# Register Wrapper types
+NODE_PYTREE_ENGINE.register(
+    NodeWrapperDef, _flatten_element_def, _unflatten_element_def, strict=True
+)
+NODE_PYTREE_ENGINE.register(
+    NodeWrapperExec, _flatten_element_exec, _unflatten_element_exec, strict=True
 )
 
 
@@ -540,7 +906,7 @@ class FunctionalFactory(Generic[_T, _P]):
 
         # Determine extra args based on class
         extra_args = {}
-        if self._cls is Node and "wrappers" in final_kwargs:
+        if issubclass(self._cls, Node) and "wrappers" in final_kwargs:
             extra_args["wrappers"] = final_kwargs.pop("wrappers")
 
         return self._cls(
@@ -571,26 +937,27 @@ class FunctionalFactory(Generic[_T, _P]):
         return self(**final_kwargs)
 
 
-def _node(func: NodeFunc[_P], /) -> FunctionalFactory[Node, _P]:
+def _node(func: NodeFunc[_P], /) -> FunctionalFactory[NodeDef, _P]:
     analysis = _analyze_signature(func)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
             f"@node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return FunctionalFactory(Node, func, analysis)
+    return FunctionalFactory(NodeDef, func, analysis)
 
 
 @overload
 def node(
     func: _Missing = _MISSING, /
-) -> Callable[[NodeFunc[_P]], FunctionalFactory[Node, _P]]: ...
+) -> Callable[[NodeFunc[_P]], FunctionalFactory[NodeDef, _P]]: ...
 @overload
-def node(func: NodeFunc[_P], /) -> FunctionalFactory[Node, _P]: ...
+def node(func: NodeFunc[_P], /) -> FunctionalFactory[NodeDef, _P]: ...
 def node(
     func: Union[NodeFunc[_P], _Missing] = _MISSING, /
 ) -> Union[
-    Callable[[NodeFunc[_P]], FunctionalFactory[Node, _P]], FunctionalFactory[Node, _P]
+    Callable[[NodeFunc[_P]], FunctionalFactory[NodeDef, _P]],
+    FunctionalFactory[NodeDef, _P],
 ]:
     if func is _MISSING:
         return partial(_node)
@@ -600,27 +967,29 @@ def node(
 
 def _expression(
     func: ExpressionFunc[_P, _R], /
-) -> FunctionalFactory[NodeExpression[_R], _P]:
+) -> FunctionalFactory[NodeExpressionDef[_R], _P]:
     analysis = _analyze_signature(func)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
             f"@expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return FunctionalFactory(NodeExpression, func, analysis)
+    return FunctionalFactory(NodeExpressionDef, func, analysis)
 
 
 @overload
 def expression(
     func: _Missing = _MISSING, /
-) -> Callable[[ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpression[_R], _P]]: ...
+) -> Callable[[ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpressionDef[_R], _P]]: ...
 @overload
 def expression(
     func: ExpressionFunc[_P, _R], /
-) -> FunctionalFactory[NodeExpression[_R], _P]: ...
-def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
-    Callable[[ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpression[_R], _P]],
-    FunctionalFactory[NodeExpression[_R], _P],
+) -> FunctionalFactory[NodeExpressionDef[_R], _P]: ...
+def expression(
+    func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /
+) -> Union[
+    Callable[[ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpressionDef[_R], _P]],
+    FunctionalFactory[NodeExpressionDef[_R], _P],
 ]:
     if func is _MISSING:
         return partial(_expression)
@@ -628,25 +997,25 @@ def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> U
         return _expression(func)
 
 
-def _wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapper, _P]:
+def _wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapperDef, _P]:
     analysis = _analyze_signature(func)
     if len(analysis.pos_only_params) != 2:
         raise TypeError(
             f"@wrapper '{func.__name__}' requires exactly 2 positional-only arguments (ctx, wrapped), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return FunctionalFactory(NodeWrapper, func, analysis)
+    return FunctionalFactory(NodeWrapperDef, func, analysis)
 
 
 @overload
 def wrapper(
     func: _Missing = _MISSING, /
-) -> Callable[[WrapperFunc[_P]], FunctionalFactory[NodeWrapper, _P]]: ...
+) -> Callable[[WrapperFunc[_P]], FunctionalFactory[NodeWrapperDef, _P]]: ...
 @overload
-def wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapper, _P]: ...
+def wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapperDef, _P]: ...
 def wrapper(func: Union[WrapperFunc[_P], _Missing] = _MISSING, /) -> Union[
-    Callable[[WrapperFunc[_P]], FunctionalFactory[NodeWrapper, _P]],
-    FunctionalFactory[NodeWrapper, _P],
+    Callable[[WrapperFunc[_P]], FunctionalFactory[NodeWrapperDef, _P]],
+    FunctionalFactory[NodeWrapperDef, _P],
 ]:
     if func is _MISSING:
         return partial(_wrapper)
