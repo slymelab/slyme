@@ -77,6 +77,7 @@ class GeneralRegistry(Generic[_KT, _VT]):
         """
         Register an item. Can be used as a decorator or a normal method.
         """
+
         def decorator(_obj: _VT2) -> _VT2:
             # Call the core register method.
             self._register(cast("_VT", _obj), key, strict)
@@ -128,7 +129,7 @@ class GeneralRegistry(Generic[_KT, _VT]):
     ) -> Union[_VT, _T]:
         if default is _MISSING:
             return self._data[key]
-        return self._data.get(key, cast(Union[_VT, _T], default))
+        return self._data.get(key, cast("Union[_VT, _T]", default))
 
     def keys(self) -> Iterable[_KT]:
         return self._data.keys()
@@ -149,10 +150,7 @@ class GeneralRegistry(Generic[_KT, _VT]):
         return len(self._data)
 
     def __repr__(self) -> str:
-        return (
-            f"{type(self).__name__}<{hex(id(self))}>"
-            f"{self._data!r}"
-        )
+        return f"{type(self).__name__}<{hex(id(self))}>" f"{self._data!r}"
 
 
 class Registry(GeneralRegistry[str, _VT]):
@@ -196,7 +194,9 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         super().__init__(namespace, strict=strict)
         self.orthogonal = orthogonal
 
-    def _register(self, obj: _VT, key: type[_KT], strict: Union[bool, _Missing]) -> None:
+    def _register(
+        self, obj: _VT, key: type[_KT], strict: Union[bool, _Missing]
+    ) -> None:
         if not isinstance(key, type):
             raise TypeError(f"TypeRegistry key must be a class, got {type(key)}.")
         # Check orthogonal.

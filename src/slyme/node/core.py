@@ -28,7 +28,6 @@ from typing import (
 )
 from typing_extensions import ParamSpec, Concatenate, Self
 from slyme.utils.common import enrich_exception
-from slyme.utils.collection import SequenceData
 from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
 from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import (
@@ -69,7 +68,9 @@ _T = TypeVar("_T")
 NodeFunc = Callable[Concatenate[Context, _P], None]
 ExpressionFunc = Callable[Concatenate[Context, _P], _R]
 WrapperFunc = Callable[Concatenate[Context, "Node", _P], Generator[Any, None, None]]
-WrapperCMFactory = Callable[Concatenate[Context, "Node", _P], AbstractContextManager[Any]]
+WrapperCMFactory = Callable[
+    Concatenate[Context, "Node", _P], AbstractContextManager[Any]
+]
 
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
@@ -78,6 +79,7 @@ STOP = Stop.MARK
 
 
 # --- Spec Definitions ---
+
 
 @dataclass(frozen=True)
 class Spec:
@@ -137,6 +139,7 @@ class RefSpec(Spec):
 
 # --- Spec Factory Functions ---
 
+
 def spec(
     default: Union[Any, _Missing] = _MISSING,
     default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
@@ -162,6 +165,7 @@ def ref_spec(
 
 
 # --- Inspection & Signature Analysis ---
+
 
 @dataclass(frozen=True)
 class _SignatureAnalysis:
@@ -282,6 +286,7 @@ def _process_kwargs(
 
 # --- Node Class Definitions ---
 
+
 class NodeElement:
     """
     Base class for all node-related entities.
@@ -336,7 +341,7 @@ class Node(NodeElement):
         *,
         func: NodeFunc,
         specs: Mapping[str, Spec],
-        node_wrappers: SequenceData["NodeWrapper"] = None,
+        node_wrappers: Optional[Iterable["NodeWrapper"]] = None,
         kwargs: dict[str, Any],
     ):
         super().__init__(func=func, specs=specs, kwargs=kwargs)
@@ -456,12 +461,9 @@ def _flatten_node_element(obj: NodeElement) -> tuple[Iterable[Any], PyTreeAux]:
     keys = tuple(obj.kwargs.keys())
     children = tuple(obj.kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
-    
-    metadata = {
-        "func": obj.func,
-        "specs": obj.specs
-    }
-    
+
+    metadata = {"func": obj.func, "specs": obj.specs}
+
     return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
 
 
@@ -471,14 +473,12 @@ def _unflatten_node_element(children: Iterable[Any], aux: PyTreeAux) -> Any:
     """
     if aux.cls is None or aux.keys is None:
         raise ValueError("Missing info in PyTreeAux for NodeElement unflattening.")
-    
-    raw_keys = [cast(MappingKey, k).key for k in aux.keys]
+
+    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
     kwargs = dict(zip(raw_keys, children))
-    
+
     return aux.cls(
-        func=aux.metadata["func"],
-        specs=aux.metadata["specs"],
-        kwargs=kwargs
+        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
 
 
@@ -490,18 +490,17 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
     # 1. Wrappers
     children = [obj.node_wrappers]
     rich_keys = [AttributeKey("node_wrappers")]
-    
+
     # 2. Kwargs
     for k, v in obj.kwargs.items():
         children.append(v)
         rich_keys.append(MappingKey(k))
-        
-    metadata = {
-        "func": obj.func,
-        "specs": obj.specs
-    }
-    
-    return tuple(children), PyTreeAux(keys=tuple(rich_keys), metadata=metadata, cls=Node)
+
+    metadata = {"func": obj.func, "specs": obj.specs}
+
+    return tuple(children), PyTreeAux(
+        keys=tuple(rich_keys), metadata=metadata, cls=Node
+    )
 
 
 def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Any:
@@ -510,64 +509,54 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Any:
     """
     children_iter = iter(children)
     keys_iter = iter(aux.keys)
-    
+
     # 1. Wrappers
-    _ = next(keys_iter) # AttributeKey("node_wrappers")
+    _ = next(keys_iter)  # AttributeKey("node_wrappers")
     node_wrappers = next(children_iter)
-    
+
     # 2. Kwargs
     kwargs = {}
     for key in keys_iter:
-        raw_key = cast(MappingKey, key).key
+        raw_key = cast("MappingKey", key).key
         val = next(children_iter)
         kwargs[raw_key] = val
-        
+
     return Node(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
         node_wrappers=node_wrappers,
-        kwargs=kwargs
+        kwargs=kwargs,
     )
 
 
 # Register strictly (no inheritance, specific handlers)
-NODE_PYTREE_ENGINE.register(
-    Node,
-    _flatten_node,
-    _unflatten_node,
-    strict=True
-)
+NODE_PYTREE_ENGINE.register(Node, _flatten_node, _unflatten_node, strict=True)
 # NodeElement logic serves NodeExpression and NodeWrapper
 NODE_PYTREE_ENGINE.register(
-    NodeExpression,
-    _flatten_node_element,
-    _unflatten_node_element,
-    strict=True
+    NodeExpression, _flatten_node_element, _unflatten_node_element, strict=True
 )
 NODE_PYTREE_ENGINE.register(
-    NodeWrapper,
-    _flatten_node_element,
-    _unflatten_node_element,
-    strict=True
+    NodeWrapper, _flatten_node_element, _unflatten_node_element, strict=True
 )
 
 
 # --- Functional Factory & Decorators ---
+
 
 class _FunctionalFactory(Generic[_T, _P]):
     """
     Factory class for creating functional node instances.
     """
 
-    def __init__(
-        self, cls: type[_T], analysis: _SignatureAnalysis
-    ) -> None:
-        update_wrapper(self, analysis.specs) # Use any object, just to hold context if needed, but really we want to wrap the original func which isn't available here directly in init params if we don't pass it.
+    def __init__(self, cls: type[_T], analysis: _SignatureAnalysis) -> None:
+        update_wrapper(
+            self, analysis.specs
+        )  # Use any object, just to hold context if needed, but really we want to wrap the original func which isn't available here directly in init params if we don't pass it.
         # Actually we need to wrap the factory with the original function's metadata
-        # But here we don't have 'func' in signature. 
+        # But here we don't have 'func' in signature.
         # Let's assume the decorator handles the wrapping, or we pass func in.
         # To match previous logic, we rely on the caller to update_wrapper if needed
-        # OR we change signature to take `func`. 
+        # OR we change signature to take `func`.
         # The previous code did: update_wrapper(self, config.func).
         # We'll adapt:
         self._cls = cls
@@ -584,11 +573,9 @@ class _FunctionalFactory(Generic[_T, _P]):
     # We need to restructure this slightly to hold the func.
     # Re-defining __init__ to be cleaner.
 
-    
+
 class FunctionalFactory(Generic[_T, _P]):
-    def __init__(
-        self, cls: type[_T], func: Callable, analysis: _SignatureAnalysis
-    ):
+    def __init__(self, cls: type[_T], func: Callable, analysis: _SignatureAnalysis):
         update_wrapper(self, func)
         self._cls = cls
         self._func = func
@@ -602,17 +589,14 @@ class FunctionalFactory(Generic[_T, _P]):
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = _process_kwargs(self._specs, kwargs)
-        
+
         # Determine extra args based on class
         extra_args = {}
         if self._cls is Node and "node_wrappers" in final_kwargs:
             extra_args["node_wrappers"] = final_kwargs.pop("node_wrappers")
-            
+
         return self._cls(
-            func=self._func,
-            specs=self._specs,
-            kwargs=final_kwargs,
-            **extra_args
+            func=self._func, specs=self._specs, kwargs=final_kwargs, **extra_args
         )
 
     @overload
@@ -635,7 +619,7 @@ class FunctionalFactory(Generic[_T, _P]):
                 if name in scope:
                     final_kwargs[name] = scope[name]
                     break
-        
+
         return self(**final_kwargs)
 
 

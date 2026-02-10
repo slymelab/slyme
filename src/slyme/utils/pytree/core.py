@@ -334,7 +334,7 @@ class PyTreeEngine:
         if self.allow_inheritance:
             handler = self._registry.lookup(cls, default=None)
         else:
-            handler = self._registry.get(cls)
+            handler = self._registry.get(cls, None)
 
         if handler is not None:
             return handler
