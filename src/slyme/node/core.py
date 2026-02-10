@@ -296,20 +296,20 @@ class NodeElement:
         specs: Mapping[str, Spec],
         kwargs: dict[str, Any],
     ):
-        self.func = func
-        self.specs = specs
+        self._func = func
+        self._specs = specs
         # NOTE: kwargs must already be processed/resolved by _process_kwargs
-        self.kwargs = kwargs
+        self._kwargs = kwargs
 
     def __getitem__(self, key: str) -> Any:
-        return self.kwargs[key]
+        return self._kwargs[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
-        if key not in self.specs:
+        if key not in self._specs:
             raise KeyError(
                 f"Invalid key '{key}'. Parameters must be defined in the specs."
             )
-        self.kwargs[key] = value
+        self._kwargs[key] = value
 
     def update(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
@@ -322,7 +322,7 @@ class NodeElement:
         return ""
 
     def type_repr(self) -> str:
-        return self.func.__name__
+        return self._func.__name__
 
 
 class Node(NodeElement):
@@ -360,7 +360,7 @@ class Node(NodeElement):
                         break
                 if not should_stop:
                     # Inline execution to reduce stack depth
-                    self.func(ctx, **self.kwargs)
+                    self._func(ctx, **self._kwargs)
         # Node Interrupts
         except (NodeTerminate, NodeExpressionExceptionRecord) as e:
             if e.source_node is None:
@@ -392,7 +392,7 @@ class NodeExpression(NodeElement, Generic[_R]):
     def __call__(self, ctx: Context, /) -> _R:
         try:
             # Inline execution
-            return self.func(ctx, **self.kwargs)
+            return self._func(ctx, **self._kwargs)
         except NodeException:
             raise
         except Exception as e:
@@ -419,7 +419,7 @@ class NodeWrapper(NodeElement):
     def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
         try:
             # Inline context manager usage
-            with self.cm_factory(ctx, wrapped, **self.kwargs) as val:
+            with self.cm_factory(ctx, wrapped, **self._kwargs) as val:
                 yield val
         except NodeException:
             raise
@@ -439,11 +439,11 @@ def _flatten_node_element(obj: NodeElement) -> tuple[Iterable[Any], PyTreeAux]:
     Generic flatten for NodeElement (NodeWrapper, NodeExpression).
     Expands kwargs as children.
     """
-    keys = tuple(obj.kwargs.keys())
-    children = tuple(obj.kwargs.values())
+    keys = tuple(obj._kwargs.keys())
+    children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
 
-    metadata = {"func": obj.func, "specs": obj.specs}
+    metadata = {"func": obj._func, "specs": obj._specs}
 
     return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=type(obj))
 
@@ -473,11 +473,11 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
     rich_keys = [AttributeKey("wrappers")]
 
     # 2. Kwargs
-    for k, v in obj.kwargs.items():
+    for k, v in obj._kwargs.items():
         children.append(v)
         rich_keys.append(MappingKey(k))
 
-    metadata = {"func": obj.func, "specs": obj.specs}
+    metadata = {"func": obj._func, "specs": obj._specs}
 
     return tuple(children), PyTreeAux(
         keys=tuple(rich_keys), metadata=metadata, cls=Node
