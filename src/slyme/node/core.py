@@ -391,13 +391,13 @@ class NodeExec(Node):
         wrappers: Iterable["NodeWrapper"],
         kwargs: Mapping[str, Any],
     ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "wrappers", tuple(wrappers))
+        wrappers = tuple(wrappers)
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
+        object.__setattr__(self, "wrappers", wrappers)
         object.__setattr__(self, "_kwargs", kwargs)
-
         # --- Composition Logic (Onion Model) ---
         # 1. Inner Core: Bind kwargs to the user function.
         # Signature: (Context) -> Context
@@ -520,10 +520,10 @@ class NodeExpressionExec(NodeExpression[_R]):
         specs: Mapping[str, Spec],
         kwargs: Mapping[str, Any],
     ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
         object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
@@ -641,10 +641,10 @@ class NodeWrapperExec(NodeWrapper):
         specs: Mapping[str, Spec],
         kwargs: Mapping[str, Any],
     ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
+        object.__setattr__(self, "_func", func)
+        object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
         object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
