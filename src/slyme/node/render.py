@@ -8,7 +8,8 @@ from typing import Any, Optional, Union
 from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
 from slyme.utils.registry import TypeRegistry
 from slyme.context import Ref
-from .core import NodeElement, Node, NodeExpression, NodeWrapper, NODE_PYTREE_ENGINE
+from .core import NodeElement, Node, NodeExpression, NodeWrapper
+from .tree import NODE_PYTREE_ENGINE
 
 __all__ = ["get_render_string"]
 

@@ -13,8 +13,8 @@ from .core import (
     Node,
     NodeExpression,
     NodeWrapper,
-    NODE_PYTREE_ENGINE,
 )
+from .tree import NODE_PYTREE_ENGINE
 
 __all__ = [
     "DEPENDENCY_REGISTRY",
