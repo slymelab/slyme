@@ -22,7 +22,7 @@ from typing import (
     Optional,
     Generic,
     Iterable,
-    cast,
+    Sequence,
 )
 from typing_extensions import ParamSpec, Concatenate, Self
 from slyme.utils.common import enrich_exception
@@ -280,7 +280,7 @@ class NodeElement(ABC):
 
     _func: Callable
     _specs: Mapping[str, Spec]
-    _kwargs: dict[str, Any]
+    _kwargs: Mapping[str, Any]
 
     @abstractmethod
     def prepare(self) -> "NodeElement":
@@ -309,7 +309,7 @@ class Node(NodeElement):
     """
 
     _func: NodeFunc
-    wrappers: Union[list["NodeWrapper"], tuple["NodeWrapper", ...]]
+    wrappers: Sequence["NodeWrapper"]  # Changed: Union[...] -> Sequence
 
     @abstractmethod
     def __call__(self, ctx: Context) -> Context:
@@ -320,6 +320,9 @@ class NodeDef(Node):
     """
     Mutable definition of a Node. Allows modification during build time.
     """
+
+    _kwargs: dict[str, Any]
+    wrappers: list["NodeWrapper"]
 
     def __init__(
         self,
@@ -381,6 +384,7 @@ class NodeExec(Node):
 
     # composed_func signature: (Context) -> Context
     _prepared_func: Callable[[Context], Context]
+    wrappers: tuple["NodeWrapper", ...]
 
     def __init__(
         self,
@@ -459,6 +463,8 @@ class NodeExpressionDef(NodeExpression[_R]):
     """
     Mutable definition of a NodeExpression.
     """
+
+    _kwargs: dict[str, Any]  # Override: Mapping -> dict
 
     def __init__(
         self,
@@ -572,6 +578,8 @@ class NodeWrapperDef(NodeWrapper):
     """
     Mutable definition of a NodeWrapper.
     """
+
+    _kwargs: dict[str, Any]  # Override: Mapping -> dict
 
     def __init__(
         self,
