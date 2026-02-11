@@ -7,13 +7,11 @@ import types
 from abc import ABC, abstractmethod
 from enum import Enum
 from functools import partial, update_wrapper
-from contextlib import contextmanager, AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from typing import (
     TypeVar,
     Callable,
     Any,
-    Generator,
     Union,
     overload,
     Annotated,
@@ -67,11 +65,14 @@ __all__ = [
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _T = TypeVar("_T")
-NodeFunc = Callable[Concatenate[Context, _P], None]
+
+# Update: NodeFunc now must return Context to align with the chain protocol.
+NodeFunc = Callable[Concatenate[Context, _P], Context]
 ExpressionFunc = Callable[Concatenate[Context, _P], _R]
-WrapperFunc = Callable[Concatenate[Context, "Node", _P], Generator[Any, None, None]]
-WrapperCMFactory = Callable[
-    Concatenate[Context, "Node", _P], AbstractContextManager[Any]
+# Wrapper definition: (ctx, wrapped, call_next, ...args) -> Context
+# call_next definition: (Context) -> Context
+WrapperFunc = Callable[
+    Concatenate[Context, "Node", Callable[[Context], Context], _P], Context
 ]
 
 _Missing = Enum("_Missing", ["MARK"])
@@ -286,15 +287,6 @@ def _process_kwargs(
     return final_kwargs
 
 
-def _freeze_structure(value: Any) -> Any:
-    """Helper to shallowly freeze dicts and lists into immutable equivalents."""
-    if isinstance(value, dict):
-        return types.MappingProxyType(value)
-    if isinstance(value, list):
-        return tuple(value)
-    return value
-
-
 # --- Node Class Definitions ---
 
 
@@ -315,6 +307,9 @@ class NodeElement(ABC):
         Converts the Definition structure into an Execution structure.
         """
         pass
+
+    def __getitem__(self, key: str) -> Any:
+        return self._kwargs[key]
 
     def __repr__(self) -> str:
         return get_render_string(self)
@@ -338,15 +333,8 @@ class Node(NodeElement):
     wrappers: Union[list["NodeWrapper"], tuple["NodeWrapper", ...]]
 
     @abstractmethod
-    def __init__(self, *args, **kwargs):
+    def __call__(self, ctx: Context) -> Context:
         pass
-
-    @abstractmethod
-    def __call__(self, ctx: Context, /) -> Context:
-        pass
-
-    def __getitem__(self, key: str) -> Any:
-        return self._kwargs[key]
 
 
 class NodeDef(Node):
@@ -379,7 +367,7 @@ class NodeDef(Node):
         for k, v in kwargs.items():
             self[k] = v
 
-    def __call__(self, ctx: Context, /) -> Context:
+    def __call__(self, ctx: Context) -> Context:
         raise RuntimeError(
             f"Cannot execute {type(self).__name__}. "
             f"Please call `.prepare()` to obtain a generic `{NodeExec.__name__}` first."
@@ -410,6 +398,9 @@ class NodeExec(Node):
     Immutable execution version of a Node.
     """
 
+    # composed_func signature: (Context) -> Context
+    _composed_func: Callable[[Context], Context]
+
     def __init__(
         self,
         /,
@@ -421,13 +412,25 @@ class NodeExec(Node):
     ):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
-        # Note: wrappers are already converted to tuple by FREEZE_PYTREE_ENGINE
         object.__setattr__(self, "wrappers", wrappers)
-        # Note: We rely on the Engine to freeze children, but the top-level kwargs dict
-        # itself needs to be wrapped in a Proxy if it isn't already.
-        # However, since the engine recursively unflattened the dict content into a dict,
-        # we wrap it here for the final layer of safety.
         object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
+
+        # --- Composition Logic (Onion Model) ---
+        
+        # 1. Inner Core: Bind kwargs to the user function.
+        # Signature: (Context) -> Context
+        # Since NodeFunc is now strictly defined to return Context, no adapter is needed.
+        chain: Callable[[Context], Context] = partial(func, **kwargs)
+
+        # 2. Build the middleware chain.
+        # Wrappers are applied from inside out (reversed order of list).
+        for wrapper in reversed(wrappers):
+            # wrapper is NodeWrapperExec which is callable: (ctx, wrapped, call_next) -> Context
+            # We partially apply `wrapped` (self) and `call_next` (current chain head)
+            # to create the new chain head: (Context) -> Context
+            chain = partial(wrapper, wrapped=self, call_next=chain)
+
+        object.__setattr__(self, "_composed_func", chain)
 
     def prepare(self) -> Self:
         return self
@@ -443,18 +446,10 @@ class NodeExec(Node):
     def __setattr__(self, name: str, value: Any) -> None:
         raise TypeError(f"{type(self).__name__} is immutable.")
 
-    def __call__(self, ctx: Context, /) -> Context:
+    def __call__(self, ctx: Context) -> Context:
         try:
-            with ExitStack() as stack:
-                should_stop = False
-                for wrapper in self.wrappers:
-                    val = stack.enter_context(wrapper(ctx, self))
-                    if val is STOP:
-                        should_stop = True
-                        break
-                if not should_stop:
-                    # Inline execution to reduce stack depth
-                    self._func(ctx, **self._kwargs)
+            # Execute the pre-composed chain
+            return self._composed_func(ctx)
         # Node Interrupts
         except (NodeTerminate, NodeExpressionExceptionRecord) as e:
             if e.source_node is None:
@@ -466,7 +461,6 @@ class NodeExec(Node):
         # General Exceptions
         except Exception as e:
             raise NodeExceptionRecord(exception_node=self, exception=e)
-        return ctx
 
 
 # --- Expression Family ---
@@ -480,15 +474,8 @@ class NodeExpression(NodeElement, Generic[_R]):
     _func: ExpressionFunc
 
     @abstractmethod
-    def __init__(self, *args, **kwargs):
+    def __call__(self, ctx: Context) -> _R:
         pass
-
-    @abstractmethod
-    def __call__(self, ctx: Context, /) -> _R:
-        pass
-
-    def __getitem__(self, key: str) -> Any:
-        return self._kwargs[key]
 
 
 class NodeExpressionDef(NodeExpression[_R]):
@@ -519,7 +506,7 @@ class NodeExpressionDef(NodeExpression[_R]):
         for k, v in kwargs.items():
             self[k] = v
 
-    def __call__(self, ctx: Context, /) -> _R:
+    def __call__(self, ctx: Context) -> _R:
         raise RuntimeError(
             f"Cannot execute {type(self).__name__}. "
             f"Please call `.prepare()` to obtain a generic `{NodeExpressionExec.__name__}` first."
@@ -543,6 +530,9 @@ class NodeExpressionExec(NodeExpression[_R]):
     Immutable execution version of a NodeExpression.
     """
 
+    # composed_func signature: (Context) -> _R
+    _composed_func: Callable[[Context], _R]
+
     def __init__(
         self,
         /,
@@ -554,6 +544,8 @@ class NodeExpressionExec(NodeExpression[_R]):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
+        # Optimization: Pre-bind kwargs using partial
+        object.__setattr__(self, "_composed_func", partial(func, **kwargs))
 
     def prepare(self) -> Self:
         return self
@@ -569,10 +561,9 @@ class NodeExpressionExec(NodeExpression[_R]):
     def __setattr__(self, name: str, value: Any) -> None:
         raise TypeError(f"{type(self).__name__} is immutable.")
 
-    def __call__(self, ctx: Context, /) -> _R:
+    def __call__(self, ctx: Context) -> _R:
         try:
-            # Inline execution
-            return self._func(ctx, **self._kwargs)
+            return self._composed_func(ctx)
         except NodeException:
             raise
         except Exception as e:
@@ -588,18 +579,15 @@ class NodeWrapper(NodeElement):
     """
 
     _func: WrapperFunc
-    cm_factory: Callable[..., AbstractContextManager]
 
     @abstractmethod
-    def __init__(self, *args, **kwargs):
+    def __call__(
+        self,
+        ctx: Context,
+        wrapped: Node,
+        call_next: Callable[[Context], Context],
+    ) -> Context:
         pass
-
-    @abstractmethod
-    def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
-        pass
-
-    def __getitem__(self, key: str) -> Any:
-        return self._kwargs[key]
 
 
 class NodeWrapperDef(NodeWrapper):
@@ -618,7 +606,6 @@ class NodeWrapperDef(NodeWrapper):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
-        object.__setattr__(self, "cm_factory", contextmanager(func))
 
     def __setitem__(self, key: str, value: Any) -> None:
         if key not in self._specs:
@@ -631,7 +618,12 @@ class NodeWrapperDef(NodeWrapper):
         for k, v in kwargs.items():
             self[k] = v
 
-    def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
+    def __call__(
+        self,
+        ctx: Context,
+        wrapped: Node,
+        call_next: Callable[[Context], Context],
+    ) -> Context:
         raise RuntimeError(
             f"Cannot execute {type(self).__name__}. "
             f"Please call `.prepare()` to obtain a generic `{NodeWrapperExec.__name__}` first."
@@ -655,6 +647,12 @@ class NodeWrapperExec(NodeWrapper):
     Immutable execution version of a NodeWrapper.
     """
 
+    # composed_func signature: (ctx, wrapped, call_next) -> Context
+    _composed_func: Callable[
+        [Context, Node, Callable[[Context], Context]],
+        Context,
+    ]
+
     def __init__(
         self,
         /,
@@ -666,7 +664,8 @@ class NodeWrapperExec(NodeWrapper):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
-        object.__setattr__(self, "cm_factory", contextmanager(func))
+        # Optimization: Pre-bind kwargs using partial
+        object.__setattr__(self, "_composed_func", partial(func, **kwargs))
 
     def prepare(self) -> Self:
         return self
@@ -682,12 +681,14 @@ class NodeWrapperExec(NodeWrapper):
     def __setattr__(self, name: str, value: Any) -> None:
         raise TypeError(f"{type(self).__name__} is immutable.")
 
-    @contextmanager
-    def __call__(self, ctx: Context, wrapped: Node, /) -> Generator:
+    def __call__(
+        self,
+        ctx: Context,
+        wrapped: Node,
+        call_next: Callable[[Context], Context],
+    ) -> Context:
         try:
-            # Inline context manager usage
-            with self.cm_factory(ctx, wrapped, **self._kwargs) as val:
-                yield val
+            return self._composed_func(ctx, wrapped, call_next)
         except NodeException:
             raise
         except Exception as e:
@@ -985,9 +986,11 @@ def expression(
 
 def _wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapperDef, _P]:
     analysis = _analyze_signature(func)
-    if len(analysis.pos_only_params) != 2:
+    # Wrapper signature: (ctx, wrapped, call_next, **kwargs)
+    # The first 3 arguments should be positional-only.
+    if len(analysis.pos_only_params) != 3:
         raise TypeError(
-            f"@wrapper '{func.__name__}' requires exactly 2 positional-only arguments (ctx, wrapped), "
+            f"@wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
             f"but found {len(analysis.pos_only_params)}."
         )
     return FunctionalFactory(NodeWrapperDef, func, analysis)
