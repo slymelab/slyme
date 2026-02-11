@@ -58,7 +58,6 @@ __all__ = [
     "NodeWrapper",
     "NodeWrapperDef",
     "NodeWrapperExec",
-    "STOP",
     "NODE_PYTREE_ENGINE",
 ]
 
@@ -77,8 +76,6 @@ WrapperFunc = Callable[
 
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
-Stop = Enum("Stop", ["MARK"])
-STOP = Stop.MARK
 
 
 # --- Spec Definitions ---
@@ -399,7 +396,7 @@ class NodeExec(Node):
     """
 
     # composed_func signature: (Context) -> Context
-    _composed_func: Callable[[Context], Context]
+    _prepared_func: Callable[[Context], Context]
 
     def __init__(
         self,
@@ -430,7 +427,7 @@ class NodeExec(Node):
             # to create the new chain head: (Context) -> Context
             chain = partial(wrapper, wrapped=self, call_next=chain)
 
-        object.__setattr__(self, "_composed_func", chain)
+        object.__setattr__(self, "_prepared_func", chain)
 
     def prepare(self) -> Self:
         return self
@@ -449,7 +446,7 @@ class NodeExec(Node):
     def __call__(self, ctx: Context) -> Context:
         try:
             # Execute the pre-composed chain
-            return self._composed_func(ctx)
+            return self._prepared_func(ctx)
         # Node Interrupts
         except (NodeTerminate, NodeExpressionExceptionRecord) as e:
             if e.source_node is None:
@@ -531,7 +528,7 @@ class NodeExpressionExec(NodeExpression[_R]):
     """
 
     # composed_func signature: (Context) -> _R
-    _composed_func: Callable[[Context], _R]
+    _prepared_func: Callable[[Context], _R]
 
     def __init__(
         self,
@@ -545,7 +542,7 @@ class NodeExpressionExec(NodeExpression[_R]):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
         # Optimization: Pre-bind kwargs using partial
-        object.__setattr__(self, "_composed_func", partial(func, **kwargs))
+        object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
 
     def prepare(self) -> Self:
         return self
@@ -563,7 +560,7 @@ class NodeExpressionExec(NodeExpression[_R]):
 
     def __call__(self, ctx: Context) -> _R:
         try:
-            return self._composed_func(ctx)
+            return self._prepared_func(ctx)
         except NodeException:
             raise
         except Exception as e:
@@ -648,7 +645,7 @@ class NodeWrapperExec(NodeWrapper):
     """
 
     # composed_func signature: (ctx, wrapped, call_next) -> Context
-    _composed_func: Callable[
+    _prepared_func: Callable[
         [Context, Node, Callable[[Context], Context]],
         Context,
     ]
@@ -665,7 +662,7 @@ class NodeWrapperExec(NodeWrapper):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
         # Optimization: Pre-bind kwargs using partial
-        object.__setattr__(self, "_composed_func", partial(func, **kwargs))
+        object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
 
     def prepare(self) -> Self:
         return self
@@ -688,7 +685,7 @@ class NodeWrapperExec(NodeWrapper):
         call_next: Callable[[Context], Context],
     ) -> Context:
         try:
-            return self._composed_func(ctx, wrapped, call_next)
+            return self._prepared_func(ctx, wrapped, call_next)
         except NodeException:
             raise
         except Exception as e:
