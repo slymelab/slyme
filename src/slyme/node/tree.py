@@ -20,23 +20,17 @@ from .core import (
     NodeWrapperExec,
 )
 
-
 # 1. Standard Engine: Preserves Types (Def -> Def, List -> List)
 # Used for inspection, rendering, and validation.
 NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
 PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_engine")
-
 # 2. Prepare Engine: Transforms Types (Def -> Exec, List -> Tuple, Dict -> MappingProxy)
 # Used for compiling the definition tree into an execution tree.
-NODE_PREPARE_PYTREE_ENGINE = PyTreeEngine("node_prepare")
+NODE_PREPARE_PYTREE_ENGINE = PyTreeEngine("node_prepare", register_defaults=False)
 PYTREE_ENGINE_REGISTRY.register(NODE_PREPARE_PYTREE_ENGINE, key="node_prepare")
 
 
-# =============================================================================
-# 1. NodeDef Logic
-# =============================================================================
-
-
+# NodeDef Logic
 def _flatten_node_def(obj: NodeDef) -> tuple[Iterable[Any], PyTreeAux]:
     """
     Flatten NodeDef into children (wrappers + kwargs values) and metadata.
@@ -60,20 +54,12 @@ def _unflatten_node_def(children: Iterable[Any], aux: PyTreeAux) -> NodeDef:
     """
     Reconstruct NodeDef (Standard Engine).
     """
-    children_iter = iter(children)
-    keys_iter = iter(aux.keys)
-
-    # 1. Wrappers
-    _ = next(keys_iter)
-    wrappers = next(children_iter)
-
-    # 2. Kwargs
-    kwargs = {}
-    for key in keys_iter:
-        raw_key = cast("MappingKey", key).key
-        val = next(children_iter)
-        kwargs[raw_key] = val
-
+    # Use zip for cleaner iteration
+    iterator = zip(aux.keys, children)
+    # 1. Wrappers (Always the first element based on flatten logic)
+    _, wrappers = next(iterator)
+    # 2. Kwargs (Remaining elements)
+    kwargs = {cast("MappingKey", k).key: v for k, v in iterator}
     return NodeDef(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -86,21 +72,13 @@ def _unflatten_node_def_to_exec(children: Iterable[Any], aux: PyTreeAux) -> Node
     """
     Transform NodeDef into NodeExec (Prepare Engine).
     """
-    children_iter = iter(children)
-    keys_iter = iter(aux.keys)
-
+    iterator = zip(aux.keys, children)
     # 1. Wrappers
-    # Note: In Prepare Engine, the list of wrappers is converted to a tuple recursively.
-    _ = next(keys_iter)
-    wrappers = cast(tuple, next(children_iter))
-
+    # NOTE: The engine has already recursively transformed the wrappers list into a tuple.
+    _, wrappers = next(iterator)
     # 2. Kwargs
-    kwargs = {}
-    for key in keys_iter:
-        raw_key = cast("MappingKey", key).key
-        val = next(children_iter)
-        kwargs[raw_key] = val
-
+    # NOTE: NodeExec.__init__ is responsible for converting this dict to MappingProxy.
+    kwargs = {cast("MappingKey", k).key: v for k, v in iterator}
     return NodeExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -109,11 +87,7 @@ def _unflatten_node_def_to_exec(children: Iterable[Any], aux: PyTreeAux) -> Node
     )
 
 
-# =============================================================================
-# 2. NodeExpressionDef Logic
-# =============================================================================
-
-
+# NodeExpressionDef Logic
 def _flatten_expression_def(
     obj: NodeExpressionDef,
 ) -> tuple[Iterable[Any], PyTreeAux]:
@@ -135,8 +109,7 @@ def _unflatten_expression_def(
     """
     Reconstruct NodeExpressionDef (Standard Engine).
     """
-    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
-    kwargs = dict(zip(raw_keys, children))
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
     return NodeExpressionDef(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
@@ -148,8 +121,7 @@ def _unflatten_expression_def_to_exec(
     """
     Transform NodeExpressionDef into NodeExpressionExec (Prepare Engine).
     """
-    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
-    kwargs = dict(zip(raw_keys, children))
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
     return NodeExpressionExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -157,11 +129,7 @@ def _unflatten_expression_def_to_exec(
     )
 
 
-# =============================================================================
-# 3. NodeWrapperDef Logic
-# =============================================================================
-
-
+# NodeWrapperDef Logic
 def _flatten_wrapper_def(obj: NodeWrapperDef) -> tuple[Iterable[Any], PyTreeAux]:
     """
     Flatten NodeWrapperDef.
@@ -177,8 +145,7 @@ def _unflatten_wrapper_def(children: Iterable[Any], aux: PyTreeAux) -> NodeWrapp
     """
     Reconstruct NodeWrapperDef (Standard Engine).
     """
-    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
-    kwargs = dict(zip(raw_keys, children))
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
     return NodeWrapperDef(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
@@ -190,8 +157,7 @@ def _unflatten_wrapper_def_to_exec(
     """
     Transform NodeWrapperDef into NodeWrapperExec (Prepare Engine).
     """
-    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
-    kwargs = dict(zip(raw_keys, children))
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
     return NodeWrapperExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -199,13 +165,7 @@ def _unflatten_wrapper_def_to_exec(
     )
 
 
-# =============================================================================
-# 4. Exec Types Logic (Completeness)
-# =============================================================================
-# Although Exec types are usually the output of the Prepare engine,
-# we register them in both engines to support re-entrant processing or inspection.
-
-
+# Exec Types Logic
 def _flatten_node_exec(obj: NodeExec) -> tuple[Iterable[Any], PyTreeAux]:
     children = [obj.wrappers]
     rich_keys = [AttributeKey("wrappers")]
@@ -219,15 +179,9 @@ def _flatten_node_exec(obj: NodeExec) -> tuple[Iterable[Any], PyTreeAux]:
 
 
 def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> NodeExec:
-    children_iter = iter(children)
-    keys_iter = iter(aux.keys)
-    _ = next(keys_iter)
-    wrappers = next(children_iter)
-    kwargs = {}
-    for key in keys_iter:
-        raw_key = cast("MappingKey", key).key
-        val = next(children_iter)
-        kwargs[raw_key] = val
+    iterator = zip(aux.keys, children)
+    _, wrappers = next(iterator)
+    kwargs = {cast("MappingKey", k).key: v for k, v in iterator}
     return NodeExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -251,8 +205,7 @@ def _flatten_expression_exec(
 def _unflatten_expression_exec(
     children: Iterable[Any], aux: PyTreeAux
 ) -> NodeExpressionExec:
-    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
-    kwargs = dict(zip(raw_keys, children))
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
     return NodeExpressionExec(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
@@ -269,18 +222,13 @@ def _flatten_wrapper_exec(obj: NodeWrapperExec) -> tuple[Iterable[Any], PyTreeAu
 def _unflatten_wrapper_exec(
     children: Iterable[Any], aux: PyTreeAux
 ) -> NodeWrapperExec:
-    raw_keys = [cast("MappingKey", k).key for k in aux.keys]
-    kwargs = dict(zip(raw_keys, children))
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
     return NodeWrapperExec(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
 
 
-# =============================================================================
-# 5. Container Logic (Prepare Transformations)
-# =============================================================================
-
-
+# Container Logic (Prepare Transformations)
 def _flatten_list(l: list) -> tuple[Iterable[Any], PyTreeAux]:
     return iter(l), PyTreeAux()
 
@@ -311,10 +259,7 @@ def _unflatten_to_mapping_proxy(
     return types.MappingProxyType(dict(zip(raw_keys, children)))
 
 
-# =============================================================================
-# 6. Registrations
-# =============================================================================
-
+# Registrations
 # --- NODE_PYTREE_ENGINE (Def -> Def, Exec -> Exec) ---
 NODE_PYTREE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def, strict=True
@@ -325,7 +270,6 @@ NODE_PYTREE_ENGINE.register(
 NODE_PYTREE_ENGINE.register(
     NodeWrapperDef, _flatten_wrapper_def, _unflatten_wrapper_def, strict=True
 )
-
 NODE_PYTREE_ENGINE.register(
     NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
 )
@@ -339,17 +283,14 @@ NODE_PYTREE_ENGINE.register(
     NodeWrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
 )
 
-
 # --- NODE_PREPARE_PYTREE_ENGINE (Def -> Exec, Mutables -> Immutables) ---
-
-# 1. Custom Containers
+# Custom Containers
 NODE_PREPARE_PYTREE_ENGINE.register(list, _flatten_list, _unflatten_to_tuple)
 NODE_PREPARE_PYTREE_ENGINE.register(tuple, _flatten_tuple, _unflatten_tuple)
 NODE_PREPARE_PYTREE_ENGINE.register(
     dict, _flatten_dict, _unflatten_to_mapping_proxy
 )
-
-# 2. Def -> Exec Transformations
+# Def -> Exec Transformations
 NODE_PREPARE_PYTREE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def_to_exec, strict=True
 )
@@ -365,9 +306,7 @@ NODE_PREPARE_PYTREE_ENGINE.register(
     _unflatten_wrapper_def_to_exec,
     strict=True,
 )
-
-# 3. Exec Identity (Exec -> Exec)
-# Ensures that if an Exec node is encountered during preparation, it is preserved (deeply).
+# Exec Identity (Exec -> Exec)
 NODE_PREPARE_PYTREE_ENGINE.register(
     NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
 )
