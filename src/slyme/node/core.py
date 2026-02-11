@@ -71,9 +71,7 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
-# --- Spec Definitions ---
-
-
+# Spec Definitions
 @dataclass(frozen=True)
 class Spec:
     """
@@ -130,9 +128,7 @@ class RefSpec(Spec):
         return value
 
 
-# --- Spec Factory Functions ---
-
-
+# Spec Factory Functions
 def spec(
     default: Union[Any, _Missing] = _MISSING,
     default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
@@ -157,9 +153,7 @@ def ref_spec(
     return RefSpec(default=default, default_factory=default_factory, metadata=metadata)
 
 
-# --- Inspection & Signature Analysis ---
-
-
+# Inspection & Signature Analysis
 @dataclass(frozen=True)
 class _SignatureAnalysis:
     pos_only_params: list[inspect.Parameter]
@@ -277,9 +271,7 @@ def _process_kwargs(
     return final_kwargs
 
 
-# --- Node Class Definitions ---
-
-
+# Node Family
 class NodeElement(ABC):
     """
     Base class for all node-related entities.
@@ -309,9 +301,6 @@ class NodeElement(ABC):
 
     def type_repr(self) -> str:
         return self._func.__name__
-
-
-# --- Node Family ---
 
 
 class Node(NodeElement):
@@ -364,11 +353,11 @@ class NodeDef(Node):
         )
 
     def prepare(self) -> "NodeExec":
-        # Use the specialized FREEZE_PYTREE_ENGINE to perform a deep transform
+        # Use the specialized NODE_PREPARE_PYTREE_ENGINE to perform a deep transform
         # of the structure (List -> Tuple, Dict -> MappingProxy, Def -> Exec).
         # We map strict identity because the transformation happens in the 'unflatten' phase
-        # of the registered types in FREEZE_PYTREE_ENGINE.
-        return FREEZE_PYTREE_ENGINE.map(lambda x: x, self)
+        # of the registered types in NODE_PREPARE_PYTREE_ENGINE.
+        return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
@@ -453,9 +442,6 @@ class NodeExec(Node):
             raise NodeExceptionRecord(exception_node=self, exception=e)
 
 
-# --- Expression Family ---
-
-
 class NodeExpression(NodeElement, Generic[_R]):
     """
     Abstract base class for NodeExpressionDef and NodeExpressionExec.
@@ -503,7 +489,7 @@ class NodeExpressionDef(NodeExpression[_R]):
         )
 
     def prepare(self) -> "NodeExpressionExec[_R]":
-        return FREEZE_PYTREE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
@@ -558,9 +544,6 @@ class NodeExpressionExec(NodeExpression[_R]):
             raise
         except Exception as e:
             raise NodeExpressionExceptionRecord(exception_node=self, exception=e)
-
-
-# --- Wrapper Family ---
 
 
 class NodeWrapper(NodeElement):
@@ -620,7 +603,7 @@ class NodeWrapperDef(NodeWrapper):
         )
 
     def prepare(self) -> "NodeWrapperExec":
-        return FREEZE_PYTREE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
@@ -687,7 +670,7 @@ class NodeWrapperExec(NodeWrapper):
             )
 
 
-# --- Functional Factory & Decorators ---
+# Functional Factory & Decorators
 class FunctionalFactory(Generic[_T, _P]):
     def __init__(self, cls: type[_T], func: Callable, analysis: _SignatureAnalysis):
         update_wrapper(self, func)
@@ -825,5 +808,5 @@ def wrapper(func: Union[WrapperFunc[_P], _Missing] = _MISSING, /) -> Union[
         return _wrapper(func)
 
 
-from .tree import NODE_PYTREE_ENGINE, FREEZE_PYTREE_ENGINE
+from .tree import NODE_PYTREE_ENGINE, NODE_PREPARE_PYTREE_ENGINE
 from .render import get_render_string
