@@ -360,7 +360,9 @@ class NodeDef(Node):
         return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
-        raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
+        raise AttributeError(
+            f"Cannot delete attribute '{name}' on {type(self).__name__}"
+        )
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "wrappers":
@@ -386,21 +388,21 @@ class NodeExec(Node):
         *,
         func: NodeFunc,
         specs: Mapping[str, Spec],
-        wrappers: tuple["NodeWrapper", ...],
-        kwargs: dict[str, Any],
+        wrappers: Iterable["NodeWrapper"],
+        kwargs: Mapping[str, Any],
     ):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "wrappers", wrappers)
-        object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
+        object.__setattr__(self, "wrappers", tuple(wrappers))
+        if not isinstance(kwargs, types.MappingProxyType):
+            kwargs = types.MappingProxyType(kwargs)
+        object.__setattr__(self, "_kwargs", kwargs)
 
         # --- Composition Logic (Onion Model) ---
-        
         # 1. Inner Core: Bind kwargs to the user function.
         # Signature: (Context) -> Context
         # Since NodeFunc is now strictly defined to return Context, no adapter is needed.
         chain: Callable[[Context], Context] = partial(func, **kwargs)
-
         # 2. Build the middleware chain.
         # Wrappers are applied from inside out (reversed order of list).
         for wrapper in reversed(wrappers):
@@ -408,7 +410,6 @@ class NodeExec(Node):
             # We partially apply `wrapped` (self) and `call_next` (current chain head)
             # to create the new chain head: (Context) -> Context
             chain = partial(wrapper, wrapped=self, call_next=chain)
-
         object.__setattr__(self, "_prepared_func", chain)
 
     def prepare(self) -> Self:
@@ -492,7 +493,9 @@ class NodeExpressionDef(NodeExpression[_R]):
         return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
-        raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
+        raise AttributeError(
+            f"Cannot delete attribute '{name}' on {type(self).__name__}"
+        )
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError(
@@ -515,11 +518,13 @@ class NodeExpressionExec(NodeExpression[_R]):
         *,
         func: ExpressionFunc,
         specs: Mapping[str, Spec],
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, Any],
     ):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
+        if not isinstance(kwargs, types.MappingProxyType):
+            kwargs = types.MappingProxyType(kwargs)
+        object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
         object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
 
@@ -606,7 +611,9 @@ class NodeWrapperDef(NodeWrapper):
         return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
-        raise AttributeError(f"Cannot delete attribute '{name}' on {type(self).__name__}")
+        raise AttributeError(
+            f"Cannot delete attribute '{name}' on {type(self).__name__}"
+        )
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError(
@@ -632,11 +639,13 @@ class NodeWrapperExec(NodeWrapper):
         *,
         func: WrapperFunc,
         specs: Mapping[str, Spec],
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, Any],
     ):
         object.__setattr__(self, "_func", func)
         object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", types.MappingProxyType(kwargs))
+        if not isinstance(kwargs, types.MappingProxyType):
+            kwargs = types.MappingProxyType(kwargs)
+        object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
         object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
 
@@ -736,9 +745,7 @@ def node(
 ) -> Callable[[NodeFunc[_P]], FunctionalFactory[NodeDef, _P]]: ...
 @overload
 def node(func: NodeFunc[_P], /) -> FunctionalFactory[NodeDef, _P]: ...
-def node(
-    func: Union[NodeFunc[_P], _Missing] = _MISSING, /
-) -> Union[
+def node(func: Union[NodeFunc[_P], _Missing] = _MISSING, /) -> Union[
     Callable[[NodeFunc[_P]], FunctionalFactory[NodeDef, _P]],
     FunctionalFactory[NodeDef, _P],
 ]:
@@ -763,14 +770,14 @@ def _expression(
 @overload
 def expression(
     func: _Missing = _MISSING, /
-) -> Callable[[ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpressionDef[_R], _P]]: ...
+) -> Callable[
+    [ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpressionDef[_R], _P]
+]: ...
 @overload
 def expression(
     func: ExpressionFunc[_P, _R], /
 ) -> FunctionalFactory[NodeExpressionDef[_R], _P]: ...
-def expression(
-    func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /
-) -> Union[
+def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
     Callable[[ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpressionDef[_R], _P]],
     FunctionalFactory[NodeExpressionDef[_R], _P],
 ]:

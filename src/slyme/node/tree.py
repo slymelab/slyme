@@ -98,9 +98,7 @@ def _flatten_expression_def(
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(
-        keys=rich_keys, metadata=metadata, cls=NodeExpressionDef
-    )
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=NodeExpressionDef)
 
 
 def _unflatten_expression_def(
@@ -219,9 +217,7 @@ def _flatten_wrapper_exec(obj: NodeWrapperExec) -> tuple[Iterable[Any], PyTreeAu
     return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=NodeWrapperExec)
 
 
-def _unflatten_wrapper_exec(
-    children: Iterable[Any], aux: PyTreeAux
-) -> NodeWrapperExec:
+def _unflatten_wrapper_exec(children: Iterable[Any], aux: PyTreeAux) -> NodeWrapperExec:
     kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
     return NodeWrapperExec(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
@@ -287,9 +283,7 @@ NODE_PYTREE_ENGINE.register(
 # Custom Containers
 NODE_PREPARE_PYTREE_ENGINE.register(list, _flatten_list, _unflatten_to_tuple)
 NODE_PREPARE_PYTREE_ENGINE.register(tuple, _flatten_tuple, _unflatten_tuple)
-NODE_PREPARE_PYTREE_ENGINE.register(
-    dict, _flatten_dict, _unflatten_to_mapping_proxy
-)
+NODE_PREPARE_PYTREE_ENGINE.register(dict, _flatten_dict, _unflatten_to_mapping_proxy)
 # Def -> Exec Transformations
 NODE_PREPARE_PYTREE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def_to_exec, strict=True
