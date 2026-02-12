@@ -345,6 +345,10 @@ class NodeDef(Node):
             )
         self._kwargs[key] = value
 
+    def add_wrappers(self, *wrappers: "NodeWrapper") -> Self:
+        self.wrappers.extend(wrappers)
+        return self
+
     def update(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             self[k] = v
@@ -703,14 +707,9 @@ class FunctionalFactory(Generic[_T, _P]):
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = _process_kwargs(self._specs, kwargs)
-
         # Determine extra args based on class
-        extra_args = {}
-        if issubclass(self._cls, Node) and "wrappers" in final_kwargs:
-            extra_args["wrappers"] = final_kwargs.pop("wrappers")
-
         return self._cls(
-            func=self._func, specs=self._specs, kwargs=final_kwargs, **extra_args
+            func=self._func, specs=self._specs, kwargs=final_kwargs
         )
 
     @overload
