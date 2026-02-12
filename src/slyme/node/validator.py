@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Union, Protocol
 from collections.abc import Callable
 from slyme.utils.registry import Registry, TypeRegistry
-from slyme.utils.pytree import AttributeKey
+from slyme.utils.pytree import AttributeKey, PyTreeKey
 from slyme.context import Context, Dep, DEP, Ref
 from .core import (
     NodeElement,
@@ -114,8 +114,8 @@ class NodeStructureError(TypeError):
 
 
 # Type definition for validation functions
-# Args: obj (container), attr_name, leaves, path_info (for error msg)
-ValidatorFunc = Callable[[NodeElement, str, list[Any], str], None]
+# Args: obj (container), key (PyTreeKey), leaves
+ValidatorFunc = Callable[[NodeElement, PyTreeKey, list[Any]], None]
 VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_validation")
 
 
@@ -173,7 +173,6 @@ def _validate_purity(stats: set[Union[type, None]], path_info: str) -> None:
                 names.append("Others")
             else:
                 names.append(cat.__name__)
-
         raise NodeStructureError(
             f"Mixed content at '{path_info}': "
             f"Found mixed types {names}. Containers must be homogenous regarding "
@@ -182,19 +181,21 @@ def _validate_purity(stats: set[Union[type, None]], path_info: str) -> None:
 
 
 @VALIDATION_REGISTRY.register(key=Node)
-def _validate_node_structure(
-    obj: Node, attr_name: str, leaves: list[Any], path_info: str
-) -> None:
+def _validate_node_structure(obj: Node, key: PyTreeKey, leaves: list[Any]) -> None:
     """Validator for Node instances."""
     stats = _scan_leaves(leaves)
+    type_name = obj.type_repr()
+    path_info = key.codify(type_name)
     _validate_purity(stats, path_info)
 
     # Rule: NodeWrapper placement
+    # NodeWrappers are ONLY allowed in the 'wrappers' attribute.
     if NodeWrapper in stats:
-        if attr_name != "node_wrappers":
+        is_wrappers_attr = isinstance(key, AttributeKey) and key.name == "wrappers"
+        if not is_wrappers_attr:
             raise NodeStructureError(
-                f"Invalid wrapper placement at '{path_info}': "
-                "NodeWrappers must be in 'node_wrappers'."
+                f"Invalid wrapper placement at {path_info}: "
+                f"NodeWrappers must be in {type_name}.wrappers."
             )
 
 
@@ -202,25 +203,24 @@ def _validate_node_structure(
 @VALIDATION_REGISTRY.register(key=NodeWrapper)
 def _validate_terminal_structure(
     obj: Union[NodeExpression, NodeWrapper],
-    attr_name: str,
+    key: PyTreeKey,
     leaves: list[Any],
-    path_info: str,
 ) -> None:
     """Validator for NodeExpression and NodeWrapper (Terminal Structures)."""
     stats = _scan_leaves(leaves)
+    type_name = obj.type_repr()
+    path_info = key.codify(type_name)
     _validate_purity(stats, path_info)
 
     # Rule: Downward closure
     if Node in stats:
         raise NodeStructureError(
-            f"Invalid containment at '{path_info}': "
-            f"{type(obj).__name__} cannot hold Node."
+            f"Invalid containment at {path_info}: " f"{type_name} cannot hold Node."
         )
-
     if NodeWrapper in stats:
         raise NodeStructureError(
-            f"Invalid containment at '{path_info}': "
-            f"{type(obj).__name__} cannot hold NodeWrapper."
+            f"Invalid containment at {path_info}: "
+            f"{type_name} cannot hold NodeWrapper."
         )
 
 
@@ -236,11 +236,9 @@ def check_node_structure(root: Node) -> None:
         # Only validate known structural units.
         if not isinstance(obj, NodeElement):
             return
-
         # Lookup the validator function for this object type
         # Uses inheritance lookup (e.g. subclass of Node uses _validate_node_structure)
         validate_func = VALIDATION_REGISTRY.lookup(type(obj), default=None)
-
         # Inspect immediate attributes using the engine.
         direct_attrs_with_path = [
             (p, c)
@@ -249,25 +247,20 @@ def check_node_structure(root: Node) -> None:
             )
             if p
         ]
-
         for path, attr_value in direct_attrs_with_path:
-            if not isinstance(path[0], AttributeKey):
-                continue
-
-            attr_name = path[0].name
-            path_info = f"{type(obj).__name__}.{attr_name}"
-
+            # path is tuple[PyTreeKey, ...]
+            # Since we iterate immediate children (is_leaf stops at obj's children),
+            # path length is guaranteed to be 1.
+            key = path[0]
             # Gather all children in this attribute structure.
             leaves = list(
                 NODE_PYTREE_ENGINE.iter(
                     attr_value, is_leaf=lambda x, _: isinstance(x, NodeElement)
                 )
             )
-
             # --- Dispatch Check Logic ---
             if validate_func is not None:
-                validate_func(obj, attr_name, leaves, path_info)
-
+                validate_func(obj, key, leaves)
             # --- Recursion ---
             # Recursively validate valid NodeElement children
             for child in leaves:
