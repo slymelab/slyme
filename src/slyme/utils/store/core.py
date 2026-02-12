@@ -182,8 +182,10 @@ class StoreDict(dict[str, Any]):
         for head, (sub_updates, sub_drops) in grouped_ops.items():
             # Optimization: Exact overwrite
             if () in sub_updates:
-                new_data[head] = sub_updates[()]
-                continue
+                new_data[head] = sub_updates.pop(())
+                # If no other updates/drops for this head, we are done
+                if not sub_updates and not sub_drops:
+                    continue
 
             # Get existing child or MISSING (if Reset, it's always MISSING)
             child = new_data.get(head, _MISSING)
