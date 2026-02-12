@@ -2,8 +2,8 @@ from .signature import spec, ref_spec
 from .core import (
     NodeElement,
     Node,
-    NodeExpression,
-    NodeWrapper,
+    Expression,
+    Wrapper,
     node,
     wrapper,
     expression,
@@ -19,8 +19,8 @@ from .validator import (
 __all__ = [
     "NodeElement",
     "Node",
-    "NodeExpression",
-    "NodeWrapper",
+    "Expression",
+    "Wrapper",
     "check_node_structure",
     "DEPENDENCY_REGISTRY",
     "vanilla_dependency_check",

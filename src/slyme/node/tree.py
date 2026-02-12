@@ -13,11 +13,11 @@ from slyme.utils.pytree import (
 )
 from .core import (
     NodeDef,
-    NodeExpressionDef,
-    NodeWrapperDef,
+    ExpressionDef,
+    WrapperDef,
     NodeExec,
-    NodeExpressionExec,
-    NodeWrapperExec,
+    ExpressionExec,
+    WrapperExec,
 )
 
 # 1. Standard Engine: Preserves Types (Def -> Def, List -> List)
@@ -35,7 +35,7 @@ def _flatten_node_def(obj: NodeDef) -> tuple[Iterable[Any], PyTreeAux]:
     """
     Flatten NodeDef into children (wrappers + kwargs values) and metadata.
     """
-    # 1. Wrappers (List[NodeWrapperDef]) treated as a single child container
+    # 1. Wrappers (List[WrapperDef]) treated as a single child container
     children = [obj.wrappers]
     rich_keys = [AttributeKey("wrappers")]
 
@@ -87,76 +87,76 @@ def _unflatten_node_def_to_exec(children: Iterable[Any], aux: PyTreeAux) -> Node
     )
 
 
-# NodeExpressionDef Logic
+# ExpressionDef Logic
 def _flatten_expression_def(
-    obj: NodeExpressionDef,
+    obj: ExpressionDef,
 ) -> tuple[Iterable[Any], PyTreeAux]:
     """
-    Flatten NodeExpressionDef.
+    Flatten ExpressionDef.
     """
     keys = tuple(obj._kwargs.keys())
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=NodeExpressionDef)
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=ExpressionDef)
 
 
 def _unflatten_expression_def(
     children: Iterable[Any], aux: PyTreeAux
-) -> NodeExpressionDef:
+) -> ExpressionDef:
     """
-    Reconstruct NodeExpressionDef (Standard Engine).
+    Reconstruct ExpressionDef (Standard Engine).
     """
     kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
-    return NodeExpressionDef(
+    return ExpressionDef(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
 
 
 def _unflatten_expression_def_to_exec(
     children: Iterable[Any], aux: PyTreeAux
-) -> NodeExpressionExec:
+) -> ExpressionExec:
     """
-    Transform NodeExpressionDef into NodeExpressionExec (Prepare Engine).
+    Transform ExpressionDef into ExpressionExec (Prepare Engine).
     """
     kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
-    return NodeExpressionExec(
+    return ExpressionExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
         kwargs=kwargs,
     )
 
 
-# NodeWrapperDef Logic
-def _flatten_wrapper_def(obj: NodeWrapperDef) -> tuple[Iterable[Any], PyTreeAux]:
+# WrapperDef Logic
+def _flatten_wrapper_def(obj: WrapperDef) -> tuple[Iterable[Any], PyTreeAux]:
     """
-    Flatten NodeWrapperDef.
+    Flatten WrapperDef.
     """
     keys = tuple(obj._kwargs.keys())
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=NodeWrapperDef)
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=WrapperDef)
 
 
-def _unflatten_wrapper_def(children: Iterable[Any], aux: PyTreeAux) -> NodeWrapperDef:
+def _unflatten_wrapper_def(children: Iterable[Any], aux: PyTreeAux) -> WrapperDef:
     """
-    Reconstruct NodeWrapperDef (Standard Engine).
+    Reconstruct WrapperDef (Standard Engine).
     """
     kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
-    return NodeWrapperDef(
+    return WrapperDef(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
 
 
 def _unflatten_wrapper_def_to_exec(
     children: Iterable[Any], aux: PyTreeAux
-) -> NodeWrapperExec:
+) -> WrapperExec:
     """
-    Transform NodeWrapperDef into NodeWrapperExec (Prepare Engine).
+    Transform WrapperDef into WrapperExec (Prepare Engine).
     """
     kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
-    return NodeWrapperExec(
+    return WrapperExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
         kwargs=kwargs,
@@ -189,37 +189,37 @@ def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> NodeExec:
 
 
 def _flatten_expression_exec(
-    obj: NodeExpressionExec,
+    obj: ExpressionExec,
 ) -> tuple[Iterable[Any], PyTreeAux]:
     keys = tuple(obj._kwargs.keys())
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
     return children, PyTreeAux(
-        keys=rich_keys, metadata=metadata, cls=NodeExpressionExec
+        keys=rich_keys, metadata=metadata, cls=ExpressionExec
     )
 
 
 def _unflatten_expression_exec(
     children: Iterable[Any], aux: PyTreeAux
-) -> NodeExpressionExec:
+) -> ExpressionExec:
     kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
-    return NodeExpressionExec(
+    return ExpressionExec(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
 
 
-def _flatten_wrapper_exec(obj: NodeWrapperExec) -> tuple[Iterable[Any], PyTreeAux]:
+def _flatten_wrapper_exec(obj: WrapperExec) -> tuple[Iterable[Any], PyTreeAux]:
     keys = tuple(obj._kwargs.keys())
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=NodeWrapperExec)
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=WrapperExec)
 
 
-def _unflatten_wrapper_exec(children: Iterable[Any], aux: PyTreeAux) -> NodeWrapperExec:
+def _unflatten_wrapper_exec(children: Iterable[Any], aux: PyTreeAux) -> WrapperExec:
     kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.keys, children)}
-    return NodeWrapperExec(
+    return WrapperExec(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
 
@@ -261,22 +261,22 @@ NODE_PYTREE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def, strict=True
 )
 NODE_PYTREE_ENGINE.register(
-    NodeExpressionDef, _flatten_expression_def, _unflatten_expression_def, strict=True
+    ExpressionDef, _flatten_expression_def, _unflatten_expression_def, strict=True
 )
 NODE_PYTREE_ENGINE.register(
-    NodeWrapperDef, _flatten_wrapper_def, _unflatten_wrapper_def, strict=True
+    WrapperDef, _flatten_wrapper_def, _unflatten_wrapper_def, strict=True
 )
 NODE_PYTREE_ENGINE.register(
     NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
 )
 NODE_PYTREE_ENGINE.register(
-    NodeExpressionExec,
+    ExpressionExec,
     _flatten_expression_exec,
     _unflatten_expression_exec,
     strict=True,
 )
 NODE_PYTREE_ENGINE.register(
-    NodeWrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
+    WrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
 )
 
 # --- NODE_PREPARE_PYTREE_ENGINE (Def -> Exec, Mutables -> Immutables) ---
@@ -289,13 +289,13 @@ NODE_PREPARE_PYTREE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def_to_exec, strict=True
 )
 NODE_PREPARE_PYTREE_ENGINE.register(
-    NodeExpressionDef,
+    ExpressionDef,
     _flatten_expression_def,
     _unflatten_expression_def_to_exec,
     strict=True,
 )
 NODE_PREPARE_PYTREE_ENGINE.register(
-    NodeWrapperDef,
+    WrapperDef,
     _flatten_wrapper_def,
     _unflatten_wrapper_def_to_exec,
     strict=True,
@@ -305,11 +305,11 @@ NODE_PREPARE_PYTREE_ENGINE.register(
     NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
 )
 NODE_PREPARE_PYTREE_ENGINE.register(
-    NodeExpressionExec,
+    ExpressionExec,
     _flatten_expression_exec,
     _unflatten_expression_exec,
     strict=True,
 )
 NODE_PREPARE_PYTREE_ENGINE.register(
-    NodeWrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
+    WrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
 )

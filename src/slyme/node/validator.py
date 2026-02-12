@@ -11,8 +11,8 @@ from slyme.context import Context, Dep, DEP, Ref
 from .core import (
     NodeElement,
     Node,
-    NodeExpression,
-    NodeWrapper,
+    Expression,
+    Wrapper,
 )
 from .tree import NODE_PYTREE_ENGINE
 
@@ -123,7 +123,7 @@ VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_valid
 
 # Configuration: Types that must be independently tracked and kept pure.
 # Any object belonging to these types (or their subclasses) is treated as a distinct category.
-_TRACKED_CATEGORIES = (Node, NodeExpression, NodeWrapper, Ref)
+_TRACKED_CATEGORIES = (Node, Expression, Wrapper, Ref)
 # Marker for any type not in the tracked categories.
 _OTHERS_MARKER = None
 
@@ -160,7 +160,7 @@ def _validate_purity(stats: set[Union[type, None]], path_info: str) -> None:
 
     Logic:
         - {Node}: OK
-        - {Node, NodeExpression}: Error (Mixed tracked types)
+        - {Node, Expression}: Error (Mixed tracked types)
         - {Node, None}: Error (Tracked type mixed with Others)
         - {None}: OK (Pure Others, internal mix of Others is allowed)
         - {}: OK (Empty)
@@ -188,25 +188,25 @@ def _validate_node_structure(obj: Node, key: PyTreeKey, leaves: list[Any]) -> No
     path_info = key.codify(type_name)
     _validate_purity(stats, path_info)
 
-    # Rule: NodeWrapper placement
-    # NodeWrappers are ONLY allowed in the 'wrappers' attribute.
-    if NodeWrapper in stats:
+    # Rule: Wrapper placement
+    # Wrappers are ONLY allowed in the 'wrappers' attribute.
+    if Wrapper in stats:
         is_wrappers_attr = isinstance(key, AttributeKey) and key.name == "wrappers"
         if not is_wrappers_attr:
             raise NodeStructureError(
                 f"Invalid wrapper placement at {path_info}: "
-                f"NodeWrappers must be in {type_name}.wrappers."
+                f"Wrappers must be in {type_name}.wrappers."
             )
 
 
-@VALIDATION_REGISTRY.register(key=NodeExpression)
-@VALIDATION_REGISTRY.register(key=NodeWrapper)
+@VALIDATION_REGISTRY.register(key=Expression)
+@VALIDATION_REGISTRY.register(key=Wrapper)
 def _validate_terminal_structure(
-    obj: Union[NodeExpression, NodeWrapper],
+    obj: Union[Expression, Wrapper],
     key: PyTreeKey,
     leaves: list[Any],
 ) -> None:
-    """Validator for NodeExpression and NodeWrapper (Terminal Structures)."""
+    """Validator for Expression and Wrapper (Terminal Structures)."""
     stats = _scan_leaves(leaves)
     type_name = obj.type_repr()
     path_info = key.codify(type_name)
@@ -217,10 +217,10 @@ def _validate_terminal_structure(
         raise NodeStructureError(
             f"Invalid containment at {path_info}: " f"{type_name} cannot hold Node."
         )
-    if NodeWrapper in stats:
+    if Wrapper in stats:
         raise NodeStructureError(
             f"Invalid containment at {path_info}: "
-            f"{type_name} cannot hold NodeWrapper."
+            f"{type_name} cannot hold Wrapper."
         )
 
 
