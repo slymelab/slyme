@@ -140,6 +140,9 @@ class NodeDef(Node):
             raise KeyError(
                 f"Invalid key '{key}'. Parameters must be defined in the specs."
             )
+        spec_obj = self._specs[key]
+        with enrich_exception(f"for parameter '{key}'"):
+            value = spec_obj.resolve(value)
         self._kwargs[key] = value
 
     def add_wrappers(self, *wrappers: "NodeWrapper") -> Self:
@@ -283,6 +286,9 @@ class NodeExpressionDef(NodeExpression[_R]):
             raise KeyError(
                 f"Invalid key '{key}'. Parameters must be defined in the specs."
             )
+        spec_obj = self._specs[key]
+        with enrich_exception(f"for parameter '{key}'"):
+            value = spec_obj.resolve(value)
         self._kwargs[key] = value
 
     def update(self, **kwargs: Any) -> None:
@@ -398,6 +404,9 @@ class NodeWrapperDef(NodeWrapper):
             raise KeyError(
                 f"Invalid key '{key}'. Parameters must be defined in the specs."
             )
+        spec_obj = self._specs[key]
+        with enrich_exception(f"for parameter '{key}'"):
+            value = spec_obj.resolve(value)
         self._kwargs[key] = value
 
     def update(self, **kwargs: Any) -> None:
