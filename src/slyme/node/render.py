@@ -28,6 +28,8 @@ class RenderConfig:
     tree_vertical: str = "│   "
     tree_spacer: str = "    "
     group_connector: str = "│ => "
+    # Optional filter for displayed categories. If None, all categories are shown.
+    visible_categories: Optional[tuple[str, ...]] = ("wrappers", "expressions", "nodes")
     # Types that should use the "Grouped" rendering strategy.
     _grouped_render_types: tuple[type, ...] = (NodeElement,)
     # Configuration for grouped rendering: (Category Name, Display Title)
@@ -143,7 +145,13 @@ def _render_grouped(items: list[_RenderItem]) -> list[str]:
     lines = []
     # Filter active categories based on config order
     active_cats = [
-        (c, t) for c, t in RenderConfig._category_config if classified_children.get(c)
+        (c, t)
+        for c, t in RenderConfig._category_config
+        if classified_children.get(c)
+        and (
+            RenderConfig.visible_categories is None
+            or c in RenderConfig.visible_categories
+        )
     ]
     count = len(active_cats)
 
