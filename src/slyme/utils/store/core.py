@@ -27,7 +27,7 @@ _T2 = TypeVar("_T2")
 _EMPTY_METADATA = types.MappingProxyType({})
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
-StoreData = Optional[Union[Mapping[str, Any], "StoreDict"]]
+StoreData = Optional[Mapping[str, Any]]
 
 
 class StoreConfig:
@@ -149,47 +149,40 @@ class StoreDict(dict):
             A new StoreDict instance (or a leaf value/MISSING) reflecting the changes.
         """
         # 1. Exact Match Handling (Base Cases)
-
         # Priority 1: Updates (Overwrites everything else)
         if () in updates:
             return updates[()]
-
         # Priority 2: Drops (Explicit deletion)
         if () in drops:
             return _MISSING
-
         # If we have no internal updates, we return self (No-Op)
         if not updates and not drops:
             return self
-
         # 2. Group operations by the immediate next key
         grouped_ops: dict[str, tuple[dict, set]] = {}
-
         for path, val in updates.items():
             head, *tail = path
             tail = tuple(tail)
             if head not in grouped_ops:
                 grouped_ops[head] = ({}, set())
             grouped_ops[head][0][tail] = val
-
         for path in drops:
             head, *tail = path
             tail = tuple(tail)
             if head not in grouped_ops:
                 grouped_ops[head] = ({}, set())
             grouped_ops[head][1].add(tail)
-
         # 3. Recursive Application & COW Reconstruction
         # Start with a shallow copy of self (pure python dict for efficient mutation)
         new_data = self.copy()
-
         for head, (sub_updates, sub_drops) in grouped_ops.items():
+            # Optimization: If we have an exact overwrite for this child, apply it directly.
+            if () in sub_updates:
+                new_data[head] = sub_updates[()]
+                continue
             # Get existing child or MISSING
             child = self.get(head, _MISSING)
-
             # Structure Validation & Auto-Vivification
-            # If child is not a StoreDict (is a leaf or MISSING), we may need to replace it
-            # with a new StoreDict to allow traversing deeper.
             if not isinstance(child, StoreDict):
                 if child is _MISSING:
                     # Implicit creation: Path didn't exist, create container
@@ -199,25 +192,20 @@ class StoreDict(dict):
                     child = StoreDict()
                 else:
                     # Conflict: Trying to traverse into a leaf value.
-                    # We raise error to avoid silent overwrites of user data structure.
                     raise StorePathError(
                         f"Path '{head}' blocked by leaf value during mutation."
                     )
-
             try:
                 # RECURSION: Delegate to the child's mutate method
                 new_child = child.mutate(sub_updates, sub_drops)
-
                 if new_child is _MISSING:
                     # Signal to remove the key
                     new_data.pop(head, None)
                 else:
                     # Update/Insert the new child
                     new_data[head] = new_child
-
             except StorePathError:
                 raise StorePathError(head) from None
-
         return StoreDict(new_data)
 
 
