@@ -4,20 +4,27 @@ class NodeException(Exception):
     pass
 
 
-# Node interrupts.
-class NodeInterrupt(NodeException):
-    """Used to interrupt all node executions."""
-
-    pass
-
-
-class NodeTerminate(NodeInterrupt):
+class NodeTerminate(NodeException):
     """Terminate the whole node execution."""
 
     def __init__(self, msg: str = "Terminate.", source_node=None) -> None:
-        super().__init__()
-        self.msg = msg
-        self.source_node = source_node
+        super().__init__(msg, source_node)
+
+    @property
+    def msg(self):
+        return self.args[0]
+
+    @msg.setter
+    def msg(self, value):
+        self.args = (value, self.args[1])
+
+    @property
+    def source_node(self):
+        return self.args[1]
+
+    @source_node.setter
+    def source_node(self, value):
+        self.args = (self.args[0], value)
 
     def __str__(self) -> str:
         return f"source_node: {self.source_node}, msg: {self.msg}"
@@ -28,33 +35,65 @@ class NodeExceptionRecord(NodeException):
     """Used to record the node exception info."""
 
     def __init__(self, exception_node, exception: Exception) -> None:
-        super().__init__()
-        self.exception_node = exception_node
-        self.exception = exception
+        super().__init__(exception_node, exception)
+
+    @property
+    def exception_node(self):
+        return self.args[0]
+
+    @property
+    def exception(self):
+        return self.args[1]
 
     def __str__(self) -> str:
         return f"exception_node: {self.exception_node}"
 
 
-class NodeWrapperExceptionRecord(NodeExceptionRecord):
+class NodeWrapperExceptionRecord(NodeException):
     """Used to record the exception info raised by a ``NodeWrapper``."""
 
     def __init__(self, exception_node, wrapped_node, exception: Exception) -> None:
-        super().__init__(exception_node, exception)
-        self.wrapped_node = wrapped_node
+        super().__init__(exception_node, wrapped_node, exception)
+
+    @property
+    def exception_node(self):
+        return self.args[0]
+
+    @property
+    def wrapped_node(self):
+        return self.args[1]
+
+    @property
+    def exception(self):
+        return self.args[2]
 
     def __str__(self) -> str:
         return f"exception_wrapper: {self.exception_node}, wrapped_node: {self.wrapped_node}"
 
 
-class NodeExpressionExceptionRecord(NodeExceptionRecord):
-    """Used to record the exception info raised by a ``NodeWrapper``."""
+class NodeExpressionExceptionRecord(NodeException):
+    """Used to record the exception info raised by a ``NodeExpression``."""
 
     def __init__(self, exception_node, exception: Exception, source_node=None) -> None:
-        super().__init__(exception_node, exception)
-        self.source_node = source_node
+        super().__init__(exception_node, exception, source_node)
+
+    @property
+    def exception_node(self):
+        return self.args[0]
+
+    @property
+    def exception(self):
+        return self.args[1]
+
+    @property
+    def source_node(self):
+        return self.args[2]
+
+    @source_node.setter
+    def source_node(self, value):
+        self.args = (self.args[0], self.args[1], value)
 
     def __str__(self) -> str:
         return (
-            f"exception_wrapper: {self.exception_node}, source_node: {self.source_node}"
+            f"exception_expression: {self.exception_node}, source_node: {self.source_node}"
         )
