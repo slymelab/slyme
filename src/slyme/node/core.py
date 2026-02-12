@@ -271,6 +271,30 @@ def _process_kwargs(
     return final_kwargs
 
 
+def _resolve_arguments(
+    specs: Mapping[str, Spec],
+    sources: Sequence[Mapping[str, Any]],
+    overrides: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Resolve arguments from sources and overrides based on specs.
+    """
+    # 1. Start with explicit overrides
+    final_kwargs = dict(overrides)
+
+    # 2. Iterate through required parameters defined in the specs
+    for name in specs.keys():
+        if name in final_kwargs:
+            continue
+        # Look in sources (reverse order)
+        for source in reversed(sources):
+            if name in source:
+                final_kwargs[name] = source[name]
+                break
+
+    return final_kwargs
+
+
 # Node Family
 class NodeElement(ABC):
     """
@@ -692,69 +716,123 @@ class NodeWrapperExec(NodeWrapper):
 
 
 # Functional Factory & Decorators
-class FunctionalFactory(Generic[_T, _P]):
-    def __init__(self, cls: type[_T], func: Callable, analysis: _SignatureAnalysis):
+class NodeFactory(Generic[_P]):
+    def __init__(self, func: Callable, analysis: _SignatureAnalysis):
         update_wrapper(self, func)
-        self._cls = cls
         self._func = func
         self._specs = analysis.specs
         self.__signature__ = analysis.public_signature
 
-    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> _T:
+    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> NodeDef:
         """
         Create the node instance using keyword arguments.
         """
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = _process_kwargs(self._specs, kwargs)
-        # Determine extra args based on class
-        return self._cls(
+        # Note: wrappers are intentionally omitted to avoid parameter conflict.
+        # Users should use .add_wrappers() explicitly.
+        return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
+
+    @overload
+    def create(self, /, *_: _P.args, **overrides: _P.kwargs) -> NodeDef: ...
+    @overload
+    def create(self, /, *sources: Mapping[str, Any], **overrides: Any) -> NodeDef: ...
+    def create(self, /, *sources: Mapping[str, Any], **overrides: Any) -> NodeDef:
+        """
+        Create the node instance by resolving parameters from sources and overrides.
+        """
+        final_kwargs = _resolve_arguments(self._specs, sources, overrides)
+        return self(**final_kwargs)
+
+
+class NodeExpressionFactory(Generic[_P, _R]):
+    def __init__(self, func: Callable, analysis: _SignatureAnalysis):
+        update_wrapper(self, func)
+        self._func = func
+        self._specs = analysis.specs
+        self.__signature__ = analysis.public_signature
+
+    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> NodeExpressionDef[_R]:
+        """
+        Create the node instance using keyword arguments.
+        """
+        # Process kwargs
+        with enrich_exception(f"for '{self._func.__name__}'"):
+            final_kwargs = _process_kwargs(self._specs, kwargs)
+        return NodeExpressionDef(
             func=self._func, specs=self._specs, kwargs=final_kwargs
         )
 
     @overload
-    def create(self, /, *_: _P.args, **overrides: _P.kwargs) -> _T: ...
+    def create(
+        self, /, *_: _P.args, **overrides: _P.kwargs
+    ) -> NodeExpressionDef[_R]: ...
     @overload
-    def create(self, /, *sources: Mapping[str, Any], **overrides: Any) -> _T: ...
-    def create(self, /, *sources: Mapping[str, Any], **overrides: Any) -> _T:
+    def create(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> NodeExpressionDef[_R]: ...
+    def create(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> NodeExpressionDef[_R]:
         """
         Create the node instance by resolving parameters from sources and overrides.
         """
-        # 1. Start with explicit overrides
-        final_kwargs = dict(overrides)
-
-        # 2. Iterate through required parameters defined in the specs
-        for name in self._specs.keys():
-            if name in final_kwargs:
-                continue
-            # Look in sources (reverse order)
-            for source in reversed(sources):
-                if name in source:
-                    final_kwargs[name] = source[name]
-                    break
-
+        final_kwargs = _resolve_arguments(self._specs, sources, overrides)
         return self(**final_kwargs)
 
 
-def _node(func: NodeFunc[_P], /) -> FunctionalFactory[NodeDef, _P]:
+class NodeWrapperFactory(Generic[_P]):
+    def __init__(self, func: Callable, analysis: _SignatureAnalysis):
+        update_wrapper(self, func)
+        self._func = func
+        self._specs = analysis.specs
+        self.__signature__ = analysis.public_signature
+
+    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> NodeWrapperDef:
+        """
+        Create the node instance using keyword arguments.
+        """
+        # Process kwargs
+        with enrich_exception(f"for '{self._func.__name__}'"):
+            final_kwargs = _process_kwargs(self._specs, kwargs)
+        return NodeWrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
+
+    @overload
+    def create(self, /, *_: _P.args, **overrides: _P.kwargs) -> NodeWrapperDef: ...
+    @overload
+    def create(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> NodeWrapperDef: ...
+    def create(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> NodeWrapperDef:
+        """
+        Create the node instance by resolving parameters from sources and overrides.
+        """
+        final_kwargs = _resolve_arguments(self._specs, sources, overrides)
+        return self(**final_kwargs)
+
+
+def _node(func: NodeFunc[_P], /) -> NodeFactory[_P]:
     analysis = _analyze_signature(func)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
             f"@node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return FunctionalFactory(NodeDef, func, analysis)
+    return NodeFactory(func, analysis)
 
 
 @overload
 def node(
     func: _Missing = _MISSING, /
-) -> Callable[[NodeFunc[_P]], FunctionalFactory[NodeDef, _P]]: ...
+) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
 @overload
-def node(func: NodeFunc[_P], /) -> FunctionalFactory[NodeDef, _P]: ...
+def node(func: NodeFunc[_P], /) -> NodeFactory[_P]: ...
 def node(func: Union[NodeFunc[_P], _Missing] = _MISSING, /) -> Union[
-    Callable[[NodeFunc[_P]], FunctionalFactory[NodeDef, _P]],
-    FunctionalFactory[NodeDef, _P],
+    Callable[[NodeFunc[_P]], NodeFactory[_P]],
+    NodeFactory[_P],
 ]:
     if func is _MISSING:
         return partial(_node)
@@ -764,29 +842,29 @@ def node(func: Union[NodeFunc[_P], _Missing] = _MISSING, /) -> Union[
 
 def _expression(
     func: ExpressionFunc[_P, _R], /
-) -> FunctionalFactory[NodeExpressionDef[_R], _P]:
+) -> NodeExpressionFactory[_P, _R]:
     analysis = _analyze_signature(func)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
             f"@expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return FunctionalFactory(NodeExpressionDef, func, analysis)
+    return NodeExpressionFactory(func, analysis)
 
 
 @overload
 def expression(
     func: _Missing = _MISSING, /
-) -> Callable[
-    [ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpressionDef[_R], _P]
-]: ...
+) -> Callable[[ExpressionFunc[_P, _R]], NodeExpressionFactory[_P, _R]]: ...
 @overload
 def expression(
     func: ExpressionFunc[_P, _R], /
-) -> FunctionalFactory[NodeExpressionDef[_R], _P]: ...
-def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
-    Callable[[ExpressionFunc[_P, _R]], FunctionalFactory[NodeExpressionDef[_R], _P]],
-    FunctionalFactory[NodeExpressionDef[_R], _P],
+) -> NodeExpressionFactory[_P, _R]: ...
+def expression(
+    func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /
+) -> Union[
+    Callable[[ExpressionFunc[_P, _R]], NodeExpressionFactory[_P, _R]],
+    NodeExpressionFactory[_P, _R],
 ]:
     if func is _MISSING:
         return partial(_expression)
@@ -794,7 +872,7 @@ def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> U
         return _expression(func)
 
 
-def _wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapperDef, _P]:
+def _wrapper(func: WrapperFunc[_P], /) -> NodeWrapperFactory[_P]:
     analysis = _analyze_signature(func)
     # Wrapper signature: (ctx, wrapped, call_next, **kwargs)
     # The first 3 arguments should be positional-only.
@@ -803,18 +881,18 @@ def _wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapperDef, _P]:
             f"@wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return FunctionalFactory(NodeWrapperDef, func, analysis)
+    return NodeWrapperFactory(func, analysis)
 
 
 @overload
 def wrapper(
     func: _Missing = _MISSING, /
-) -> Callable[[WrapperFunc[_P]], FunctionalFactory[NodeWrapperDef, _P]]: ...
+) -> Callable[[WrapperFunc[_P]], NodeWrapperFactory[_P]]: ...
 @overload
-def wrapper(func: WrapperFunc[_P], /) -> FunctionalFactory[NodeWrapperDef, _P]: ...
+def wrapper(func: WrapperFunc[_P], /) -> NodeWrapperFactory[_P]: ...
 def wrapper(func: Union[WrapperFunc[_P], _Missing] = _MISSING, /) -> Union[
-    Callable[[WrapperFunc[_P]], FunctionalFactory[NodeWrapperDef, _P]],
-    FunctionalFactory[NodeWrapperDef, _P],
+    Callable[[WrapperFunc[_P]], NodeWrapperFactory[_P]],
+    NodeWrapperFactory[_P],
 ]:
     if func is _MISSING:
         return partial(_wrapper)
