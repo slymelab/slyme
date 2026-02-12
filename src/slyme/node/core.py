@@ -523,6 +523,14 @@ class NodeFactory(Generic[_P]):
         # Users should use .add_wrappers() explicitly.
         return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
+    def call(self, ctx: Context, **kwargs: _P.kwargs) -> Context:
+        """
+        Execute the node logic directly, bypassing the definition phase.
+        """
+        with enrich_exception(f"for '{self._func.__name__}'"):
+            final_kwargs = process_kwargs(self._specs, kwargs)
+        return self._func(ctx, **final_kwargs)
+
     @overload
     def create(self, /, *_: _P.args, **overrides: _P.kwargs) -> NodeDef: ...
     @overload
@@ -533,6 +541,22 @@ class NodeFactory(Generic[_P]):
         """
         final_kwargs = resolve_arguments(self._specs, sources, overrides)
         return self(**final_kwargs)
+
+    @overload
+    def resolve_arguments(
+        self, /, *_: _P.args, **overrides: _P.kwargs
+    ) -> dict[str, Any]: ...
+    @overload
+    def resolve_arguments(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> dict[str, Any]: ...
+    def resolve_arguments(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> dict[str, Any]:
+        """
+        Resolve arguments from sources and overrides based on specs.
+        """
+        return resolve_arguments(self._specs, sources, overrides)
 
 
 class ExpressionFactory(Generic[_P, _R]):
@@ -561,6 +585,14 @@ class ExpressionFactory(Generic[_P, _R]):
             func=self._func, specs=self._specs, kwargs=final_kwargs
         )
 
+    def call(self, ctx: Context, **kwargs: _P.kwargs) -> _R:
+        """
+        Execute the expression logic directly, bypassing the definition phase.
+        """
+        with enrich_exception(f"for '{self._func.__name__}'"):
+            final_kwargs = process_kwargs(self._specs, kwargs)
+        return self._func(ctx, **final_kwargs)
+
     @overload
     def create(
         self, /, *_: _P.args, **overrides: _P.kwargs
@@ -577,6 +609,22 @@ class ExpressionFactory(Generic[_P, _R]):
         """
         final_kwargs = resolve_arguments(self._specs, sources, overrides)
         return self(**final_kwargs)
+
+    @overload
+    def resolve_arguments(
+        self, /, *_: _P.args, **overrides: _P.kwargs
+    ) -> dict[str, Any]: ...
+    @overload
+    def resolve_arguments(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> dict[str, Any]: ...
+    def resolve_arguments(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> dict[str, Any]:
+        """
+        Resolve arguments from sources and overrides based on specs.
+        """
+        return resolve_arguments(self._specs, sources, overrides)
 
 
 class WrapperFactory(Generic[_P]):
@@ -603,6 +651,20 @@ class WrapperFactory(Generic[_P]):
             final_kwargs = process_kwargs(self._specs, kwargs)
         return WrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
+    def call(
+        self,
+        ctx: Context,
+        wrapped: Node,
+        call_next: Callable[[Context], Context],
+        **kwargs: _P.kwargs,
+    ) -> Context:
+        """
+        Execute the wrapper logic directly, bypassing the definition phase.
+        """
+        with enrich_exception(f"for '{self._func.__name__}'"):
+            final_kwargs = process_kwargs(self._specs, kwargs)
+        return self._func(ctx, wrapped, call_next, **final_kwargs)
+
     @overload
     def create(self, /, *_: _P.args, **overrides: _P.kwargs) -> WrapperDef: ...
     @overload
@@ -617,6 +679,22 @@ class WrapperFactory(Generic[_P]):
         """
         final_kwargs = resolve_arguments(self._specs, sources, overrides)
         return self(**final_kwargs)
+
+    @overload
+    def resolve_arguments(
+        self, /, *_: _P.args, **overrides: _P.kwargs
+    ) -> dict[str, Any]: ...
+    @overload
+    def resolve_arguments(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> dict[str, Any]: ...
+    def resolve_arguments(
+        self, /, *sources: Mapping[str, Any], **overrides: Any
+    ) -> dict[str, Any]:
+        """
+        Resolve arguments from sources and overrides based on specs.
+        """
+        return resolve_arguments(self._specs, sources, overrides)
 
 
 def _node(func: NodeFunc[_P], /) -> NodeFactory[_P]:
