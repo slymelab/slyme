@@ -523,7 +523,7 @@ class NodeFactory(Generic[_P]):
         # Users should use .add_wrappers() explicitly.
         return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
-    def call(self, ctx: Context, *_: _P.args, **kwargs: _P.kwargs) -> Context:
+    def call(self, ctx: Context, /, *_: _P.args, **kwargs: _P.kwargs) -> Context:
         """
         Execute the node logic directly, bypassing the definition phase.
         """
@@ -575,7 +575,7 @@ class ExpressionFactory(Generic[_P, _R]):
             func=self._func, specs=self._specs, kwargs=final_kwargs
         )
 
-    def call(self, ctx: Context, *_: _P.args, **kwargs: _P.kwargs) -> _R:
+    def call(self, ctx: Context, /, *_: _P.args, **kwargs: _P.kwargs) -> _R:
         """
         Execute the expression logic directly, bypassing the definition phase.
         """
@@ -630,6 +630,7 @@ class WrapperFactory(Generic[_P]):
         ctx: Context,
         wrapped: Node,
         call_next: Callable[[Context], Context],
+        /,
         *_: _P.args,
         **kwargs: _P.kwargs,
     ) -> Context:
