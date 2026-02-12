@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TypeVar, Generic
-from slyme.utils.collection import SequenceData
+from typing import TypeVar, Generic, Iterable, Optional
 from slyme.node import Node, check_node_structure
 from .extension import BuilderExtension
 
@@ -12,7 +11,7 @@ class Builder(ABC, Generic[_NodeT]):
     def __init__(
         self,
         /,
-        extensions: SequenceData[BuilderExtension[_NodeT]] = None,
+        extensions: Optional[Iterable[BuilderExtension[_NodeT]]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)

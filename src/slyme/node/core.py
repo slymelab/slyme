@@ -37,8 +37,6 @@ from .signature import (
 )
 
 __all__ = [
-    "spec",
-    "ref_spec",
     "node",
     "expression",
     "wrapper",
