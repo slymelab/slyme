@@ -713,12 +713,12 @@ class FunctionalFactory(Generic[_T, _P]):
         )
 
     @overload
-    def bind(self, /, *_: _P.args, **overrides: _P.kwargs) -> _T: ...
+    def create(self, /, *_: _P.args, **overrides: _P.kwargs) -> _T: ...
     @overload
-    def bind(self, /, *scopes: Mapping[str, Any], **overrides: Any) -> _T: ...
-    def bind(self, /, *scopes: Mapping[str, Any], **overrides: Any) -> _T:
+    def create(self, /, *sources: Mapping[str, Any], **overrides: Any) -> _T: ...
+    def create(self, /, *sources: Mapping[str, Any], **overrides: Any) -> _T:
         """
-        Create the node instance by binding parameters from scopes and overrides.
+        Create the node instance by resolving parameters from sources and overrides.
         """
         # 1. Start with explicit overrides
         final_kwargs = dict(overrides)
@@ -727,10 +727,10 @@ class FunctionalFactory(Generic[_T, _P]):
         for name in self._specs.keys():
             if name in final_kwargs:
                 continue
-            # Look in scopes (reverse order)
-            for scope in reversed(scopes):
-                if name in scope:
-                    final_kwargs[name] = scope[name]
+            # Look in sources (reverse order)
+            for source in reversed(sources):
+                if name in source:
+                    final_kwargs[name] = source[name]
                     break
 
         return self(**final_kwargs)
