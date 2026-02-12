@@ -2,6 +2,7 @@ import types
 from abc import ABC, abstractmethod
 from enum import Enum
 from dataclasses import dataclass, field, InitVar
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import (
     Any,
@@ -141,70 +142,74 @@ class StoreDict(dict[str, Any]):
         """
         Core recursive Copy-On-Write (COW) algorithm for simultaneous updates and drops.
 
-        Args:
-            updates: A dict mapping relative path tuples to new values.
-            drops: A set of relative path tuples to drop.
-
-        Returns:
-            A new StoreDict instance (or a leaf value/MISSING) reflecting the changes.
+        Semantics:
+        - Updates overwrite everything (Priority 1).
+        - Drop at root + Updates at children = Reset & Apply (Drop clears existing, Updates build new).
+        - Drop at root + No Updates = Delete.
         """
-        # 1. Exact Match Handling (Base Cases)
-        # Priority 1: Updates (Overwrites everything else)
+        # 1. Base Cases
         if () in updates:
             return updates[()]
-        # Priority 2: Drops (Explicit deletion)
+
+        # Determine Base State (Reset vs Copy)
         if () in drops:
-            return _MISSING
-        # If we have no internal updates, we return self (No-Op)
-        if not updates and not drops:
-            return self
-        # 2. Group operations by the immediate next key
-        grouped_ops: dict[str, tuple[dict, set]] = {}
+            # Reset: Start from empty. Existing data is discarded.
+            if not updates:
+                return _MISSING
+            new_data = {}
+        else:
+            # Copy: Start from existing.
+            if not updates and not drops:
+                return self
+            new_data = dict(self)
+
+        # 2. Group Operations
+        grouped_ops = defaultdict(lambda: ({}, set()))
+
         for path, val in updates.items():
+            if not path:
+                continue  # Handled above
             head, *tail = path
-            tail = tuple(tail)
-            if head not in grouped_ops:
-                grouped_ops[head] = ({}, set())
-            grouped_ops[head][0][tail] = val
+            grouped_ops[head][0][tuple(tail)] = val
+
         for path in drops:
+            if not path:
+                continue  # Handled above
             head, *tail = path
-            tail = tuple(tail)
-            if head not in grouped_ops:
-                grouped_ops[head] = ({}, set())
-            grouped_ops[head][1].add(tail)
-        # 3. Recursive Application & COW Reconstruction
-        new_data = dict(self)
+            grouped_ops[head][1].add(tuple(tail))
+
+        # 3. Recursive Application
         for head, (sub_updates, sub_drops) in grouped_ops.items():
-            # Optimization: If we have an exact overwrite for this child, apply it directly.
+            # Optimization: Exact overwrite
             if () in sub_updates:
                 new_data[head] = sub_updates[()]
                 continue
-            # Get existing child or MISSING
-            child = self.get(head, _MISSING)
-            # Structure Validation & Auto-Vivification
+
+            # Get existing child or MISSING (if Reset, it's always MISSING)
+            child = new_data.get(head, _MISSING)
+
+            # Structure Validation / Auto-Vivification
             if not isinstance(child, StoreDict):
                 if child is _MISSING:
-                    # Implicit creation: Path didn't exist, create container
+                    # Create new container for updates
                     if not sub_updates:
-                        # Optimization: If only dropping inside a non-existent path, do nothing
                         continue
                     child = StoreDict()
                 else:
-                    # Conflict: Trying to traverse into a leaf value.
+                    # Conflict: Path blocked by leaf
                     raise StorePathError(
                         f"Path '{head}' blocked by leaf value during mutation."
                     )
+
             try:
-                # RECURSION: Delegate to the child's mutate method
                 new_child = child.mutate(sub_updates, sub_drops)
                 if new_child is _MISSING:
-                    # Signal to remove the key
                     new_data.pop(head, None)
                 else:
-                    # Update/Insert the new child
                     new_data[head] = new_child
             except StorePathError:
                 raise StorePathError(head) from None
+
         return StoreDict(new_data)
 
 
@@ -319,17 +324,16 @@ class StoreElement(ABC):
         return DiffResult(added, removed, modified)
 
     def collect_leaves(self) -> dict[str, Any]:
+        # STORE_PYTREE_ENGINE is configured to only traverse Store/StoreDict structure.
+        # So it treats user dicts as leaves automatically.
+        # Use iter_with_path for memory efficiency (generator based)
+        iterator = STORE_PYTREE_ENGINE.iter_with_path(self.to_store_dict())
+
         leaves = {}
-
-        def _scan(node: Any, prefix: str):
-            if isinstance(node, StoreDict):
-                for k, v in node.items():
-                    path = f"{prefix}.{k}" if prefix else k
-                    _scan(v, path)
-            else:
-                leaves[prefix] = node
-
-        _scan(self.to_store_dict(), "")
+        for path, leaf in iterator:
+            # We know StoreDict keys are MappingKeys wrapping strings
+            parts = [str(cast(MappingKey, k).key) for k in path]
+            leaves[".".join(parts)] = leaf
         return leaves
 
 
