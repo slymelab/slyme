@@ -113,7 +113,12 @@ class Ref(Generic[_T]):
         return f"{type(self).__name__}({self.extra_repr()})"
 
     def extra_repr(self) -> str:
-        return f"path={self.path!r}, lens_expr={PyTreeEngine.codify_path(self.lens)}, metadata={self.metadata!r}"
+        repr_items = [f"path={self.path!r}"]
+        if self.lens:
+            repr_items.append(f"lens_expr={PyTreeEngine.codify_path(self.lens)}")
+        if self.metadata:
+            repr_items.append(f"metadata={self.metadata!r}")
+        return ", ".join(repr_items)
 
 
 class StorePathError(KeyError):
