@@ -3,6 +3,7 @@ Core node module, consolidating base definitions and functional APIs.
 """
 
 import types
+import inspect
 from abc import ABC, abstractmethod
 from enum import Enum
 from functools import partial, update_wrapper
@@ -498,11 +499,19 @@ class NodeWrapperExec(NodeWrapper):
 
 # Functional Factory & Decorators
 class NodeFactory(Generic[_P]):
-    def __init__(self, func: Callable, analysis: SignatureAnalysis):
+    def __init__(
+        self,
+        func: Callable,
+        specs: Mapping[str, Spec],
+        signature: inspect.Signature,
+    ):
         update_wrapper(self, func)
         self._func = func
-        self._specs = analysis.specs
-        self.__signature__ = analysis.public_signature
+        self._specs = specs
+        self.__signature__ = signature
+
+    def __repr__(self) -> str:
+        return f"<NodeFactory of {self._func.__name__}>"
 
     def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> NodeDef:
         """
@@ -528,11 +537,19 @@ class NodeFactory(Generic[_P]):
 
 
 class NodeExpressionFactory(Generic[_P, _R]):
-    def __init__(self, func: Callable, analysis: SignatureAnalysis):
+    def __init__(
+        self,
+        func: Callable,
+        specs: Mapping[str, Spec],
+        signature: inspect.Signature,
+    ):
         update_wrapper(self, func)
         self._func = func
-        self._specs = analysis.specs
-        self.__signature__ = analysis.public_signature
+        self._specs = specs
+        self.__signature__ = signature
+
+    def __repr__(self) -> str:
+        return f"<NodeExpressionFactory of {self._func.__name__}>"
 
     def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> NodeExpressionDef[_R]:
         """
@@ -564,11 +581,19 @@ class NodeExpressionFactory(Generic[_P, _R]):
 
 
 class NodeWrapperFactory(Generic[_P]):
-    def __init__(self, func: Callable, analysis: SignatureAnalysis):
+    def __init__(
+        self,
+        func: Callable,
+        specs: Mapping[str, Spec],
+        signature: inspect.Signature,
+    ):
         update_wrapper(self, func)
         self._func = func
-        self._specs = analysis.specs
-        self.__signature__ = analysis.public_signature
+        self._specs = specs
+        self.__signature__ = signature
+
+    def __repr__(self) -> str:
+        return f"<NodeWrapperFactory of {self._func.__name__}>"
 
     def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> NodeWrapperDef:
         """
@@ -602,7 +627,7 @@ def _node(func: NodeFunc[_P], /) -> NodeFactory[_P]:
             f"@node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return NodeFactory(func, analysis)
+    return NodeFactory(func, analysis.specs, analysis.public_signature)
 
 
 @overload
@@ -626,7 +651,7 @@ def _expression(func: ExpressionFunc[_P, _R], /) -> NodeExpressionFactory[_P, _R
             f"@expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return NodeExpressionFactory(func, analysis)
+    return NodeExpressionFactory(func, analysis.specs, analysis.public_signature)
 
 
 @overload
@@ -654,7 +679,7 @@ def _wrapper(func: WrapperFunc[_P], /) -> NodeWrapperFactory[_P]:
             f"@wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
             f"but found {len(analysis.pos_only_params)}."
         )
-    return NodeWrapperFactory(func, analysis)
+    return NodeWrapperFactory(func, analysis.specs, analysis.public_signature)
 
 
 @overload
