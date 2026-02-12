@@ -93,11 +93,30 @@ class Ref(Generic[_T]):
     def resolve(self, pytree) -> _T:
         return PyTreeEngine.get_element(pytree, self.lens)
 
-    def update_metadata(self, metadata: Mapping[str, Any]) -> Self:
+    def update_metadata(self, metadata: Mapping[str, Any]) -> "Ref[_T]":
         """Returns a new Ref with updated metadata (merging with existing)."""
         new_metadata = dict(self.metadata)
         new_metadata.update(metadata)
-        return type(self)(self.path, lens=self.lens, metadata=new_metadata)
+        return Ref(self.path, lens=self.lens, metadata=new_metadata)
+
+    def at(
+        self,
+        subpath: str,
+        lens: Union[KeyPath, _Missing] = _MISSING,
+        metadata: Union[Optional[Mapping[str, Any]], _Missing] = _MISSING,
+    ) -> "Ref":
+        """
+        Create a new Ref at a subpath relative to this Ref.
+
+        Does NOT inherit lens or metadata from the parent Ref by default.
+        """
+        new_path = f"{self.path}.{subpath}" if self.path else subpath
+        kwargs = {}
+        if lens is not _MISSING:
+            kwargs["lens"] = lens
+        if metadata is not _MISSING:
+            kwargs["metadata"] = metadata
+        return Ref(new_path, **kwargs)
 
     def __hash__(self) -> int:
         return self.hash
@@ -493,6 +512,21 @@ class Store(StoreElement):
     def set(self, ref: Ref[_T], value: _T) -> "Store":
         """Single set convenience interface."""
         return self.mutate(updates={ref: value})
+
+    def clear(self, ref: Ref[_T]) -> "Store":
+        """
+        Clear all contents under a reference but keep the path.
+        Raises StorePathError if the target is not a container (StoreDict).
+        """
+        # 1. Validate target is a container
+        val = self._resolve(ref.parts)
+        if not isinstance(val, StoreDict):
+            raise StorePathError(
+                f"Cannot clear '{ref.path}': not a container (StoreDict)."
+            )
+
+        # 2. Update with empty StoreDict
+        return self.mutate(updates={ref: StoreDict()})
 
     def delete(self, ref: Ref[_T]) -> "Store":
         """Single delete convenience interface."""
