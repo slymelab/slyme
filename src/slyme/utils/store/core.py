@@ -106,7 +106,7 @@ class StorePathError(KeyError):
     pass
 
 
-class StoreDict(dict):
+class StoreDict(dict[str, Any]):
     """
     Internal dictionary implementation used to distinguish structural elements
     from user-provided dictionary values.
@@ -173,8 +173,7 @@ class StoreDict(dict):
                 grouped_ops[head] = ({}, set())
             grouped_ops[head][1].add(tail)
         # 3. Recursive Application & COW Reconstruction
-        # Start with a shallow copy of self (pure python dict for efficient mutation)
-        new_data = self.copy()
+        new_data = dict(self)
         for head, (sub_updates, sub_drops) in grouped_ops.items():
             # Optimization: If we have an exact overwrite for this child, apply it directly.
             if () in sub_updates:
@@ -362,7 +361,6 @@ class Store(StoreElement):
         return obj
 
     # --- Read Operations ---
-
     @overload
     def get(self, ref: Ref[_T]) -> _T: ...
     @overload
@@ -415,7 +413,6 @@ class Store(StoreElement):
         return current
 
     # --- Unified Modification Interface ---
-
     def mutate(
         self,
         *,
@@ -434,21 +431,16 @@ class Store(StoreElement):
         """
         if not updates and not drops:
             return self
-
         raw_updates = {r.parts: v for r, v in updates.items()} if updates else {}
         raw_drops = {r.parts for r in drops} if drops else set()
-
         # Delegate to the root StoreDict
         new_root = self._root.mutate(raw_updates, raw_drops)
-
         # Edge Case: If the root itself resulted in MISSING (dropped), we reset to empty.
         if new_root is _MISSING:
             new_root = StoreDict()
-
         return self._from_store_dict(new_root)
 
     # --- Convenience Interfaces ---
-
     def update(self, updates: Mapping[Ref, Any]) -> "Store":
         """Batch update convenience interface."""
         return self.mutate(updates=updates)
@@ -499,7 +491,6 @@ class StoreView(StoreElement):
 
 
 # --- PyTreeEngine Configuration ---
-
 STORE_PYTREE_ENGINE = PyTreeEngine("store_engine", register_defaults=False)
 PYTREE_ENGINE_REGISTRY.register(STORE_PYTREE_ENGINE, key="store_engine")
 
