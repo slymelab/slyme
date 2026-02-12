@@ -28,7 +28,13 @@ from .exception import (
     NodeExpressionExceptionRecord,
     NodeWrapperExceptionRecord,
 )
-from .signature import Spec, process_kwargs, analyze_signature, SignatureAnalysis, resolve_arguments
+from .signature import (
+    Spec,
+    process_kwargs,
+    analyze_signature,
+    SignatureAnalysis,
+    resolve_arguments,
+)
 
 __all__ = [
     "spec",
@@ -594,9 +600,7 @@ def _node(func: NodeFunc[_P], /) -> NodeFactory[_P]:
 
 
 @overload
-def node(
-    func: _Missing = _MISSING, /
-) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
+def node(func: _Missing = _MISSING, /) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
 @overload
 def node(func: NodeFunc[_P], /) -> NodeFactory[_P]: ...
 def node(func: Union[NodeFunc[_P], _Missing] = _MISSING, /) -> Union[
@@ -609,9 +613,7 @@ def node(func: Union[NodeFunc[_P], _Missing] = _MISSING, /) -> Union[
         return _node(func)
 
 
-def _expression(
-    func: ExpressionFunc[_P, _R], /
-) -> NodeExpressionFactory[_P, _R]:
+def _expression(func: ExpressionFunc[_P, _R], /) -> NodeExpressionFactory[_P, _R]:
     analysis = analyze_signature(func)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
@@ -626,12 +628,8 @@ def expression(
     func: _Missing = _MISSING, /
 ) -> Callable[[ExpressionFunc[_P, _R]], NodeExpressionFactory[_P, _R]]: ...
 @overload
-def expression(
-    func: ExpressionFunc[_P, _R], /
-) -> NodeExpressionFactory[_P, _R]: ...
-def expression(
-    func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /
-) -> Union[
+def expression(func: ExpressionFunc[_P, _R], /) -> NodeExpressionFactory[_P, _R]: ...
+def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
     Callable[[ExpressionFunc[_P, _R]], NodeExpressionFactory[_P, _R]],
     NodeExpressionFactory[_P, _R],
 ]:
