@@ -1,3 +1,4 @@
+from .signature import spec, ref_spec
 from .core import (
     NodeElement,
     Node,
@@ -6,8 +7,6 @@ from .core import (
     node,
     wrapper,
     expression,
-    spec,
-    ref_spec,
 )
 from .validator import (
     check_node_structure,

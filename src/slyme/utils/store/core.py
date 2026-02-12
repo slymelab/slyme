@@ -25,8 +25,8 @@ from slyme.utils.pytree import (
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
 _EMPTY_METADATA = types.MappingProxyType({})
-Missing = Enum("Missing", ["MARK"])
-MISSING = Missing.MARK
+_Missing = Enum("_Missing", ["MARK"])
+_MISSING = _Missing.MARK
 StoreData = Optional[Union[Mapping[str, Any], "StoreDict"]]
 
 
@@ -156,7 +156,7 @@ class StoreDict(dict):
 
         # Priority 2: Drops (Explicit deletion)
         if () in drops:
-            return MISSING
+            return _MISSING
 
         # If we have no internal updates, we return self (No-Op)
         if not updates and not drops:
@@ -185,13 +185,13 @@ class StoreDict(dict):
 
         for head, (sub_updates, sub_drops) in grouped_ops.items():
             # Get existing child or MISSING
-            child = self.get(head, MISSING)
+            child = self.get(head, _MISSING)
 
             # Structure Validation & Auto-Vivification
             # If child is not a StoreDict (is a leaf or MISSING), we may need to replace it
             # with a new StoreDict to allow traversing deeper.
             if not isinstance(child, StoreDict):
-                if child is MISSING:
+                if child is _MISSING:
                     # Implicit creation: Path didn't exist, create container
                     if not sub_updates:
                         # Optimization: If only dropping inside a non-existent path, do nothing
@@ -208,7 +208,7 @@ class StoreDict(dict):
                 # RECURSION: Delegate to the child's mutate method
                 new_child = child.mutate(sub_updates, sub_drops)
 
-                if new_child is MISSING:
+                if new_child is _MISSING:
                     # Signal to remove the key
                     new_data.pop(head, None)
                 else:
@@ -238,7 +238,7 @@ class StoreElement(ABC):
 
     @abstractmethod
     def get(
-        self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING
+        self, ref: Ref[_T], default: Union[_T2, _Missing] = _MISSING
     ) -> Union[_T, _T2]:
         pass
 
@@ -380,7 +380,7 @@ class Store(StoreElement):
     @overload
     def get(self, ref: Ref[_T], default: _T2) -> Union[_T, _T2]: ...
     def get(
-        self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING
+        self, ref: Ref[_T], default: Union[_T2, _Missing] = _MISSING
     ) -> Union[_T, _T2]:
         try:
             val = self._resolve(ref.parts)
@@ -388,7 +388,7 @@ class Store(StoreElement):
                 return StoreView(self, ref.parts)
             return ref.resolve(val)
         except StorePathError:
-            if default is MISSING:
+            if default is _MISSING:
                 raise
             return default
 
@@ -454,7 +454,7 @@ class Store(StoreElement):
         new_root = self._root.mutate(raw_updates, raw_drops)
 
         # Edge Case: If the root itself resulted in MISSING (dropped), we reset to empty.
-        if new_root is MISSING:
+        if new_root is _MISSING:
             new_root = StoreDict()
 
         return self._from_store_dict(new_root)
@@ -496,7 +496,7 @@ class StoreView(StoreElement):
         return type(ref)(new_path, lens=ref.lens, metadata=ref.metadata)
 
     def get(
-        self, ref: Ref[_T], default: Union[_T2, Missing] = MISSING
+        self, ref: Ref[_T], default: Union[_T2, _Missing] = _MISSING
     ) -> Union[_T, _T2]:
         return self._store.get(self._adjust_ref(ref), default)
 
