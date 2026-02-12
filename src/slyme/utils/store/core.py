@@ -272,23 +272,35 @@ class StoreElement(ABC):
         if not keys:
             return f"{name}()"
 
-        lines = [f"{name}({{{StoreConfig.repr_newline}"]
-        count = len(keys)
-        for i, key in enumerate(keys):
-            value = self.get(Ref(key))
-            value_lines = repr(value).splitlines(keepends=True)
-            head = value_lines[0] if value_lines else repr("")
-            lines.append(f"{StoreConfig.repr_indent}{key!r}: {head}")
-            for line in value_lines[1:]:
-                lines.append(f"{StoreConfig.repr_indent}{line}")
-            if i == count - 1:
-                lines.append(
-                    f"{StoreConfig.repr_last_suffix}{StoreConfig.repr_newline}"
-                )
+        newline = StoreConfig.repr_newline
+        indent = StoreConfig.repr_indent
+
+        item_blocks = []
+        for key in keys:
+            val = self.get(Ref(key))
+            if newline:
+                v_lines = repr(val).split(newline)
+                if len(v_lines) > 1 and not v_lines[-1]:
+                    v_lines.pop()
             else:
-                lines.append(f"{StoreConfig.repr_suffix}{StoreConfig.repr_newline}")
-        lines.append("})")
-        return "".join(lines)
+                v_lines = [repr(val)]
+
+            block = [f"{indent}{key!r}: {v_lines[0]}"]
+            block.extend(f"{indent}{line}" for line in v_lines[1:])
+            item_blocks.append(block)
+
+        body_lines = []
+        count = len(item_blocks)
+        for i, block in enumerate(item_blocks):
+            suffix = (
+                StoreConfig.repr_last_suffix
+                if i == count - 1
+                else StoreConfig.repr_suffix
+            )
+            block[-1] += suffix
+            body_lines.extend(block)
+
+        return f"{name}({{{newline}{newline.join(body_lines)}{newline}}})"
 
     def diff(
         self, other: "StoreElement", strategy: Literal["is", "eq"] = "is"
