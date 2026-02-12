@@ -25,7 +25,7 @@ from typing import (
     Sequence,
 )
 from typing_extensions import ParamSpec, Concatenate, Self
-from slyme.utils.common import enrich_exception
+from slyme.utils.exception import enrich_exception
 from slyme.context import Context, Ref
 from .exception import (
     NodeTerminate,
