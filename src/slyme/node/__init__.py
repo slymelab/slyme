@@ -13,6 +13,7 @@ from .validator import (
     DEPENDENCY_REGISTRY,
     vanilla_dependency_check,
     VanillaDependencyReport,
+    NodeStructureError,
 )
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "DEPENDENCY_REGISTRY",
     "vanilla_dependency_check",
     "VanillaDependencyReport",
+    "NodeStructureError",
     "node",
     "wrapper",
     "expression",

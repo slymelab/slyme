@@ -206,7 +206,6 @@ class NodeExec(Node):
         # --- Composition Logic (Onion Model) ---
         # 1. Inner Core: Bind kwargs to the user function.
         # Signature: (Context) -> Context
-        # Since NodeFunc is now strictly defined to return Context, no adapter is needed.
         chain: Callable[[Context], Context] = partial(func, **kwargs)
         # 2. Build the middleware chain.
         # Wrappers are applied from inside out (reversed order of list).
