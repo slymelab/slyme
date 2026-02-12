@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from dataclasses import dataclass, field, InitVar
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Callable
 from typing import (
     Any,
     Generic,
@@ -32,24 +32,39 @@ StoreData = Optional[Mapping[str, Any]]
 
 
 class StoreConfig:
-    repr_indent: str = "    "
-    repr_newline: str = "\n"
-    repr_suffix: str = ","
-    repr_last_suffix: str = ","
+    repr_indent: str
+    repr_newline: str
+    repr_suffix: str
+    repr_last_suffix: str
+    leaf_formatter: Callable[[Any], str]
 
     @classmethod
-    def set_compact_repr(cls):
+    def set_compact_repr(cls) -> type[Self]:
         cls.repr_indent = ""
         cls.repr_newline = ""
         cls.repr_suffix = ", "
         cls.repr_last_suffix = ""
+        return cls
 
     @classmethod
-    def set_pretty_repr(cls):
+    def set_pretty_repr(cls) -> type[Self]:
         cls.repr_indent = "    "
         cls.repr_newline = "\n"
         cls.repr_suffix = ","
         cls.repr_last_suffix = ","
+        return cls
+
+    @classmethod
+    def set_truncated_repr(cls, max_len: int = 100) -> type[Self]:
+        def _truncated(obj: Any) -> str:
+            s = repr(obj)
+            return s if len(s) <= max_len else s[:max_len] + "..."
+
+        cls.leaf_formatter = _truncated
+        return cls
+
+
+StoreConfig.set_pretty_repr().set_truncated_repr(max_len=100)
 
 
 @dataclass(frozen=True, repr=False, eq=False)
@@ -274,16 +289,19 @@ class StoreElement(ABC):
 
         newline = StoreConfig.repr_newline
         indent = StoreConfig.repr_indent
+        formatter = StoreConfig.leaf_formatter
 
         item_blocks = []
         for key in keys:
             val = self.get(Ref(key))
+            v_str = repr(val) if isinstance(val, StoreElement) else formatter(val)
+
             if newline:
-                v_lines = repr(val).split(newline)
+                v_lines = v_str.split(newline)
                 if len(v_lines) > 1 and not v_lines[-1]:
                     v_lines.pop()
             else:
-                v_lines = [repr(val)]
+                v_lines = [v_str]
 
             block = [f"{indent}{key!r}: {v_lines[0]}"]
             block.extend(f"{indent}{line}" for line in v_lines[1:])
