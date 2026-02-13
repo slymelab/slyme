@@ -94,6 +94,4 @@ class ExpressionExceptionRecord(NodeException):
         self.args = (self.args[0], self.args[1], value)
 
     def __str__(self) -> str:
-        return (
-            f"exception_expression: {self.exception_node}, source_node: {self.source_node}"
-        )
+        return f"exception_expression: {self.exception_node}, source_node: {self.source_node}"

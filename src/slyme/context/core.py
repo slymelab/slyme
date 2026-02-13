@@ -600,5 +600,7 @@ def _unflatten_context(children: Iterable[Any], aux: PyTreeAux) -> Context:
 
 
 # Register
-CONTEXT_PYTREE_ENGINE.register(ContextDict, _flatten_context_dict, _unflatten_context_dict)
+CONTEXT_PYTREE_ENGINE.register(
+    ContextDict, _flatten_context_dict, _unflatten_context_dict
+)
 CONTEXT_PYTREE_ENGINE.register(Context, _flatten_context, _unflatten_context)

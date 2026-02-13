@@ -101,9 +101,7 @@ def _flatten_expression_def(
     return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=ExpressionDef)
 
 
-def _unflatten_expression_def(
-    children: Iterable[Any], aux: PyTreeAux
-) -> ExpressionDef:
+def _unflatten_expression_def(children: Iterable[Any], aux: PyTreeAux) -> ExpressionDef:
     """
     Reconstruct ExpressionDef (Standard Engine).
     """
@@ -195,9 +193,7 @@ def _flatten_expression_exec(
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(
-        keys=rich_keys, metadata=metadata, cls=ExpressionExec
-    )
+    return children, PyTreeAux(keys=rich_keys, metadata=metadata, cls=ExpressionExec)
 
 
 def _unflatten_expression_exec(

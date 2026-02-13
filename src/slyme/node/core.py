@@ -532,7 +532,11 @@ class NodeFactory(Generic[_P]):
         return self._func(ctx, **final_kwargs)
 
     def create(
-        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
     ) -> NodeDef:
         """
         Create the node instance by resolving parameters from sources and overrides.
@@ -541,7 +545,11 @@ class NodeFactory(Generic[_P]):
         return self(**final_kwargs)
 
     def resolve_arguments(
-        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
     ) -> dict[str, Any]:
         """
         Resolve arguments from sources and overrides based on specs.
@@ -571,9 +579,7 @@ class ExpressionFactory(Generic[_P, _R]):
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
-        return ExpressionDef(
-            func=self._func, specs=self._specs, kwargs=final_kwargs
-        )
+        return ExpressionDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
     def call(self, ctx: Context, /, *_: _P.args, **kwargs: _P.kwargs) -> _R:
         """
@@ -584,7 +590,11 @@ class ExpressionFactory(Generic[_P, _R]):
         return self._func(ctx, **final_kwargs)
 
     def create(
-        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
     ) -> ExpressionDef[_R]:
         """
         Create the node instance by resolving parameters from sources and overrides.
@@ -593,7 +603,11 @@ class ExpressionFactory(Generic[_P, _R]):
         return self(**final_kwargs)
 
     def resolve_arguments(
-        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
     ) -> dict[str, Any]:
         """
         Resolve arguments from sources and overrides based on specs.
@@ -642,7 +656,11 @@ class WrapperFactory(Generic[_P]):
         return self._func(ctx, wrapped, call_next, **final_kwargs)
 
     def create(
-        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
     ) -> WrapperDef:
         """
         Create the node instance by resolving parameters from sources and overrides.
@@ -651,7 +669,11 @@ class WrapperFactory(Generic[_P]):
         return self(**final_kwargs)
 
     def resolve_arguments(
-        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        /,
+        *_: _P.args,
+        **overrides: _P.kwargs,
     ) -> dict[str, Any]:
         """
         Resolve arguments from sources and overrides based on specs.
@@ -699,9 +721,7 @@ def expression(
 ) -> Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]]: ...
 @overload
 def expression(func: ExpressionFunc[_P, _R], /) -> ExpressionFactory[_P, _R]: ...
-def expression(
-    func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /
-) -> Union[
+def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
     Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]],
     ExpressionFactory[_P, _R],
 ]:
