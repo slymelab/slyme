@@ -7,6 +7,7 @@ from typing import Any, Union, Protocol
 from collections.abc import Callable
 from slyme.utils.registry import Registry, TypeRegistry
 from slyme.utils.pytree import AttributeKey, PyTreeKey
+from slyme.utils.exception import enrich_exception
 from slyme.context import Context, Dep, DEP, Ref
 from .core import (
     NodeElement,
@@ -153,7 +154,7 @@ def _scan_leaves(leaves: list[Any]) -> set[Union[type, None]]:
     return stats
 
 
-def _validate_purity(stats: set[Union[type, None]], path_info: str) -> None:
+def _validate_purity(stats: set[Union[type, None]]) -> None:
     """
     Enforce purity: A container can only hold elements of ONE tracked category,
     OR purely untracked elements (Others).
@@ -174,9 +175,8 @@ def _validate_purity(stats: set[Union[type, None]], path_info: str) -> None:
             else:
                 names.append(cat.__name__)
         raise NodeStructureError(
-            f"Mixed content at '{path_info}': "
-            f"Found mixed types {names}. Containers must be homogenous regarding "
-            f"Nodes, Expressions, Wrappers, and Refs."
+            f"Mixed content: Found mixed types {names}. "
+            f"Containers must be homogenous regarding Nodes, Expressions, Wrappers, and Refs."
         )
 
 
@@ -186,42 +186,68 @@ def _validate_node_structure(obj: Node, key: PyTreeKey, leaves: list[Any]) -> No
     stats = _scan_leaves(leaves)
     type_name = obj.type_repr()
     path_info = key.codify(type_name)
-    _validate_purity(stats, path_info)
 
-    # Rule: Wrapper placement
-    # Wrappers are ONLY allowed in the 'wrappers' attribute.
-    if Wrapper in stats:
-        is_wrappers_attr = isinstance(key, AttributeKey) and key.name == "wrappers"
-        if not is_wrappers_attr:
-            raise NodeStructureError(
-                f"Invalid wrapper placement at {path_info}: "
-                f"Wrappers must be in {type_name}.wrappers."
-            )
+    with enrich_exception(f"at {path_info}"):
+        _validate_purity(stats)
+
+        # Rule: Wrapper placement
+        # Wrappers are ONLY allowed in the 'wrappers' attribute.
+        if Wrapper in stats:
+            is_wrappers_attr = isinstance(key, AttributeKey) and key.name == "wrappers"
+            if not is_wrappers_attr:
+                raise NodeStructureError(
+                    f"Invalid wrapper placement: Wrappers must be in {type_name}.wrappers."
+                )
 
 
 @VALIDATION_REGISTRY.register(key=Expression)
-@VALIDATION_REGISTRY.register(key=Wrapper)
-def _validate_terminal_structure(
-    obj: Union[Expression, Wrapper],
+def _validate_expression_structure(
+    obj: Expression,
     key: PyTreeKey,
     leaves: list[Any],
 ) -> None:
-    """Validator for Expression and Wrapper (Terminal Structures)."""
+    """Validator for Expression."""
     stats = _scan_leaves(leaves)
     type_name = obj.type_repr()
     path_info = key.codify(type_name)
-    _validate_purity(stats, path_info)
 
-    # Rule: Downward closure
-    if Node in stats:
-        raise NodeStructureError(
-            f"Invalid containment at {path_info}: " f"{type_name} cannot hold Node."
-        )
-    if Wrapper in stats:
-        raise NodeStructureError(
-            f"Invalid containment at {path_info}: "
-            f"{type_name} cannot hold Wrapper."
-        )
+    with enrich_exception(f"at {path_info}"):
+        _validate_purity(stats)
+
+        # Rule: Downward closure
+        if Node in stats:
+            raise NodeStructureError(
+                f"Invalid containment: {type_name} cannot hold Node."
+            )
+        if Wrapper in stats:
+            raise NodeStructureError(
+                f"Invalid containment: {type_name} cannot hold Wrapper."
+            )
+
+
+@VALIDATION_REGISTRY.register(key=Wrapper)
+def _validate_wrapper_structure(
+    obj: Wrapper,
+    key: PyTreeKey,
+    leaves: list[Any],
+) -> None:
+    """Validator for Wrapper."""
+    stats = _scan_leaves(leaves)
+    type_name = obj.type_repr()
+    path_info = key.codify(type_name)
+
+    with enrich_exception(f"at {path_info}"):
+        _validate_purity(stats)
+
+        # Rule: Downward closure
+        if Node in stats:
+            raise NodeStructureError(
+                f"Invalid containment: {type_name} cannot hold Node."
+            )
+        if Wrapper in stats:
+            raise NodeStructureError(
+                f"Invalid containment: {type_name} cannot hold Wrapper."
+            )
 
 
 def check_node_structure(root: Node) -> None:
