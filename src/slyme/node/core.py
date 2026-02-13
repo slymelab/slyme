@@ -532,7 +532,7 @@ class NodeFactory(Generic[_P]):
         return self._func(ctx, **final_kwargs)
 
     def create(
-        self, sources: list[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
     ) -> NodeDef:
         """
         Create the node instance by resolving parameters from sources and overrides.
@@ -541,7 +541,7 @@ class NodeFactory(Generic[_P]):
         return self(**final_kwargs)
 
     def resolve_arguments(
-        self, sources: list[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
     ) -> dict[str, Any]:
         """
         Resolve arguments from sources and overrides based on specs.
@@ -584,7 +584,7 @@ class ExpressionFactory(Generic[_P, _R]):
         return self._func(ctx, **final_kwargs)
 
     def create(
-        self, sources: list[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
     ) -> ExpressionDef[_R]:
         """
         Create the node instance by resolving parameters from sources and overrides.
@@ -593,7 +593,7 @@ class ExpressionFactory(Generic[_P, _R]):
         return self(**final_kwargs)
 
     def resolve_arguments(
-        self, sources: list[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
     ) -> dict[str, Any]:
         """
         Resolve arguments from sources and overrides based on specs.
@@ -642,7 +642,7 @@ class WrapperFactory(Generic[_P]):
         return self._func(ctx, wrapped, call_next, **final_kwargs)
 
     def create(
-        self, sources: list[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
     ) -> WrapperDef:
         """
         Create the node instance by resolving parameters from sources and overrides.
@@ -651,7 +651,7 @@ class WrapperFactory(Generic[_P]):
         return self(**final_kwargs)
 
     def resolve_arguments(
-        self, sources: list[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
+        self, sources: Sequence[Mapping[str, Any]], /, *_: _P.args, **overrides: _P.kwargs
     ) -> dict[str, Any]:
         """
         Resolve arguments from sources and overrides based on specs.
