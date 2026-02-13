@@ -1,7 +1,5 @@
-from .base import Builder
-from .extension import BuilderExtension
+from .base import builder
 
 __all__ = [
-    "Builder",
-    "BuilderExtension",
+    "builder",
 ]
