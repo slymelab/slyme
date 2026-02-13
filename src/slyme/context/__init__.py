@@ -1,10 +1,12 @@
 from .core import Context, Ref, ContextConfig
-from .ref import DEP, Dep
+from .metadata import DEP, Dep, HELP, TYPE
 
 __all__ = [
     "Context",
+    "Ref",
     "ContextConfig",
     "DEP",
     "Dep",
-    "Ref",
+    "HELP",
+    "TYPE",
 ]

@@ -3,10 +3,14 @@ from enum import Flag, auto
 __all__ = [
     "DEP",
     "Dep",
+    "HELP",
+    "TYPE",
 ]
 
 # Metadata Key
 DEP = "node.dep"
+HELP = "node.help"
+TYPE = "node.type"
 
 
 class Dep(Flag):
