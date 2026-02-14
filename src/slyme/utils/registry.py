@@ -38,9 +38,9 @@ class GeneralRegistry(Generic[_KT, _VT]):
         *,
         strict: bool = True,
     ):
+        self._data: dict[_KT, _VT] = {}
         self.namespace = repr(self) if namespace is _MISSING else namespace
         self.strict = strict
-        self._data: dict[_KT, _VT] = {}
 
     def _resolve_strict(self, strict: Union[bool, _Missing] = _MISSING):
         """
@@ -281,15 +281,14 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
 
     def lookup_all_cls(self, key: type[_KT]) -> Iterable[type[_KT]]:
         """
-        Yield all **registered** keys that are superclasses (including virtual ones) of ``key``.
+        Yield all **registered** keys that are superclasses of ``key``, following the MRO order.
 
-        NOTE: Unlike ``lookup_cls``, this method relies on ``issubclass`` check
-        rather than MRO. The yield order follows the **registration order**,
-        not the inheritance order.
+        NOTE: This method strictly relies on MRO (Method Resolution Order).
+        It does NOT support virtual subclasses.
         """
-        for cls_key in self.keys():
-            if issubclass(key, cls_key):
-                yield cls_key
+        for base in inspect.getmro(key):
+            if base in self:
+                yield base
 
     def lookup_all(self, key: type[_KT]) -> Iterable[_VT]:
         """
@@ -300,12 +299,13 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
 
     def collect_cls(self, base_cls: type[_KT]) -> Iterable[type[_KT]]:
         """
-        Yield all **registered** keys that are subclasses (including virtual ones) of ``base_cls``.
+        Yield all **registered** keys that are subclasses of ``base_cls``.
 
-        This iterates over all registered keys and checks ``issubclass(registered_key, base_cls)``.
+        NOTE: This method strictly relies on MRO (Method Resolution Order).
+        It does NOT support virtual subclasses.
         """
         for cls_key in self.keys():
-            if issubclass(cls_key, base_cls):
+            if base_cls in inspect.getmro(cls_key):
                 yield cls_key
 
     def collect(self, base_cls: type[_KT]) -> Iterable[_VT]:
