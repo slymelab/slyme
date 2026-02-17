@@ -21,6 +21,7 @@ __all__ = [
     "check_node_structure",
 ]
 
+
 # --- Node Structure Consistency Check ---
 class NodeStructureError(TypeError):
     """Raised when the Node structure violates consistency rules."""

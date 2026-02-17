@@ -11,7 +11,7 @@ from slyme.context import Ref
 from .core import NodeElement, Node, Expression, Wrapper
 from .tree import NODE_PYTREE_ENGINE
 
-__all__ = ["get_render_string"]
+__all__ = ["get_render_string", "Config"]
 
 # Registry to determine the category of an object during rendering.
 RENDER_TYPE_REGISTRY = TypeRegistry[Any, str]("render_category")
@@ -22,7 +22,7 @@ RENDER_TYPE_REGISTRY.register("refs", key=Ref)
 
 
 # Tree rendering config
-class RenderConfig:
+class Config:
     tree_branch: str = "├── "
     tree_last: str = "└── "
     tree_vertical: str = "│   "
@@ -124,7 +124,7 @@ def _build_render_lines(obj: Any) -> _RenderResult:
 
     # 5. Dispatch Rendering Strategy
     lines = []
-    if isinstance(obj, RenderConfig._grouped_render_types):
+    if isinstance(obj, Config._grouped_render_types):
         lines = _render_grouped(flat_children)
     else:
         lines = _render_direct(flat_children)
@@ -146,11 +146,11 @@ def _render_grouped(items: list[_RenderItem]) -> list[str]:
     # Filter active categories based on config order
     active_cats = [
         (c, t)
-        for c, t in RenderConfig._category_config
+        for c, t in Config._category_config
         if classified_children.get(c)
         and (
-            RenderConfig.visible_categories is None
-            or c in RenderConfig.visible_categories
+            Config.visible_categories is None
+            or c in Config.visible_categories
         )
     ]
     count = len(active_cats)
@@ -160,13 +160,13 @@ def _render_grouped(items: list[_RenderItem]) -> list[str]:
 
         # Determine the connector/prefix style for the LAST item in this group.
         if i == count - 1:
-            last_connector = RenderConfig.tree_last
-            last_prefix = RenderConfig.tree_spacer
+            last_connector = Config.tree_last
+            last_prefix = Config.tree_spacer
         else:
-            last_connector = RenderConfig.tree_branch
-            last_prefix = RenderConfig.tree_vertical
+            last_connector = Config.tree_branch
+            last_prefix = Config.tree_vertical
 
-        lines.append(f"{RenderConfig.group_connector}{cat_title}")
+        lines.append(f"{Config.group_connector}{cat_title}")
         lines.extend(_render_children_lines(cat_items, last_connector, last_prefix))
 
     return lines
@@ -178,7 +178,7 @@ def _render_direct(items: list[_RenderItem]) -> list[str]:
     """
     # Direct rendering implies no subsequent groups, so the last item always terminates.
     return _render_children_lines(
-        items, RenderConfig.tree_last, RenderConfig.tree_spacer
+        items, Config.tree_last, Config.tree_spacer
     )
 
 
@@ -202,8 +202,8 @@ def _render_children_lines(
             connector = last_connector
             prefix = last_prefix
         else:
-            connector = RenderConfig.tree_branch
-            prefix = RenderConfig.tree_vertical
+            connector = Config.tree_branch
+            prefix = Config.tree_vertical
 
         child_header = _get_node_header(item.child)
         lines.append(f"{connector}{item.key} {child_header}")

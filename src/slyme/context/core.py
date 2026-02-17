@@ -31,7 +31,7 @@ _MISSING = _Missing.MARK
 ContextData = Optional[Mapping[str, Any]]
 
 
-class ContextConfig:
+class Config:
     repr_indent: str
     repr_newline: str
     repr_suffix: str
@@ -64,7 +64,7 @@ class ContextConfig:
         return cls
 
 
-ContextConfig.set_pretty_repr().set_truncated_repr(max_len=100)
+Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 
 @dataclass(frozen=True, repr=False, eq=False)
@@ -311,9 +311,9 @@ class ContextElement(ABC):
         if not keys:
             return f"{name}()"
 
-        newline = ContextConfig.repr_newline
-        indent = ContextConfig.repr_indent
-        formatter = ContextConfig.leaf_formatter
+        newline = Config.repr_newline
+        indent = Config.repr_indent
+        formatter = Config.leaf_formatter
 
         item_blocks = []
         for key in keys:
@@ -335,9 +335,9 @@ class ContextElement(ABC):
         count = len(item_blocks)
         for i, block in enumerate(item_blocks):
             suffix = (
-                ContextConfig.repr_last_suffix
+                Config.repr_last_suffix
                 if i == count - 1
-                else ContextConfig.repr_suffix
+                else Config.repr_suffix
             )
             block[-1] += suffix
             body_lines.extend(block)

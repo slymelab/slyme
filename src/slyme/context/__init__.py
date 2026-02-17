@@ -1,4 +1,4 @@
-from .core import Context, Ref, ContextConfig
+from .core import Context, Ref, Config as ContextConfig
 from .metadata import HELP, TYPE
 
 __all__ = [

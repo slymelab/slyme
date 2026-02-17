@@ -37,6 +37,7 @@ from .signature import (
 )
 
 __all__ = [
+    "Config",
     "node",
     "expression",
     "wrapper",
@@ -66,6 +67,10 @@ WrapperFunc = Callable[
 ]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
+
+
+class Config:
+    pass
 
 
 # Node Family
