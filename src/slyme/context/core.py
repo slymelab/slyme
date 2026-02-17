@@ -28,7 +28,6 @@ _T2 = TypeVar("_T2")
 _EMPTY_METADATA = types.MappingProxyType({})
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
-ContextData = Optional[Mapping[str, Any]]
 
 
 class Config:
@@ -146,7 +145,7 @@ class ContextPathError(KeyError):
     pass
 
 
-class ContextDict(dict[str, Any]):
+class ContextData(dict[str, Any]):
     """
     Internal dictionary implementation used to distinguish structural elements
     from user-provided dictionary values.
@@ -177,7 +176,7 @@ class ContextDict(dict[str, Any]):
         self,
         updates: dict[tuple[str, ...], Any],
         drops: set[tuple[str, ...]],
-    ) -> "ContextDict":
+    ) -> "ContextData":
         """
         Core recursive Copy-On-Write (COW) algorithm for simultaneous updates and drops.
 
@@ -230,12 +229,12 @@ class ContextDict(dict[str, Any]):
             child = new_data.get(head, _MISSING)
 
             # Structure Validation / Auto-Vivification
-            if not isinstance(child, ContextDict):
+            if not isinstance(child, ContextData):
                 if child is _MISSING:
                     # Create new container for updates
                     if not sub_updates:
                         continue
-                    child = ContextDict()
+                    child = ContextData()
                 else:
                     # Conflict: Path blocked by leaf
                     raise ContextPathError(
@@ -251,7 +250,7 @@ class ContextDict(dict[str, Any]):
             except ContextPathError:
                 raise ContextPathError(head) from None
 
-        return ContextDict(new_data)
+        return ContextData(new_data)
 
 
 @dataclass(frozen=True)
@@ -284,18 +283,18 @@ class ContextElement(ABC):
         pass
 
     @abstractmethod
-    def to_context_dict(self, ref: Optional[Ref[_T]] = None) -> ContextDict:
+    def to_context_data(self, ref: Optional[Ref[_T]] = None) -> ContextData:
         pass
 
     def to_dict(self, ref: Optional[Ref[_T]] = None) -> dict[str, Any]:
         """Convert to standard python dictionary recursively."""
 
         def _recursive_to_dict(data: Any) -> Any:
-            if isinstance(data, ContextDict):
+            if isinstance(data, ContextData):
                 return {k: _recursive_to_dict(v) for k, v in data.items()}
             return data
 
-        root = self.to_context_dict(ref)
+        root = self.to_context_data(ref)
         return _recursive_to_dict(root)
 
     def type_repr(self) -> str:
@@ -376,14 +375,14 @@ class ContextElement(ABC):
         return DiffResult(added, removed, modified)
 
     def collect_leaves(self) -> dict[str, Any]:
-        # CONTEXT_PYTREE_ENGINE is configured to only traverse Context/ContextDict structure.
+        # CONTEXT_PYTREE_ENGINE is configured to only traverse Context/ContextData structure.
         # So it treats user dicts as leaves automatically.
         # Use iter_with_path for memory efficiency (generator based)
-        iterator = CONTEXT_PYTREE_ENGINE.iter_with_path(self.to_context_dict())
+        iterator = CONTEXT_PYTREE_ENGINE.iter_with_path(self.to_context_data())
 
         leaves = {}
         for path, leaf in iterator:
-            # We know ContextDict keys are MappingKeys wrapping strings
+            # We know ContextData keys are MappingKeys wrapping strings
             parts = [str(cast(MappingKey, k).key) for k in path]
             leaves[".".join(parts)] = leaf
         return leaves
@@ -393,27 +392,27 @@ class ContextElement(ABC):
 class Context(ContextElement):
     """
     Immutable Context implementation with efficient Copy-On-Write (COW) updates.
-    Wraps a root `ContextDict`.
+    Wraps a root `ContextData`.
 
     The main **runtime** context container for the node execution.
     """
 
-    _root: ContextDict = field(init=False)
-    data: InitVar[ContextData] = None
+    _root: ContextData = field(init=False)
+    data: InitVar[Optional[Mapping[str, Any]]] = None
 
-    def __post_init__(self, data: ContextData) -> None:
+    def __post_init__(self, data: Optional[Mapping[str, Any]] = None) -> None:
         if data is None:
-            root = ContextDict()
-        elif isinstance(data, ContextDict):
+            root = ContextData()
+        elif isinstance(data, ContextData):
             root = data
         else:
             # Shallow conversion strictly for the top level.
             # Trusts user input for deep structure.
-            root = ContextDict(data)
+            root = ContextData(data)
         object.__setattr__(self, "_root", root)
 
     @classmethod
-    def _from_context_dict(cls, root: ContextDict) -> "Context":
+    def _from_context_data(cls, root: ContextData) -> "Context":
         obj = object.__new__(cls)
         object.__setattr__(obj, "_root", root)
         return obj
@@ -428,7 +427,7 @@ class Context(ContextElement):
     ) -> Union[_T, _T2]:
         try:
             val = self._resolve(ref.parts)
-            if isinstance(val, ContextDict):
+            if isinstance(val, ContextData):
                 return ContextView(self, ref.parts)
             return ref.resolve(val)
         except ContextPathError:
@@ -447,22 +446,22 @@ class Context(ContextElement):
         if ref is None:
             return self._root.keys()
         element = self._resolve(ref.parts)
-        if isinstance(element, ContextDict):
+        if isinstance(element, ContextData):
             return element.keys()
         raise ContextPathError("Cannot list keys of a leaf value.")
 
-    def to_context_dict(self, ref: Optional[Ref[_T]] = None) -> ContextDict:
+    def to_context_data(self, ref: Optional[Ref[_T]] = None) -> ContextData:
         if ref is None:
             return self._root
         val = self._resolve(ref.parts)
-        if isinstance(val, ContextDict):
+        if isinstance(val, ContextData):
             return val
-        raise ContextPathError("Target is not a ContextDict (container).")
+        raise ContextPathError("Target is not a ContextData (container).")
 
     def _resolve(self, parts: Iterable[str]) -> Any:
         current: Any = self._root
         for p in parts:
-            if not isinstance(current, ContextDict):
+            if not isinstance(current, ContextData):
                 raise ContextPathError(f"Path blocked by leaf value.")
             try:
                 current = current[p]
@@ -491,12 +490,12 @@ class Context(ContextElement):
             return self
         raw_updates = {r.parts: v for r, v in updates.items()} if updates else {}
         raw_drops = {r.parts for r in drops} if drops else set()
-        # Delegate to the root ContextDict
+        # Delegate to the root ContextData
         new_root = self._root.mutate(raw_updates, raw_drops)
         # Edge Case: If the root itself resulted in MISSING (dropped), we reset to empty.
         if new_root is _MISSING:
-            new_root = ContextDict()
-        return self._from_context_dict(new_root)
+            new_root = ContextData()
+        return self._from_context_data(new_root)
 
     # --- Convenience Interfaces ---
     def update(self, updates: Mapping[Ref, Any]) -> "Context":
@@ -514,17 +513,17 @@ class Context(ContextElement):
     def clear(self, ref: Ref[_T]) -> "Context":
         """
         Clear all contents under a reference but keep the path.
-        Raises ContextPathError if the target is not a container (ContextDict).
+        Raises ContextPathError if the target is not a container (ContextData).
         """
         # 1. Validate target is a container
         val = self._resolve(ref.parts)
-        if not isinstance(val, ContextDict):
+        if not isinstance(val, ContextData):
             raise ContextPathError(
-                f"Cannot clear '{ref.path}': not a container (ContextDict)."
+                f"Cannot clear '{ref.path}': not a container (ContextData)."
             )
 
-        # 2. Update with empty ContextDict
-        return self.mutate(updates={ref: ContextDict()})
+        # 2. Update with empty ContextData
+        return self.mutate(updates={ref: ContextData()})
 
     def delete(self, ref: Ref[_T]) -> "Context":
         """Single delete convenience interface."""
@@ -559,8 +558,8 @@ class ContextView(ContextElement):
     def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
         return self._context.keys(self._adjust_ref(ref))
 
-    def to_context_dict(self, ref: Optional[Ref[_T]] = None) -> ContextDict:
-        return self._context.to_context_dict(self._adjust_ref(ref))
+    def to_context_data(self, ref: Optional[Ref[_T]] = None) -> ContextData:
+        return self._context.to_context_data(self._adjust_ref(ref))
 
 
 # --- PyTreeEngine Configuration ---
@@ -568,35 +567,35 @@ CONTEXT_PYTREE_ENGINE = PyTreeEngine("context_engine", register_defaults=False)
 PYTREE_ENGINE_REGISTRY.register(CONTEXT_PYTREE_ENGINE, key="context_engine")
 
 
-def _flatten_context_dict(data: ContextDict) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten ContextDict."""
+def _flatten_context_data(data: ContextData) -> tuple[Iterable[Any], PyTreeAux]:
+    """Flatten ContextData."""
     keys = tuple(data.keys())
     rich_keys = tuple(MappingKey(k) for k in keys)
     children = (data[k] for k in keys)
     return children, PyTreeAux(keys=rich_keys)
 
 
-def _unflatten_context_dict(children: Iterable[Any], aux: PyTreeAux) -> ContextDict:
-    """Unflatten to ContextDict."""
+def _unflatten_context_data(children: Iterable[Any], aux: PyTreeAux) -> ContextData:
+    """Unflatten to ContextData."""
     if aux.keys is None:
-        raise ValueError("Missing keys for ContextDict unflattening.")
+        raise ValueError("Missing keys for ContextData unflattening.")
     raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.keys)]
-    return ContextDict(zip(raw_keys, children))
+    return ContextData(zip(raw_keys, children))
 
 
 def _flatten_context(context: Context) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten Context -> (root_context_dict, )."""
+    """Flatten Context -> (root_context_data, )."""
     return (context._root,), PyTreeAux()
 
 
 def _unflatten_context(children: Iterable[Any], aux: PyTreeAux) -> Context:
     """Unflatten Context."""
     (root,) = children
-    return Context._from_context_dict(root)
+    return Context._from_context_data(root)
 
 
 # Register
 CONTEXT_PYTREE_ENGINE.register(
-    ContextDict, _flatten_context_dict, _unflatten_context_dict
+    ContextData, _flatten_context_data, _unflatten_context_data
 )
 CONTEXT_PYTREE_ENGINE.register(Context, _flatten_context, _unflatten_context)
