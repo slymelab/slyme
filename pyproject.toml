@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slyme"
-version = "0.0.5.dev202602141142"
+version = "0.0.6.dev202602171752"
 description = "Placeholder for slyme series."
 readme = "README.md"
 authors = [{ name = "Zikang Liu", email = "liuzikang0625@gmail.com" }]

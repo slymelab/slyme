@@ -334,11 +334,7 @@ class ContextElement(ABC):
         body_lines = []
         count = len(item_blocks)
         for i, block in enumerate(item_blocks):
-            suffix = (
-                Config.repr_last_suffix
-                if i == count - 1
-                else Config.repr_suffix
-            )
+            suffix = Config.repr_last_suffix if i == count - 1 else Config.repr_suffix
             block[-1] += suffix
             body_lines.extend(block)
 

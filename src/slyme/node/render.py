@@ -148,10 +148,7 @@ def _render_grouped(items: list[_RenderItem]) -> list[str]:
         (c, t)
         for c, t in Config._category_config
         if classified_children.get(c)
-        and (
-            Config.visible_categories is None
-            or c in Config.visible_categories
-        )
+        and (Config.visible_categories is None or c in Config.visible_categories)
     ]
     count = len(active_cats)
 
@@ -177,9 +174,7 @@ def _render_direct(items: list[_RenderItem]) -> list[str]:
     Strategy: Render children linearly.
     """
     # Direct rendering implies no subsequent groups, so the last item always terminates.
-    return _render_children_lines(
-        items, Config.tree_last, Config.tree_spacer
-    )
+    return _render_children_lines(items, Config.tree_last, Config.tree_spacer)
 
 
 def _render_children_lines(

@@ -70,7 +70,25 @@ _MISSING = _Missing.MARK
 
 
 class Config:
-    pass
+    check_return_type: bool = True
+
+
+def _ensure_context_return(func: Callable[_P, Any]) -> Callable[_P, Context]:
+    """
+    Wrap a callable to ensure it returns a Context object.
+    """
+
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> Context:
+        result = func(*args, **kwargs)
+        if not isinstance(result, Context):
+            raise TypeError(
+                f"Node execution return type mismatch. "
+                f"Expected 'Context', but got '{type(result).__name__}'. "
+                f"Function: {func}"
+            )
+        return result
+
+    return wrapper
 
 
 # Node Family
@@ -215,6 +233,9 @@ class NodeExec(Node):
         # 1. Inner Core: Bind kwargs to the user function.
         # Signature: (Context) -> Context
         chain: Callable[[Context], Context] = partial(func, **kwargs)
+        if Config.check_return_type:
+            chain = _ensure_context_return(chain)
+
         # 2. Build the middleware chain.
         # Wrappers are applied from inside out (reversed order of list).
         for wrapper in reversed(wrappers):
@@ -469,7 +490,10 @@ class WrapperExec(Wrapper):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
-        object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
+        prepared_func = partial(func, **kwargs)
+        if Config.check_return_type:
+            prepared_func = _ensure_context_return(prepared_func)
+        object.__setattr__(self, "_prepared_func", prepared_func)
 
     def prepare(self) -> Self:
         return self
