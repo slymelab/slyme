@@ -10,10 +10,11 @@ from .core import (
 )
 from .validator import (
     check_node_structure,
-    DEPENDENCY_REGISTRY,
-    vanilla_dependency_check,
-    VanillaDependencyReport,
     NodeStructureError,
+)
+from .common import (
+    sequential_exec,
+    sequential,
 )
 
 __all__ = [
@@ -22,13 +23,12 @@ __all__ = [
     "Expression",
     "Wrapper",
     "check_node_structure",
-    "DEPENDENCY_REGISTRY",
-    "vanilla_dependency_check",
-    "VanillaDependencyReport",
     "NodeStructureError",
     "node",
     "wrapper",
     "expression",
     "spec",
     "ref_spec",
+    "sequential_exec",
+    "sequential",
 ]

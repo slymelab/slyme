@@ -1,14 +1,13 @@
 """
-Node validation module, including dependency checking and structure consistency checking.
+Node validation module, including structure consistency checking.
 """
 
-from dataclasses import dataclass
-from typing import Any, Union, Protocol
+from typing import Any, Union
 from collections.abc import Callable
-from slyme.utils.registry import Registry, TypeRegistry
+from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import AttributeKey, PyTreeKey
 from slyme.utils.exception import enrich_exception
-from slyme.context import Context, Dep, DEP, Ref
+from slyme.context import Ref
 from .core import (
     NodeElement,
     Node,
@@ -18,94 +17,9 @@ from .core import (
 from .tree import NODE_PYTREE_ENGINE
 
 __all__ = [
-    "DEPENDENCY_REGISTRY",
-    "vanilla_dependency_check",
-    "VanillaDependencyReport",
     "NodeStructureError",
     "check_node_structure",
 ]
-
-# Registry definition for dependency checkers
-DEPENDENCY_REGISTRY: Registry["_NodeDependencyChecker"] = Registry("node_dependency")
-
-
-class _NodeDependencyChecker(Protocol):
-    """
-    Protocol for dependency checkers.
-    """
-
-    def __call__(self, node: NodeElement, ctx: Context, /, **kwargs) -> Any:
-        """
-        Check the dependencies of the given node against the context.
-        """
-        ...
-
-
-@dataclass
-class VanillaDependencyReport:
-    """Strategy-specific report."""
-
-    missing_keys: set[str]
-    context_keys: set[str]
-    all_provided: set[str]
-    all_required: set[str]
-
-    @property
-    def valid(self) -> bool:
-        return len(self.missing_keys) == 0
-
-    @property
-    def message(self) -> str:
-        if self.valid:
-            return "Dependency Check Passed (Vanilla)."
-        return (
-            f"Dependency Check Failed (Vanilla).\n"
-            f"Missing Keys: {sorted(list(self.missing_keys))}"
-        )
-
-
-@DEPENDENCY_REGISTRY.register(key="vanilla")
-def vanilla_dependency_check(
-    node: NodeElement,
-    ctx: Context,
-    /,
-    **kwargs,
-) -> VanillaDependencyReport:
-    """
-    A simple dependency checker that flattens the node to find required and provided keys.
-    """
-    # 1. Collect dependencies directly using NODE_PYTREE_ENGINE
-    requires: set[str] = set()
-    provides: set[str] = set()
-
-    # Flatten the node structure.
-    # NODE_PYTREE_ENGINE is configured to handle NodeElement traversal.
-    leaves = tuple(NODE_PYTREE_ENGINE.iter(node))
-
-    for leaf in leaves:
-        if isinstance(leaf, Ref):
-            dep_mode = leaf.metadata.get(DEP, Dep.NONE)
-            path = leaf.path
-            if dep_mode & Dep.REQUIRE:
-                requires.add(path)
-            if dep_mode & Dep.PROVIDE:
-                provides.add(path)
-
-    # 2. Extract existing keys from Context
-    context_data = ctx.collect_leaves()
-    context_keys = set(context_data.keys())
-
-    # 3. Calculate missing keys (Set arithmetic)
-    available_keys = provides | context_keys
-    missing_keys = requires - available_keys
-
-    return VanillaDependencyReport(
-        missing_keys=missing_keys,
-        context_keys=context_keys,
-        all_provided=provides,
-        all_required=requires,
-    )
-
 
 # --- Node Structure Consistency Check ---
 class NodeStructureError(TypeError):
@@ -118,10 +32,7 @@ class NodeStructureError(TypeError):
 # Args: obj (container), key (PyTreeKey), leaves
 ValidatorFunc = Callable[[NodeElement, PyTreeKey, list[Any]], None]
 VALIDATION_REGISTRY: TypeRegistry[Any, ValidatorFunc] = TypeRegistry("node_validation")
-
-
 # --- Leaf Scanning Logic ---
-
 # Configuration: Types that must be independently tracked and kept pure.
 # Any object belonging to these types (or their subclasses) is treated as a distinct category.
 _TRACKED_CATEGORIES = (Node, Expression, Wrapper, Ref)
