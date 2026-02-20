@@ -22,6 +22,7 @@ from slyme.utils.pytree import (
     PYTREE_ENGINE_REGISTRY,
     KeyPath,
 )
+from slyme.utils.exception import enrich_exception
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
@@ -181,9 +182,27 @@ class ContextData(dict[str, Any]):
         Core recursive Copy-On-Write (COW) algorithm for simultaneous updates and drops.
 
         Semantics:
-        - Updates overwrite everything (Priority 1).
-        - Drop at root + Updates at children = Reset & Apply (Drop clears existing, Updates build new).
-        - Drop at root + No Updates = Delete.
+        - Logically, drops are executed first, then updates.
+          However, for efficiency, they are processed in a single pass.
+        - Updates have higher priority than drops if they target the same path or its children.
+          (i.e., updating 'a' overrides dropping 'a' or dropping 'a.b').
+        - Drop Conflicts:
+          - Overlapping drops (e.g., drop 'a' and drop 'a.b') are handled implicitly.
+            Dropping the parent 'a' removes the entire subtree, so dropping 'a.b' is redundant but valid.
+        - Update Conflicts:
+          - Overlapping updates (e.g., update 'a' and update 'a.b') raise a ValueError.
+            We cannot determine whether 'a' should be a leaf (value) or a container (for 'b').
+
+        Algorithm:
+        1. Base Cases:
+           - If root is updated, return new value immediately.
+           - If root is dropped (and not updated), return _MISSING.
+        2. Group Operations:
+           - Group updates and drops by their head key (first path component).
+        3. Recursive Application:
+           - For each head, recursively call mutate on the child.
+           - Handle leaf conflicts (path blocked by existing value).
+           - Enhance exceptions with path context.
         """
         # 1. Base Cases
         if () in updates:
@@ -220,35 +239,52 @@ class ContextData(dict[str, Any]):
         for head, (sub_updates, sub_drops) in grouped_ops.items():
             # Optimization: Exact overwrite
             if () in sub_updates:
-                new_data[head] = sub_updates.pop(())
-                # If no other updates/drops for this head, we are done
-                if not sub_updates and not sub_drops:
-                    continue
+                # Conflict: Cannot update both parent and child simultaneously
+                if len(sub_updates) > 1:
+                    raise ValueError(
+                        f"Update conflict at '{head}': Cannot update both parent and child simultaneously."
+                    )
+
+                # Apply update
+                new_data[head] = sub_updates[()]
+
+                # If we are overwriting the head, any drops for this head or its children
+                # are implicitly handled (superseded by the overwrite).
+                # This satisfies "batch drops then batch updates" semantics.
+                continue
 
             # Get existing child or MISSING (if Reset, it's always MISSING)
             child = new_data.get(head, _MISSING)
 
             # Structure Validation / Auto-Vivification
-            if not isinstance(child, ContextData):
-                if child is _MISSING:
-                    # Create new container for updates
-                    if not sub_updates:
-                        continue
-                    child = ContextData()
-                else:
-                    # Conflict: Path blocked by leaf
-                    raise ContextPathError(
-                        f"Path '{head}' blocked by leaf value during mutation."
-                    )
+            if isinstance(child, ContextData):
+                pass
+            elif child is _MISSING:
+                # Create new container for updates
+                if not sub_updates:
+                    continue
+                child = ContextData()
+            elif () in sub_drops:
+                # Child is a leaf.
+                # If we are dropping the leaf itself, allow it.
+                if not sub_updates:
+                    new_data.pop(head, None)
+                    continue
+                # If we also have updates, we start from a fresh container (Reset)
+                child = ContextData()
+            else:
+                # Conflict: Path blocked by leaf value
+                raise ContextPathError(
+                    f"Path '{head}' blocked by leaf value during mutation."
+                )
 
-            try:
+            # Enrich both ContextPathError (structural issues) and ValueError (update conflicts)
+            with enrich_exception(head, exc_types=(ContextPathError, ValueError)):
                 new_child = child.mutate(sub_updates, sub_drops)
                 if new_child is _MISSING:
                     new_data.pop(head, None)
                 else:
                     new_data[head] = new_child
-            except ContextPathError:
-                raise ContextPathError(head) from None
 
         return ContextData(new_data)
 
