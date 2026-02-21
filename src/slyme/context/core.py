@@ -29,6 +29,8 @@ _T2 = TypeVar("_T2")
 _EMPTY_METADATA = types.MappingProxyType({})
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
+DiffMissing = Enum("DiffMissing", ["MARK"])
+DIFF_MISSING = DiffMissing.MARK
 
 
 class Config:
@@ -69,7 +71,10 @@ Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 @dataclass(frozen=True, repr=False, eq=False)
 class Ref(Generic[_T]):
-    """Immutable dotted ref with cached hash and split parts."""
+    """Immutable dotted ref with cached hash and split parts.
+
+    NOTE: Ref.lens can only resolve leaf values.
+    """
 
     path: str
     lens: KeyPath = ()
@@ -290,11 +295,114 @@ class ContextData(dict[str, Any]):
 
 
 @dataclass(frozen=True)
-class DiffResult:
-    __slots__ = ("added", "removed", "modified")
-    added: dict[str, Any]  # {key: other_value}
-    removed: dict[str, Any]  # {key: self_value}
-    modified: dict[str, tuple[Any, Any]]  # {key: (self_value, other_value)}
+class ContextDiff:
+    """
+    Recursive diff structure representing changes between two ContextElements.
+    Supports nested diffs for containers and direct value changes for leaves.
+    """
+
+    added: dict[str, Any] = field(default_factory=dict)
+    removed: dict[str, Any] = field(default_factory=dict)
+    modified: dict[str, tuple[Any, Any]] = field(default_factory=dict)
+    nested: dict[str, "ContextDiff"] = field(default_factory=dict)
+
+    def __bool__(self) -> bool:
+        return bool(self.added or self.removed or self.modified or self.nested)
+
+    def __repr__(self) -> str:
+        parts = []
+        if self.added:
+            parts.append(f"added={list(self.added.keys())}")
+        if self.removed:
+            parts.append(f"removed={list(self.removed.keys())}")
+        if self.modified:
+            parts.append(f"modified={list(self.modified.keys())}")
+        if self.nested:
+            parts.append(f"nested={list(self.nested.keys())}")
+        if not parts:
+            return "ContextDiff(no changes)"
+        return f"ContextDiff({', '.join(parts)})"
+
+    def flatten(self) -> dict[str, tuple[Any, Any]]:
+        """
+        Flatten the recursive diff into a single dictionary of changes.
+        Returns a dict of {path: (old_value, new_value)}.
+        Added values have old_value as DIFF_MISSING.
+        Removed values have new_value as DIFF_MISSING.
+        """
+        changes: dict[str, tuple[Any, Any]] = {}
+
+        for k, v in self.added.items():
+            changes[k] = (DIFF_MISSING, v)
+        for k, v in self.removed.items():
+            changes[k] = (v, DIFF_MISSING)
+        for k, v in self.modified.items():
+            changes[k] = v
+
+        for key, child_diff in self.nested.items():
+            for child_path, (old, new) in child_diff.flatten().items():
+                changes[f"{key}.{child_path}"] = (old, new)
+
+        return changes
+
+
+def diff_context_data(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+    strategy: Literal["is", "eq"] = "is",
+) -> ContextDiff:
+    """
+    Compute the recursive difference between two ContextData objects.
+    Optimized for Copy-On-Write (COW) structures by skipping identical subtrees.
+    """
+    if left is right:
+        return ContextDiff()
+
+    added = {}
+    removed = {}
+    modified = {}
+    nested = {}
+
+    keys_left = set(left.keys())
+    keys_right = set(right.keys())
+
+    # Removed keys
+    for k in keys_left - keys_right:
+        removed[k] = left[k]
+
+    # Added keys
+    for k in keys_right - keys_left:
+        added[k] = right[k]
+
+    # Shared keys
+    for k in keys_left & keys_right:
+        val_left = left[k]
+        val_right = right[k]
+
+        # Optimization: Skip identical objects (COW sharing)
+        if val_left is val_right:
+            continue
+
+        # Check for nested containers (ContextData)
+        is_container_left = isinstance(val_left, ContextData)
+        is_container_right = isinstance(val_right, ContextData)
+
+        if is_container_left and is_container_right:
+            child_diff = diff_context_data(val_left, val_right, strategy)
+            if child_diff:
+                nested[k] = child_diff
+        else:
+            # Leaf comparison
+            is_different = False
+            if strategy == "is":
+                is_different = val_left is not val_right
+            elif strategy == "eq":
+                is_different = val_left != val_right
+
+            if is_different:
+                modified[k] = (val_left, val_right)
+
+    return ContextDiff(added, removed, modified, nested)
 
 
 class ContextElement(ABC):
@@ -377,38 +485,20 @@ class ContextElement(ABC):
 
     def diff(
         self, other: "ContextElement", strategy: Literal["is", "eq"] = "is"
-    ) -> DiffResult:
+    ) -> ContextDiff:
+        """
+        Compute the difference between this element and another.
+        Returns a recursive ContextDiff structure.
+        """
         if strategy not in ("is", "eq"):
             raise ValueError(f"Unknown diff strategy: {strategy!r}")
 
-        leaves_self = self.collect_leaves()
-        leaves_other = other.collect_leaves()
+        # Convert both to ContextData for recursive comparison
+        # This handles Context, ContextView, and any other ContextElement
+        data_self = self.to_context_data()
+        data_other = other.to_context_data()
 
-        added: dict[str, Any] = {}
-        removed: dict[str, Any] = {}
-        modified: dict[str, tuple[Any, Any]] = {}
-
-        keys_self = set(leaves_self.keys())
-        keys_other = set(leaves_other.keys())
-
-        for k in keys_self - keys_other:
-            removed[k] = leaves_self[k]
-        for k in keys_other - keys_self:
-            added[k] = leaves_other[k]
-
-        for k in keys_self & keys_other:
-            val_self = leaves_self[k]
-            val_other = leaves_other[k]
-            is_different = False
-            if strategy == "is":
-                is_different = val_self is not val_other
-            elif strategy == "eq":
-                is_different = val_self != val_other
-
-            if is_different:
-                modified[k] = (val_self, val_other)
-
-        return DiffResult(added, removed, modified)
+        return diff_context_data(data_self, data_other, strategy)
 
     def collect_leaves(self) -> dict[str, Any]:
         # CONTEXT_PYTREE_ENGINE is configured to only traverse Context/ContextData structure.
@@ -464,6 +554,8 @@ class Context(ContextElement):
         try:
             val = self._resolve(ref.parts)
             if isinstance(val, ContextData):
+                if ref.lens:
+                    raise ValueError("Ref.lens can only resolve leaf values.")
                 return ContextView(self, ref.parts)
             return ref.resolve(val)
         except ContextPathError:
