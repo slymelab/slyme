@@ -21,6 +21,7 @@ from slyme.utils.pytree import (
     MappingKey,
     PYTREE_ENGINE_REGISTRY,
     KeyPath,
+    PyTreeKey,
 )
 from slyme.utils.exception import enrich_exception
 
@@ -69,7 +70,7 @@ class Config:
 Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 
-@dataclass(frozen=True, repr=False, eq=False)
+@dataclass(frozen=True, repr=False, eq=False, init=False)
 class Ref(Generic[_T]):
     """Immutable dotted ref with cached hash and split parts.
 
@@ -77,24 +78,32 @@ class Ref(Generic[_T]):
     """
 
     path: str
-    key_path: KeyPath = ()
-    metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_METADATA)
-    parts: tuple[str, ...] = field(init=False)
-    hash: int = field(init=False)
+    key_path: KeyPath
+    metadata: Mapping[str, Any]
+    parts: tuple[str, ...]
+    hash: int
 
-    def __post_init__(self) -> None:
-        if not self.path:
+    def __init__(
+        self,
+        path: str,
+        key_path: Iterable[PyTreeKey] = (),
+        metadata: Mapping[str, Any] = _EMPTY_METADATA,
+    ) -> None:
+        if not path:
             raise ValueError("Empty ref path")
-        parts = tuple(self.path.split("."))
+        parts = tuple(path.split("."))
         if any(not p for p in parts):
-            raise ValueError(f"Invalid ref path: {self.path!r}")
-
-        # Bypass frozen=True to set calculated fields
-        object.__setattr__(self, "key_path", tuple(self.key_path))
+            raise ValueError(f"Invalid ref path: {path!r}")
+        # Bypass frozen=True to set fields
+        object.__setattr__(self, "path", path)
+        # Normalize key_path to tuple
+        kp_tuple = tuple(key_path)
+        object.__setattr__(self, "key_path", kp_tuple)
         object.__setattr__(self, "parts", parts)
-        object.__setattr__(self, "hash", hash((parts, self.key_path)))
-        if not isinstance(self.metadata, types.MappingProxyType):
-            object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
+        object.__setattr__(self, "hash", hash((parts, kp_tuple)))
+        if not isinstance(metadata, types.MappingProxyType):
+            metadata = types.MappingProxyType(metadata)
+        object.__setattr__(self, "metadata", metadata)
 
     def resolve(self, pytree) -> _T:
         return PyTreeEngine.get_element(pytree, self.key_path)
@@ -108,7 +117,7 @@ class Ref(Generic[_T]):
     def at(
         self,
         subpath: str,
-        key_path: Union[KeyPath, _Missing] = _MISSING,
+        key_path: Union[Iterable[PyTreeKey], _Missing] = _MISSING,
         metadata: Union[Optional[Mapping[str, Any]], _Missing] = _MISSING,
     ) -> "Ref":
         """
@@ -140,7 +149,9 @@ class Ref(Generic[_T]):
     def extra_repr(self) -> str:
         repr_items = [f"path={self.path!r}"]
         if self.key_path:
-            repr_items.append(f"key_path_expr={PyTreeEngine.codify_key_path(self.key_path)}")
+            repr_items.append(
+                f"key_path_expr={PyTreeEngine.codify_key_path(self.key_path)}"
+            )
         if self.metadata:
             repr_items.append(f"metadata={self.metadata!r}")
         return ", ".join(repr_items)

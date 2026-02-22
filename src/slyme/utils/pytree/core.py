@@ -148,9 +148,7 @@ class KeyPathExpr:
         object.__setattr__(self, "_keys", keys)
 
     def _raise_immutable(self, *args, **kwargs):
-        raise TypeError(
-            f"{type(self).__name__} is immutable."
-        )
+        raise TypeError(f"{type(self).__name__} is immutable.")
 
     __setattr__ = _raise_immutable
     __delattr__ = _raise_immutable
