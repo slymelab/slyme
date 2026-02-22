@@ -748,14 +748,14 @@ def _flatten_context_data(data: ContextData) -> tuple[Iterable[Any], PyTreeAux]:
     keys = tuple(data.keys())
     rich_keys = tuple(MappingKey(k) for k in keys)
     children = (data[k] for k in keys)
-    return children, PyTreeAux(key_path=rich_keys)
+    return children, PyTreeAux(children_keys=rich_keys)
 
 
 def _unflatten_context_data(children: Iterable[Any], aux: PyTreeAux) -> ContextData:
     """Unflatten to ContextData."""
-    if aux.key_path is None:
+    if aux.children_keys is None:
         raise ValueError("Missing keys for ContextData unflattening.")
-    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.key_path)]
+    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.children_keys)]
     return ContextData(zip(raw_keys, children))
 
 

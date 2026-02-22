@@ -46,7 +46,7 @@ def _flatten_node_def(obj: NodeDef) -> tuple[Iterable[Any], PyTreeAux]:
 
     metadata = {"func": obj._func, "specs": obj._specs}
     return tuple(children), PyTreeAux(
-        key_path=tuple(rich_keys), metadata=metadata, cls=NodeDef
+        children_keys=tuple(rich_keys), metadata=metadata, cls=NodeDef
     )
 
 
@@ -55,7 +55,7 @@ def _unflatten_node_def(children: Iterable[Any], aux: PyTreeAux) -> NodeDef:
     Reconstruct NodeDef (Standard Engine).
     """
     # Use zip for cleaner iteration
-    iterator = zip(aux.key_path, children)
+    iterator = zip(aux.children_keys, children)
     # 1. Wrappers (Always the first element based on flatten logic)
     _, wrappers = next(iterator)
     # 2. Kwargs (Remaining elements)
@@ -72,7 +72,7 @@ def _unflatten_node_def_to_exec(children: Iterable[Any], aux: PyTreeAux) -> Node
     """
     Transform NodeDef into NodeExec (Prepare Engine).
     """
-    iterator = zip(aux.key_path, children)
+    iterator = zip(aux.children_keys, children)
     # 1. Wrappers
     # NOTE: The engine has already recursively transformed the wrappers list into a tuple.
     _, wrappers = next(iterator)
@@ -98,14 +98,14 @@ def _flatten_expression_def(
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(key_path=rich_keys, metadata=metadata, cls=ExpressionDef)
+    return children, PyTreeAux(children_keys=rich_keys, metadata=metadata, cls=ExpressionDef)
 
 
 def _unflatten_expression_def(children: Iterable[Any], aux: PyTreeAux) -> ExpressionDef:
     """
     Reconstruct ExpressionDef (Standard Engine).
     """
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.key_path, children)}
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
     return ExpressionDef(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
@@ -117,7 +117,7 @@ def _unflatten_expression_def_to_exec(
     """
     Transform ExpressionDef into ExpressionExec (Prepare Engine).
     """
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.key_path, children)}
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
     return ExpressionExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -134,14 +134,14 @@ def _flatten_wrapper_def(obj: WrapperDef) -> tuple[Iterable[Any], PyTreeAux]:
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(key_path=rich_keys, metadata=metadata, cls=WrapperDef)
+    return children, PyTreeAux(children_keys=rich_keys, metadata=metadata, cls=WrapperDef)
 
 
 def _unflatten_wrapper_def(children: Iterable[Any], aux: PyTreeAux) -> WrapperDef:
     """
     Reconstruct WrapperDef (Standard Engine).
     """
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.key_path, children)}
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
     return WrapperDef(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
@@ -153,7 +153,7 @@ def _unflatten_wrapper_def_to_exec(
     """
     Transform WrapperDef into WrapperExec (Prepare Engine).
     """
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.key_path, children)}
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
     return WrapperExec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -170,12 +170,12 @@ def _flatten_node_exec(obj: NodeExec) -> tuple[Iterable[Any], PyTreeAux]:
         rich_keys.append(MappingKey(k))
     metadata = {"func": obj._func, "specs": obj._specs}
     return tuple(children), PyTreeAux(
-        key_path=tuple(rich_keys), metadata=metadata, cls=NodeExec
+        children_keys=tuple(rich_keys), metadata=metadata, cls=NodeExec
     )
 
 
 def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> NodeExec:
-    iterator = zip(aux.key_path, children)
+    iterator = zip(aux.children_keys, children)
     _, wrappers = next(iterator)
     kwargs = {cast("MappingKey", k).key: v for k, v in iterator}
     return NodeExec(
@@ -194,14 +194,14 @@ def _flatten_expression_exec(
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
     return children, PyTreeAux(
-        key_path=rich_keys, metadata=metadata, cls=ExpressionExec
+        children_keys=rich_keys, metadata=metadata, cls=ExpressionExec
     )
 
 
 def _unflatten_expression_exec(
     children: Iterable[Any], aux: PyTreeAux
 ) -> ExpressionExec:
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.key_path, children)}
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
     return ExpressionExec(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
@@ -212,11 +212,11 @@ def _flatten_wrapper_exec(obj: WrapperExec) -> tuple[Iterable[Any], PyTreeAux]:
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(key_path=rich_keys, metadata=metadata, cls=WrapperExec)
+    return children, PyTreeAux(children_keys=rich_keys, metadata=metadata, cls=WrapperExec)
 
 
 def _unflatten_wrapper_exec(children: Iterable[Any], aux: PyTreeAux) -> WrapperExec:
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.key_path, children)}
+    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
     return WrapperExec(
         func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
     )
@@ -243,13 +243,13 @@ def _flatten_dict(d: dict) -> tuple[Iterable[Any], PyTreeAux]:
     keys = tuple(d.keys())
     rich_keys = tuple(MappingKey(k) for k in keys)
     children = (d[k] for k in keys)
-    return children, PyTreeAux(key_path=rich_keys)
+    return children, PyTreeAux(children_keys=rich_keys)
 
 
 def _unflatten_to_mapping_proxy(
     children: Iterable[Any], aux: PyTreeAux
 ) -> types.MappingProxyType:
-    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.key_path)]
+    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.children_keys)]
     return types.MappingProxyType(dict(zip(raw_keys, children)))
 
 

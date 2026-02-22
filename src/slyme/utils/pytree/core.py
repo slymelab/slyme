@@ -199,28 +199,16 @@ class PyTreeAux:
 
     Attributes:
         metadata: Custom data needed for unflattening (e.g., specific flags).
-        key_path: Optional sequence of keys corresponding to the children.
-
-              Used for path tracking during flattening and potentially for structure
-              reconstruction during unflattening.
-
-              WARNING: Must be a reusable iterable (e.g., tuple, list). Do NOT use
-              a one-time iterator (like a generator), as it may be iterated over
-              multiple times (once during flatten, and again during unflatten).
-
-              If None, defaults to SequenceKey(0), SequenceKey(1), ...
+        children_keys: Optional tuple of keys corresponding to the children.
     """
 
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
-    key_path: Optional[Iterable[PyTreeKey]] = None
+    children_keys: Optional[tuple[PyTreeKey, ...]] = None
     cls: Optional[type] = None
 
     def __post_init__(self):
         if not isinstance(self.metadata, types.MappingProxyType):
             object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
-
-        if self.key_path is not None:
-            object.__setattr__(self, "key_path", tuple(self.key_path))
 
 
 class _FlattenFunc(Protocol):
@@ -416,13 +404,13 @@ class PyTreeEngine:
             rich_keys = tuple(MappingKey(k) for k in keys)
             # Yield values as children.
             children = (data[k] for k in keys)
-            return children, PyTreeAux(key_path=rich_keys)
+            return children, PyTreeAux(children_keys=rich_keys)
 
         def _unflatten_dict(children: Iterable[Any], tree_aux: PyTreeAux) -> dict:
-            if tree_aux.key_path is None:
+            if tree_aux.children_keys is None:
                 raise ValueError("Missing keys in TreeAux for dict unflattening.")
             # Unwrap DictKey to get raw keys.
-            raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.key_path)]
+            raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.children_keys)]
             return dict(zip(raw_keys, children))
 
         self.register(dict, _flatten_dict, _unflatten_dict)
@@ -555,8 +543,8 @@ class PyTreeEngine:
             tree_aux = replace(tree_aux, cls=type(element))
 
         # Resolve Keys for Path Tracking.
-        if tree_aux.key_path is not None:
-            keys_iter = iter(tree_aux.key_path)
+        if tree_aux.children_keys is not None:
+            keys_iter = iter(tree_aux.children_keys)
         else:
             # Default fallback: Generate SequenceKey for indices.
             keys_iter = (SequenceKey(i) for i in count())
