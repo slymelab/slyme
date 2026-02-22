@@ -98,7 +98,9 @@ def _flatten_expression_def(
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(children_keys=rich_keys, metadata=metadata, cls=ExpressionDef)
+    return children, PyTreeAux(
+        children_keys=rich_keys, metadata=metadata, cls=ExpressionDef
+    )
 
 
 def _unflatten_expression_def(children: Iterable[Any], aux: PyTreeAux) -> ExpressionDef:
@@ -134,7 +136,9 @@ def _flatten_wrapper_def(obj: WrapperDef) -> tuple[Iterable[Any], PyTreeAux]:
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(children_keys=rich_keys, metadata=metadata, cls=WrapperDef)
+    return children, PyTreeAux(
+        children_keys=rich_keys, metadata=metadata, cls=WrapperDef
+    )
 
 
 def _unflatten_wrapper_def(children: Iterable[Any], aux: PyTreeAux) -> WrapperDef:
@@ -212,7 +216,9 @@ def _flatten_wrapper_exec(obj: WrapperExec) -> tuple[Iterable[Any], PyTreeAux]:
     children = tuple(obj._kwargs.values())
     rich_keys = tuple(MappingKey(k) for k in keys)
     metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(children_keys=rich_keys, metadata=metadata, cls=WrapperExec)
+    return children, PyTreeAux(
+        children_keys=rich_keys, metadata=metadata, cls=WrapperExec
+    )
 
 
 def _unflatten_wrapper_exec(children: Iterable[Any], aux: PyTreeAux) -> WrapperExec:

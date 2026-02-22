@@ -314,7 +314,7 @@ class ContainerDef(PyTreeDef):
     unflatten_func: _UnflattenFunc = field(compare=False, repr=False)
 
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
-        children = [child._build(leaves_iter) for child in self.children_defs]
+        children = tuple(child._build(leaves_iter) for child in self.children_defs)
         return self.unflatten_func(children, self.tree_aux)
 
 
@@ -410,7 +410,9 @@ class PyTreeEngine:
             if tree_aux.children_keys is None:
                 raise ValueError("Missing keys in TreeAux for dict unflattening.")
             # Unwrap DictKey to get raw keys.
-            raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.children_keys)]
+            raw_keys = [
+                k.key for k in cast("Iterable[MappingKey]", tree_aux.children_keys)
+            ]
             return dict(zip(raw_keys, children))
 
         self.register(dict, _flatten_dict, _unflatten_dict)

@@ -78,7 +78,7 @@ class Ref(Generic[_T]):
     """
 
     path: str
-    key_path: Iterable[PyTreeKey] = ()
+    key_path: KeyPath = ()
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
     parts: tuple[str, ...] = field(init=False)
     hash: int = field(init=False)
@@ -91,13 +91,7 @@ class Ref(Generic[_T]):
             raise ValueError(f"Invalid ref path: {self.path!r}")
         # Bypass frozen=True to set fields
         object.__setattr__(self, "parts", parts)
-
-        # Normalize key_path to tuple
-        kp_tuple = tuple(self.key_path)
-        object.__setattr__(self, "key_path", kp_tuple)
-
-        object.__setattr__(self, "hash", hash((parts, kp_tuple)))
-
+        object.__setattr__(self, "hash", hash((parts, self.key_path)))
         if not isinstance(self.metadata, types.MappingProxyType):
             object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
 
@@ -113,7 +107,7 @@ class Ref(Generic[_T]):
     def at(
         self,
         subpath: str,
-        key_path: Union[Iterable[PyTreeKey], _Missing] = _MISSING,
+        key_path: Union[KeyPath, _Missing] = _MISSING,
         metadata: Union[Optional[Mapping[str, Any]], _Missing] = _MISSING,
     ) -> "Ref":
         """
