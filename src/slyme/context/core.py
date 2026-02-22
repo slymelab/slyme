@@ -576,6 +576,11 @@ class Context(ContextElement):
             return default
 
     def exists(self, ref: Ref[_T]) -> bool:
+        if ref.key_path:
+            raise ValueError(
+                f"Ref.key_path must be empty for existence check (found {ref.key_path!r}). "
+                "Use get() to check leaf value existence."
+            )
         try:
             self._resolve(ref.parts)
             return True
@@ -585,6 +590,11 @@ class Context(ContextElement):
     def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
         if ref is None:
             return self._root.keys()
+        if ref.key_path:
+            raise ValueError(
+                f"Ref.key_path must be empty for listing keys (found {ref.key_path!r}). "
+                "Context keys operation is structural and does not support leaf navigation."
+            )
         element = self._resolve(ref.parts)
         if isinstance(element, ContextData):
             return element.keys()
@@ -593,6 +603,11 @@ class Context(ContextElement):
     def to_context_data(self, ref: Optional[Ref[_T]] = None) -> ContextData:
         if ref is None:
             return self._root
+        if ref.key_path:
+            raise ValueError(
+                f"Ref.key_path must be empty for converting to ContextData (found {ref.key_path!r}). "
+                "ContextData conversion is structural and does not support leaf navigation."
+            )
         val = self._resolve(ref.parts)
         if isinstance(val, ContextData):
             return val
@@ -628,6 +643,23 @@ class Context(ContextElement):
         """
         if not updates and not drops:
             return self
+
+        # Validate Ref.key_path is empty for all mutation operations
+        if updates:
+            for r in updates:
+                if r.key_path:
+                    raise ValueError(
+                        f"Ref.key_path must be empty for mutation operations (found {r.key_path!r} in {r}). "
+                        "Mutation on a specific key path is ambiguous; operate on the full path instead."
+                    )
+        if drops:
+            for r in drops:
+                if r.key_path:
+                    raise ValueError(
+                        f"Ref.key_path must be empty for mutation operations (found {r.key_path!r} in {r}). "
+                        "Mutation on a specific key path is ambiguous; operate on the full path instead."
+                    )
+
         raw_updates = {r.parts: v for r, v in updates.items()} if updates else {}
         raw_drops = {r.parts for r in drops} if drops else set()
         # Delegate to the root ContextData
