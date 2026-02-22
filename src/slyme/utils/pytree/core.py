@@ -4,8 +4,9 @@ Tree structure utilities for slyme (PyTree-like).
 Designed to be lightweight, explicit, and instance-isolated.
 """
 
+import types
 from dataclasses import dataclass, field, replace
-from collections.abc import Iterable, Callable, Iterator, Hashable
+from collections.abc import Iterable, Callable, Iterator, Hashable, Mapping
 from itertools import count
 from typing import (
     Any,
@@ -16,6 +17,8 @@ from typing import (
     cast,
 )
 from slyme.utils.registry import Registry, TypeRegistry
+
+_EMPTY_MAPPING = types.MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -91,11 +94,15 @@ class CallKey(PyTreeKey):
     """
 
     args: tuple[Any, ...] = field(default_factory=tuple)
-    kwargs: dict[str, Any] = field(default_factory=dict)
+    kwargs: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
     hash: int = field(init=False, repr=False)
     is_hashable: bool = field(init=False, repr=False)
 
     def __post_init__(self):
+        # Convert kwargs to MappingProxyType if needed
+        if not isinstance(self.kwargs, types.MappingProxyType):
+            object.__setattr__(self, "kwargs", types.MappingProxyType(self.kwargs))
+
         try:
             # Sort kwargs for deterministic hashing
             # Assuming keys are strings as per standard kwargs
@@ -192,7 +199,7 @@ class PyTreeAux:
 
     Attributes:
         metadata: Custom data needed for unflattening (e.g., specific flags).
-        keys: Optional sequence of keys corresponding to the children.
+        key_path: Optional sequence of keys corresponding to the children.
 
               Used for path tracking during flattening and potentially for structure
               reconstruction during unflattening.
@@ -204,9 +211,16 @@ class PyTreeAux:
               If None, defaults to SequenceKey(0), SequenceKey(1), ...
     """
 
-    metadata: dict[str, Any] = field(default_factory=dict)
-    keys: Optional[Iterable[PyTreeKey]] = None
+    metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
+    key_path: Optional[Iterable[PyTreeKey]] = None
     cls: Optional[type] = None
+
+    def __post_init__(self):
+        if not isinstance(self.metadata, types.MappingProxyType):
+            object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
+
+        if self.key_path is not None:
+            object.__setattr__(self, "key_path", tuple(self.key_path))
 
 
 class _FlattenFunc(Protocol):
@@ -402,13 +416,13 @@ class PyTreeEngine:
             rich_keys = tuple(MappingKey(k) for k in keys)
             # Yield values as children.
             children = (data[k] for k in keys)
-            return children, PyTreeAux(keys=rich_keys)
+            return children, PyTreeAux(key_path=rich_keys)
 
         def _unflatten_dict(children: Iterable[Any], tree_aux: PyTreeAux) -> dict:
-            if tree_aux.keys is None:
+            if tree_aux.key_path is None:
                 raise ValueError("Missing keys in TreeAux for dict unflattening.")
             # Unwrap DictKey to get raw keys.
-            raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.keys)]
+            raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.key_path)]
             return dict(zip(raw_keys, children))
 
         self.register(dict, _flatten_dict, _unflatten_dict)
@@ -541,8 +555,8 @@ class PyTreeEngine:
             tree_aux = replace(tree_aux, cls=type(element))
 
         # Resolve Keys for Path Tracking.
-        if tree_aux.keys is not None:
-            keys_iter = iter(tree_aux.keys)
+        if tree_aux.key_path is not None:
+            keys_iter = iter(tree_aux.key_path)
         else:
             # Default fallback: Generate SequenceKey for indices.
             keys_iter = (SequenceKey(i) for i in count())
@@ -568,7 +582,7 @@ class PyTreeEngine:
                 try:
                     key = next(keys_iter)
                 except StopIteration:
-                    # Should not happen if aux.keys matches children length.
+                    # Should not happen if aux.key_path matches children length.
                     raise ValueError(
                         f"Not enough keys provided in TreeAux for container {type(element)}"
                     )
@@ -609,7 +623,7 @@ class PyTreeEngine:
                 try:
                     key = next(keys_iter)
                 except StopIteration:
-                    # Should not happen if aux.keys matches children length.
+                    # Should not happen if aux.key_path matches children length.
                     raise ValueError(
                         f"Not enough keys provided in TreeAux for container {type(element)}"
                     )

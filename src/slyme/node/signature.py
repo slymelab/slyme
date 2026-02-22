@@ -110,9 +110,13 @@ def ref_spec(
 # Inspection & Signature Analysis
 @dataclass(frozen=True)
 class SignatureAnalysis:
-    pos_only_params: list[inspect.Parameter]
+    pos_only_params: tuple[inspect.Parameter, ...]
     public_signature: inspect.Signature
     specs: Mapping[str, Spec]
+
+    def __post_init__(self):
+        if not isinstance(self.specs, types.MappingProxyType):
+            object.__setattr__(self, "specs", types.MappingProxyType(self.specs))
 
 
 def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
@@ -187,7 +191,7 @@ def analyze_signature(func: Callable) -> SignatureAnalysis:
 
     public_signature = sig.replace(parameters=public_params)
     return SignatureAnalysis(
-        pos_only_params=pos_only_params,
+        pos_only_params=tuple(pos_only_params),
         public_signature=public_signature,
         specs=types.MappingProxyType(specs),
     )

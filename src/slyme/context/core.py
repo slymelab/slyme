@@ -27,7 +27,7 @@ from slyme.utils.exception import enrich_exception
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
-_EMPTY_METADATA = types.MappingProxyType({})
+_EMPTY_MAPPING = types.MappingProxyType({})
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 DiffMissing = Enum("DiffMissing", ["MARK"])
@@ -70,7 +70,7 @@ class Config:
 Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 
-@dataclass(frozen=True, repr=False, eq=False, init=False)
+@dataclass(frozen=True, repr=False, eq=False)
 class Ref(Generic[_T]):
     """Immutable dotted ref with cached hash and split parts.
 
@@ -78,32 +78,28 @@ class Ref(Generic[_T]):
     """
 
     path: str
-    key_path: KeyPath
-    metadata: Mapping[str, Any]
-    parts: tuple[str, ...]
-    hash: int
+    key_path: Iterable[PyTreeKey] = ()
+    metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
+    parts: tuple[str, ...] = field(init=False)
+    hash: int = field(init=False)
 
-    def __init__(
-        self,
-        path: str,
-        key_path: Iterable[PyTreeKey] = (),
-        metadata: Mapping[str, Any] = _EMPTY_METADATA,
-    ) -> None:
-        if not path:
+    def __post_init__(self) -> None:
+        if not self.path:
             raise ValueError("Empty ref path")
-        parts = tuple(path.split("."))
+        parts = tuple(self.path.split("."))
         if any(not p for p in parts):
-            raise ValueError(f"Invalid ref path: {path!r}")
+            raise ValueError(f"Invalid ref path: {self.path!r}")
         # Bypass frozen=True to set fields
-        object.__setattr__(self, "path", path)
-        # Normalize key_path to tuple
-        kp_tuple = tuple(key_path)
-        object.__setattr__(self, "key_path", kp_tuple)
         object.__setattr__(self, "parts", parts)
+
+        # Normalize key_path to tuple
+        kp_tuple = tuple(self.key_path)
+        object.__setattr__(self, "key_path", kp_tuple)
+
         object.__setattr__(self, "hash", hash((parts, kp_tuple)))
-        if not isinstance(metadata, types.MappingProxyType):
-            metadata = types.MappingProxyType(metadata)
-        object.__setattr__(self, "metadata", metadata)
+
+        if not isinstance(self.metadata, types.MappingProxyType):
+            object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
 
     def resolve(self, pytree) -> _T:
         return PyTreeEngine.get_element(pytree, self.key_path)
@@ -313,10 +309,18 @@ class ContextDiff:
     Supports nested diffs for containers and direct value changes for leaves.
     """
 
-    added: dict[str, Any] = field(default_factory=dict)
-    removed: dict[str, Any] = field(default_factory=dict)
-    modified: dict[str, tuple[Any, Any]] = field(default_factory=dict)
-    nested: dict[str, "ContextDiff"] = field(default_factory=dict)
+    added: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
+    removed: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
+    modified: Mapping[str, tuple[Any, Any]] = field(
+        default_factory=lambda: _EMPTY_MAPPING
+    )
+    nested: Mapping[str, "ContextDiff"] = field(default_factory=lambda: _EMPTY_MAPPING)
+
+    def __post_init__(self):
+        for name in ("added", "removed", "modified", "nested"):
+            val = getattr(self, name)
+            if not isinstance(val, types.MappingProxyType):
+                object.__setattr__(self, name, types.MappingProxyType(val))
 
     def __bool__(self) -> bool:
         return bool(self.added or self.removed or self.modified or self.nested)
@@ -744,14 +748,14 @@ def _flatten_context_data(data: ContextData) -> tuple[Iterable[Any], PyTreeAux]:
     keys = tuple(data.keys())
     rich_keys = tuple(MappingKey(k) for k in keys)
     children = (data[k] for k in keys)
-    return children, PyTreeAux(keys=rich_keys)
+    return children, PyTreeAux(key_path=rich_keys)
 
 
 def _unflatten_context_data(children: Iterable[Any], aux: PyTreeAux) -> ContextData:
     """Unflatten to ContextData."""
-    if aux.keys is None:
+    if aux.key_path is None:
         raise ValueError("Missing keys for ContextData unflattening.")
-    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.keys)]
+    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.key_path)]
     return ContextData(zip(raw_keys, children))
 
 
