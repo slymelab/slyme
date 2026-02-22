@@ -178,18 +178,18 @@ def check_node_structure(root: Node) -> None:
         # Uses inheritance lookup (e.g. subclass of Node uses _validate_node_structure)
         validate_func = VALIDATION_REGISTRY.lookup(type(obj), default=None)
         # Inspect immediate attributes using the engine.
-        direct_attrs_with_path = [
+        direct_attrs_with_key_path = [
             (p, c)
-            for p, c in NODE_PYTREE_ENGINE.iter_with_path(
+            for p, c in NODE_PYTREE_ENGINE.iter_with_key_path(
                 obj, is_leaf=lambda x, _: x is not obj
             )
             if p
         ]
-        for path, attr_value in direct_attrs_with_path:
-            # path is tuple[PyTreeKey, ...]
+        for key_path, attr_value in direct_attrs_with_key_path:
+            # key_path is tuple[PyTreeKey, ...]
             # Since we iterate immediate children (is_leaf stops at obj's children),
-            # path length is guaranteed to be 1.
-            key = path[0]
+            # key_path length is guaranteed to be 1.
+            key = key_path[0]
             # Gather all children in this attribute structure.
             leaves = list(
                 NODE_PYTREE_ENGINE.iter(

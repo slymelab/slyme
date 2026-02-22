@@ -93,23 +93,23 @@ def _build_render_lines(obj: Any) -> _RenderResult:
 
     # 2. Collect Children via PyTree Engine
     # NOTE: We use `is_leaf` to inspect the immediate attributes without flattening nested Nodes.
-    children_with_path = [
-        (path, child)
-        for path, child in NODE_PYTREE_ENGINE.iter_with_path(
+    children_with_key_path = [
+        (key_path, child)
+        for key_path, child in NODE_PYTREE_ENGINE.iter_with_key_path(
             obj, is_leaf=lambda x, _: x is not obj
         )
-        if path
+        if key_path
     ]
 
     # 3. Process Children Recursively
     flat_children: list[_RenderItem] = []
 
-    for path, child in children_with_path:
+    for key_path, child in children_with_key_path:
         child_result = _build_render_lines(child)
 
         # Only display children that have a valid category or content
         if child_result.category is not None:
-            key_str = path[-1].codify("")  # e.g., ".name" or "[0]"
+            key_str = key_path[-1].codify("")  # e.g., ".name" or "[0]"
             item = _RenderItem(key=key_str, child=child, result=child_result)
             flat_children.append(item)
 

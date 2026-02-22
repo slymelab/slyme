@@ -73,11 +73,11 @@ Config.set_pretty_repr().set_truncated_repr(max_len=100)
 class Ref(Generic[_T]):
     """Immutable dotted ref with cached hash and split parts.
 
-    NOTE: Ref.lens can only resolve leaf values.
+    NOTE: Ref.key_path can only resolve leaf values.
     """
 
     path: str
-    lens: KeyPath = ()
+    key_path: KeyPath = ()
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_METADATA)
     parts: tuple[str, ...] = field(init=False)
     hash: int = field(init=False)
@@ -90,35 +90,36 @@ class Ref(Generic[_T]):
             raise ValueError(f"Invalid ref path: {self.path!r}")
 
         # Bypass frozen=True to set calculated fields
+        object.__setattr__(self, "key_path", tuple(self.key_path))
         object.__setattr__(self, "parts", parts)
-        object.__setattr__(self, "hash", hash((parts, self.lens)))
+        object.__setattr__(self, "hash", hash((parts, self.key_path)))
         if not isinstance(self.metadata, types.MappingProxyType):
             object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
 
     def resolve(self, pytree) -> _T:
-        return PyTreeEngine.get_element(pytree, self.lens)
+        return PyTreeEngine.get_element(pytree, self.key_path)
 
     def update_metadata(self, metadata: Mapping[str, Any]) -> "Ref[_T]":
         """Returns a new Ref with updated metadata (merging with existing)."""
         new_metadata = dict(self.metadata)
         new_metadata.update(metadata)
-        return Ref(self.path, lens=self.lens, metadata=new_metadata)
+        return Ref(self.path, key_path=self.key_path, metadata=new_metadata)
 
     def at(
         self,
         subpath: str,
-        lens: Union[KeyPath, _Missing] = _MISSING,
+        key_path: Union[KeyPath, _Missing] = _MISSING,
         metadata: Union[Optional[Mapping[str, Any]], _Missing] = _MISSING,
     ) -> "Ref":
         """
         Create a new Ref at a subpath relative to this Ref.
 
-        Does NOT inherit lens or metadata from the parent Ref by default.
+        Does NOT inherit key_path or metadata from the parent Ref by default.
         """
         new_path = f"{self.path}.{subpath}" if self.path else subpath
         kwargs = {}
-        if lens is not _MISSING:
-            kwargs["lens"] = lens
+        if key_path is not _MISSING:
+            kwargs["key_path"] = key_path
         if metadata is not _MISSING:
             kwargs["metadata"] = metadata
         return Ref(new_path, **kwargs)
@@ -130,7 +131,7 @@ class Ref(Generic[_T]):
         return (
             isinstance(other, Ref)
             and self.parts == other.parts
-            and self.lens == other.lens
+            and self.key_path == other.key_path
         )
 
     def __repr__(self) -> str:
@@ -138,8 +139,8 @@ class Ref(Generic[_T]):
 
     def extra_repr(self) -> str:
         repr_items = [f"path={self.path!r}"]
-        if self.lens:
-            repr_items.append(f"lens_expr={PyTreeEngine.codify_path(self.lens)}")
+        if self.key_path:
+            repr_items.append(f"key_path_expr={PyTreeEngine.codify_key_path(self.key_path)}")
         if self.metadata:
             repr_items.append(f"metadata={self.metadata!r}")
         return ", ".join(repr_items)
@@ -503,13 +504,13 @@ class ContextElement(ABC):
     def collect_leaves(self) -> dict[str, Any]:
         # CONTEXT_PYTREE_ENGINE is configured to only traverse Context/ContextData structure.
         # So it treats user dicts as leaves automatically.
-        # Use iter_with_path for memory efficiency (generator based)
-        iterator = CONTEXT_PYTREE_ENGINE.iter_with_path(self.to_context_data())
+        # Use iter_with_key_path for memory efficiency (generator based)
+        iterator = CONTEXT_PYTREE_ENGINE.iter_with_key_path(self.to_context_data())
 
         leaves = {}
-        for path, leaf in iterator:
+        for key_path, leaf in iterator:
             # We know ContextData keys are MappingKeys wrapping strings
-            parts = [str(cast(MappingKey, k).key) for k in path]
+            parts = [str(cast(MappingKey, k).key) for k in key_path]
             leaves[".".join(parts)] = leaf
         return leaves
 
@@ -554,8 +555,8 @@ class Context(ContextElement):
         try:
             val = self._resolve(ref.parts)
             if isinstance(val, ContextData):
-                if ref.lens:
-                    raise ValueError("Ref.lens can only resolve leaf values.")
+                if ref.key_path:
+                    raise ValueError("Ref.key_path can only resolve leaf values.")
                 return ContextView(self, ref.parts)
             return ref.resolve(val)
         except ContextPathError:
@@ -673,7 +674,7 @@ class ContextView(ContextElement):
             return Ref(path)
         new_parts = self._parts + ref.parts
         new_path = ".".join(new_parts)
-        return type(ref)(new_path, lens=ref.lens, metadata=ref.metadata)
+        return Ref(new_path, key_path=ref.key_path, metadata=ref.metadata)
 
     def get(
         self, ref: Ref[_T], default: Union[_T2, _Missing] = _MISSING

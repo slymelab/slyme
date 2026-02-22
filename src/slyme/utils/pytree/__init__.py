@@ -9,6 +9,8 @@ from .core import (
     SequenceKey,
     MappingKey,
     AttributeKey,
+    CallKey,
+    P,
     PyTreeAux,
     # Structure & Engine
     PyTreeDef,
@@ -26,6 +28,8 @@ __all__ = [
     "SequenceKey",
     "MappingKey",
     "AttributeKey",
+    "CallKey",
+    "P",
     "PyTreeAux",
     "PyTreeDef",
     "LeafDef",

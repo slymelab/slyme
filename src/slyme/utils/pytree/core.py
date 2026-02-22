@@ -25,7 +25,7 @@ class PyTreeKey:
     def resolve(self, element: Any) -> Any:
         """
         Resolve the key against the given element to retrieve the child.
-        Acts as the 'Getter' logic in Lens.
+        Acts as the 'Getter' logic in KeyPath resolution.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement resolve.")
 
@@ -81,6 +81,108 @@ class AttributeKey(PyTreeKey):
         return f"{parent_expr}.{self.name}"
 
 
+@dataclass(frozen=True)
+class CallKey(PyTreeKey):
+    """
+    Represents a function call.
+
+    If the function arguments are not hashable, this key falls back to identity semantics
+    (object.__hash__ and self is other).
+    """
+
+    args: tuple[Any, ...] = field(default_factory=tuple)
+    kwargs: dict[str, Any] = field(default_factory=dict)
+    hash: int = field(init=False, repr=False)
+    is_hashable: bool = field(init=False, repr=False)
+
+    def __post_init__(self):
+        try:
+            # Sort kwargs for deterministic hashing
+            # Assuming keys are strings as per standard kwargs
+            kwargs_tuple = tuple(sorted(self.kwargs.items()))
+            computed_hash = hash((self.args, kwargs_tuple))
+            is_hashable = True
+        except TypeError:
+            computed_hash = object.__hash__(self)
+            is_hashable = False
+
+        object.__setattr__(self, "hash", computed_hash)
+        object.__setattr__(self, "is_hashable", is_hashable)
+
+    def __hash__(self) -> int:
+        return self.hash
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, CallKey):
+            return False
+
+        # If either is not hashable, fall back to identity
+        if not self.is_hashable or not other.is_hashable:
+            return self is other
+
+        return self.args == other.args and self.kwargs == other.kwargs
+
+    def resolve(self, element: Any) -> Any:
+        return element(*self.args, **self.kwargs)
+
+    def codify(self, parent_expr: str) -> str:
+        args_str = [repr(arg) for arg in self.args]
+        kwargs_str = [f"{k}={repr(v)}" for k, v in self.kwargs.items()]
+        combined = ", ".join(args_str + kwargs_str)
+        return f"{parent_expr}({combined})"
+
+
+class KeyPathExpr:
+    """
+    A proxy object to build KeyPaths using natural syntax.
+
+    Examples:
+        P = KeyPathExpr()
+        path = tuple(P.foo["bar"][0](1, a=2))
+        # path is a tuple of (AttributeKey, MappingKey, MappingKey, CallKey)
+    """
+
+    __slots__ = ("_keys",)
+
+    def __init__(self, keys: tuple[PyTreeKey, ...] = ()):
+        object.__setattr__(self, "_keys", keys)
+
+    def _raise_immutable(self, *args, **kwargs):
+        raise TypeError(
+            f"{type(self).__name__} is immutable."
+        )
+
+    __setattr__ = _raise_immutable
+    __delattr__ = _raise_immutable
+
+    def __getattribute__(self, name: str) -> Any:
+        # Everything is treated as an AttributeKey.
+        # Use object.__getattribute__ explicitly to get internal state when needed.
+        current_keys = object.__getattribute__(self, "_keys")
+        new_key = AttributeKey(name)
+        return KeyPathExpr(current_keys + (new_key,))
+
+    def __getitem__(self, key: Any) -> "KeyPathExpr":
+        # Unified MappingKey for both sequence index and mapping key
+        current_keys = object.__getattribute__(self, "_keys")
+        new_key = MappingKey(key)
+        return KeyPathExpr(current_keys + (new_key,))
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "KeyPathExpr":
+        current_keys = object.__getattribute__(self, "_keys")
+        new_key = CallKey(args=args, kwargs=kwargs)
+        return KeyPathExpr(current_keys + (new_key,))
+
+    def __iter__(self) -> Iterator[PyTreeKey]:
+        return iter(object.__getattribute__(self, "_keys"))
+
+    def __repr__(self) -> str:
+        keys = object.__getattribute__(self, "_keys")
+        return f"KeyPathExpr(keys={keys!r})"
+
+
+# Global proxy object
+P = KeyPathExpr()
 # Type Alias for Path
 KeyPath = tuple[PyTreeKey, ...]
 
@@ -143,7 +245,7 @@ class TraverseAux:
     """
 
     parent: Any
-    path: KeyPath
+    key_path: KeyPath
 
 
 class _IsLeafFunc(Protocol):
@@ -361,25 +463,25 @@ class PyTreeEngine:
         def _sink(leaf: Any, traverse_aux: TraverseAux) -> None:
             leaves.append(leaf)
 
-        initial_traverse_aux = TraverseAux(parent=None, path=())
+        initial_traverse_aux = TraverseAux(parent=None, key_path=())
         treedef = self._traverse(tree, initial_traverse_aux, _sink, is_leaf)
         return leaves, treedef
 
-    def flatten_with_path(
+    def flatten_with_key_path(
         self,
         tree: Any,
         *,
         is_leaf: Optional[_IsLeafFunc] = None,
     ) -> tuple[list[tuple[KeyPath, Any]], "PyTreeDef"]:
         """
-        Flatten a tree into a list of (path, leaf) tuples and a structure definition.
+        Flatten a tree into a list of (key_path, leaf) tuples and a structure definition.
         """
         leaves_with_path: list[tuple[KeyPath, Any]] = []
 
         def _sink(leaf: Any, traverse_aux: TraverseAux) -> None:
-            leaves_with_path.append((traverse_aux.path, leaf))
+            leaves_with_path.append((traverse_aux.key_path, leaf))
 
-        initial_traverse_aux = TraverseAux(parent=None, path=())
+        initial_traverse_aux = TraverseAux(parent=None, key_path=())
         treedef = self._traverse(tree, initial_traverse_aux, _sink, is_leaf)
         return leaves_with_path, treedef
 
@@ -392,23 +494,23 @@ class PyTreeEngine:
         """
         Iterate over leaves of a tree without creating a PyTreeDef.
         """
-        initial_traverse_aux = TraverseAux(parent=None, path=())
+        initial_traverse_aux = TraverseAux(parent=None, key_path=())
         yield from self._traverse_iter(
-            tree, initial_traverse_aux, is_leaf, with_path=False
+            tree, initial_traverse_aux, is_leaf, with_key_path=False
         )
 
-    def iter_with_path(
+    def iter_with_key_path(
         self,
         tree: Any,
         *,
         is_leaf: Optional[_IsLeafFunc] = None,
     ) -> Iterator[tuple[KeyPath, Any]]:
         """
-        Iterate over (path, leaf) tuples of a tree without creating a PyTreeDef.
+        Iterate over (key_path, leaf) tuples of a tree without creating a PyTreeDef.
         """
-        initial_traverse_aux = TraverseAux(parent=None, path=())
+        initial_traverse_aux = TraverseAux(parent=None, key_path=())
         yield from self._traverse_iter(
-            tree, initial_traverse_aux, is_leaf, with_path=True
+            tree, initial_traverse_aux, is_leaf, with_key_path=True
         )
 
     def _prepare_element(
@@ -474,7 +576,7 @@ class PyTreeEngine:
                     )
 
                 child_traverse_aux = TraverseAux(
-                    parent=element, path=traverse_aux.path + (key,)
+                    parent=element, key_path=traverse_aux.key_path + (key,)
                 )
                 child_def = self._traverse(
                     child,
@@ -497,7 +599,7 @@ class PyTreeEngine:
         element: Any,
         traverse_aux: TraverseAux,
         is_leaf: Optional[_IsLeafFunc],
-        with_path: bool,
+        with_key_path: bool,
     ) -> Iterator[Any]:
         """Recursive core for iterator traversal."""
         should_flatten, _, children_iter, keys_iter, _ = self._prepare_element(
@@ -515,18 +617,18 @@ class PyTreeEngine:
                     )
 
                 child_traverse_aux = TraverseAux(
-                    parent=element, path=traverse_aux.path + (key,)
+                    parent=element, key_path=traverse_aux.key_path + (key,)
                 )
                 yield from self._traverse_iter(
                     child,
                     child_traverse_aux,
                     is_leaf,
-                    with_path,
+                    with_key_path,
                 )
         else:
             # Leaf.
-            if with_path:
-                yield (traverse_aux.path, element)
+            if with_key_path:
+                yield (traverse_aux.key_path, element)
             else:
                 yield element
 
@@ -550,26 +652,26 @@ class PyTreeEngine:
         return self.unflatten(treedef, new_leaves)
 
     @staticmethod
-    def get_element(tree: Any, path: KeyPath) -> Any:
+    def get_element(tree: Any, key_path: KeyPath) -> Any:
         """
-        Retrieve an element from the tree using a specific path (Runtime Lens).
+        Retrieve an element from the tree using a specific key_path (Runtime KeyPath Resolution).
         """
         current = tree
-        for i, key in enumerate(path):
+        for i, key in enumerate(key_path):
             if not isinstance(key, PyTreeKey):
                 raise TypeError(
-                    f"Invalid path key at index {i}: expected PyTreeKey, got {type(key)}."
+                    f"Invalid key_path key at index {i}: expected PyTreeKey, got {type(key)}."
                 )
             current = key.resolve(current)
         return current
 
     @staticmethod
-    def codify_path(path: KeyPath, root_name: str = "$") -> str:
+    def codify_key_path(key_path: KeyPath, root_name: str = "$") -> str:
         """
-        Generate the Python code string corresponding to the path.
+        Generate the Python code string corresponding to the key_path.
         """
         expr = root_name
-        for key in path:
+        for key in key_path:
             expr = key.codify(expr)
         return expr
 
