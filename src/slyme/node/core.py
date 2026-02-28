@@ -541,49 +541,65 @@ class NodeFactory(Generic[_P]):
     def __repr__(self) -> str:
         return f"<NodeFactory of {self._func.__name__}>"
 
-    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> NodeDef:
+    @overload
+    def __call__(
+        self,
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> NodeDef: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> NodeDef: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        source2: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> NodeDef: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        source2: Mapping[str, Any],
+        source3: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> NodeDef: ...
+    @overload
+    def __call__(self, *sources: Any, **kwargs: Any) -> NodeDef: ...
+    def __call__(self, *sources: Any, **kwargs: Any) -> NodeDef:
         """
-        Create the node instance using keyword arguments.
+        Create the node instance by resolving parameters from sources and overrides.
         """
+        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
+            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
         # Note: wrappers are intentionally omitted to avoid parameter conflict.
         # Users should use .add_wrappers() explicitly.
         return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
-    def call(self, ctx: Context, /, *_: _P.args, **kwargs: _P.kwargs) -> Context:
+    def call(self, ctx: Context, /, *args: _P.args, **kwargs: _P.kwargs) -> Context:
         """
         Execute the node logic directly, bypassing the definition phase.
         """
+        if args:
+            raise TypeError(
+                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the context."
+            )
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
         return self._func(ctx, **final_kwargs)
-
-    def create(
-        self,
-        sources: Sequence[Mapping[str, Any]],
-        /,
-        *_: _P.args,
-        **overrides: _P.kwargs,
-    ) -> NodeDef:
-        """
-        Create the node instance by resolving parameters from sources and overrides.
-        """
-        final_kwargs = self.resolve_arguments(sources, **overrides)
-        return self(**final_kwargs)
-
-    def resolve_arguments(
-        self,
-        sources: Sequence[Mapping[str, Any]],
-        /,
-        *_: _P.args,
-        **overrides: _P.kwargs,
-    ) -> dict[str, Any]:
-        """
-        Resolve arguments from sources and overrides based on specs.
-        """
-        return resolve_arguments(self._specs, sources, overrides)
 
 
 class ExpressionFactory(Generic[_P, _R]):
@@ -601,47 +617,63 @@ class ExpressionFactory(Generic[_P, _R]):
     def __repr__(self) -> str:
         return f"<ExpressionFactory of {self._func.__name__}>"
 
-    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> ExpressionDef[_R]:
-        """
-        Create the node instance using keyword arguments.
-        """
-        # Process kwargs
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return ExpressionDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
-
-    def call(self, ctx: Context, /, *_: _P.args, **kwargs: _P.kwargs) -> _R:
-        """
-        Execute the expression logic directly, bypassing the definition phase.
-        """
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return self._func(ctx, **final_kwargs)
-
-    def create(
+    @overload
+    def __call__(
         self,
-        sources: Sequence[Mapping[str, Any]],
         /,
         *_: _P.args,
-        **overrides: _P.kwargs,
-    ) -> ExpressionDef[_R]:
+        **kwargs: _P.kwargs,
+    ) -> ExpressionDef[_R]: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> ExpressionDef[_R]: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        source2: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> ExpressionDef[_R]: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        source2: Mapping[str, Any],
+        source3: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> ExpressionDef[_R]: ...
+    @overload
+    def __call__(self, *sources: Any, **kwargs: Any) -> ExpressionDef[_R]: ...
+    def __call__(self, *sources: Any, **kwargs: Any) -> ExpressionDef[_R]:
         """
         Create the node instance by resolving parameters from sources and overrides.
         """
-        final_kwargs = self.resolve_arguments(sources, **overrides)
-        return self(**final_kwargs)
+        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
+        # Process kwargs
+        with enrich_exception(f"for '{self._func.__name__}'"):
+            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
+        return ExpressionDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
-    def resolve_arguments(
-        self,
-        sources: Sequence[Mapping[str, Any]],
-        /,
-        *_: _P.args,
-        **overrides: _P.kwargs,
-    ) -> dict[str, Any]:
+    def call(self, ctx: Context, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
         """
-        Resolve arguments from sources and overrides based on specs.
+        Execute the expression logic directly, bypassing the definition phase.
         """
-        return resolve_arguments(self._specs, sources, overrides)
+        if args:
+            raise TypeError(
+                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the context."
+            )
+        with enrich_exception(f"for '{self._func.__name__}'"):
+            final_kwargs = process_kwargs(self._specs, kwargs)
+        return self._func(ctx, **final_kwargs)
 
 
 class WrapperFactory(Generic[_P]):
@@ -659,13 +691,50 @@ class WrapperFactory(Generic[_P]):
     def __repr__(self) -> str:
         return f"<WrapperFactory of {self._func.__name__}>"
 
-    def __call__(self, *_: _P.args, **kwargs: _P.kwargs) -> WrapperDef:
+    @overload
+    def __call__(
+        self,
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> WrapperDef: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> WrapperDef: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        source2: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> WrapperDef: ...
+    @overload
+    def __call__(
+        self,
+        source1: Mapping[str, Any],
+        source2: Mapping[str, Any],
+        source3: Mapping[str, Any],
+        /,
+        *_: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> WrapperDef: ...
+    @overload
+    def __call__(self, *sources: Any, **kwargs: Any) -> WrapperDef: ...
+    def __call__(self, *sources: Any, **kwargs: Any) -> WrapperDef:
         """
-        Create the node instance using keyword arguments.
+        Create the node instance by resolving parameters from sources and overrides.
         """
+        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
+            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
         return WrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
     def call(
@@ -674,40 +743,19 @@ class WrapperFactory(Generic[_P]):
         wrapped: Node,
         call_next: Callable[[Context], Context],
         /,
-        *_: _P.args,
+        *args: _P.args,
         **kwargs: _P.kwargs,
     ) -> Context:
         """
         Execute the wrapper logic directly, bypassing the definition phase.
         """
+        if args:
+            raise TypeError(
+                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the system arguments."
+            )
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
         return self._func(ctx, wrapped, call_next, **final_kwargs)
-
-    def create(
-        self,
-        sources: Sequence[Mapping[str, Any]],
-        /,
-        *_: _P.args,
-        **overrides: _P.kwargs,
-    ) -> WrapperDef:
-        """
-        Create the node instance by resolving parameters from sources and overrides.
-        """
-        final_kwargs = self.resolve_arguments(sources, **overrides)
-        return self(**final_kwargs)
-
-    def resolve_arguments(
-        self,
-        sources: Sequence[Mapping[str, Any]],
-        /,
-        *_: _P.args,
-        **overrides: _P.kwargs,
-    ) -> dict[str, Any]:
-        """
-        Resolve arguments from sources and overrides based on specs.
-        """
-        return resolve_arguments(self._specs, sources, overrides)
 
 
 def _node(func: NodeFunc[_P], /) -> NodeFactory[_P]:

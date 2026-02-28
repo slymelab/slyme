@@ -14,6 +14,7 @@ from typing import (
     Optional,
     Sequence,
 )
+from collections import ChainMap
 from slyme.utils.exception import enrich_exception
 from slyme.context import Ref
 
@@ -237,17 +238,8 @@ def resolve_arguments(
     """
     Resolve arguments from sources and overrides based on specs.
     """
-    # 1. Start with explicit overrides
-    final_kwargs = dict(overrides)
-
+    # 1. Create a unified lookup map: overrides > last source > ... > first source
+    # ChainMap looks up keys in the first mapping, then the second, and so on.
+    unified_map = ChainMap(overrides, *reversed(sources))
     # 2. Iterate through required parameters defined in the specs
-    for name in specs.keys():
-        if name in final_kwargs:
-            continue
-        # Look in sources (reverse order)
-        for source in reversed(sources):
-            if name in source:
-                final_kwargs[name] = source[name]
-                break
-
-    return final_kwargs
+    return {name: unified_map[name] for name in specs if name in unified_map}
