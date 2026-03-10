@@ -1,4 +1,3 @@
-from .signature import spec, ref_spec
 from .core import (
     Config as NodeConfig,
     NodeElement,
@@ -30,8 +29,6 @@ __all__ = [
     "node",
     "wrapper",
     "expression",
-    "spec",
-    "ref_spec",
     "sequential_exec",
     "sequential",
     "RenderConfig",

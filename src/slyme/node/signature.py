@@ -11,16 +11,13 @@ from typing import (
     get_origin,
     get_args,
     Mapping,
-    Optional,
     Sequence,
 )
 from collections import ChainMap
 from slyme.utils.exception import enrich_exception
-from slyme.context import Ref
 
 __all__ = [
-    "spec",
-    "ref_spec",
+    
 ]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
@@ -34,13 +31,6 @@ class Spec:
     """
 
     default: Union[Any, _Missing] = _MISSING
-    default_factory: Union[Callable[[], Any], _Missing] = _MISSING
-
-    def __post_init__(self):
-        if self.default is not _MISSING and self.default_factory is not _MISSING:
-            raise ValueError(
-                "Cannot specify both `default` and `default_factory` in Spec."
-            )
 
     def resolve(self, value: Any = _MISSING) -> Any:
         """
@@ -50,62 +40,7 @@ class Spec:
             return value
         if self.default is not _MISSING:
             return self.default
-        if self.default_factory is not _MISSING:
-            return self.default_factory()
         raise ValueError("Missing required parameter.")
-
-
-@dataclass(frozen=True)
-class RefSpec(Spec):
-    """
-    Specialized Spec for Ref parameters, allowing metadata injection and type enforcement.
-    """
-
-    metadata: Optional[Mapping[str, Any]] = None
-
-    def __post_init__(self):
-        super().__post_init__()
-        if self.metadata is not None:
-            object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
-
-    def resolve(self, value: Union[_Missing, Ref] = _MISSING) -> Ref:
-        # 1. Resolve the value using the base Spec logic (handling defaults)
-        value = super().resolve(value)
-        # 2. Type check: Ensure the resolved value is strictly a Ref
-        if not isinstance(value, Ref):
-            raise TypeError(
-                f"The resolved value for this parameter must be an instance of 'Ref', "
-                f"but got '{type(value).__name__}'."
-            )
-        # 3. Metadata injection: Update the Ref's metadata if specified in Spec
-        if self.metadata is not None:
-            return value.update_metadata(self.metadata)
-        return value
-
-
-# Spec Factory Functions
-def spec(
-    default: Union[Any, _Missing] = _MISSING,
-    default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
-) -> Any:
-    """
-    Factory function for creating a _Spec instance.
-    Returns Any to bypass type checker errors when assigned as a default value.
-    """
-    return Spec(default=default, default_factory=default_factory)
-
-
-def ref_spec(
-    default: Union[Any, _Missing] = _MISSING,
-    default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
-    *,
-    metadata: Optional[Mapping[str, Any]] = None,
-) -> Any:
-    """
-    Factory function for creating a _RefSpec instance.
-    Returns Any to bypass type checker errors when assigned as a default value.
-    """
-    return RefSpec(default=default, default_factory=default_factory, metadata=metadata)
 
 
 # Inspection & Signature Analysis
@@ -149,9 +84,6 @@ def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
                 f"Please remove the standard default value assignment."
             )
         return spec_obj
-    elif isinstance(param.default, Spec):
-        # Spec is specified through func default value.
-        return param.default
     elif param.default is not inspect.Parameter.empty:
         # Create a new Spec using default value.
         return Spec(default=param.default)
