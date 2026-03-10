@@ -17,7 +17,7 @@ from collections import ChainMap
 from slyme.utils.exception import enrich_exception
 
 __all__ = [
-    
+    "field",
 ]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
@@ -25,22 +25,35 @@ _MISSING = _Missing.MARK
 
 # Spec Definitions
 @dataclass(frozen=True)
-class Spec:
-    """
-    Dependency injection metadata for functional node parameters.
-    """
-
+class Field:
+    """Build-time configuration for functional node parameters."""
     default: Union[Any, _Missing] = _MISSING
+    default_factory: Union[Callable[[], Any], _Missing] = _MISSING
 
     def resolve(self, value: Any = _MISSING) -> Any:
-        """
-        Resolve the final value for the parameter.
-        """
         if value is not _MISSING:
             return value
         if self.default is not _MISSING:
             return self.default
+        if self.default_factory is not _MISSING:
+            return self.default_factory()
         raise ValueError("Missing required parameter.")
+
+
+def field(
+    default: Union[Any, _Missing] = _MISSING,
+    default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
+) -> Any:
+    return Field(default=default, default_factory=default_factory)
+
+
+@dataclass(frozen=True)
+class Spec:
+    """
+    Dependency injection metadata for functional node parameters.
+    """
+    # NOTE: ``Field`` and ``field`` here are not from ``dataclasses``.
+    field: Field = field()
 
 
 # Inspection & Signature Analysis
@@ -56,40 +69,11 @@ class SignatureAnalysis:
 
 
 def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
-    spec_obj: Union[_Missing, Spec] = _MISSING
-    # 1. Check for Annotated
-    if get_origin(hint) is Annotated:
-        args = get_args(hint)
-        if len(args) != 2:
-            raise TypeError(
-                f"Invalid Annotated metadata for parameter '{param.name}'."
-                f"Currently, only a single `Spec` metadata is allowed, but found {len(args) - 1} items."
-            )
-        candidate = args[1]
-        if not isinstance(candidate, Spec):
-            raise TypeError(
-                f"Invalid Annotated metadata for parameter '{param.name}'."
-                f"Expected explicit `Spec` instance, but got {type(candidate).__name__}. "
-                f"Other metadata types are strictly forbidden (for now)."
-            )
-        spec_obj = candidate
-
-    # 2. Conflict Check and Collection
-    if spec_obj is not _MISSING:
-        # If Spec is defined in Annotated, strictly forbid standard default values.
-        if param.default is not inspect.Parameter.empty:
-            raise TypeError(
-                f"Parameter '{param.name}' has a semantic conflict. "
-                f"It defines a `Spec` in `Annotated` but also has a standard default value. "
-                f"Please remove the standard default value assignment."
-            )
-        return spec_obj
-    elif param.default is not inspect.Parameter.empty:
-        # Create a new Spec using default value.
-        return Spec(default=param.default)
-    else:
-        # Return an empty Spec for standard keyword arguments
-        return Spec()
+    if param.default is not inspect.Parameter.empty:
+        if isinstance(param.default, Field):
+            return Spec(field=param.default)
+        return Spec(field=field(default=param.default))
+    return Spec()
 
 
 def analyze_signature(func: Callable) -> SignatureAnalysis:
@@ -156,7 +140,7 @@ def process_kwargs(
     for name, spec_obj in specs.items():
         value = kwargs.get(name, _MISSING)
         with enrich_exception(f"for parameter '{name}'"):
-            value = spec_obj.resolve(value)
+            value = spec_obj.field.resolve(value)
         final_kwargs[name] = value
 
     return final_kwargs
