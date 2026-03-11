@@ -8,7 +8,7 @@ from .core import (
     wrapper,
     expression,
 )
-from .signature import field
+from .signature import spec
 from .render import Config as RenderConfig
 from .validator import (
     check_node_structure,
@@ -32,6 +32,6 @@ __all__ = [
     "expression",
     "sequential_exec",
     "sequential",
-    "field",
+    "spec",
     "RenderConfig",
 ]

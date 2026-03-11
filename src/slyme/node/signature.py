@@ -17,7 +17,7 @@ from collections import ChainMap
 from slyme.utils.exception import enrich_exception
 
 __all__ = [
-    "field",
+    "spec",
 ]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
@@ -25,12 +25,14 @@ _MISSING = _Missing.MARK
 
 # Spec Definitions
 @dataclass(frozen=True)
-class Field:
-    """Build-time configuration for functional node parameters."""
+class Spec:
+    """
+    Dependency injection metadata for functional node parameters.
+    """
     default: Union[Any, _Missing] = _MISSING
     default_factory: Union[Callable[[], Any], _Missing] = _MISSING
 
-    def resolve(self, value: Any = _MISSING) -> Any:
+    def build(self, value: Any = _MISSING) -> Any:
         if value is not _MISSING:
             return value
         if self.default is not _MISSING:
@@ -40,20 +42,11 @@ class Field:
         raise ValueError("Missing required parameter.")
 
 
-def field(
+def spec(
     default: Union[Any, _Missing] = _MISSING,
     default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
 ) -> Any:
-    return Field(default=default, default_factory=default_factory)
-
-
-@dataclass(frozen=True)
-class Spec:
-    """
-    Dependency injection metadata for functional node parameters.
-    """
-    # NOTE: ``Field`` and ``field`` here are not from ``dataclasses``.
-    field: Field = field()
+    return Spec(default=default, default_factory=default_factory)
 
 
 # Inspection & Signature Analysis
@@ -70,9 +63,9 @@ class SignatureAnalysis:
 
 def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
     if param.default is not inspect.Parameter.empty:
-        if isinstance(param.default, Field):
-            return Spec(field=param.default)
-        return Spec(field=field(default=param.default))
+        if isinstance(param.default, Spec):
+            return param.default
+        return Spec(default=param.default)
     return Spec()
 
 
@@ -140,7 +133,7 @@ def process_kwargs(
     for name, spec_obj in specs.items():
         value = kwargs.get(name, _MISSING)
         with enrich_exception(f"for parameter '{name}'"):
-            value = spec_obj.field.resolve(value)
+            value = spec_obj.build(value)
         final_kwargs[name] = value
 
     return final_kwargs
