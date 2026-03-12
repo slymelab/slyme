@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import (
     Callable,
     Any,
+    Optional,
     Union,
     Annotated,
     get_type_hints,
@@ -12,15 +13,31 @@ from typing import (
     get_args,
     Mapping,
     Sequence,
+    Protocol,
+    TypeVar,
 )
 from collections import ChainMap
+from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.exception import enrich_exception
+from slyme.utils.registry import TypeRegistry
+from slyme.context import Context
 
 __all__ = [
     "spec",
+    "Auto",
 ]
+T = TypeVar("T")
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
+EvaluatorFunc = Callable[[Context], Any]
+
+
+class EvaluatorFactory(Protocol):
+    def __call__(self, value: Any, **kwargs: Any) -> EvaluatorFunc: ...
+
+
+# NOTE: The evaluator funcs are registered in eval.py
+EVALUATOR_REGISTRY = TypeRegistry[Any, EvaluatorFactory]("evaluator")
 
 
 # Spec Definitions
@@ -29,9 +46,16 @@ class Spec:
     """
     Dependency injection metadata for functional node parameters.
     """
+
     default: Union[Any, _Missing] = _MISSING
     default_factory: Union[Callable[[], Any], _Missing] = _MISSING
     auto_eval: Union[bool, _Missing] = _MISSING
+
+    def __post_init__(self):
+        if self.default is not _MISSING and self.default_factory is not _MISSING:
+            raise ValueError(
+                "`default` and `default_factory` cannot be set at the same time."
+            )
 
     def _build(self, value: Any = _MISSING) -> Any:
         if value is not _MISSING:
@@ -42,12 +66,53 @@ class Spec:
             return self.default_factory()
         raise ValueError("Missing required parameter.")
 
+    def _prepare_evaluator(self, value: Any) -> Optional["EvaluatorFunc"]:
+        if self.auto_eval is _MISSING:
+            raise ValueError(
+                "`auto_eval` should not be `_MISSING` when `_prepare_evaluator` is called."
+            )
+        if not self.auto_eval:
+            return None
+        try:
+            # We assume value is a pytree with same type for all leaves.
+            ele = next(CTX_EVAL_ENGINE.iter(value))
+        except StopIteration:
+            return None
+
+        evaluator_factory = EVALUATOR_REGISTRY.lookup(type(ele), default=None)
+        if evaluator_factory is None:
+            return None
+        return evaluator_factory(value)
+
+
+def prepare_evaluators(
+    specs: Mapping[str, Spec],
+    kwargs: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, EvaluatorFunc]]:
+    """
+    Split kwargs into static values and dynamic evaluators based on specs.
+    """
+    raw_kwargs = {}
+    evaluators = {}
+    for key, value in kwargs.items():
+        evaluator = specs[key]._prepare_evaluator(value)
+        if evaluator is not None:
+            evaluators[key] = evaluator
+        else:
+            raw_kwargs[key] = value
+    return raw_kwargs, evaluators
+
 
 def spec(
     default: Union[Any, _Missing] = _MISSING,
     default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
+    auto_eval: Union[bool, _Missing] = _MISSING,
 ) -> Any:
-    return Spec(default=default, default_factory=default_factory)
+    return Spec(default=default, default_factory=default_factory, auto_eval=auto_eval)
+
+
+# Some syntactic sugar
+Auto = Annotated[T, Spec(auto_eval=True)]
 
 
 # Inspection & Signature Analysis
@@ -62,15 +127,56 @@ class SignatureAnalysis:
             object.__setattr__(self, "specs", types.MappingProxyType(self.specs))
 
 
+def _collect_specs_from_hint(hint: Any) -> list[Spec]:
+    """Recursively collect Spec annotations from a type hint."""
+    specs = []
+    current = hint
+    while get_origin(current) is Annotated:
+        args = get_args(current)
+        for item in args[1:]:
+            if isinstance(item, Spec):
+                specs.append(item)
+        current = args[0]
+    return specs
+
+
 def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
+    if hint is None:
+        collected_specs = []
+    else:
+        collected_specs = _collect_specs_from_hint(hint)
+
     if param.default is not inspect.Parameter.empty:
         if isinstance(param.default, Spec):
-            return param.default
-        return Spec(default=param.default)
-    return Spec()
+            collected_specs.append(param.default)
+        else:
+            collected_specs.append(Spec(default=param.default))
+
+    merged_values: dict[str, Any] = {
+        "default": _MISSING,
+        "default_factory": _MISSING,
+        "auto_eval": _MISSING,
+    }
+
+    for s in collected_specs:
+        for field in merged_values:
+            if (val := getattr(s, field)) is _MISSING:
+                continue
+            if merged_values[field] is not _MISSING:
+                raise ValueError(
+                    f"Conflict: Multiple definitions for '{field}' in parameter '{param.name}'."
+                )
+            merged_values[field] = val
+
+    if merged_values["auto_eval"] is _MISSING:
+        merged_values["auto_eval"] = False
+
+    return Spec(**merged_values)
 
 
-def analyze_signature(func: Callable) -> SignatureAnalysis:
+def analyze_signature(
+    func: Callable, *, resolve_type_hints: bool = True
+) -> SignatureAnalysis:
     """
     Analyze the function signature to separate runtime parameters and config parameters.
     """
@@ -81,7 +187,10 @@ def analyze_signature(func: Callable) -> SignatureAnalysis:
     public_params = []  # Used for factory signature
     specs: dict[str, Spec] = {}
 
-    type_hints = get_type_hints(func, include_extras=True)
+    if resolve_type_hints:
+        type_hints = get_type_hints(func, include_extras=True)
+    else:
+        type_hints = {}
 
     for p in params:
         with enrich_exception(f"in definition of '{func.__name__}'"):

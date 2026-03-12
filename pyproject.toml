@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slyme"
-version = "0.0.8.dev202603010024"
+version = "0.0.9.dev202603130213"
 description = "Placeholder for slyme series."
 readme = "README.md"
 authors = [{ name = "Zikang Liu", email = "liuzikang0625@gmail.com" }]
@@ -18,3 +18,6 @@ dependencies = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/slyme"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/**/*.py" = ["E402", "E741"]

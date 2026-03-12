@@ -4,6 +4,7 @@ PyTree engine configuration and logic for Node.
 
 import types
 from typing import Any, Iterable, cast
+from types import MappingProxyType
 from slyme.utils.pytree import (
     PyTreeEngine,
     PYTREE_ENGINE_REGISTRY,
@@ -11,6 +12,7 @@ from slyme.utils.pytree import (
     AttributeKey,
     MappingKey,
 )
+from slyme.utils.pytree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 from .core import (
     NodeDef,
     ExpressionDef,
@@ -22,12 +24,12 @@ from .core import (
 
 # 1. Standard Engine: Preserves Types (Def -> Def, List -> List)
 # Used for inspection, rendering, and validation.
-NODE_PYTREE_ENGINE = PyTreeEngine("node_engine")
-PYTREE_ENGINE_REGISTRY.register(NODE_PYTREE_ENGINE, key="node_engine")
+NODE_ENGINE = PyTreeEngine("node_engine")
+PYTREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
 # 2. Prepare Engine: Transforms Types (Def -> Exec, List -> Tuple, Dict -> MappingProxy)
 # Used for compiling the definition tree into an execution tree.
-NODE_PREPARE_PYTREE_ENGINE = PyTreeEngine("node_prepare", register_defaults=False)
-PYTREE_ENGINE_REGISTRY.register(NODE_PREPARE_PYTREE_ENGINE, key="node_prepare")
+NODE_PREPARE_ENGINE = PyTreeEngine("node_prepare", register_defaults=False)
+PYTREE_ENGINE_REGISTRY.register(NODE_PREPARE_ENGINE, key="node_prepare")
 
 
 # NodeDef Logic
@@ -261,59 +263,65 @@ def _unflatten_to_mapping_proxy(
 
 # Registrations
 # --- NODE_PYTREE_ENGINE (Def -> Def, Exec -> Exec) ---
-NODE_PYTREE_ENGINE.register(
+NODE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def, strict=True
 )
-NODE_PYTREE_ENGINE.register(
+NODE_ENGINE.register(
     ExpressionDef, _flatten_expression_def, _unflatten_expression_def, strict=True
 )
-NODE_PYTREE_ENGINE.register(
+NODE_ENGINE.register(
     WrapperDef, _flatten_wrapper_def, _unflatten_wrapper_def, strict=True
 )
-NODE_PYTREE_ENGINE.register(
+NODE_ENGINE.register(
     NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
 )
-NODE_PYTREE_ENGINE.register(
+NODE_ENGINE.register(
     ExpressionExec,
     _flatten_expression_exec,
     _unflatten_expression_exec,
     strict=True,
 )
-NODE_PYTREE_ENGINE.register(
+NODE_ENGINE.register(
     WrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
+)
+NODE_ENGINE.register(
+    MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy
 )
 
 # --- NODE_PREPARE_PYTREE_ENGINE (Def -> Exec, Mutables -> Immutables) ---
 # Custom Containers
-NODE_PREPARE_PYTREE_ENGINE.register(list, _flatten_list, _unflatten_to_tuple)
-NODE_PREPARE_PYTREE_ENGINE.register(tuple, _flatten_tuple, _unflatten_tuple)
-NODE_PREPARE_PYTREE_ENGINE.register(dict, _flatten_dict, _unflatten_to_mapping_proxy)
+NODE_PREPARE_ENGINE.register(list, _flatten_list, _unflatten_to_tuple)
+NODE_PREPARE_ENGINE.register(tuple, _flatten_tuple, _unflatten_tuple)
+NODE_PREPARE_ENGINE.register(dict, _flatten_dict, _unflatten_to_mapping_proxy)
 # Def -> Exec Transformations
-NODE_PREPARE_PYTREE_ENGINE.register(
+NODE_PREPARE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def_to_exec, strict=True
 )
-NODE_PREPARE_PYTREE_ENGINE.register(
+NODE_PREPARE_ENGINE.register(
     ExpressionDef,
     _flatten_expression_def,
     _unflatten_expression_def_to_exec,
     strict=True,
 )
-NODE_PREPARE_PYTREE_ENGINE.register(
+NODE_PREPARE_ENGINE.register(
     WrapperDef,
     _flatten_wrapper_def,
     _unflatten_wrapper_def_to_exec,
     strict=True,
 )
 # Exec Identity (Exec -> Exec)
-NODE_PREPARE_PYTREE_ENGINE.register(
+NODE_PREPARE_ENGINE.register(
     NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
 )
-NODE_PREPARE_PYTREE_ENGINE.register(
+NODE_PREPARE_ENGINE.register(
     ExpressionExec,
     _flatten_expression_exec,
     _unflatten_expression_exec,
     strict=True,
 )
-NODE_PREPARE_PYTREE_ENGINE.register(
+NODE_PREPARE_ENGINE.register(
     WrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
+)
+NODE_PREPARE_ENGINE.register(
+    MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy
 )

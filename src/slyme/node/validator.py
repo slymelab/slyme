@@ -14,7 +14,7 @@ from .core import (
     Expression,
     Wrapper,
 )
-from .tree import NODE_PYTREE_ENGINE
+from .tree import NODE_ENGINE
 
 __all__ = [
     "NodeStructureError",
@@ -180,7 +180,7 @@ def check_node_structure(root: Node) -> None:
         # Inspect immediate attributes using the engine.
         direct_attrs_with_key_path = [
             (p, c)
-            for p, c in NODE_PYTREE_ENGINE.iter_with_key_path(
+            for p, c in NODE_ENGINE.iter_with_key_path(
                 obj, is_leaf=lambda x, _: x is not obj
             )
             if p
@@ -192,7 +192,7 @@ def check_node_structure(root: Node) -> None:
             key = key_path[0]
             # Gather all children in this attribute structure.
             leaves = list(
-                NODE_PYTREE_ENGINE.iter(
+                NODE_ENGINE.iter(
                     attr_value, is_leaf=lambda x, _: isinstance(x, NodeElement)
                 )
             )

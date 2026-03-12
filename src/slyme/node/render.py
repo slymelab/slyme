@@ -9,7 +9,7 @@ from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
 from slyme.utils.registry import TypeRegistry
 from slyme.context import Ref
 from .core import NodeElement, Node, Expression, Wrapper
-from .tree import NODE_PYTREE_ENGINE
+from .tree import NODE_ENGINE
 
 __all__ = ["get_render_string", "Config"]
 
@@ -95,7 +95,7 @@ def _build_render_lines(obj: Any) -> _RenderResult:
     # NOTE: We use `is_leaf` to inspect the immediate attributes without flattening nested Nodes.
     children_with_key_path = [
         (key_path, child)
-        for key_path, child in NODE_PYTREE_ENGINE.iter_with_key_path(
+        for key_path, child in NODE_ENGINE.iter_with_key_path(
             obj, is_leaf=lambda x, _: x is not obj
         )
         if key_path

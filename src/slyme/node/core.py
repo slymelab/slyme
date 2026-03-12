@@ -34,6 +34,7 @@ from .signature import (
     process_kwargs,
     analyze_signature,
     resolve_arguments,
+    prepare_evaluators,
 )
 
 __all__ = [
@@ -51,7 +52,7 @@ __all__ = [
     "Wrapper",
     "WrapperDef",
     "WrapperExec",
-    "NODE_PYTREE_ENGINE",
+    "NODE_ENGINE",
 ]
 
 _P = ParamSpec("_P")
@@ -187,7 +188,7 @@ class NodeDef(Node):
         # of the structure (List -> Tuple, Dict -> MappingProxy, Def -> Exec).
         # We map strict identity because the transformation happens in the 'unflatten' phase
         # of the registered types in NODE_PREPARE_PYTREE_ENGINE.
-        return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(
@@ -232,7 +233,16 @@ class NodeExec(Node):
         # --- Composition Logic (Onion Model) ---
         # 1. Inner Core: Bind kwargs to the user function.
         # Signature: (Context) -> Context
-        chain: Callable[[Context], Context] = partial(func, **kwargs)
+        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+
+        if not evaluators:
+            chain: Callable[[Context], Context] = partial(func, **raw_kwargs)
+        else:
+
+            def chain(ctx: Context) -> Context:
+                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
+                return func(ctx, **raw_kwargs, **dynamic_kwargs)
+
         if Config.check_return_type:
             chain = _ensure_context_return(chain)
 
@@ -328,7 +338,7 @@ class ExpressionDef(Expression[_R]):
         )
 
     def prepare(self) -> "ExpressionExec[_R]":
-        return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(
@@ -364,7 +374,17 @@ class ExpressionExec(Expression[_R]):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
-        object.__setattr__(self, "_prepared_func", partial(func, **kwargs))
+        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+
+        if not evaluators:
+            prepared_func = partial(func, **raw_kwargs)
+        else:
+
+            def prepared_func(ctx: Context) -> _R:
+                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
+                return func(ctx, **raw_kwargs, **dynamic_kwargs)
+
+        object.__setattr__(self, "_prepared_func", prepared_func)
 
     def prepare(self) -> Self:
         return self
@@ -451,7 +471,7 @@ class WrapperDef(Wrapper):
         )
 
     def prepare(self) -> "WrapperExec":
-        return NODE_PREPARE_PYTREE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(
@@ -490,7 +510,20 @@ class WrapperExec(Wrapper):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
-        prepared_func = partial(func, **kwargs)
+        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+
+        if not evaluators:
+            prepared_func = partial(func, **raw_kwargs)
+        else:
+
+            def prepared_func(
+                ctx: Context,
+                wrapped: Node,
+                call_next: Callable[[Context], Context],
+            ) -> Context:
+                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
+                return func(ctx, wrapped, call_next, **raw_kwargs, **dynamic_kwargs)
+
         if Config.check_return_type:
             prepared_func = _ensure_context_return(prepared_func)
         object.__setattr__(self, "_prepared_func", prepared_func)
@@ -758,8 +791,8 @@ class WrapperFactory(Generic[_P]):
         return self._func(ctx, wrapped, call_next, **final_kwargs)
 
 
-def _node(func: NodeFunc[_P], /) -> NodeFactory[_P]:
-    analysis = analyze_signature(func)
+def _node(func: NodeFunc[_P], /, *, resolve_type_hints: bool) -> NodeFactory[_P]:
+    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
             f"@node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
@@ -769,21 +802,32 @@ def _node(func: NodeFunc[_P], /) -> NodeFactory[_P]:
 
 
 @overload
-def node(func: _Missing = _MISSING, /) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
+def node(
+    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
+) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
 @overload
-def node(func: NodeFunc[_P], /) -> NodeFactory[_P]: ...
-def node(func: Union[NodeFunc[_P], _Missing] = _MISSING, /) -> Union[
+def node(
+    func: NodeFunc[_P], /, *, resolve_type_hints: bool = True
+) -> NodeFactory[_P]: ...
+def node(
+    func: Union[NodeFunc[_P], _Missing] = _MISSING,
+    /,
+    *,
+    resolve_type_hints: bool = True,
+) -> Union[
     Callable[[NodeFunc[_P]], NodeFactory[_P]],
     NodeFactory[_P],
 ]:
     if func is _MISSING:
-        return partial(_node)
+        return partial(_node, resolve_type_hints=resolve_type_hints)
     else:
-        return _node(func)
+        return _node(func, resolve_type_hints=resolve_type_hints)
 
 
-def _expression(func: ExpressionFunc[_P, _R], /) -> ExpressionFactory[_P, _R]:
-    analysis = analyze_signature(func)
+def _expression(
+    func: ExpressionFunc[_P, _R], /, *, resolve_type_hints: bool
+) -> ExpressionFactory[_P, _R]:
+    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
             f"@expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
@@ -794,22 +838,31 @@ def _expression(func: ExpressionFunc[_P, _R], /) -> ExpressionFactory[_P, _R]:
 
 @overload
 def expression(
-    func: _Missing = _MISSING, /
+    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
 ) -> Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]]: ...
 @overload
-def expression(func: ExpressionFunc[_P, _R], /) -> ExpressionFactory[_P, _R]: ...
-def expression(func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING, /) -> Union[
+def expression(
+    func: ExpressionFunc[_P, _R], /, *, resolve_type_hints: bool = True
+) -> ExpressionFactory[_P, _R]: ...
+def expression(
+    func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING,
+    /,
+    *,
+    resolve_type_hints: bool = True,
+) -> Union[
     Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]],
     ExpressionFactory[_P, _R],
 ]:
     if func is _MISSING:
-        return partial(_expression)
+        return partial(_expression, resolve_type_hints=resolve_type_hints)
     else:
-        return _expression(func)
+        return _expression(func, resolve_type_hints=resolve_type_hints)
 
 
-def _wrapper(func: WrapperFunc[_P], /) -> WrapperFactory[_P]:
-    analysis = analyze_signature(func)
+def _wrapper(
+    func: WrapperFunc[_P], /, *, resolve_type_hints: bool
+) -> WrapperFactory[_P]:
+    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
     # Wrapper signature: (ctx, wrapped, call_next, **kwargs)
     # The first 3 arguments should be positional-only.
     if len(analysis.pos_only_params) != 3:
@@ -822,19 +875,26 @@ def _wrapper(func: WrapperFunc[_P], /) -> WrapperFactory[_P]:
 
 @overload
 def wrapper(
-    func: _Missing = _MISSING, /
+    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
 ) -> Callable[[WrapperFunc[_P]], WrapperFactory[_P]]: ...
 @overload
-def wrapper(func: WrapperFunc[_P], /) -> WrapperFactory[_P]: ...
-def wrapper(func: Union[WrapperFunc[_P], _Missing] = _MISSING, /) -> Union[
+def wrapper(
+    func: WrapperFunc[_P], /, *, resolve_type_hints: bool = True
+) -> WrapperFactory[_P]: ...
+def wrapper(
+    func: Union[WrapperFunc[_P], _Missing] = _MISSING,
+    /,
+    *,
+    resolve_type_hints: bool = True,
+) -> Union[
     Callable[[WrapperFunc[_P]], WrapperFactory[_P]],
     WrapperFactory[_P],
 ]:
     if func is _MISSING:
-        return partial(_wrapper)
+        return partial(_wrapper, resolve_type_hints=resolve_type_hints)
     else:
-        return _wrapper(func)
+        return _wrapper(func, resolve_type_hints=resolve_type_hints)
 
 
-from .tree import NODE_PYTREE_ENGINE, NODE_PREPARE_PYTREE_ENGINE
+from .tree import NODE_ENGINE, NODE_PREPARE_ENGINE
 from .render import get_render_string

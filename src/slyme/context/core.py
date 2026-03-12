@@ -17,11 +17,8 @@ from typing import (
 from typing_extensions import Self
 from slyme.utils.pytree import (
     PyTreeEngine,
-    PyTreeAux,
     MappingKey,
-    PYTREE_ENGINE_REGISTRY,
     KeyPath,
-    PyTreeKey,
 )
 from slyme.utils.exception import enrich_exception
 
@@ -514,7 +511,7 @@ class ContextElement(ABC):
         # CONTEXT_PYTREE_ENGINE is configured to only traverse Context/ContextData structure.
         # So it treats user dicts as leaves automatically.
         # Use iter_with_key_path for memory efficiency (generator based)
-        iterator = CONTEXT_PYTREE_ENGINE.iter_with_key_path(self.to_context_data())
+        iterator = CONTEXT_ENGINE.iter_with_key_path(self.to_context_data())
 
         leaves = {}
         for key_path, leaf in iterator:
@@ -552,6 +549,20 @@ class Context(ContextElement):
         obj = object.__new__(cls)
         object.__setattr__(obj, "_root", root)
         return obj
+
+    def extract(self, ref_tree: Any) -> Any:
+        """
+        Recursively extract values from the context for each leaf in ref_tree.
+
+        Args:
+            ref_tree: A nested structure (list, tuple, dict, MappingProxyType) where
+                      leaves are Refs that can be resolved by Context.get().
+
+        Returns:
+            A new structure matching ref_tree, with leaves replaced by their resolved values.
+        """
+        # Use map to apply self.get to every leaf in the tree
+        return CTX_EVAL_ENGINE.map(self.get, ref_tree)
 
     # --- Read Operations ---
     @overload
@@ -615,7 +626,7 @@ class Context(ContextElement):
         current: Any = self._root
         for p in parts:
             if not isinstance(current, ContextData):
-                raise ContextPathError(f"Path blocked by leaf value.")
+                raise ContextPathError("Path blocked by leaf value.")
             try:
                 current = current[p]
             except KeyError:
@@ -680,6 +691,26 @@ class Context(ContextElement):
         """Single set convenience interface."""
         return self.mutate(updates={ref: value})
 
+    def update_tree(self, ref_tree: Any, value_tree: Any) -> "Context":
+        """
+        Recursively update the context using a structure of references (ref_tree)
+        and a matching structure of values (value_tree).
+
+        Args:
+            ref_tree: A nested structure (list, tuple, dict, MappingProxyType) where
+                      leaves are references (Ref objects) that point to locations in the context.
+            value_tree: A nested structure matching the shape of ref_tree, containing
+                        the values to be updated at the corresponding references.
+
+        Returns:
+            A new Context instance with the updates applied.
+        """
+        updates = {
+            ref: CTX_EVAL_ENGINE.get_element(value_tree, path)
+            for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
+        }
+        return self.mutate(updates=updates)
+
     def clear(self, ref: Ref[_T]) -> "Context":
         """
         Clear all contents under a reference but keep the path.
@@ -732,40 +763,4 @@ class ContextView(ContextElement):
         return self._context.to_context_data(self._adjust_ref(ref))
 
 
-# --- PyTreeEngine Configuration ---
-CONTEXT_PYTREE_ENGINE = PyTreeEngine("context_engine", register_defaults=False)
-PYTREE_ENGINE_REGISTRY.register(CONTEXT_PYTREE_ENGINE, key="context_engine")
-
-
-def _flatten_context_data(data: ContextData) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten ContextData."""
-    keys = tuple(data.keys())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-    children = (data[k] for k in keys)
-    return children, PyTreeAux(children_keys=rich_keys)
-
-
-def _unflatten_context_data(children: Iterable[Any], aux: PyTreeAux) -> ContextData:
-    """Unflatten to ContextData."""
-    if aux.children_keys is None:
-        raise ValueError("Missing keys for ContextData unflattening.")
-    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.children_keys)]
-    return ContextData(zip(raw_keys, children))
-
-
-def _flatten_context(context: Context) -> tuple[Iterable[Any], PyTreeAux]:
-    """Flatten Context -> (root_context_data, )."""
-    return (context._root,), PyTreeAux()
-
-
-def _unflatten_context(children: Iterable[Any], aux: PyTreeAux) -> Context:
-    """Unflatten Context."""
-    (root,) = children
-    return Context._from_context_data(root)
-
-
-# Register
-CONTEXT_PYTREE_ENGINE.register(
-    ContextData, _flatten_context_data, _unflatten_context_data
-)
-CONTEXT_PYTREE_ENGINE.register(Context, _flatten_context, _unflatten_context)
+from .tree import CONTEXT_ENGINE, CTX_EVAL_ENGINE

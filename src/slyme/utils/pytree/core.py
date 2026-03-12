@@ -14,7 +14,6 @@ from typing import (
     Protocol,
     Optional,
     Literal,
-    cast,
 )
 from slyme.utils.registry import Registry, TypeRegistry
 
@@ -396,26 +395,8 @@ class PyTreeEngine:
             lambda x: (iter(x), PyTreeAux()),
             lambda children, _: list(children),
         )
-
         # Dict
-        def _flatten_dict(data: dict) -> tuple[Iterable[Any], PyTreeAux]:
-            keys = tuple(data.keys())
-            # Wrap keys in DictKey for path tracking.
-            rich_keys = tuple(MappingKey(k) for k in keys)
-            # Yield values as children.
-            children = (data[k] for k in keys)
-            return children, PyTreeAux(children_keys=rich_keys)
-
-        def _unflatten_dict(children: Iterable[Any], tree_aux: PyTreeAux) -> dict:
-            if tree_aux.children_keys is None:
-                raise ValueError("Missing keys in TreeAux for dict unflattening.")
-            # Unwrap DictKey to get raw keys.
-            raw_keys = [
-                k.key for k in cast("Iterable[MappingKey]", tree_aux.children_keys)
-            ]
-            return dict(zip(raw_keys, children))
-
-        self.register(dict, _flatten_dict, _unflatten_dict)
+        self.register(dict, flatten_dict, unflatten_dict)
 
     def _lookup_handler(
         self, element: Any, traverse_aux: TraverseAux
@@ -680,3 +661,5 @@ class PyTreeEngine:
 
 # Global registry to manage Tree instances.
 PYTREE_ENGINE_REGISTRY: Registry[PyTreeEngine] = Registry("pytree_engine")
+
+from .common import flatten_dict, unflatten_dict
