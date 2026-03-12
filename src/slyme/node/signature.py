@@ -31,8 +31,9 @@ class Spec:
     """
     default: Union[Any, _Missing] = _MISSING
     default_factory: Union[Callable[[], Any], _Missing] = _MISSING
+    auto_eval: Union[bool, _Missing] = _MISSING
 
-    def build(self, value: Any = _MISSING) -> Any:
+    def _build(self, value: Any = _MISSING) -> Any:
         if value is not _MISSING:
             return value
         if self.default is not _MISSING:
@@ -133,7 +134,7 @@ def process_kwargs(
     for name, spec_obj in specs.items():
         value = kwargs.get(name, _MISSING)
         with enrich_exception(f"for parameter '{name}'"):
-            value = spec_obj.build(value)
+            value = spec_obj._build(value)
         final_kwargs[name] = value
 
     return final_kwargs

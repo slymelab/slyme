@@ -95,7 +95,7 @@ class Ref(Generic[_T]):
         if not isinstance(self.metadata, types.MappingProxyType):
             object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
 
-    def resolve(self, pytree) -> _T:
+    def _resolve(self, pytree) -> _T:
         return PyTreeEngine.get_element(pytree, self.key_path)
 
     def update_metadata(self, metadata: Mapping[str, Any]) -> "Ref[_T]":
@@ -567,7 +567,7 @@ class Context(ContextElement):
                 if ref.key_path:
                     raise ValueError("Ref.key_path can only resolve leaf values.")
                 return ContextView(self, ref.parts)
-            return ref.resolve(val)
+            return ref._resolve(val)
         except ContextPathError:
             if default is _MISSING:
                 raise

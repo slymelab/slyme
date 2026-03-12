@@ -165,7 +165,7 @@ class NodeDef(Node):
             )
         spec_obj = self._specs[key]
         with enrich_exception(f"for parameter '{key}'"):
-            value = spec_obj.build(value)
+            value = spec_obj._build(value)
         self._kwargs[key] = value
 
     def add_wrappers(self, *wrappers: "Wrapper") -> Self:
@@ -314,7 +314,7 @@ class ExpressionDef(Expression[_R]):
             )
         spec_obj = self._specs[key]
         with enrich_exception(f"for parameter '{key}'"):
-            value = spec_obj.resolve(value)
+            value = spec_obj._build(value)
         self._kwargs[key] = value
 
     def update(self, **kwargs: Any) -> None:
@@ -432,7 +432,7 @@ class WrapperDef(Wrapper):
             )
         spec_obj = self._specs[key]
         with enrich_exception(f"for parameter '{key}'"):
-            value = spec_obj.resolve(value)
+            value = spec_obj._build(value)
         self._kwargs[key] = value
 
     def update(self, **kwargs: Any) -> None:
