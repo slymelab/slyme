@@ -263,18 +263,14 @@ def _unflatten_to_mapping_proxy(
 
 # Registrations
 # --- NODE_PYTREE_ENGINE (Def -> Def, Exec -> Exec) ---
-NODE_ENGINE.register(
-    NodeDef, _flatten_node_def, _unflatten_node_def, strict=True
-)
+NODE_ENGINE.register(NodeDef, _flatten_node_def, _unflatten_node_def, strict=True)
 NODE_ENGINE.register(
     ExpressionDef, _flatten_expression_def, _unflatten_expression_def, strict=True
 )
 NODE_ENGINE.register(
     WrapperDef, _flatten_wrapper_def, _unflatten_wrapper_def, strict=True
 )
-NODE_ENGINE.register(
-    NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
-)
+NODE_ENGINE.register(NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True)
 NODE_ENGINE.register(
     ExpressionExec,
     _flatten_expression_exec,
@@ -284,9 +280,7 @@ NODE_ENGINE.register(
 NODE_ENGINE.register(
     WrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
 )
-NODE_ENGINE.register(
-    MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy
-)
+NODE_ENGINE.register(MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy)
 
 # --- NODE_PREPARE_PYTREE_ENGINE (Def -> Exec, Mutables -> Immutables) ---
 # Custom Containers

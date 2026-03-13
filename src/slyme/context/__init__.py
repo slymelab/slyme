@@ -1,5 +1,6 @@
 from .core import Context, Ref, Config as ContextConfig
 from .metadata import HELP, TYPE
+from .hook import Hook, HookChain
 
 __all__ = [
     "Context",
@@ -7,4 +8,6 @@ __all__ = [
     "ContextConfig",
     "HELP",
     "TYPE",
+    "Hook",
+    "HookChain",
 ]

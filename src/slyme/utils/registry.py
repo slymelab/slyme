@@ -150,7 +150,7 @@ class GeneralRegistry(Generic[_KT, _VT]):
         return len(self._data)
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}<{hex(id(self))}>" f"{self._data!r}"
+        return f"{type(self).__name__}<{hex(id(self))}>{self._data!r}"
 
 
 class Registry(GeneralRegistry[str, _VT]):

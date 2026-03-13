@@ -19,6 +19,7 @@ def eval_expression_tree(ctx: Context, expression_tree: Any) -> Any:
 def ref_evaluator(ref_tree: Any, **kwargs: Any) -> EvaluatorFunc:
     def _evaluate(ctx: Context) -> Any:
         return ctx.extract(ref_tree)
+
     return _evaluate
 
 
