@@ -424,6 +424,16 @@ class ContextElement(ABC):
     __slots__ = ()
 
     @abstractmethod
+    def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
+        pass
+
+    @abstractmethod
+    async def extract_async(
+        self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
+    ) -> Any:
+        pass
+
+    @abstractmethod
     def get(
         self,
         ref: Ref[_T],
@@ -578,21 +588,59 @@ class Context(ContextElement):
         object.__setattr__(obj, "_hook", hook)
         return obj
 
-    def extract(self, ref_tree: Any, *, apply_hook: bool = True) -> Any:
-        """
-        Recursively extract values from the context for each leaf in ref_tree.
+    def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
+        refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
+        values = tuple(self._resolve(ref.parts) for ref in refs)
+        # NOTE: Check key_path
+        for ref, val in zip(refs, values):
+            if isinstance(val, ContextData) and ref.key_path:
+                raise ValueError("Ref.key_path can only resolve leaf values.")
 
-        Args:
-            ref_tree: A nested structure (list, tuple, dict, MappingProxyType) where
-                      leaves are Refs that can be resolved by Context.get().
+        if apply_hook and self._hook:
+            values = self._hook.on_extract(ctx=self, refs=refs, values=values, **kwargs)
 
-        Returns:
-            A new structure matching ref_tree, with leaves replaced by their resolved values.
-        """
-        # Use map to apply self.get to every leaf in the tree
-        return CTX_EVAL_ENGINE.map(
-            lambda ref: self.get(ref, apply_hook=apply_hook), ref_tree
+        values = tuple(
+            ContextView(self, ref.parts) if isinstance(val, ContextData) else ref._resolve(val)
+            for ref, val in zip(refs, values)
         )
+        return CTX_EVAL_ENGINE.unflatten(treedef, values)
+
+    async def extract_async(
+        self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
+    ) -> Any:
+        refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
+        values = tuple(self._resolve(ref.parts) for ref in refs)
+        # NOTE: Check key_path
+        for ref, val in zip(refs, values):
+            if isinstance(val, ContextData) and ref.key_path:
+                raise ValueError("Ref.key_path can only resolve leaf values.")
+
+        if apply_hook and self._hook:
+            values = await self._hook.on_extract_async(
+                ctx=self, refs=refs, values=values, **kwargs
+            )
+
+        values = tuple(
+            ContextView(self, ref.parts) if isinstance(val, ContextData) else ref._resolve(val)
+            for ref, val in zip(refs, values)
+        )
+        return CTX_EVAL_ENGINE.unflatten(treedef, values)
+
+    def _build_dict_ref_tree(self, ref: Optional[Ref[_T]] = None) -> Any:
+        data = self.to_context_data(ref)
+        base_path = ref.path if ref else ""
+
+        def build_tree(current_data: ContextData, current_path: str) -> dict[str, Any]:
+            tree = {}
+            for k, v in current_data.items():
+                path = f"{current_path}.{k}" if current_path else k
+                if isinstance(v, ContextData):
+                    tree[k] = build_tree(v, path)
+                else:
+                    tree[k] = Ref(path)
+            return tree
+
+        return build_tree(data, base_path)
 
     # --- Read Operations ---
     @overload
@@ -609,20 +657,11 @@ class Context(ContextElement):
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
         try:
-            val = self._resolve(ref.parts)
+            return self.extract(ref, apply_hook=apply_hook)
         except ContextPathError:
             if default is _MISSING:
                 raise
             return default
-
-        if apply_hook and self._hook:
-            val = self._hook.on_get(ctx=self, ref=ref, value=val)
-
-        if isinstance(val, ContextData):
-            if ref.key_path:
-                raise ValueError("Ref.key_path can only resolve leaf values.")
-            return ContextView(self, ref.parts)
-        return ref._resolve(val)
 
     @overload
     async def get_async(
@@ -647,20 +686,11 @@ class Context(ContextElement):
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
         try:
-            val = self._resolve(ref.parts)
+            return await self.extract_async(ref, apply_hook=apply_hook)
         except ContextPathError:
             if default is _MISSING:
                 raise
             return default
-
-        if apply_hook and self._hook:
-            val = await self._hook.on_get_async(ctx=self, ref=ref, value=val)
-
-        if isinstance(val, ContextData):
-            if ref.key_path:
-                raise ValueError("Ref.key_path can only resolve leaf values.")
-            return ContextView(self, ref.parts)
-        return ref._resolve(val)
 
     def exists(self, ref: Ref[_T]) -> bool:
         if ref.key_path:
@@ -700,29 +730,17 @@ class Context(ContextElement):
             return val
         raise ContextPathError("Target is not a ContextData (container).")
 
-    def _to_raw_dict(self, ref: Optional[Ref[_T]] = None) -> Any:
-        def _convert(obj: Any) -> Any:
-            if isinstance(obj, ContextData):
-                return {k: _convert(v) for k, v in obj.items()}
-            return obj
-
-        return _convert(self.to_context_data(ref))
-
     def to_dict(
         self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
-        result = self._to_raw_dict(ref)
-        if apply_hook and self._hook:
-            result = self._hook.on_to_dict(ctx=self, ref=ref, value=result)
-        return result
+        ref_tree = self._build_dict_ref_tree(ref)
+        return self.extract(ref_tree, apply_hook=apply_hook)
 
     async def to_dict_async(
         self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
-        result = self._to_raw_dict(ref)
-        if apply_hook and self._hook:
-            result = await self._hook.on_to_dict_async(ctx=self, ref=ref, value=result)
-        return result
+        ref_tree = self._build_dict_ref_tree(ref)
+        return await self.extract_async(ref_tree, apply_hook=apply_hook)
 
     def _resolve(self, parts: Iterable[str]) -> Any:
         current: Any = self._root
@@ -948,6 +966,26 @@ class ContextView(ContextElement):
         new_parts = self._parts + ref.parts
         new_path = ".".join(new_parts)
         return Ref(new_path, key_path=ref.key_path, metadata=ref.metadata)
+
+    def _adjust_ref_tree(self, ref_tree: Any) -> Any:
+        def adjust(obj):
+            if isinstance(obj, Ref):
+                return self._adjust_ref(obj)
+            return obj
+
+        return CTX_EVAL_ENGINE.map(adjust, ref_tree)
+
+    def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
+        return self._context.extract(
+            self._adjust_ref_tree(ref_tree), apply_hook=apply_hook, **kwargs
+        )
+
+    async def extract_async(
+        self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
+    ) -> Any:
+        return await self._context.extract_async(
+            self._adjust_ref_tree(ref_tree), apply_hook=apply_hook, **kwargs
+        )
 
     def get(
         self,
