@@ -597,7 +597,8 @@ class Context(ContextElement):
                 raise ValueError("Ref.key_path can only resolve leaf values.")
 
         if apply_hook and self._hook:
-            values = self._hook.on_extract(ctx=self, refs=refs, values=values, **kwargs)
+            result = self._hook.on_extract(ctx=self, refs=refs, values=values, **kwargs)
+            values = result.values
 
         values = tuple(
             ContextView(self, ref.parts) if isinstance(val, ContextData) else ref._resolve(val)
@@ -616,9 +617,10 @@ class Context(ContextElement):
                 raise ValueError("Ref.key_path can only resolve leaf values.")
 
         if apply_hook and self._hook:
-            values = await self._hook.on_extract_async(
+            result = await self._hook.on_extract_async(
                 ctx=self, refs=refs, values=values, **kwargs
             )
+            values = result.values
 
         values = tuple(
             ContextView(self, ref.parts) if isinstance(val, ContextData) else ref._resolve(val)
@@ -787,9 +789,10 @@ class Context(ContextElement):
             )
 
         if apply_hook and self._hook:
-            updates, drops = self._hook.on_mutate(
+            result = self._hook.on_mutate(
                 ctx=self, updates=updates, drops=drops
             )
+            updates, drops = result.updates, result.drops
         raw_updates = {r.parts: v for r, v in updates.items()}
         raw_drops = {r.parts for r in drops}
 
@@ -823,9 +826,10 @@ class Context(ContextElement):
             )
 
         if apply_hook and self._hook:
-            updates, drops = await self._hook.on_mutate_async(
+            result = await self._hook.on_mutate_async(
                 ctx=self, updates=updates, drops=drops
             )
+            updates, drops = result.updates, result.drops
         raw_updates = {r.parts: v for r, v in updates.items()}
         raw_drops = {r.parts for r in drops}
 
