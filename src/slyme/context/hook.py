@@ -26,12 +26,22 @@ class MutateResult:
 @dataclass(frozen=True)
 class Hook:
     def on_extract(
-        self, *, ctx: "Context", refs: tuple["Ref", ...], values: tuple[Any, ...], **kwargs
+        self,
+        *,
+        ctx: "Context",
+        refs: tuple["Ref", ...],
+        values: tuple[Any, ...],
+        **kwargs,
     ) -> ExtractResult:
         return ExtractResult(values=values)
 
     async def on_extract_async(
-        self, *, ctx: "Context", refs: tuple["Ref", ...], values: tuple[Any, ...], **kwargs
+        self,
+        *,
+        ctx: "Context",
+        refs: tuple["Ref", ...],
+        values: tuple[Any, ...],
+        **kwargs,
     ) -> ExtractResult:
         return self.on_extract(ctx=ctx, refs=refs, values=values, **kwargs)
 
@@ -51,7 +61,12 @@ class HookChain(Hook):
     hooks: tuple[Hook, ...]
 
     def on_extract(
-        self, *, ctx: "Context", refs: tuple["Ref", ...], values: tuple[Any, ...], **kwargs
+        self,
+        *,
+        ctx: "Context",
+        refs: tuple["Ref", ...],
+        values: tuple[Any, ...],
+        **kwargs,
     ) -> ExtractResult:
         for hook in self.hooks:
             result = hook.on_extract(ctx=ctx, refs=refs, values=values, **kwargs)
@@ -59,7 +74,12 @@ class HookChain(Hook):
         return ExtractResult(values=values)
 
     async def on_extract_async(
-        self, *, ctx: "Context", refs: tuple["Ref", ...], values: tuple[Any, ...], **kwargs
+        self,
+        *,
+        ctx: "Context",
+        refs: tuple["Ref", ...],
+        values: tuple[Any, ...],
+        **kwargs,
     ) -> ExtractResult:
         for hook in self.hooks:
             result = await hook.on_extract_async(
@@ -72,9 +92,7 @@ class HookChain(Hook):
         self, *, ctx: "Context", updates: dict["Ref", Any], drops: set["Ref"], **kwargs
     ) -> MutateResult:
         for hook in self.hooks:
-            result = hook.on_mutate(
-                ctx=ctx, updates=updates, drops=drops, **kwargs
-            )
+            result = hook.on_mutate(ctx=ctx, updates=updates, drops=drops, **kwargs)
             updates, drops = result.updates, result.drops
         return MutateResult(updates=updates, drops=drops)
 

@@ -601,7 +601,9 @@ class Context(ContextElement):
             values = result.values
 
         values = tuple(
-            ContextView(self, ref.parts) if isinstance(val, ContextData) else ref._resolve(val)
+            ContextView(self, ref.parts)
+            if isinstance(val, ContextData)
+            else ref._resolve(val)
             for ref, val in zip(refs, values)
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
@@ -623,7 +625,9 @@ class Context(ContextElement):
             values = result.values
 
         values = tuple(
-            ContextView(self, ref.parts) if isinstance(val, ContextData) else ref._resolve(val)
+            ContextView(self, ref.parts)
+            if isinstance(val, ContextData)
+            else ref._resolve(val)
             for ref, val in zip(refs, values)
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
@@ -789,9 +793,7 @@ class Context(ContextElement):
             )
 
         if apply_hook and self._hook:
-            result = self._hook.on_mutate(
-                ctx=self, updates=updates, drops=drops
-            )
+            result = self._hook.on_mutate(ctx=self, updates=updates, drops=drops)
             updates, drops = result.updates, result.drops
         raw_updates = {r.parts: v for r, v in updates.items()}
         raw_drops = {r.parts for r in drops}

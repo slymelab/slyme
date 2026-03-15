@@ -8,16 +8,21 @@ from typing import Any, Optional, Union
 from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
 from slyme.utils.registry import TypeRegistry
 from slyme.context import Ref
-from .core import NodeElement, Node, Expression, Wrapper
+from .core import (
+    NodeElement,
+    BaseNode,
+    BaseExpression,
+    BaseWrapper,
+)
 from .tree import NODE_ENGINE
 
 __all__ = ["get_render_string", "Config"]
 
 # Registry to determine the category of an object during rendering.
 RENDER_TYPE_REGISTRY = TypeRegistry[Any, str]("render_category")
-RENDER_TYPE_REGISTRY.register("nodes", key=Node)
-RENDER_TYPE_REGISTRY.register("expressions", key=Expression)
-RENDER_TYPE_REGISTRY.register("wrappers", key=Wrapper)
+RENDER_TYPE_REGISTRY.register("nodes", key=BaseNode)
+RENDER_TYPE_REGISTRY.register("expressions", key=BaseExpression)
+RENDER_TYPE_REGISTRY.register("wrappers", key=BaseWrapper)
 RENDER_TYPE_REGISTRY.register("refs", key=Ref)
 
 

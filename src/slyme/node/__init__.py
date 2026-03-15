@@ -7,6 +7,12 @@ from .core import (
     node,
     wrapper,
     expression,
+    AsyncNode,
+    AsyncExpression,
+    AsyncWrapper,
+    async_node,
+    async_wrapper,
+    async_expression,
 )
 from .signature import spec, Auto
 from .render import Config as RenderConfig
@@ -20,6 +26,8 @@ from .eval import eval_expression_tree
 from .common import (
     sequential_exec,
     sequential,
+    async_sequential_exec,
+    async_sequential,
 )
 
 __all__ = [
@@ -33,8 +41,16 @@ __all__ = [
     "node",
     "wrapper",
     "expression",
+    "AsyncNode",
+    "AsyncExpression",
+    "AsyncWrapper",
+    "async_node",
+    "async_wrapper",
+    "async_expression",
     "sequential_exec",
     "sequential",
+    "async_sequential_exec",
+    "async_sequential",
     "spec",
     "Auto",
     "RenderConfig",
