@@ -35,7 +35,6 @@ from .signature import (
     process_kwargs,
     analyze_signature,
     resolve_arguments,
-    prepare_evaluators,
 )
 
 __all__ = [
@@ -126,6 +125,22 @@ def _ensure_async_context_return(
         return result
 
     return wrapper
+
+
+def _prepare_eval(
+    specs: Mapping[str, Spec], kwargs: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Split kwargs into static values and dynamic evaluators based on specs.
+    """
+    raw_kwargs = {}
+    eval_kwargs = {}
+    for key, value in kwargs.items():
+        if specs[key].should_eval(value):
+            eval_kwargs[key] = value
+        else:
+            raw_kwargs[key] = value
+    return raw_kwargs, eval_kwargs
 
 
 class _DefMixin:
@@ -302,15 +317,15 @@ class NodeExec(Node, _ExecMixin):
         # --- Composition Logic (Onion Model) ---
         # 1. Inner Core: Bind kwargs to the user function.
         # Signature: (Context) -> Context
-        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
-        if not evaluators:
+        if not eval_kwargs:
             chain: Callable[[Context], Context] = partial(func, **raw_kwargs)
         else:
+            eval_plan = prepare_eval_plan(eval_kwargs)
 
             def chain(ctx: Context) -> Context:
-                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
-                return func(ctx, **raw_kwargs, **dynamic_kwargs)
+                return func(ctx, **raw_kwargs, **execute_eval_plan(ctx, eval_plan))
 
         if Config.check_return_type:
             chain = _ensure_context_return(chain)
@@ -424,15 +439,17 @@ class AsyncNodeExec(AsyncNode, _ExecMixin):
         object.__setattr__(self, "wrappers", wrappers)
         object.__setattr__(self, "_kwargs", kwargs)
 
-        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
-        if not evaluators:
+        if not eval_kwargs:
             chain = partial(func, **raw_kwargs)
         else:
+            eval_plan = prepare_eval_plan(eval_kwargs)
 
             async def chain(ctx: Context) -> Context:
-                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
-                return await func(ctx, **raw_kwargs, **dynamic_kwargs)
+                return await func(
+                    ctx, **raw_kwargs, **await async_execute_eval_plan(ctx, eval_plan)
+                )
 
         if Config.check_return_type:
             chain = _ensure_async_context_return(chain)
@@ -524,15 +541,15 @@ class ExpressionExec(Expression[_R], _ExecMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
-        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
-        if not evaluators:
+        if not eval_kwargs:
             prepared_func = partial(func, **raw_kwargs)
         else:
+            eval_plan = prepare_eval_plan(eval_kwargs)
 
             def prepared_func(ctx: Context) -> _R:
-                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
-                return func(ctx, **raw_kwargs, **dynamic_kwargs)
+                return func(ctx, **raw_kwargs, **execute_eval_plan(ctx, eval_plan))
 
         object.__setattr__(self, "_prepared_func", prepared_func)
 
@@ -610,15 +627,17 @@ class AsyncExpressionExec(AsyncExpression[_R], _ExecMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
-        if not evaluators:
+        if not eval_kwargs:
             prepared_func = partial(func, **raw_kwargs)
         else:
+            eval_plan = prepare_eval_plan(eval_kwargs)
 
             async def prepared_func(ctx: Context) -> _R:
-                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
-                return await func(ctx, **raw_kwargs, **dynamic_kwargs)
+                return await func(
+                    ctx, **raw_kwargs, **await async_execute_eval_plan(ctx, eval_plan)
+                )
 
         object.__setattr__(self, "_prepared_func", prepared_func)
 
@@ -714,19 +733,25 @@ class WrapperExec(Wrapper, _ExecMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
         # Optimization: Pre-bind kwargs using partial
-        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
-        if not evaluators:
+        if not eval_kwargs:
             prepared_func = partial(func, **raw_kwargs)
         else:
+            eval_plan = prepare_eval_plan(eval_kwargs)
 
             def prepared_func(
                 ctx: Context,
                 wrapped: Node,
                 call_next: Callable[[Context], Context],
             ) -> Context:
-                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
-                return func(ctx, wrapped, call_next, **raw_kwargs, **dynamic_kwargs)
+                return func(
+                    ctx,
+                    wrapped,
+                    call_next,
+                    **raw_kwargs,
+                    **execute_eval_plan(ctx, eval_plan),
+                )
 
         if Config.check_return_type:
             prepared_func = _ensure_context_return(prepared_func)
@@ -826,20 +851,24 @@ class AsyncWrapperExec(AsyncWrapper, _ExecMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-        raw_kwargs, evaluators = prepare_evaluators(specs, kwargs)
+        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
-        if not evaluators:
+        if not eval_kwargs:
             prepared_func = partial(func, **raw_kwargs)
         else:
+            eval_plan = prepare_eval_plan(eval_kwargs)
 
             async def prepared_func(
                 ctx: Context,
                 wrapped: Node,
                 call_next: Callable[[Context], Awaitable[Context]],
             ) -> Context:
-                dynamic_kwargs = {k: ev(ctx) for k, ev in evaluators.items()}
                 return await func(
-                    ctx, wrapped, call_next, **raw_kwargs, **dynamic_kwargs
+                    ctx,
+                    wrapped,
+                    call_next,
+                    **raw_kwargs,
+                    **await async_execute_eval_plan(ctx, eval_plan),
                 )
 
         if Config.check_return_type:
@@ -1546,3 +1575,4 @@ def async_wrapper(
 
 from .tree import NODE_ENGINE, NODE_PREPARE_ENGINE
 from .render import get_render_string
+from .eval import prepare_eval_plan, execute_eval_plan, async_execute_eval_plan

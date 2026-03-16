@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import (
     Callable,
     Any,
-    Optional,
     Union,
     Annotated,
     get_type_hints,
@@ -13,13 +12,10 @@ from typing import (
     get_args,
     Mapping,
     Sequence,
-    Protocol,
     TypeVar,
 )
 from collections import ChainMap
-from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.exception import enrich_exception
-from slyme.utils.registry import TypeRegistry
 from slyme.context import Context
 
 __all__ = [
@@ -30,14 +26,6 @@ T = TypeVar("T")
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 EvaluatorFunc = Callable[[Context], Any]
-
-
-class EvaluatorFactory(Protocol):
-    def __call__(self, value: Any, **kwargs: Any) -> EvaluatorFunc: ...
-
-
-# NOTE: The evaluator funcs are registered in eval.py
-EVALUATOR_REGISTRY = TypeRegistry[Any, EvaluatorFactory]("evaluator")
 
 
 # Spec Definitions
@@ -66,41 +54,16 @@ class Spec:
             return self.default_factory()
         raise ValueError("Missing required parameter.")
 
-    def _prepare_evaluator(self, value: Any) -> Optional["EvaluatorFunc"]:
+    def should_eval(self, value: Any) -> bool:
         if self.auto_eval is _MISSING:
             raise ValueError(
-                "`auto_eval` should not be `_MISSING` when `_prepare_evaluator` is called."
+                "`auto_eval` should not be `_MISSING` when `should_eval` is called."
             )
         if not self.auto_eval:
-            return None
-        try:
-            # We assume value is a pytree with same type for all leaves.
-            ele = next(CTX_EVAL_ENGINE.iter(value))
-        except StopIteration:
-            return None
+            return False
+        from slyme.node.eval import contains_eval_type
 
-        evaluator_factory = EVALUATOR_REGISTRY.lookup(type(ele), default=None)
-        if evaluator_factory is None:
-            return None
-        return evaluator_factory(value)
-
-
-def prepare_evaluators(
-    specs: Mapping[str, Spec],
-    kwargs: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, EvaluatorFunc]]:
-    """
-    Split kwargs into static values and dynamic evaluators based on specs.
-    """
-    raw_kwargs = {}
-    evaluators = {}
-    for key, value in kwargs.items():
-        evaluator = specs[key]._prepare_evaluator(value)
-        if evaluator is not None:
-            evaluators[key] = evaluator
-        else:
-            raw_kwargs[key] = value
-    return raw_kwargs, evaluators
+        return contains_eval_type(value)
 
 
 def spec(

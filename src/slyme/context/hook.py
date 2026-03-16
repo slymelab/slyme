@@ -35,7 +35,7 @@ class Hook:
     ) -> ExtractResult:
         return ExtractResult(values=values)
 
-    async def on_extract_async(
+    async def on_async_extract(
         self,
         *,
         ctx: "Context",
@@ -50,7 +50,7 @@ class Hook:
     ) -> MutateResult:
         return MutateResult(updates=updates, drops=drops)
 
-    async def on_mutate_async(
+    async def on_async_mutate(
         self, *, ctx: "Context", updates: dict["Ref", Any], drops: set["Ref"], **kwargs
     ) -> MutateResult:
         return self.on_mutate(ctx=ctx, updates=updates, drops=drops, **kwargs)
@@ -73,7 +73,7 @@ class HookChain(Hook):
             values = result.values
         return ExtractResult(values=values)
 
-    async def on_extract_async(
+    async def on_async_extract(
         self,
         *,
         ctx: "Context",
@@ -82,7 +82,7 @@ class HookChain(Hook):
         **kwargs,
     ) -> ExtractResult:
         for hook in self.hooks:
-            result = await hook.on_extract_async(
+            result = await hook.on_async_extract(
                 ctx=ctx, refs=refs, values=values, **kwargs
             )
             values = result.values
@@ -96,11 +96,11 @@ class HookChain(Hook):
             updates, drops = result.updates, result.drops
         return MutateResult(updates=updates, drops=drops)
 
-    async def on_mutate_async(
+    async def on_async_mutate(
         self, *, ctx: "Context", updates: dict["Ref", Any], drops: set["Ref"], **kwargs
     ) -> MutateResult:
         for hook in self.hooks:
-            result = await hook.on_mutate_async(
+            result = await hook.on_async_mutate(
                 ctx=ctx, updates=updates, drops=drops, **kwargs
             )
             updates, drops = result.updates, result.drops

@@ -428,7 +428,7 @@ class ContextElement(ABC):
         pass
 
     @abstractmethod
-    async def extract_async(
+    async def async_extract(
         self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
     ) -> Any:
         pass
@@ -444,7 +444,7 @@ class ContextElement(ABC):
         pass
 
     @abstractmethod
-    async def get_async(
+    async def async_get(
         self,
         ref: Ref[_T],
         default: Union[_T2, _Missing] = _MISSING,
@@ -473,7 +473,7 @@ class ContextElement(ABC):
         pass
 
     @abstractmethod
-    async def to_dict_async(
+    async def async_to_dict(
         self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         pass
@@ -608,7 +608,7 @@ class Context(ContextElement):
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
 
-    async def extract_async(
+    async def async_extract(
         self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
     ) -> Any:
         refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
@@ -619,7 +619,7 @@ class Context(ContextElement):
                 raise ValueError("Ref.key_path can only resolve leaf values.")
 
         if apply_hook and self._hook:
-            result = await self._hook.on_extract_async(
+            result = await self._hook.on_async_extract(
                 ctx=self, refs=refs, values=values, **kwargs
             )
             values = result.values
@@ -670,21 +670,21 @@ class Context(ContextElement):
             return default
 
     @overload
-    async def get_async(
+    async def async_get(
         self,
         ref: Ref[_T],
         *,
         apply_hook: bool = True,
     ) -> _T: ...
     @overload
-    async def get_async(
+    async def async_get(
         self,
         ref: Ref[_T],
         default: _T2,
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]: ...
-    async def get_async(
+    async def async_get(
         self,
         ref: Ref[_T],
         default: Union[_T2, _Missing] = _MISSING,
@@ -692,7 +692,7 @@ class Context(ContextElement):
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
         try:
-            return await self.extract_async(ref, apply_hook=apply_hook)
+            return await self.async_extract(ref, apply_hook=apply_hook)
         except ContextPathError:
             if default is _MISSING:
                 raise
@@ -742,11 +742,11 @@ class Context(ContextElement):
         ref_tree = self._build_dict_ref_tree(ref)
         return self.extract(ref_tree, apply_hook=apply_hook)
 
-    async def to_dict_async(
+    async def async_to_dict(
         self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         ref_tree = self._build_dict_ref_tree(ref)
-        return await self.extract_async(ref_tree, apply_hook=apply_hook)
+        return await self.async_extract(ref_tree, apply_hook=apply_hook)
 
     def _resolve(self, parts: Iterable[str]) -> Any:
         current: Any = self._root
@@ -805,7 +805,7 @@ class Context(ContextElement):
             new_root = ContextData()
         return self._from_context_data(new_root, hook=self._hook)
 
-    async def mutate_async(
+    async def async_mutate(
         self,
         *,
         updates: Optional[Mapping[Ref, Any]] = None,
@@ -828,7 +828,7 @@ class Context(ContextElement):
             )
 
         if apply_hook and self._hook:
-            result = await self._hook.on_mutate_async(
+            result = await self._hook.on_async_mutate(
                 ctx=self, updates=updates, drops=drops
             )
             updates, drops = result.updates, result.drops
@@ -849,28 +849,28 @@ class Context(ContextElement):
         """Batch update convenience interface."""
         return self.mutate(updates=updates, apply_hook=apply_hook)
 
-    async def update_async(
+    async def async_update(
         self, updates: Mapping[Ref, Any], *, apply_hook: bool = True
     ) -> "Context":
-        return await self.mutate_async(updates=updates, apply_hook=apply_hook)
+        return await self.async_mutate(updates=updates, apply_hook=apply_hook)
 
     def drop(self, refs: Iterable[Ref], *, apply_hook: bool = True) -> "Context":
         """Batch delete convenience interface."""
         return self.mutate(drops=refs, apply_hook=apply_hook)
 
-    async def drop_async(
+    async def async_drop(
         self, refs: Iterable[Ref], *, apply_hook: bool = True
     ) -> "Context":
-        return await self.mutate_async(drops=refs, apply_hook=apply_hook)
+        return await self.async_mutate(drops=refs, apply_hook=apply_hook)
 
     def set(self, ref: Ref[_T], value: _T, *, apply_hook: bool = True) -> "Context":
         """Single set convenience interface."""
         return self.mutate(updates={ref: value}, apply_hook=apply_hook)
 
-    async def set_async(
+    async def async_set(
         self, ref: Ref[_T], value: _T, *, apply_hook: bool = True
     ) -> "Context":
-        return await self.mutate_async(updates={ref: value}, apply_hook=apply_hook)
+        return await self.async_mutate(updates={ref: value}, apply_hook=apply_hook)
 
     def update_tree(
         self, ref_tree: Any, value_tree: Any, *, apply_hook: bool = True
@@ -894,7 +894,7 @@ class Context(ContextElement):
         }
         return self.mutate(updates=updates, apply_hook=apply_hook)
 
-    async def update_tree_async(
+    async def async_update_tree(
         self, ref_tree: Any, value_tree: Any, *, apply_hook: bool = True
     ) -> "Context":
         """
@@ -914,14 +914,14 @@ class Context(ContextElement):
             ref: CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
-        return await self.mutate_async(updates=updates, apply_hook=apply_hook)
+        return await self.async_mutate(updates=updates, apply_hook=apply_hook)
 
     def delete(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
         """Single delete convenience interface."""
         return self.mutate(drops=[ref], apply_hook=apply_hook)
 
-    async def delete_async(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
-        return await self.mutate_async(drops=[ref], apply_hook=apply_hook)
+    async def async_delete(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
+        return await self.async_mutate(drops=[ref], apply_hook=apply_hook)
 
     def clear(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
         """
@@ -938,7 +938,7 @@ class Context(ContextElement):
         # 2. Update with empty ContextData
         return self.mutate(updates={ref: ContextData()}, apply_hook=apply_hook)
 
-    async def clear_async(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
+    async def async_clear(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
         """
         Clear all contents under a reference but keep the path.
         Raises ContextPathError if the target is not a container (ContextData).
@@ -951,7 +951,7 @@ class Context(ContextElement):
             )
 
         # 2. Update with empty ContextData
-        return await self.mutate_async(
+        return await self.async_mutate(
             updates={ref: ContextData()}, apply_hook=apply_hook
         )
 
@@ -986,10 +986,10 @@ class ContextView(ContextElement):
             self._adjust_ref_tree(ref_tree), apply_hook=apply_hook, **kwargs
         )
 
-    async def extract_async(
+    async def async_extract(
         self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
     ) -> Any:
-        return await self._context.extract_async(
+        return await self._context.async_extract(
             self._adjust_ref_tree(ref_tree), apply_hook=apply_hook, **kwargs
         )
 
@@ -1002,14 +1002,14 @@ class ContextView(ContextElement):
     ) -> Union[_T, _T2]:
         return self._context.get(self._adjust_ref(ref), default, apply_hook=apply_hook)
 
-    async def get_async(
+    async def async_get(
         self,
         ref: Ref[_T],
         default: Union[_T2, _Missing] = _MISSING,
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
-        return await self._context.get_async(
+        return await self._context.async_get(
             self._adjust_ref(ref), default, apply_hook=apply_hook
         )
 
@@ -1027,10 +1027,10 @@ class ContextView(ContextElement):
     ) -> dict[str, Any]:
         return self._context.to_dict(self._adjust_ref(ref), apply_hook=apply_hook)
 
-    async def to_dict_async(
+    async def async_to_dict(
         self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
-        return await self._context.to_dict_async(
+        return await self._context.async_to_dict(
             self._adjust_ref(ref), apply_hook=apply_hook
         )
 

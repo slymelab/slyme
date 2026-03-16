@@ -22,7 +22,7 @@ from .validator import (
 )
 
 # NOTE: register eval funcs here through import
-from .eval import eval_expression_tree
+from .eval import eval_tree
 from .common import (
     sequential_exec,
     sequential,
@@ -54,5 +54,5 @@ __all__ = [
     "spec",
     "Auto",
     "RenderConfig",
-    "eval_expression_tree",
+    "eval_tree",
 ]
