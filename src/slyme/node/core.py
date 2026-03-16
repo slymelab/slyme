@@ -787,7 +787,7 @@ class AsyncWrapper(BaseWrapper):
     async def __call__(
         self,
         ctx: Context,
-        wrapped: Node,
+        wrapped: AsyncNode,
         call_next: Callable[[Context], Awaitable[Context]],
     ) -> Context:
         pass
@@ -815,7 +815,7 @@ class AsyncWrapperDef(AsyncWrapper, _DefMixin):
     async def __call__(
         self,
         ctx: Context,
-        wrapped: Node,
+        wrapped: AsyncNode,
         call_next: Callable[[Context], Awaitable[Context]],
     ) -> Context:
         raise TypeError(
@@ -860,7 +860,7 @@ class AsyncWrapperExec(AsyncWrapper, _ExecMixin):
 
             async def prepared_func(
                 ctx: Context,
-                wrapped: Node,
+                wrapped: AsyncNode,
                 call_next: Callable[[Context], Awaitable[Context]],
             ) -> Context:
                 return await func(
@@ -881,7 +881,7 @@ class AsyncWrapperExec(AsyncWrapper, _ExecMixin):
     async def __call__(
         self,
         ctx: Context,
-        wrapped: Node,
+        wrapped: AsyncNode,
         call_next: Callable[[Context], Awaitable[Context]],
     ) -> Context:
         try:
@@ -895,7 +895,18 @@ class AsyncWrapperExec(AsyncWrapper, _ExecMixin):
 
 
 # Functional Factory & Decorators
-class NodeFactory(Generic[_P]):
+class BaseFactory:
+    _func: Callable
+
+    @property
+    def func(self) -> Callable:
+        return self._func
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} of {self._func.__name__}>"
+
+
+class NodeFactory(BaseFactory, Generic[_P]):
     def __init__(
         self,
         func: Callable,
@@ -906,9 +917,6 @@ class NodeFactory(Generic[_P]):
         self._func = func
         self._specs = specs
         self.__signature__ = signature
-
-    def __repr__(self) -> str:
-        return f"<NodeFactory of {self._func.__name__}>"
 
     @overload
     def __call__(
@@ -958,20 +966,8 @@ class NodeFactory(Generic[_P]):
         # Users should use .add_wrappers() explicitly.
         return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
-    def call(self, ctx: Context, /, *args: _P.args, **kwargs: _P.kwargs) -> Context:
-        """
-        Execute the node logic directly, bypassing the definition phase.
-        """
-        if args:
-            raise TypeError(
-                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the context."
-            )
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return self._func(ctx, **final_kwargs)
 
-
-class ExpressionFactory(Generic[_P, _R]):
+class ExpressionFactory(BaseFactory, Generic[_P, _R]):
     def __init__(
         self,
         func: Callable,
@@ -982,9 +978,6 @@ class ExpressionFactory(Generic[_P, _R]):
         self._func = func
         self._specs = specs
         self.__signature__ = signature
-
-    def __repr__(self) -> str:
-        return f"<ExpressionFactory of {self._func.__name__}>"
 
     @overload
     def __call__(
@@ -1032,20 +1025,8 @@ class ExpressionFactory(Generic[_P, _R]):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
         return ExpressionDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
-    def call(self, ctx: Context, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
-        """
-        Execute the expression logic directly, bypassing the definition phase.
-        """
-        if args:
-            raise TypeError(
-                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the context."
-            )
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return self._func(ctx, **final_kwargs)
 
-
-class WrapperFactory(Generic[_P]):
+class WrapperFactory(BaseFactory, Generic[_P]):
     def __init__(
         self,
         func: Callable,
@@ -1056,9 +1037,6 @@ class WrapperFactory(Generic[_P]):
         self._func = func
         self._specs = specs
         self.__signature__ = signature
-
-    def __repr__(self) -> str:
-        return f"<WrapperFactory of {self._func.__name__}>"
 
     @overload
     def __call__(
@@ -1106,28 +1084,8 @@ class WrapperFactory(Generic[_P]):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
         return WrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
-    def call(
-        self,
-        ctx: Context,
-        wrapped: Node,
-        call_next: Callable[[Context], Context],
-        /,
-        *args: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> Context:
-        """
-        Execute the wrapper logic directly, bypassing the definition phase.
-        """
-        if args:
-            raise TypeError(
-                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the system arguments."
-            )
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return self._func(ctx, wrapped, call_next, **final_kwargs)
 
-
-class AsyncNodeFactory(Generic[_P]):
+class AsyncNodeFactory(BaseFactory, Generic[_P]):
     def __init__(
         self,
         func: Callable,
@@ -1138,9 +1096,6 @@ class AsyncNodeFactory(Generic[_P]):
         self._func = func
         self._specs = specs
         self.__signature__ = signature
-
-    def __repr__(self) -> str:
-        return f"<AsyncNodeFactory of {self._func.__name__}>"
 
     @overload
     def __call__(
@@ -1190,22 +1145,8 @@ class AsyncNodeFactory(Generic[_P]):
         # Users should use .add_wrappers() explicitly.
         return AsyncNodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
-    async def call(
-        self, ctx: Context, /, *args: _P.args, **kwargs: _P.kwargs
-    ) -> Context:
-        """
-        Execute the node logic directly, bypassing the definition phase.
-        """
-        if args:
-            raise TypeError(
-                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the context."
-            )
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return await self._func(ctx, **final_kwargs)
 
-
-class AsyncExpressionFactory(Generic[_P, _R]):
+class AsyncExpressionFactory(BaseFactory, Generic[_P, _R]):
     def __init__(
         self,
         func: Callable,
@@ -1216,9 +1157,6 @@ class AsyncExpressionFactory(Generic[_P, _R]):
         self._func = func
         self._specs = specs
         self.__signature__ = signature
-
-    def __repr__(self) -> str:
-        return f"<AsyncExpressionFactory of {self._func.__name__}>"
 
     @overload
     def __call__(
@@ -1268,20 +1206,8 @@ class AsyncExpressionFactory(Generic[_P, _R]):
             func=self._func, specs=self._specs, kwargs=final_kwargs
         )
 
-    async def call(self, ctx: Context, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
-        """
-        Execute the expression logic directly, bypassing the definition phase.
-        """
-        if args:
-            raise TypeError(
-                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the context."
-            )
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return await self._func(ctx, **final_kwargs)
 
-
-class AsyncWrapperFactory(Generic[_P]):
+class AsyncWrapperFactory(BaseFactory, Generic[_P]):
     def __init__(
         self,
         func: Callable,
@@ -1292,9 +1218,6 @@ class AsyncWrapperFactory(Generic[_P]):
         self._func = func
         self._specs = specs
         self.__signature__ = signature
-
-    def __repr__(self) -> str:
-        return f"<AsyncWrapperFactory of {self._func.__name__}>"
 
     @overload
     def __call__(
@@ -1341,26 +1264,6 @@ class AsyncWrapperFactory(Generic[_P]):
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
         return AsyncWrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
-
-    async def call(
-        self,
-        ctx: Context,
-        wrapped: Node,
-        call_next: Callable[[Context], Awaitable[Context]],
-        /,
-        *args: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> Context:
-        """
-        Execute the wrapper logic directly, bypassing the definition phase.
-        """
-        if args:
-            raise TypeError(
-                f"Positional arguments are not allowed in {type(self).__name__}.call(), except for the system arguments."
-            )
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return await self._func(ctx, wrapped, call_next, **final_kwargs)
 
 
 def _node(func: NodeFunc[_P], /, *, resolve_type_hints: bool) -> NodeFactory[_P]:

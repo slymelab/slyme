@@ -8,6 +8,8 @@ from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import AttributeKey, PyTreeKey
 from slyme.utils.exception import enrich_exception
 from .core import (
+    BaseNode,
+    BaseWrapper,
     NodeElement,
     Node,
     Expression,
@@ -49,7 +51,11 @@ def _validate_node_structure(obj: Node, key: PyTreeKey, leaves: list[Any]) -> No
         is_wrappers_attr = isinstance(key, AttributeKey) and key.name == "wrappers"
 
         for leaf in leaves:
-            if isinstance(leaf, Wrapper) and not is_wrappers_attr:
+            if isinstance(leaf, AsyncWrapper):
+                raise NodeStructureError(
+                    f"Cannot use AsyncWrapper in synchronous Node {type_name}."
+                )
+            if isinstance(leaf, Wrapper) != is_wrappers_attr:
                 raise NodeStructureError(
                     f"Invalid wrapper placement: Wrappers must be in {type_name}.wrappers."
                 )
@@ -68,11 +74,11 @@ def _validate_expression_structure(
     with enrich_exception(f"at {path_info}"):
         # Rule: Downward closure
         for leaf in leaves:
-            if isinstance(leaf, Node):
+            if isinstance(leaf, BaseNode):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Node."
                 )
-            if isinstance(leaf, Wrapper):
+            if isinstance(leaf, BaseWrapper):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Wrapper."
                 )
@@ -91,11 +97,11 @@ def _validate_wrapper_structure(
     with enrich_exception(f"at {path_info}"):
         # Rule: Downward closure
         for leaf in leaves:
-            if isinstance(leaf, Node):
+            if isinstance(leaf, BaseNode):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Node."
                 )
-            if isinstance(leaf, Wrapper):
+            if isinstance(leaf, BaseWrapper):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Wrapper."
                 )
@@ -114,7 +120,11 @@ def _validate_async_node_structure(
         is_wrappers_attr = isinstance(key, AttributeKey) and key.name == "wrappers"
 
         for leaf in leaves:
-            if isinstance(leaf, AsyncWrapper) and not is_wrappers_attr:
+            if isinstance(leaf, Wrapper):
+                raise NodeStructureError(
+                    f"Cannot use synchronous Wrapper in AsyncNode {type_name}."
+                )
+            if isinstance(leaf, AsyncWrapper) != is_wrappers_attr:
                 raise NodeStructureError(
                     f"Invalid wrapper placement: Wrappers must be in {type_name}.wrappers."
                 )
@@ -133,11 +143,11 @@ def _validate_async_expression_structure(
     with enrich_exception(f"at {path_info}"):
         # Rule: Downward closure
         for leaf in leaves:
-            if isinstance(leaf, (Node, AsyncNode)):
+            if isinstance(leaf, BaseNode):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Node."
                 )
-            if isinstance(leaf, (Wrapper, AsyncWrapper)):
+            if isinstance(leaf, BaseWrapper):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Wrapper."
                 )
@@ -156,11 +166,11 @@ def _validate_async_wrapper_structure(
     with enrich_exception(f"at {path_info}"):
         # Rule: Downward closure
         for leaf in leaves:
-            if isinstance(leaf, (Node, AsyncNode)):
+            if isinstance(leaf, BaseNode):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Node."
                 )
-            if isinstance(leaf, (Wrapper, AsyncWrapper)):
+            if isinstance(leaf, BaseWrapper):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Wrapper."
                 )
