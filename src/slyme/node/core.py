@@ -151,6 +151,12 @@ class _DefMixin:
     _specs: Mapping[str, Spec]
     _kwargs: dict[str, Any]
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        raise TypeError(
+            f"{type(self).__name__} is a definition and not callable. "
+            f"Please call `.prepare()` to obtain an Exec instance first."
+        )
+
     def __setitem__(self, key: str, value: Any) -> None:
         if key not in self._specs:
             raise KeyError(
@@ -243,7 +249,7 @@ class Node(BaseNode):
         pass
 
 
-class NodeDef(Node, _DefMixin):
+class NodeDef(_DefMixin, Node):
     """
     Mutable definition of a Node. Allows modification during build time.
     """
@@ -269,12 +275,6 @@ class NodeDef(Node, _DefMixin):
         self.wrappers.extend(wrappers)
         return self
 
-    def __call__(self, ctx: Context) -> Context:
-        raise RuntimeError(
-            f"Cannot execute {type(self).__name__}. "
-            f"Please call `.prepare()` to obtain a generic `{NodeExec.__name__}` first."
-        )
-
     def prepare(self) -> "NodeExec":
         # Use the specialized NODE_PREPARE_PYTREE_ENGINE to perform a deep transform
         # of the structure (List -> Tuple, Dict -> MappingProxy, Def -> Exec).
@@ -289,7 +289,7 @@ class NodeDef(Node, _DefMixin):
             super().__setattr__(name, value)
 
 
-class NodeExec(Node, _ExecMixin):
+class NodeExec(_ExecMixin, Node):
     """
     Immutable execution version of a Node.
     """
@@ -356,7 +356,7 @@ class NodeExec(Node, _ExecMixin):
             raise
         # General Exceptions
         except Exception as e:
-            raise NodeExceptionRecord(exception_node=self, exception=e)
+            raise NodeExceptionRecord(exception_node=self, exception=e) from e
 
 
 class AsyncNode(BaseNode):
@@ -372,7 +372,7 @@ class AsyncNode(BaseNode):
         pass
 
 
-class AsyncNodeDef(AsyncNode, _DefMixin):
+class AsyncNodeDef(_DefMixin, AsyncNode):
     """
     Mutable definition of an AsyncNode.
     """
@@ -398,12 +398,6 @@ class AsyncNodeDef(AsyncNode, _DefMixin):
         self.wrappers.extend(wrappers)
         return self
 
-    async def __call__(self, ctx: Context) -> Context:
-        raise RuntimeError(
-            f"Cannot execute {type(self).__name__}. "
-            f"Please call `.prepare()` to obtain a generic `{AsyncNodeExec.__name__}` first."
-        )
-
     def prepare(self) -> "AsyncNodeExec":
         return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
@@ -414,7 +408,7 @@ class AsyncNodeDef(AsyncNode, _DefMixin):
             super().__setattr__(name, value)
 
 
-class AsyncNodeExec(AsyncNode, _ExecMixin):
+class AsyncNodeExec(_ExecMixin, AsyncNode):
     """
     Immutable execution version of an AsyncNode.
     """
@@ -471,7 +465,7 @@ class AsyncNodeExec(AsyncNode, _ExecMixin):
         except NodeException:
             raise
         except Exception as e:
-            raise NodeExceptionRecord(exception_node=self, exception=e)
+            raise NodeExceptionRecord(exception_node=self, exception=e) from e
 
 
 class BaseExpression(NodeElement):
@@ -490,7 +484,7 @@ class Expression(BaseExpression, Generic[_R]):
         pass
 
 
-class ExpressionDef(Expression[_R], _DefMixin):
+class ExpressionDef(_DefMixin, Expression[_R]):
     """
     Mutable definition of an Expression.
     """
@@ -509,17 +503,11 @@ class ExpressionDef(Expression[_R], _DefMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-    def __call__(self, ctx: Context) -> _R:
-        raise TypeError(
-            f"{type(self).__name__} is a definition and not callable. "
-            f"Please call `.prepare()` to obtain a generic `{ExpressionExec.__name__}` first."
-        )
-
     def prepare(self) -> "ExpressionExec[_R]":
         return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
 
-class ExpressionExec(Expression[_R], _ExecMixin):
+class ExpressionExec(_ExecMixin, Expression[_R]):
     """
     Immutable execution version of an Expression.
     """
@@ -562,7 +550,7 @@ class ExpressionExec(Expression[_R], _ExecMixin):
         except NodeException:
             raise
         except Exception as e:
-            raise ExpressionExceptionRecord(exception_node=self, exception=e)
+            raise ExpressionExceptionRecord(exception_node=self, exception=e) from e
 
 
 class AsyncExpression(BaseExpression, Generic[_R]):
@@ -577,7 +565,7 @@ class AsyncExpression(BaseExpression, Generic[_R]):
         pass
 
 
-class AsyncExpressionDef(AsyncExpression[_R], _DefMixin):
+class AsyncExpressionDef(_DefMixin, AsyncExpression[_R]):
     """
     Mutable definition of an AsyncExpression.
     """
@@ -596,17 +584,11 @@ class AsyncExpressionDef(AsyncExpression[_R], _DefMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-    async def __call__(self, ctx: Context) -> _R:
-        raise TypeError(
-            f"{type(self).__name__} is a definition and not callable. "
-            f"Please call `.prepare()` to obtain a generic `{AsyncExpressionExec.__name__}` first."
-        )
-
     def prepare(self) -> "AsyncExpressionExec[_R]":
         return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
 
-class AsyncExpressionExec(AsyncExpression[_R], _ExecMixin):
+class AsyncExpressionExec(_ExecMixin, AsyncExpression[_R]):
     """
     Immutable execution version of an AsyncExpression.
     """
@@ -650,7 +632,7 @@ class AsyncExpressionExec(AsyncExpression[_R], _ExecMixin):
         except NodeException:
             raise
         except Exception as e:
-            raise ExpressionExceptionRecord(exception_node=self, exception=e)
+            raise ExpressionExceptionRecord(exception_node=self, exception=e) from e
 
 
 class BaseWrapper(NodeElement):
@@ -674,7 +656,7 @@ class Wrapper(BaseWrapper):
         pass
 
 
-class WrapperDef(Wrapper, _DefMixin):
+class WrapperDef(_DefMixin, Wrapper):
     """
     Mutable definition of a Wrapper.
     """
@@ -693,22 +675,11 @@ class WrapperDef(Wrapper, _DefMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-    def __call__(
-        self,
-        ctx: Context,
-        wrapped: Node,
-        call_next: Callable[[Context], Context],
-    ) -> Context:
-        raise TypeError(
-            f"{type(self).__name__} is a definition and not callable. "
-            f"Please call `.prepare()` to obtain a generic `{WrapperExec.__name__}` first."
-        )
-
     def prepare(self) -> "WrapperExec":
         return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
 
-class WrapperExec(Wrapper, _ExecMixin):
+class WrapperExec(_ExecMixin, Wrapper):
     """
     Immutable execution version of a Wrapper.
     """
@@ -773,7 +744,7 @@ class WrapperExec(Wrapper, _ExecMixin):
         except Exception as e:
             raise WrapperExceptionRecord(
                 exception_node=self, wrapped_node=wrapped, exception=e
-            )
+            ) from e
 
 
 class AsyncWrapper(BaseWrapper):
@@ -793,7 +764,7 @@ class AsyncWrapper(BaseWrapper):
         pass
 
 
-class AsyncWrapperDef(AsyncWrapper, _DefMixin):
+class AsyncWrapperDef(_DefMixin, AsyncWrapper):
     """
     Mutable definition of an AsyncWrapper.
     """
@@ -812,22 +783,11 @@ class AsyncWrapperDef(AsyncWrapper, _DefMixin):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-    async def __call__(
-        self,
-        ctx: Context,
-        wrapped: AsyncNode,
-        call_next: Callable[[Context], Awaitable[Context]],
-    ) -> Context:
-        raise TypeError(
-            f"{type(self).__name__} is a definition and not callable. "
-            f"Please call `.prepare()` to obtain a generic `{AsyncWrapperExec.__name__}` first."
-        )
-
     def prepare(self) -> "AsyncWrapperExec":
         return NODE_PREPARE_ENGINE.map(lambda x: x, self)
 
 
-class AsyncWrapperExec(AsyncWrapper, _ExecMixin):
+class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
     """
     Immutable execution version of an AsyncWrapper.
     """
@@ -891,7 +851,7 @@ class AsyncWrapperExec(AsyncWrapper, _ExecMixin):
         except Exception as e:
             raise WrapperExceptionRecord(
                 exception_node=self, wrapped_node=wrapped, exception=e
-            )
+            ) from e
 
 
 # Functional Factory & Decorators
