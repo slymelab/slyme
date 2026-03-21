@@ -214,14 +214,14 @@ def process_kwargs(
 
 def resolve_arguments(
     specs: Mapping[str, Spec],
-    sources: Sequence[Mapping[str, Any]],
+    scopes: Sequence[Mapping[str, Any]],
     overrides: Mapping[str, Any],
 ) -> dict[str, Any]:
     """
-    Resolve arguments from sources and overrides based on specs.
+    Resolve arguments from scopes and overrides based on specs.
     """
-    # 1. Create a unified lookup map: overrides > last source > ... > first source
+    # 1. Create a unified lookup map: overrides > last scope > ... > first scope
     # ChainMap looks up keys in the first mapping, then the second, and so on.
-    unified_map = ChainMap(overrides, *reversed(sources))
+    unified_map = ChainMap(overrides, *reversed(scopes))
     # 2. Iterate through required parameters defined in the specs
     return {name: unified_map[name] for name in specs if name in unified_map}

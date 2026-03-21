@@ -888,7 +888,7 @@ class NodeFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
+        scope1: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -896,8 +896,8 @@ class NodeFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -905,20 +905,20 @@ class NodeFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
-        source3: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        scope3: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
     ) -> NodeDef: ...
     @overload
-    def __call__(self, *sources: Any, **kwargs: Any) -> NodeDef: ...
-    def __call__(self, *sources: Any, **kwargs: Any) -> NodeDef:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef:
         """
-        Create the node instance by resolving parameters from sources and overrides.
+        Create the node instance by resolving parameters from scopes and overrides.
         """
-        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
+        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
@@ -949,7 +949,7 @@ class ExpressionFactory(BaseFactory, Generic[_P, _R]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
+        scope1: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -957,8 +957,8 @@ class ExpressionFactory(BaseFactory, Generic[_P, _R]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -966,20 +966,20 @@ class ExpressionFactory(BaseFactory, Generic[_P, _R]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
-        source3: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        scope3: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
     ) -> ExpressionDef[_R]: ...
     @overload
-    def __call__(self, *sources: Any, **kwargs: Any) -> ExpressionDef[_R]: ...
-    def __call__(self, *sources: Any, **kwargs: Any) -> ExpressionDef[_R]:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> ExpressionDef[_R]: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> ExpressionDef[_R]:
         """
-        Create the node instance by resolving parameters from sources and overrides.
+        Create the node instance by resolving parameters from scopes and overrides.
         """
-        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
+        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
@@ -1008,7 +1008,7 @@ class WrapperFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
+        scope1: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1016,8 +1016,8 @@ class WrapperFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1025,20 +1025,20 @@ class WrapperFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
-        source3: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        scope3: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
     ) -> WrapperDef: ...
     @overload
-    def __call__(self, *sources: Any, **kwargs: Any) -> WrapperDef: ...
-    def __call__(self, *sources: Any, **kwargs: Any) -> WrapperDef:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> WrapperDef: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> WrapperDef:
         """
-        Create the node instance by resolving parameters from sources and overrides.
+        Create the node instance by resolving parameters from scopes and overrides.
         """
-        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
+        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
@@ -1067,7 +1067,7 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
+        scope1: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1075,8 +1075,8 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1084,20 +1084,20 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
-        source3: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        scope3: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
     ) -> AsyncNodeDef: ...
     @overload
-    def __call__(self, *sources: Any, **kwargs: Any) -> AsyncNodeDef: ...
-    def __call__(self, *sources: Any, **kwargs: Any) -> AsyncNodeDef:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef:
         """
-        Create the node instance by resolving parameters from sources and overrides.
+        Create the node instance by resolving parameters from scopes and overrides.
         """
-        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
+        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
@@ -1128,7 +1128,7 @@ class AsyncExpressionFactory(BaseFactory, Generic[_P, _R]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
+        scope1: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1136,8 +1136,8 @@ class AsyncExpressionFactory(BaseFactory, Generic[_P, _R]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1145,20 +1145,20 @@ class AsyncExpressionFactory(BaseFactory, Generic[_P, _R]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
-        source3: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        scope3: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
     ) -> AsyncExpressionDef[_R]: ...
     @overload
-    def __call__(self, *sources: Any, **kwargs: Any) -> AsyncExpressionDef[_R]: ...
-    def __call__(self, *sources: Any, **kwargs: Any) -> AsyncExpressionDef[_R]:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncExpressionDef[_R]: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncExpressionDef[_R]:
         """
-        Create the node instance by resolving parameters from sources and overrides.
+        Create the node instance by resolving parameters from scopes and overrides.
         """
-        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
+        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
@@ -1189,7 +1189,7 @@ class AsyncWrapperFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
+        scope1: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1197,8 +1197,8 @@ class AsyncWrapperFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
@@ -1206,20 +1206,20 @@ class AsyncWrapperFactory(BaseFactory, Generic[_P]):
     @overload
     def __call__(
         self,
-        source1: Mapping[str, Any],
-        source2: Mapping[str, Any],
-        source3: Mapping[str, Any],
+        scope1: Mapping[str, Any],
+        scope2: Mapping[str, Any],
+        scope3: Mapping[str, Any],
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
     ) -> AsyncWrapperDef: ...
     @overload
-    def __call__(self, *sources: Any, **kwargs: Any) -> AsyncWrapperDef: ...
-    def __call__(self, *sources: Any, **kwargs: Any) -> AsyncWrapperDef:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncWrapperDef: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncWrapperDef:
         """
-        Create the node instance by resolving parameters from sources and overrides.
+        Create the node instance by resolving parameters from scopes and overrides.
         """
-        resolved_kwargs = resolve_arguments(self._specs, sources, kwargs)
+        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
         # Process kwargs
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, resolved_kwargs)
