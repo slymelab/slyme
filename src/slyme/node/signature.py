@@ -92,15 +92,36 @@ class SignatureAnalysis:
 
 def _collect_specs_from_hint(hint: Any) -> list[Spec]:
     """Recursively collect Spec annotations from a type hint."""
-    specs = []
-    current = hint
-    while get_origin(current) is Annotated:
-        args = get_args(current)
-        for item in args[1:]:
-            if isinstance(item, Spec):
-                specs.append(item)
-        current = args[0]
-    return specs
+    # TODO: Better support for type hint annotations (e.g., TypeAliasType).
+    collected: list[Spec] = []
+    seen: set[int] = set()
+
+    def visit(h: Any) -> None:
+        obj_id = id(h)
+        if obj_id in seen:
+            return
+        seen.add(obj_id)
+
+        origin = get_origin(h)
+        if origin is Annotated:
+            args = get_args(h)
+            if args:
+                base = args[0]
+                metas = args[1:]
+                for meta in metas:
+                    if isinstance(meta, Spec):
+                        collected.append(meta)
+                    else:
+                        visit(meta)
+                visit(base)
+            return
+
+        if origin is not None:
+            for a in get_args(h):
+                visit(a)
+
+    visit(hint)
+    return collected
 
 
 def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
