@@ -1,3 +1,4 @@
+import sys
 import inspect
 import types
 from enum import Enum
@@ -92,36 +93,26 @@ class SignatureAnalysis:
 
 def _collect_specs_from_hint(hint: Any) -> list[Spec]:
     """Recursively collect Spec annotations from a type hint."""
-    # TODO: Better support for type hint annotations (e.g., TypeAliasType).
-    collected: list[Spec] = []
-    seen: set[int] = set()
+    # NOTE: Compatibility for Python < 3.11: get_type_hints auto-wraps parameters
+    # with None defaults in Optional. Safely unwrap this outer Optional/Union
+    # to expose the underlying Annotated type.
+    if sys.version_info < (3, 11):
+        if get_origin(hint) is Union:
+            args = get_args(hint)
+            if len(args) == 2 and type(None) in args:
+                hint = args[0] if args[1] is type(None) else args[1]
 
-    def visit(h: Any) -> None:
-        obj_id = id(h)
-        if obj_id in seen:
-            return
-        seen.add(obj_id)
+    specs = []
+    current = hint
 
-        origin = get_origin(h)
-        if origin is Annotated:
-            args = get_args(h)
-            if args:
-                base = args[0]
-                metas = args[1:]
-                for meta in metas:
-                    if isinstance(meta, Spec):
-                        collected.append(meta)
-                    else:
-                        visit(meta)
-                visit(base)
-            return
+    while get_origin(current) is Annotated:
+        args = get_args(current)
+        for item in args[1:]:
+            if isinstance(item, Spec):
+                specs.append(item)
+        current = args[0]
 
-        if origin is not None:
-            for a in get_args(h):
-                visit(a)
-
-    visit(hint)
-    return collected
+    return specs
 
 
 def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
