@@ -4,17 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slyme"
-version = "0.1.0rc2"
+version = "0.1.0rc3"
 description = "Placeholder for slyme series."
 readme = "README.md"
-authors = [{ name = "Zikang Liu", email = "liuzikang0625@gmail.com" }]
-license = "Apache-2.0"
+authors = [{ name = "The SlymeLab Team" }]
+license = { text = "Apache-2.0" }
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
 requires-python = ">=3.9"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/slymelab/slyme"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/slyme"]
