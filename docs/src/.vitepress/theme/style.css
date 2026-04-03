@@ -1,0 +1,48 @@
+@import "tailwindcss/theme";
+@import "tailwindcss/utilities";
+@import "@slymelab/theme/style.css";
+
+.VPNavBarTitle .logo {
+  height: 45px !important;
+  width: auto !important;
+}
+
+@layer components {
+  .shiki-container pre {
+    background-color: transparent;
+    margin: 0;
+    padding: 0;
+  }
+
+  .shiki-container .shiki,
+  .shiki-container .shiki span {
+    color: var(--shiki-light);
+    font-style: var(--shiki-light-font-style, normal);
+    font-weight: var(--shiki-light-font-weight, normal);
+    text-decoration: var(--shiki-light-text-decoration, none);
+
+    @variant dark {
+      color: var(--shiki-dark);
+      font-style: var(--shiki-dark-font-style, normal);
+      font-weight: var(--shiki-dark-font-weight, normal);
+      text-decoration: var(--shiki-dark-text-decoration, none);
+    }
+  }
+
+  .shiki-container pre::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  .shiki-container pre::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .shiki-container pre::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.5);
+    border-radius: 4px;
+
+    @variant dark {
+      background-color: rgba(75, 85, 99, 0.5);
+    }
+  }
+}

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="a" cx="50%" cy="188" r="90%" fx="50%" fy="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F3CE47"/>
+      <stop offset="50%" stop-color="#EF9944"/>
+      <stop offset="100%" stop-color="#EA6B3C"/>
+    </radialGradient>
+    <filter id="b" width="200%" height="200%" x="-50%" y="-50%">
+      <feGaussianBlur result="blur" stdDeviation="20"/>
+    </filter>
+  </defs>
+  <path fill="url(#a)" d="M512 188c180 0 382 100 382 292 0 180-70 335-382 335S130 660 130 480c0-192 202-292 382-292"/>
+  <ellipse cx="370" cy="460" fill="#FFF" filter="url(#b)" rx="70" ry="100"/>
+  <ellipse cx="370" cy="460" fill="#FFF" rx="60" ry="90"/>
+  <ellipse cx="654" cy="460" fill="#FFF" filter="url(#b)" rx="70" ry="100"/>
+  <ellipse cx="654" cy="460" fill="#FFF" rx="60" ry="90"/>
+</svg>
