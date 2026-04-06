@@ -17,7 +17,7 @@ def llm_api(
     /,
     *,
     prompts: Auto[list[str]],  # 这里我们通过 Auto 自动注入 prompts 的参数值  // [!code highlight]
-    responses: Ref[list[str]],
+    responses: Ref[list[str]],  # Ref 对象，类似于字典的 key，用于读取/写入特定的路径
 ):
     # NOTE: 这里我们模拟 LLM 对每一个 prompt 做出了响应
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
@@ -34,8 +34,8 @@ def llm_api(
     ctx: Context,
     /,
     *,
-    prompts: Union[Ref[list[str]], Expression[list[str]], list[str]],  # [!code highlight]
-    responses: Ref[list[str]],
+    prompts: Union[Ref[list[str]], Expression[list[str]], list[str]],  # 如果不使用 Auto，我们需要根据 prompts 的类型来分别处理，或者把 prompts 的类型限制为 Expression 以简化代码 // [!code highlight]
+    responses: Ref[list[str]],  # Ref 对象，类似于字典的 key，用于读取/写入特定的路径
 ) -> Context:
     # NOTE: 这里我们手动通过 Context 来获取 prompts 的值，根据 prompts 的类型进行不同的处理
     if isinstance(prompts, Ref):  # [!code highlight]
@@ -120,14 +120,159 @@ def timing(
 
 ## Step 4：使用 @builder 将组件实例化并组装起来
 
+我们推荐使用 @builder 来将原子化的组件构建成具体的执行流程。它会自动进行结构校验，保证组装正确性。
+
 ::: code-group
 ```python [使用 scope 进行自动注入（推荐）]
+from slyme.builder import builder
+from slyme.context import Ref
 
+@builder
+def build_pipeline():
+    scope = {  # [!code highlight]
+        "articles": Ref("input.articles"),  # [!code highlight]
+        "responses": Ref("output.responses"),  # [!code highlight]
+    }  # [!code highlight]
+
+    return llm_api(
+        scope,  # [!code highlight]
+        prompts=format_article_prompts(scope),  # [!code highlight]
+    ).add_wrappers(timing(prefix="LLM API Call"))
 ```
 
 ```python [手动传入参数]
+from slyme.builder import builder
+from slyme.context import Ref
 
+@builder
+def build_pipeline():
+    return llm_api(
+        responses=Ref("output.responses"),  # [!code highlight]
+        prompts=format_article_prompts(
+            articles=Ref("input.articles"),  # [!code highlight]
+        ),
+    ).add_wrappers(timing(prefix="LLM API Call"))
 ```
 :::
 
+有几个需要注意的点：
+- 组装 Node 过程我们称之为**构建期**，在这个过程中，我们需要填入**构建期参数**（即**仅关键字参数**，在 `*` 之后），这些参数完全根据具体的逻辑来定义。在这里我们使用了 Node 自带的 scope 注入来绑定参数，它的好处是相比于我们手动地传入各种 Ref 参数，scope 注入只需要用户维护一个 scope 字典，即可根据函数的参数名来自动地传入对应的同名参数，这在 Node 结构复杂、重复字段比较多的场景下非常有用，避免了用户反复写 `value=Ref("foo.bar")` 这样的参数赋值语句。scope 字典的 key 是 `str` 类型，它对应的是用户函数的参数名，我们称之为“别名”。比如说，上面的代码中，`"articles": Ref("input.articles")` 的 `"articles"` 是别名，与 `format_article_prompts` 的 `articles` 参数对应，而 `Ref("input.articles")` 则代表着填入的值，其中 `"input.articles"` 对应的是我们在 Context 对象中存储的真实路径。
+- 上述组装过程中，我们将 `timing` 加入到 `llm_api` 的 wrappers 列表，那么 `timing` 会在 `llm_api` 执行的时候被调用。我们给 `llm_api` 的 `prompts` 参数赋值了 `format_article_prompts`，在 `Auto` 注解的加持下，`llm_api` 函数完全不需要知道 `format_article_prompts` 的存在，传入函数的参数是已经被 `format_article_prompts` 处理好之后返回的 prompt 列表（`list[str]`）。同理，`format_article_prompts` 的 `articles` 参数使用了 `Auto` 注解，而构建期我们给 `articles` 参数赋值了 `Ref("input.articles")`，那么执行期会自动根据路径从 Context 中取值，然后赋值给 `articles` 参数。
 
+## Step 5：运行
+
+最终，我们调用上述代码并执行：
+
+```python
+from slyme.context import Context, Ref
+
+ctx = Context().update({
+    # NOTE: 我们给 Context 注入了初始所需的文章数据
+    Ref("input.articles"): [
+        {"title": "Article 1", "content": "Content of Article 1"},
+        {"title": "Article 2", "content": "Content of Article 2"},
+    ],
+})
+pipeline = build_pipeline()
+pipeline_exec = pipeline.prepare()  # 通过调用 prepare 将构建期转换为执行期  // [!code highlight]
+ctx = pipeline_exec(ctx)  # 执行
+print(ctx.get(Ref("output.responses")))  # 打印执行结果
+```
+
+::: details 最终的完整代码
+```python
+from time import time
+from collections.abc import Callable
+from slyme.builder import builder
+from slyme.context import Context, Ref
+from slyme.node import node, expression, wrapper, Auto, Node
+
+
+@node
+def llm_api(
+    ctx: Context,
+    /,
+    *,
+    prompts: Auto[list[str]],
+    responses: Ref[list[str]],
+):
+    responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
+    return ctx.set(responses, responses_)
+
+
+@expression
+def format_article_prompts(
+    ctx: Context,
+    /,
+    *,
+    articles: Auto[list[dict]]
+) -> list[str]:
+    return [
+        f"Please summarize the content of the article titled: {article['title']}. The content is: {article['content']}"
+        for article in articles
+    ]
+
+
+@wrapper
+def timing(
+    ctx: Context,
+    wrapped: Node,
+    call_next: Callable[[Context], Context],
+    /,
+    *,
+    prefix: str
+) -> Context:
+    start_time = time()
+    ctx = call_next(ctx)
+    end_time = time()
+    print(f"[{prefix}] Node:\n{wrapped}\nFinished successfully in {end_time - start_time:.4f} seconds.")
+    return ctx
+
+
+@builder
+def build_pipeline():
+    scope = {
+        "articles": Ref("input.articles"),
+        "responses": Ref("output.responses"),
+    }
+
+    return llm_api(
+        scope,
+        prompts=format_article_prompts(scope),
+    ).add_wrappers(timing(prefix="LLM API Call"))
+
+
+if __name__ == "__main__":
+    ctx = Context().update({
+    Ref("input.articles"): [
+            {"title": "Article 1", "content": "Content of Article 1"},
+            {"title": "Article 2", "content": "Content of Article 2"},
+        ],
+    })
+    pipeline = build_pipeline()
+    pipeline_exec = pipeline.prepare()
+    ctx = pipeline_exec(ctx)
+    print(ctx.get(Ref("output.responses")))
+```
+:::
+
+输出结果：
+
+```text
+[LLM API Call] Node:
+llm_api<NodeExec>
+│ => @wrappers
+├── .wrappers tuple
+│   └── [0] timing<WrapperExec>
+│ => $expressions
+└── ['prompts'] format_article_prompts<ExpressionExec>
+Finished successfully in 0.0000 seconds.
+['Response to the prompt: Please summarize the content of the article titled: Article 1. The content is: Content of Article 1', 'Response to the prompt: Please summarize the content of the article titled: Article 2. The content is: Content of Article 2']
+```
+
+## 下一步
+
+现在你已经对 Slyme 的核心模块有了基本的理解，接下来：
+
+- 为了对这些组件的行为有更深入的掌握，推荐你阅读接下来的基础章节，了解 [Context](/zh/guide/essentials/context)、[Node](/zh/guide/essentials/node)、[Builder](/zh/guide/essentials/builder) 和[生命周期](/zh/guide/essentials/lifecycle)。它们将提供组件的更详细的说明，帮助你高效地开发 Slyme 执行流程。
+- 如果你想要更深入地了解 Slyme 的工作原理，推荐你阅读 [深入 Slyme](/zh/guide/advanced-usage/functional-programming-basics) 章节。
