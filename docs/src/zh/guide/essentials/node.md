@@ -2,6 +2,10 @@
 
 Node 是 Slyme 中最核心的逻辑执行单元，它是函数式编程概念的具象化。Slyme 基于一种严谨的构建（Def）到执行（Exec）的两阶段架构，这让 Node 在具备极高灵活性的同时，也能保证运行时结构的安全与高效。
 
+::: info
+在接下来的章节（包括整个 Slyme 文档）中，除非特殊说明，我们使用 “Node” 来泛指 @node / @expression / @wrapper，而具体的类型则会显式地通过 @node / @expression / @wrapper 来表示。
+:::
+
 ## Node 体系设计 {#design}
 
 在 Slyme 中，所有的 Node 类都遵循以下几个核心设计理念：
@@ -116,6 +120,17 @@ node_def = to_upper(value=Ref("name")).add_wrappers(
 node_exec = node_def.prepare()
 new_ctx = node_exec(ctx)
 ```
+
+## Node 结构校验
+
+Slyme 中，@node，@expression，@wrapper 之间的合法结构关系如下：
+
+- @expression 可以被 @node / @wrapper 或者另一个 @expression 持有，即任意 Node 类型都可以使用 @expression 来进行求值计算
+- @wrapper 只能被 @node 通过 `.add_wrappers()` 方法挂载，不能被其他 Node 类型（包括 @expression 和 @wrapper）持有。即，@wrapper 只能用于作为 @node 的中间件。
+- @node 只能被其他 @node 持有，不能被 @expression 或 @wrapper 持有。@node 是 Node 体系的最核心的类型，@expression 和 @wrapper 的作用是功能的增强。
+- 上述“持有”的意思是，@node / @expression / @wrapper 通过自定义参数传入了 Node 类型的实例，其中包括任意嵌套的列表/元组/字典，比如某个 @node 的参数 `nodes` 传入了一个 @node 列表，或者某个 @wrapper 的参数 `expression_dict` 传入了一个 `dict[str, Expression]` 等等。
+
+在上述约束下，我们可以构建任意复杂的 Node 结构，最终组成一个 Node 树。
 
 ## 声明式依赖 (Spec) {#spec}
 
