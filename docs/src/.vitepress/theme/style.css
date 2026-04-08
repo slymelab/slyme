@@ -40,8 +40,10 @@
   .shiki-container pre::-webkit-scrollbar-thumb {
     background-color: rgba(156, 163, 175, 0.5);
     border-radius: 4px;
+  }
 
-    @variant dark {
+  @variant dark {
+    .shiki-container pre::-webkit-scrollbar-thumb {
       background-color: rgba(75, 85, 99, 0.5);
     }
   }
