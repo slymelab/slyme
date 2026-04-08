@@ -275,4 +275,4 @@ Finished successfully in 0.0000 seconds.
 现在你已经对 Slyme 的核心模块有了基本的理解，接下来：
 
 - 为了对这些组件的行为有更深入的掌握，推荐你阅读接下来的基础章节，了解 [Context](/zh/guide/essentials/context)、[Node](/zh/guide/essentials/node)、[Builder](/zh/guide/essentials/builder) 和[生命周期](/zh/guide/essentials/lifecycle)。它们将提供组件的更详细的说明，帮助你高效地开发 Slyme 执行流程。
-- 如果你想要更深入地了解 Slyme 的工作原理，推荐你阅读 [深入 Slyme](/zh/guide/advanced-usage/functional-programming-basics) 章节。
+- 如果你想要更深入地了解 Slyme 的工作原理，推荐你阅读 [深入 Slyme](/zh/guide/slyme-in-depth/functional-programming-basics) 章节。

@@ -32,7 +32,7 @@ name_ref = profile_ref.at("name")  # 等价于 Ref("user.profile.name")
 ```
 
 ::: info
-`Ref` 在内部会缓存哈希值和拆分后的路径片段（`parts`），因此在执行期频繁使用 `Ref` 进行查找时具有极高的性能。除此之外，`Ref` 还可以携带 `metadata` 和 `key_path`（用于 [PyTree](/zh/guide/advanced-usage/pytree-in-slyme) 解析）等高级元数据，以支持命令行参数配置等功能。
+`Ref` 在内部会缓存哈希值和拆分后的路径片段（`parts`），因此在执行期频繁使用 `Ref` 进行查找时具有极高的性能。除此之外，`Ref` 还可以携带 `metadata` 和 `key_path`（用于 [PyTree](/zh/guide/slyme-in-depth/pytree-in-slyme) 解析）等高级元数据，以支持命令行参数配置等功能。
 :::
 
 ## Context
@@ -103,7 +103,7 @@ profiles = ctx.extract([
 ```
 
 ::: warning
-请注意，`ctx.extract()` 方法要求每一个叶子的值都是 `Ref` 对象，不允许混合普通值，比如 `ctx.extract([Ref("status"), 123])` 这样是不允许的。如果想要解析混合的结构，你应该使用更高级的 eval API（详见[依赖注入](/zh/guide/advanced-usage/dependency-injection)）：
+请注意，`ctx.extract()` 方法要求每一个叶子的值都是 `Ref` 对象，不允许混合普通值，比如 `ctx.extract([Ref("status"), 123])` 这样是不允许的。如果想要解析混合的结构，你应该使用更高级的 eval API（详见[依赖注入](/zh/guide/slyme-in-depth/dependency-injection)）：
 
 ```python
 from slyme.node.eval import eval_tree

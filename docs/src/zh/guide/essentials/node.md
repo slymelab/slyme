@@ -233,7 +233,7 @@ process_data(data={
 :::
 
 ::: tip
-如果想深入了解 `Auto` 的工作原理，你可以参考[依赖注入](/zh/guide/advanced-usage/dependency-injection)章节。
+如果想深入了解 `Auto` 的工作原理，你可以参考[依赖注入](/zh/guide/slyme-in-depth/dependency-injection)章节。
 :::
 
 ## 使用 Scope 来初始化 Node
