@@ -121,7 +121,7 @@ node_exec = node_def.prepare()
 new_ctx = node_exec(ctx)
 ```
 
-## Node 结构校验
+## Node 结构校验 {#node-struct}
 
 Slyme 中，@node，@expression，@wrapper 之间的合法结构关系如下：
 
@@ -321,7 +321,7 @@ def my_builder():
 Node 中有一些常量用于实例化 Node 过程中的特殊标记：
 
 - `UNSET`：显式表示 Node 的某个参数未被设置，从而触发默认值逻辑。
-- `UNDEFINED`：表示 Node 某个参数没有被设置合法的值，需要设置之后才能执行。这意味着，一些参数可以延迟被指定，但是在 `.prepare()` 方法被调用之前，所有的参数都不能是 `UNDEFINED`。
+- `UNDEFINED`：表示 Node 某个参数没有被设置合法的值，需要设置之后才能执行。这意味着，一些参数可以延迟被指定，但是在 `.prepare()` 方法被调用时，所有的参数都不能是 `UNDEFINED`。
 
 举例：
 
