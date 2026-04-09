@@ -35,6 +35,21 @@ name_ref = profile_ref.at("name")  # 等价于 Ref("user.profile.name")
 `Ref` 在内部会缓存哈希值和拆分后的路径片段（`parts`），因此在执行期频繁使用 `Ref` 进行查找时具有极高的性能。除此之外，`Ref` 还可以携带 `metadata` 和 `key_path`（用于 [PyTree](/zh/guide/slyme-in-depth/pytree-in-slyme) 解析）等高级元数据，以支持命令行参数配置等功能。
 :::
 
+### Key Path
+
+`Ref("a.b.c")` 的路径只能放问到 Context 本身的结构化数据，但是对叶子结点无法进一步穿透获取。Slyme 提供了 Key Path 功能，以增强对 Context 结构的访问。可以通过这个例子来理解：
+
+```python
+from slyme.utils.pytree import P
+
+# 如果 `hidden_size` 直接存储在 Context 路径上，那么我们可以直接 get 得到
+ctx.get(Ref("hidden_size"))
+# 如果 `hidden_size` 需要从 Context 存储的 model 的 config 中获取，那么由于 model 本身是普通用户对象，不属于 Context 结构，因此我们可以使用 Key Path
+ctx.get(Ref("model", key_path=tuple(P.config.hidden_size)))
+```
+
+请注意，其中的 `P` 是一个特殊的代理对象，支持点属性操作（`P.a`）、getitem 操作（`P[...]`）和调用操作（`P(*args, **kwargs)`）。上述例子的最终效果是，首先从 Context 的 `"model"` 路径获取值，然后对其调用 `.config.hidden_size`，并将最终结果返回。Key Path 功能是对 Node 的进一步解耦，Node 只需要声明自己需要一个 `hidden_size` 参数，而无需关心这个 `hidden_size` 是如何计算得到的。
+
 ## Context
 
 `Context` 是 Node 运行时的状态容器。基于 **Copy-On-Write（写时复制）** 机制，每次对 Context 的修改都不会改变原对象，而是返回一个全新的 Context 实例。这种设计从根本上保证了函数式编程的并发安全和状态可追溯性。
