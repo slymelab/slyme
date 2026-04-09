@@ -2,6 +2,14 @@
 
 在这篇指引中，我们将通过一个简单的 LLM 模拟调用示例来串联一遍 Slyme 的核心概念。我们将接受一个文章的列表（`list[dict]`），包含文章的标题和内容，然后模拟调用 LLM 来生成文章的总结。在这个过程中，我们将对 LLM 的调用时间进行记录并打印。
 
+## 安装
+
+```bash
+pip install slyme==0.1.0rc3
+```
+
+项目依赖仅包括 `Python >= 3.9` 和 `typing_extensions`。
+
 ## Step 1：使用 @node 实现 LLM 模拟调用节点
 
 我们使用 @node 装饰器来装饰 `llm_api` 函数，其中 `llm_api` 的功能是接收一个 prompt 列表（batch 输入），根据 prompt 来调用 LLM 模型，最后将 LLM 的响应（batch 输出）写入到 `responses` 中。
