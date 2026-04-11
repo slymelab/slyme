@@ -1,10 +1,13 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [project]
 name = "slyme"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Slyme is a highly composable functional execution framework."
 readme = "README.md"
 authors = [{ name = "The SlymeLab Team" }]

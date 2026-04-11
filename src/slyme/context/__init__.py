@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .core import Context, Ref, Config as ContextConfig
+from .core import Context, Ref, Config as ContextConfig, DIFF_MISSING
 from .metadata import HELP, TYPE
 from .hook import Hook, HookChain, ExtractResult, MutateResult
 
@@ -20,6 +20,7 @@ __all__ = [
     "Context",
     "Ref",
     "ContextConfig",
+    "DIFF_MISSING",
     "HELP",
     "TYPE",
     "Hook",

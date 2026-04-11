@@ -36,10 +36,16 @@ from slyme.context import Context
 __all__ = [
     "spec",
     "Auto",
+    "UNSET",
+    "UNDEFINED",
 ]
 T = TypeVar("T")
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
+Unset = Enum("Unset", ["MARK"])
+UNSET = Unset.MARK
+Undefined = Enum("Undefined", ["MARK"])
+UNDEFINED = Undefined.MARK
 EvaluatorFunc = Callable[[Context], Any]
 
 
@@ -61,13 +67,13 @@ class Spec:
             )
 
     def _build(self, value: Any = _MISSING) -> Any:
-        if value is not _MISSING:
+        if value is not _MISSING and value is not UNSET:
             return value
         if self.default is not _MISSING:
             return self.default
         if self.default_factory is not _MISSING:
             return self.default_factory()
-        raise ValueError("Missing required parameter.")
+        return UNDEFINED
 
     def should_eval(self, value: Any) -> bool:
         if self.auto_eval is _MISSING:
@@ -105,13 +111,13 @@ class SignatureAnalysis:
             object.__setattr__(self, "specs", types.MappingProxyType(self.specs))
 
 
-def _collect_specs_from_hint(hint: Any) -> list[Spec]:
+def _collect_specs_from_hint(hint: Any, default_is_none: bool) -> list[Spec]:
     """Recursively collect Spec annotations from a type hint."""
     # NOTE: Compatibility for Python < 3.11: get_type_hints auto-wraps parameters
     # with None defaults in Optional. Safely unwrap this outer Optional/Union
     # to expose the underlying Annotated type.
     if sys.version_info < (3, 11):
-        if get_origin(hint) is Union:
+        if default_is_none and get_origin(hint) is Union:
             args = get_args(hint)
             if len(args) == 2 and type(None) in args:
                 hint = args[0] if args[1] is type(None) else args[1]
@@ -129,11 +135,11 @@ def _collect_specs_from_hint(hint: Any) -> list[Spec]:
     return specs
 
 
-def resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
+def _resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
     if hint is None:
         collected_specs = []
     else:
-        collected_specs = _collect_specs_from_hint(hint)
+        collected_specs = _collect_specs_from_hint(hint, param.default is None)
 
     if param.default is not inspect.Parameter.empty:
         if isinstance(param.default, Spec):
@@ -188,7 +194,7 @@ def analyze_signature(
             elif p.kind == inspect.Parameter.KEYWORD_ONLY:
                 public_params.append(p)
                 # Spec Resolution Logic: Always returns a Spec object now
-                specs[p.name] = resolve_spec(p, type_hints.get(p.name))
+                specs[p.name] = _resolve_spec(p, type_hints.get(p.name))
             else:
                 kind_name = str(p.kind)
                 raise TypeError(

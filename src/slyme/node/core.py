@@ -49,6 +49,7 @@ from .signature import (
     process_kwargs,
     analyze_signature,
     resolve_arguments,
+    UNDEFINED,
 )
 
 __all__ = [
@@ -157,6 +158,31 @@ def _prepare_eval(
     return raw_kwargs, eval_kwargs
 
 
+def _validate_kwargs(specs: Mapping[str, Spec], kwargs: Mapping[str, Any]) -> None:
+    allowed_names = set(specs.keys())
+    input_names = set(kwargs.keys())
+
+    # 1. Exact match check
+    unknown_args = input_names - allowed_names
+    missing_args = allowed_names - input_names
+
+    if unknown_args or missing_args:
+        msg_parts = []
+        if unknown_args:
+            msg_parts.append(f"unexpected keyword argument(s) {list(unknown_args)}")
+        if missing_args:
+            msg_parts.append(f"missing required argument(s) {list(missing_args)}")
+
+        raise TypeError(
+            f"Got {' and '.join(msg_parts)}. Allowed arguments: {list(allowed_names)}."
+        )
+
+    # 2. Check for UNDEFINED values
+    undefined_args = [k for k, v in kwargs.items() if v is UNDEFINED]
+    if undefined_args:
+        raise ValueError(f"Missing required parameter(s): {undefined_args}.")
+
+
 class _DefMixin:
     """
     Mixin for mutable definition classes.
@@ -232,6 +258,20 @@ class NodeElement(ABC):
         Converts the Definition structure into an Execution structure.
         """
         pass
+
+    @property
+    def func(self) -> Callable:
+        return self._func
+
+    @property
+    def specs(self) -> Mapping[str, Spec]:
+        return self._specs
+
+    @property
+    def kwargs(self) -> Mapping[str, Any]:
+        if isinstance(self._kwargs, types.MappingProxyType):
+            return self._kwargs
+        return types.MappingProxyType(self._kwargs)
 
     def __getitem__(self, key: str) -> Any:
         return self._kwargs[key]
@@ -321,6 +361,9 @@ class NodeExec(_ExecMixin, Node):
         wrappers: Iterable["Wrapper"],
         kwargs: Mapping[str, Any],
     ):
+        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
+            _validate_kwargs(specs, kwargs)
+
         wrappers = tuple(wrappers)
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
@@ -439,6 +482,9 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
         wrappers: Iterable["AsyncWrapper"],
         kwargs: Mapping[str, Any],
     ):
+        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
+            _validate_kwargs(specs, kwargs)
+
         wrappers = tuple(wrappers)
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
@@ -537,6 +583,9 @@ class ExpressionExec(_ExecMixin, Expression[_R]):
         specs: Mapping[str, Spec],
         kwargs: Mapping[str, Any],
     ):
+        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
+            _validate_kwargs(specs, kwargs)
+
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
         object.__setattr__(self, "_func", func)
@@ -617,6 +666,9 @@ class AsyncExpressionExec(_ExecMixin, AsyncExpression[_R]):
         specs: Mapping[str, Spec],
         kwargs: Mapping[str, Any],
     ):
+        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
+            _validate_kwargs(specs, kwargs)
+
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
         object.__setattr__(self, "_func", func)
@@ -712,6 +764,9 @@ class WrapperExec(_ExecMixin, Wrapper):
         specs: Mapping[str, Spec],
         kwargs: Mapping[str, Any],
     ):
+        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
+            _validate_kwargs(specs, kwargs)
+
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
         object.__setattr__(self, "_func", func)
@@ -819,6 +874,9 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
         specs: Mapping[str, Spec],
         kwargs: Mapping[str, Any],
     ):
+        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
+            _validate_kwargs(specs, kwargs)
+
         if not isinstance(kwargs, types.MappingProxyType):
             kwargs = types.MappingProxyType(kwargs)
         object.__setattr__(self, "_func", func)

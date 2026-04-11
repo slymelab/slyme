@@ -28,7 +28,7 @@ from .core import (
     async_wrapper,
     async_expression,
 )
-from .signature import spec, Auto
+from .signature import spec, Auto, UNSET, UNDEFINED
 from .render import Config as RenderConfig
 from .validator import (
     check_node_structure,
@@ -36,7 +36,7 @@ from .validator import (
 )
 
 # NOTE: register eval funcs here through import
-from .eval import eval_tree
+from .eval import eval_tree, async_eval_tree
 from .common import (
     sequential_exec,
     sequential,
@@ -67,6 +67,9 @@ __all__ = [
     "async_sequential",
     "spec",
     "Auto",
+    "UNSET",
+    "UNDEFINED",
     "RenderConfig",
     "eval_tree",
+    "async_eval_tree",
 ]
