@@ -75,7 +75,7 @@
                 <span class="text-blue-600 bg-blue-100 dark:bg-blue-900/40 px-2 py-1 rounded text-xs">Mutable</span>
               </div>
               <div
-                class="p-4 border border-dashed border-blue-300 dark:border-blue-700/60 rounded-lg bg-white dark:bg-black/20 text-gray-700 dark:text-gray-300 leading-relaxed">
+                class="p-4 border border-dashed border-blue-300 dark:border-blue-700/60 rounded-lg bg-white dark:bg-black/20 text-gray-700 dark:text-gray-300 leading-relaxed break-all">
                 <span class="text-gray-400"># Dynamically orchestrate nodes</span><br />
                 read_data.add_wrappers(retry, log)<br />
                 pipeline = sequential([read_data, model_forward])
@@ -94,7 +94,7 @@
                   class="text-green-600 bg-green-100 dark:bg-green-900/40 px-2 py-1 rounded text-xs">Immutable</span>
               </div>
               <div
-                class="p-4 border border-green-400/50 rounded-lg bg-green-50 dark:bg-green-900/10 text-green-800 dark:text-green-300 leading-relaxed">
+                class="p-4 border border-green-400/50 rounded-lg bg-green-50 dark:bg-green-900/10 text-green-800 dark:text-green-300 leading-relaxed break-all">
                 <span class="text-green-600/70 dark:text-green-400/70"># Freeze topology for safe execution</span><br />
                 frozen_chain = pipeline.prepare()<br />
                 ctx = frozen_chain(ctx)
