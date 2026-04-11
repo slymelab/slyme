@@ -5,7 +5,7 @@
 ## 安装
 
 ```bash
-pip install slyme==0.1.0rc3
+pip install slyme
 ```
 
 项目依赖仅包括 `Python >= 3.9` 和 `typing_extensions`。

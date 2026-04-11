@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitepress'
 import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
-import nav from './theme/config/nav.js'
-import sidebar from './theme/config/sidebar.js'
+import { navEn, navZh } from './theme/config/nav.js'
+import { sidebarEn, sidebarZh } from './theme/config/sidebar.js'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
@@ -11,8 +11,6 @@ export default defineConfig({
   head: [['link', { rel: 'icon', href: '/Slyme.svg' }]],
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
-    nav: nav,
-    sidebar: sidebar,
     socialLinks: [
       { icon: 'github', link: 'https://github.com/slymelab/slyme' }
     ],
@@ -36,6 +34,24 @@ export default defineConfig({
       label: 'English',
       lang: 'en-US',
       description: 'Welcome to Slyme!',
+      themeConfig: {
+        nav: navEn,
+        sidebar: sidebarEn,
+      }
     },
+    zh: {
+      label: '简体中文',
+      lang: 'zh-CN',
+      description: '欢迎使用 Slyme!',
+      themeConfig: {
+        nav: navZh,
+        sidebar: sidebarZh,
+        outline: { label: '页面导航' },
+        docFooter: {
+          prev: '上一页',
+          next: '下一页'
+        },
+      }
+    }
   }
 })

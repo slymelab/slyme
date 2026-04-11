@@ -1,38 +1,45 @@
 # What is Slyme?
 
-Slyme (pronounced /slaɪm/) is a highly composable functional execution framework. True to its acronym—**S**LYME **L**ets **Y**ou **M**old **E**verything—it empowers developers to seamlessly build complex, concurrency-safe execution pipelines out of simple, reusable functional blocks.
+Slyme (pronounced /slaɪm/) is a highly composable functional execution framework. As the recursive naming suggests (**S**LYME **L**ets **Y**ou **M**old **E**verything), it enables developers to seamlessly build arbitrarily complex execution flows based on simple, reusable functions, without needing to master cumbersome APIs or syntax.
 
 ::: tip
-Just want to try it out? Skip to the [Quickstart](/guide/intro/get-started).
+Just want to try Slyme? Jump to the [Quick Start](/guide/intro/quick-start).
 :::
 
-## Highlights
+## Core Advantages
 
-- **Native Python Experience**: Developing with Slyme feels entirely natural. You only need to understand basic Python functions and native data structures (like dictionaries, lists, and tuples). There is no heavy object-oriented boilerplate or steep learning curve required.
-- **Infinite Composability (Fractal Structure)**: Slyme's architecture is inherently fractal. A [Node](/guide/core-concepts/node) can seamlessly encapsulate sub-nodes, while simultaneously being embedded as a sub-node within another larger Node. This allows you to build infinitely complex systems from simple, reusable blocks.
-- **Functional & Concurrency-Safe**: State mutations are handled purely functionally. Because the runtime relies on an immutable context with Copy-On-Write (COW) mechanics, node executions are thread-safe and inherently designed for safe asynchronous concurrency.
-- **Seamless Collaboration & Easy Testing**: Slyme's decoupled design makes it perfect for teamwork and open-source contributions. Developers can build independent Nodes. Since each Node is essentially a function interacting with a [Context](/guide/core-concepts/context), unit testing is completely straightforward.
-- **Flexible PyTree Architecture**: Under the hood, Slyme is powered by a robust [PyTree](/guide/advanced-usage/pytree-in-slyme) engine. It can dynamically parse, traverse, and rebuild almost any nested combination of native Python data types and Slyme node structures.
+- **Native Python Development Experience**: Slyme has no heavy object-oriented boilerplate code and no steep learning curve. You only need to master some basic Python concepts, including Python functions and native data structures (such as dictionaries, lists, tuples, etc.), and understand a few core concepts to get started quickly.
+- **Unlimited Composability**: The basic execution unit in Slyme is [Node](/guide/essentials/node), which is responsible for executing user-defined functions. Node supports **unlimited composition** — a Node can contain other Nodes, or be contained by other Nodes. Interestingly, thanks to PyTree augmentation, this containment relationship can be directly represented through native Python data structures, such as lists or dictionaries. Unlimited composition enables Slyme to build arbitrarily complex execution flows, with complete decoupling between Nodes.
+- **Functional/Concurrency Safety**: Slyme is designed as a functional execution framework, where the "state" (i.e., [Context](/guide/essentials/context)) exchanged between Nodes is **structurally immutable**, making state management under concurrent execution simpler and safer.
+- **Seamless Collaboration**: Slyme's Node design is highly decoupled. These Nodes communicate through Context, which allows community/development teams to independently develop their own features and perform unit testing, reducing code conflicts during development and allowing developers to focus on logic implementation rather than being bound by deep system coupling and tedious "glue code".
 
 ## Core Concepts
 
-To understand how Slyme molds everything together, you only need to grasp a few core concepts (which we will explore in detail in the following sections):
+To understand how Slyme works, you need to understand the following core concepts:
 
-### 1. Context
-The [Context](/guide/core-concepts/context) is the lifeblood of Slyme. It is an immutable, Copy-On-Write data container that flows through your execution graph. Instead of mutating state globally, functions extract what they need from the Context and return an updated Context safely.
+### Context
 
-### 2. The Node Series
-Slyme's execution units are divided into specific families to handle different tasks:
-- [**Node**](/guide/core-concepts/node): The primary unit that takes a Context and returns a new Context.
-- [**Expression**](/guide/core-concepts/node): Computes and returns specific values from the Context.
-- [**Wrapper**](/guide/core-concepts/node): Acts as middleware to intercept, modify, or augment the execution of other Nodes.
+[Context](/guide/essentials/context) is Slyme's core data structure. It behaves like a dictionary (`dict`) in Python, with two key differences: it is **hierarchical** and **structurally immutable**. [Ref](/guide/essentials/context#ref) is a class used to access/modify Context, similar to a dictionary key. You can access paths like `a.b` through Ref, or modify values like `c.d`. Each modification to Context returns a new Context object. Internally, Context uses **Copy-On-Write** mechanism to reuse structures and improve execution efficiency.
 
-*(Note: All of these have `Async` equivalents for asynchronous execution).*
+### Node
 
-### 3. Builder
-The [Builder](/guide/core-concepts/builder) is a structural pattern (often used via the `@builder` decorator) that helps you assemble and compose complex PyTree node structures out of simpler ones during the initialization phase.
+As mentioned earlier, [Node](/guide/essentials/node) is Slyme's basic execution unit, responsible for executing user-defined functions. Depending on the Node type, it can be categorized as follows:
 
-### 4. Build-time / Run-time Separation
-Slyme enforces a strict boundary between two distinct phases:
-- **Build-time (Definition)**: Where you construct, mutate, and wire together your Node definitions (e.g., `NodeDef`).
-- **Run-time (Execution)**: Where definitions are frozen into highly optimized, immutable execution structures (e.g., `NodeExec`) that process your Contexts safely and efficiently.
+- [**@node**](/guide/essentials/node#at-node): Slyme's basic execution unit, responsible for accepting a Context object, executing a user function, and returning a new Context object (or the original Context if no modifications were made). During this process, the user function retrieves values from Context, executes custom logic, writes the execution result to Context and returns it, similar to traditional functions that accept input parameters, execute logic, and return results.
+- [**@expression**](/guide/essentials/node#at-expression): Similar to @node, @expression's user function retrieves values from Context, processes them, and then **directly returns the value itself** (rather than a Context object). This behavior is similar to Python's @property (or Vue's computed properties).
+- [**@wrapper**](/guide/essentials/node#at-wrapper): @wrapper functions like middleware, responsible for intercepting, modifying, or enhancing the Node's execution process, such as adding logs before/after @node execution, recording performance, handling exceptions, etc.
+
+::: info
+@node / @expression / @wrapper all have corresponding async versions (@async_node / @async_expression / @async_wrapper) for execution in async environments.
+:::
+
+### Builder
+
+[@builder](/guide/essentials/builder) is used to assemble Node structures. Users can build arbitrary Node flows within custom functions, then hand them over to @builder for automatic structure validation. A @builder function can call other @builder functions for more flexible organization of the building process.
+
+### Build-time / Execution-time Separation
+
+In Slyme, build-time and execution-time are two distinct concepts, corresponding to different points in time (see [Lifecycle](/guide/essentials/lifecycle)).
+
+- **Build-time**: During build-time, users assemble Node structures and can make arbitrary modifications to them.
+- **Execution-time**: During execution-time, users convert the built Node structure into a fixed execution structure through the `.prepare()` method, for safe and efficient execution.
