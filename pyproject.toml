@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slyme"
-version = "0.1.0rc3"
-description = "Placeholder for slyme series."
+version = "0.1.0"
+description = "Slyme is a highly composable functional execution framework."
 readme = "README.md"
 authors = [{ name = "The SlymeLab Team" }]
 license = { text = "Apache-2.0" }
@@ -14,7 +14,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 requires-python = ">=3.9"
-dependencies = []
+dependencies = [
+    "typing-extensions>=4.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/slymelab/slyme"
