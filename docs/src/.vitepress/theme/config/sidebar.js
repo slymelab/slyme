@@ -27,6 +27,13 @@ const guideEn = [
     collapsed: false,
   },
   {
+    text: 'Extensions',
+    items: [
+      { text: 'Argparse Integration', link: '/guide/extensions/argparse-integration' },
+    ],
+    collapsed: false,
+  },
+  {
     text: 'Contributing',
     items: [
       { text: 'Overview', link: '/guide/contributing/' },
@@ -64,6 +71,13 @@ const guideZh = [
       { text: '函数式编程基础', link: '/zh/guide/slyme-in-depth/functional-programming-basics' },
       { text: '深入理解 Slyme 中的 PyTree', link: '/zh/guide/slyme-in-depth/pytree-in-slyme' },
       { text: '依赖注入', link: '/zh/guide/slyme-in-depth/dependency-injection' },
+    ],
+    collapsed: false,
+  },
+  {
+    text: '扩展功能',
+    items: [
+      { text: '自动参数解析', link: '/zh/guide/extensions/argparse-integration' },
     ],
     collapsed: false,
   },
