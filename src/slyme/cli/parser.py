@@ -29,7 +29,7 @@ from typing import (
     get_origin,
 )
 
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, RefLike
 from slyme.context.metadata import Arg
 from slyme.utils.registry import TypeRegistry
 
@@ -355,8 +355,8 @@ def parse_and_inject(
     context: Optional[Context] = None,
     parser: Optional[argparse.ArgumentParser] = None,
     cli_args: Optional[List[str]] = None,
-    node: Optional[Union[Any, Iterable[Ref]]] = None,
-    extra_refs: Optional[Iterable[Ref]] = None,
+    node: Optional[Union[Any, Iterable[RefLike]]] = None,
+    extra_refs: Optional[Iterable[RefLike]] = None,
     extra_args: Optional[Dict[str, Arg]] = None,
 ) -> Union[Dict[str, Any], Context]:
     """

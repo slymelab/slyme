@@ -162,6 +162,56 @@ class Ref(Generic[_T]):
         return ", ".join(repr_items)
 
 
+class RefFactory:
+    """Immutable factory that records attribute access as a dotted path.
+
+    R.x.y.z records ``"x.y.z"``. Calling ``R.x.y.z()`` creates ``Ref("x.y.z")``.
+    ``R.x.y.z(key_path=..., metadata=...)`` passes additional arguments to ``Ref``.
+    """
+
+    __slots__ = ("_path",)
+
+    def __init__(self, path: str = "") -> None:
+        object.__setattr__(self, "_path", path)
+
+    def __getattribute__(self, name: str) -> "RefFactory":
+        if name.startswith("_"):
+            return object.__getattribute__(self, name)
+        path = object.__getattribute__(self, "_path")
+        new_path = f"{path}.{name}" if path else name
+        return RefFactory(new_path)
+
+    def __call__(
+        self,
+        *,
+        key_path: KeyPath = (),
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Ref:
+        path = object.__getattribute__(self, "_path")
+        kwargs: dict[str, Any] = {}
+        if key_path:
+            kwargs["key_path"] = key_path
+        if metadata is not None:
+            kwargs["metadata"] = metadata
+        return Ref(path, **kwargs)
+
+    def __repr__(self) -> str:
+        path = object.__getattribute__(self, "_path")
+        return f"R.{path}" if path else "R"
+
+
+R = RefFactory()
+
+RefLike = Union[Ref, RefFactory]
+
+
+def to_ref(ref_like: RefLike) -> Ref:
+    """Normalize a :class:`Ref` or :class:`RefFactory` into a :class:`Ref` object."""
+    if isinstance(ref_like, RefFactory):
+        return ref_like()
+    return ref_like
+
+
 class ContextPathError(KeyError):
     """Internal exception raised when a path cannot be resolved in the context."""
 
@@ -450,7 +500,7 @@ class ContextElement(ABC):
     @abstractmethod
     def get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
         *,
         apply_hook: bool = True,
@@ -460,7 +510,7 @@ class ContextElement(ABC):
     @abstractmethod
     async def async_get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
         *,
         apply_hook: bool = True,
@@ -468,27 +518,27 @@ class ContextElement(ABC):
         pass
 
     @abstractmethod
-    def exists(self, ref: Ref[_T]) -> bool:
+    def exists(self, ref: RefLike) -> bool:
         pass
 
     @abstractmethod
-    def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
+    def keys(self, ref: Optional[RefLike] = None) -> Iterable[str]:
         pass
 
     @abstractmethod
-    def to_context_data(self, ref: Optional[Ref[_T]] = None) -> ContextData:
+    def to_context_data(self, ref: Optional[RefLike] = None) -> ContextData:
         pass
 
     @abstractmethod
     def to_dict(
-        self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
+        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         """Convert to standard python dictionary recursively."""
         pass
 
     @abstractmethod
     async def async_to_dict(
-        self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
+        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         pass
 
@@ -603,6 +653,9 @@ class Context(ContextElement):
         return obj
 
     def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
+        ref_tree = CTX_EVAL_ENGINE.map(
+            lambda x: x() if isinstance(x, RefFactory) else x, ref_tree
+        )
         refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
         values = tuple(self._resolve(ref.parts) for ref in refs)
         # NOTE: Check key_path
@@ -625,6 +678,9 @@ class Context(ContextElement):
     async def async_extract(
         self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
     ) -> Any:
+        ref_tree = CTX_EVAL_ENGINE.map(
+            lambda x: x() if isinstance(x, RefFactory) else x, ref_tree
+        )
         refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
         values = tuple(self._resolve(ref.parts) for ref in refs)
         # NOTE: Check key_path
@@ -646,7 +702,8 @@ class Context(ContextElement):
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
 
-    def _build_dict_ref_tree(self, ref: Optional[Ref[_T]] = None) -> Any:
+    def _build_dict_ref_tree(self, ref: Optional[RefLike] = None) -> Any:
+        ref = to_ref(ref) if ref is not None else None
         data = self.to_context_data(ref)
         base_path = ref.path if ref else ""
 
@@ -664,18 +721,19 @@ class Context(ContextElement):
 
     # --- Read Operations ---
     @overload
-    def get(self, ref: Ref[_T], *, apply_hook: bool = True) -> _T: ...
+    def get(self, ref: RefLike, *, apply_hook: bool = True) -> _T: ...
     @overload
     def get(
-        self, ref: Ref[_T], default: _T2, *, apply_hook: bool = True
+        self, ref: RefLike, default: _T2, *, apply_hook: bool = True
     ) -> Union[_T, _T2]: ...
     def get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
+        ref = to_ref(ref)
         try:
             return self.extract(ref, apply_hook=apply_hook)
         except ContextPathError:
@@ -686,25 +744,26 @@ class Context(ContextElement):
     @overload
     async def async_get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         *,
         apply_hook: bool = True,
     ) -> _T: ...
     @overload
     async def async_get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         default: _T2,
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]: ...
     async def async_get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
+        ref = to_ref(ref)
         try:
             return await self.async_extract(ref, apply_hook=apply_hook)
         except ContextPathError:
@@ -712,7 +771,8 @@ class Context(ContextElement):
                 raise
             return default
 
-    def exists(self, ref: Ref[_T]) -> bool:
+    def exists(self, ref: RefLike) -> bool:
+        ref = to_ref(ref)
         if ref.key_path:
             raise ValueError(
                 f"Ref.key_path must be empty for existence check (found {ref.key_path!r}). "
@@ -724,9 +784,10 @@ class Context(ContextElement):
         except ContextPathError:
             return False
 
-    def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
+    def keys(self, ref: Optional[RefLike] = None) -> Iterable[str]:
         if ref is None:
             return self._root.keys()
+        ref = to_ref(ref)
         if ref.key_path:
             raise ValueError(
                 f"Ref.key_path must be empty for listing keys (found {ref.key_path!r}). "
@@ -737,9 +798,10 @@ class Context(ContextElement):
             return element.keys()
         raise ContextPathError("Cannot list keys of a leaf value.")
 
-    def to_context_data(self, ref: Optional[Ref[_T]] = None) -> ContextData:
+    def to_context_data(self, ref: Optional[RefLike] = None) -> ContextData:
         if ref is None:
             return self._root
+        ref = to_ref(ref)
         if ref.key_path:
             raise ValueError(
                 f"Ref.key_path must be empty for converting to ContextData (found {ref.key_path!r}). "
@@ -751,13 +813,13 @@ class Context(ContextElement):
         raise ContextPathError("Target is not a ContextData (container).")
 
     def to_dict(
-        self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
+        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         ref_tree = self._build_dict_ref_tree(ref)
         return self.extract(ref_tree, apply_hook=apply_hook)
 
     async def async_to_dict(
-        self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
+        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         ref_tree = self._build_dict_ref_tree(ref)
         return await self.async_extract(ref_tree, apply_hook=apply_hook)
@@ -777,8 +839,8 @@ class Context(ContextElement):
     def mutate(
         self,
         *,
-        updates: Optional[Mapping[Ref, Any]] = None,
-        drops: Optional[Iterable[Ref]] = None,
+        updates: Optional[Mapping[RefLike, Any]] = None,
+        drops: Optional[Iterable[RefLike]] = None,
         apply_hook: bool = True,
     ) -> "Context":
         """
@@ -794,8 +856,8 @@ class Context(ContextElement):
         if not updates and not drops:
             return self
 
-        updates = dict(updates) if updates else {}
-        drops = set(drops) if drops else set()
+        updates = {to_ref(k): v for k, v in updates.items()} if updates else {}
+        drops = {to_ref(r) for r in drops} if drops else set()
         # Validate Ref.key_path is empty for all mutation operations
         invalid_updates = [r for r in updates if r.key_path]
         invalid_drops = [r for r in drops if r.key_path]
@@ -822,15 +884,15 @@ class Context(ContextElement):
     async def async_mutate(
         self,
         *,
-        updates: Optional[Mapping[Ref, Any]] = None,
-        drops: Optional[Iterable[Ref]] = None,
+        updates: Optional[Mapping[RefLike, Any]] = None,
+        drops: Optional[Iterable[RefLike]] = None,
         apply_hook: bool = True,
     ) -> "Context":
         if not updates and not drops:
             return self
 
-        updates = dict(updates) if updates else {}
-        drops = set(drops) if drops else set()
+        updates = {to_ref(k): v for k, v in updates.items()} if updates else {}
+        drops = {to_ref(r) for r in drops} if drops else set()
         # Validate Ref.key_path is empty for all mutation operations
         invalid_updates = [r for r in updates if r.key_path]
         invalid_drops = [r for r in drops if r.key_path]
@@ -858,32 +920,34 @@ class Context(ContextElement):
 
     # --- Convenience Interfaces ---
     def update(
-        self, updates: Mapping[Ref, Any], *, apply_hook: bool = True
+        self, updates: Mapping[RefLike, Any], *, apply_hook: bool = True
     ) -> "Context":
         """Batch update convenience interface."""
         return self.mutate(updates=updates, apply_hook=apply_hook)
 
     async def async_update(
-        self, updates: Mapping[Ref, Any], *, apply_hook: bool = True
+        self, updates: Mapping[RefLike, Any], *, apply_hook: bool = True
     ) -> "Context":
         return await self.async_mutate(updates=updates, apply_hook=apply_hook)
 
-    def drop(self, refs: Iterable[Ref], *, apply_hook: bool = True) -> "Context":
+    def drop(self, refs: Iterable[RefLike], *, apply_hook: bool = True) -> "Context":
         """Batch delete convenience interface."""
         return self.mutate(drops=refs, apply_hook=apply_hook)
 
     async def async_drop(
-        self, refs: Iterable[Ref], *, apply_hook: bool = True
+        self, refs: Iterable[RefLike], *, apply_hook: bool = True
     ) -> "Context":
         return await self.async_mutate(drops=refs, apply_hook=apply_hook)
 
-    def set(self, ref: Ref[_T], value: _T, *, apply_hook: bool = True) -> "Context":
+    def set(self, ref: RefLike, value: _T, *, apply_hook: bool = True) -> "Context":
         """Single set convenience interface."""
+        ref = to_ref(ref)
         return self.mutate(updates={ref: value}, apply_hook=apply_hook)
 
     async def async_set(
-        self, ref: Ref[_T], value: _T, *, apply_hook: bool = True
+        self, ref: RefLike, value: _T, *, apply_hook: bool = True
     ) -> "Context":
+        ref = to_ref(ref)
         return await self.async_mutate(updates={ref: value}, apply_hook=apply_hook)
 
     def update_tree(
@@ -903,7 +967,7 @@ class Context(ContextElement):
             A new Context instance with the updates applied.
         """
         updates = {
-            ref: CTX_EVAL_ENGINE.get_element(value_tree, path)
+            to_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
         return self.mutate(updates=updates, apply_hook=apply_hook)
@@ -925,23 +989,26 @@ class Context(ContextElement):
             A new Context instance with the updates applied.
         """
         updates = {
-            ref: CTX_EVAL_ENGINE.get_element(value_tree, path)
+            to_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
         return await self.async_mutate(updates=updates, apply_hook=apply_hook)
 
-    def delete(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
+    def delete(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
         """Single delete convenience interface."""
+        ref = to_ref(ref)
         return self.mutate(drops=[ref], apply_hook=apply_hook)
 
-    async def async_delete(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
+    async def async_delete(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
+        ref = to_ref(ref)
         return await self.async_mutate(drops=[ref], apply_hook=apply_hook)
 
-    def clear(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
+    def clear(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
         """
         Clear all contents under a reference but keep the path.
         Raises ContextPathError if the target is not a container (ContextData).
         """
+        ref = to_ref(ref)
         # 1. Validate target is a container
         val = self._resolve(ref.parts)
         if not isinstance(val, ContextData):
@@ -952,11 +1019,12 @@ class Context(ContextElement):
         # 2. Update with empty ContextData
         return self.mutate(updates={ref: ContextData()}, apply_hook=apply_hook)
 
-    async def async_clear(self, ref: Ref[_T], *, apply_hook: bool = True) -> "Context":
+    async def async_clear(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
         """
         Clear all contents under a reference but keep the path.
         Raises ContextPathError if the target is not a container (ContextData).
         """
+        ref = to_ref(ref)
         # 1. Validate target is a container
         val = self._resolve(ref.parts)
         if not isinstance(val, ContextData):
@@ -979,17 +1047,17 @@ class ContextView(ContextElement):
     _context: Context
     _parts: tuple[str, ...]
 
-    def _adjust_ref(self, ref: Optional[Ref[_T]]) -> Ref[_T]:
+    def _adjust_ref(self, ref: Optional[RefLike]) -> Ref:
         if ref is None:
-            path = ".".join(self._parts)
-            return Ref(path)
+            return Ref(".".join(self._parts))
+        ref = to_ref(ref)
         new_parts = self._parts + ref.parts
         new_path = ".".join(new_parts)
         return Ref(new_path, key_path=ref.key_path, metadata=ref.metadata)
 
     def _adjust_ref_tree(self, ref_tree: Any) -> Any:
         def adjust(obj):
-            if isinstance(obj, Ref):
+            if isinstance(obj, (Ref, RefFactory)):
                 return self._adjust_ref(obj)
             return obj
 
@@ -1009,7 +1077,7 @@ class ContextView(ContextElement):
 
     def get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
         *,
         apply_hook: bool = True,
@@ -1018,7 +1086,7 @@ class ContextView(ContextElement):
 
     async def async_get(
         self,
-        ref: Ref[_T],
+        ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
         *,
         apply_hook: bool = True,
@@ -1027,22 +1095,22 @@ class ContextView(ContextElement):
             self._adjust_ref(ref), default, apply_hook=apply_hook
         )
 
-    def exists(self, ref: Ref[_T]) -> bool:
+    def exists(self, ref: RefLike) -> bool:
         return self._context.exists(self._adjust_ref(ref))
 
-    def keys(self, ref: Optional[Ref[_T]] = None) -> Iterable[str]:
+    def keys(self, ref: Optional[RefLike] = None) -> Iterable[str]:
         return self._context.keys(self._adjust_ref(ref))
 
-    def to_context_data(self, ref: Optional[Ref[_T]] = None) -> ContextData:
+    def to_context_data(self, ref: Optional[RefLike] = None) -> ContextData:
         return self._context.to_context_data(self._adjust_ref(ref))
 
     def to_dict(
-        self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
+        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         return self._context.to_dict(self._adjust_ref(ref), apply_hook=apply_hook)
 
     async def async_to_dict(
-        self, ref: Optional[Ref[_T]] = None, *, apply_hook: bool = True
+        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
         return await self._context.async_to_dict(
             self._adjust_ref(ref), apply_hook=apply_hook

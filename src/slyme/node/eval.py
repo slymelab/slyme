@@ -15,7 +15,7 @@
 import asyncio
 from typing import Any, Sequence, Callable, Awaitable
 from dataclasses import dataclass
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, RefFactory
 from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import PyTreeDef
@@ -169,6 +169,10 @@ async def async_ref_evaluator(ctx: Context, refs: Sequence[Ref]) -> Sequence[Any
 
 EVALUATOR_REGISTRY.register(
     EvaluatorDef(sync_func=ref_evaluator, async_func=async_ref_evaluator), key=Ref
+)
+
+EVALUATOR_REGISTRY.register(
+    EvaluatorDef(sync_func=ref_evaluator, async_func=async_ref_evaluator), key=RefFactory
 )
 
 

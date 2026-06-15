@@ -36,7 +36,7 @@ from typing import (
 )
 from typing_extensions import ParamSpec, Concatenate, Self
 from slyme.utils.exception import enrich_exception
-from slyme.context import Context
+from slyme.context import Context, RefFactory
 from .exception import (
     NodeTerminate,
     NodeExceptionRecord,
@@ -98,6 +98,13 @@ AsyncWrapperFunc = Callable[
 ]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
+
+
+def _prepare_map(x: Any) -> Any:
+    """Leaf transform for :func:`NODE_PREPARE_ENGINE.map`. Normalizes RefFactory→Ref."""
+    if isinstance(x, RefFactory):
+        return x()
+    return x
 
 
 class Config:
@@ -334,7 +341,7 @@ class NodeDef(_DefMixin, Node):
         # of the structure (List -> Tuple, Dict -> MappingProxy, Def -> Exec).
         # We map strict identity because the transformation happens in the 'unflatten' phase
         # of the registered types in NODE_PREPARE_PYTREE_ENGINE.
-        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "wrappers":
@@ -456,7 +463,7 @@ class AsyncNodeDef(_DefMixin, AsyncNode):
         return self
 
     def prepare(self) -> "AsyncNodeExec":
-        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "wrappers":
@@ -564,7 +571,7 @@ class ExpressionDef(_DefMixin, Expression[_R]):
         object.__setattr__(self, "_kwargs", kwargs)
 
     def prepare(self) -> "ExpressionExec[_R]":
-        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
 
 
 class ExpressionExec(_ExecMixin, Expression[_R]):
@@ -648,7 +655,7 @@ class AsyncExpressionDef(_DefMixin, AsyncExpression[_R]):
         object.__setattr__(self, "_kwargs", kwargs)
 
     def prepare(self) -> "AsyncExpressionExec[_R]":
-        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
 
 
 class AsyncExpressionExec(_ExecMixin, AsyncExpression[_R]):
@@ -742,7 +749,7 @@ class WrapperDef(_DefMixin, Wrapper):
         object.__setattr__(self, "_kwargs", kwargs)
 
     def prepare(self) -> "WrapperExec":
-        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
 
 
 class WrapperExec(_ExecMixin, Wrapper):
@@ -853,7 +860,7 @@ class AsyncWrapperDef(_DefMixin, AsyncWrapper):
         object.__setattr__(self, "_kwargs", kwargs)
 
     def prepare(self) -> "AsyncWrapperExec":
-        return NODE_PREPARE_ENGINE.map(lambda x: x, self)
+        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
 
 
 class AsyncWrapperExec(_ExecMixin, AsyncWrapper):

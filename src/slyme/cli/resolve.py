@@ -22,7 +22,7 @@ from typing import (
     Union,
 )
 
-from slyme.context import Ref
+from slyme.context import Ref, RefFactory, RefLike, to_ref
 from slyme.context.metadata import ARG, HELP, TYPE, Arg
 from slyme.node.core import NODE_ENGINE
 
@@ -37,17 +37,16 @@ def collect_refs(element: Any) -> List[Ref]:
     refs: List[Ref] = []
 
     def is_leaf(node: Any, _) -> bool:
-        return isinstance(node, Ref)
+        return isinstance(node, (Ref, RefFactory))
 
     # We iterate using NODE_ENGINE which knows how to traverse Node structures
     for _, leaf in NODE_ENGINE.iter_with_key_path(element, is_leaf=is_leaf):
-        if isinstance(leaf, Ref):
-            refs.append(leaf)
+        refs.append(to_ref(leaf))
 
     return refs
 
 
-def resolve_args_from_refs(refs: Iterable[Ref]) -> Dict[str, Arg]:
+def resolve_args_from_refs(refs: Iterable[RefLike]) -> Dict[str, Arg]:
     """
     Resolve a list of Refs into a mapping of {path: Arg}.
 
@@ -62,7 +61,8 @@ def resolve_args_from_refs(refs: Iterable[Ref]) -> Dict[str, Arg]:
     path_to_help: Dict[str, List[str]] = {}
     path_to_type: Dict[str, List[Any]] = {}
 
-    for ref in refs:
+    for ref_like in refs:
+        ref = to_ref(ref_like)
         if ARG in ref.metadata:
             arg_def = ref.metadata[ARG]
             if not isinstance(arg_def, Arg):
@@ -113,8 +113,8 @@ def resolve_args_from_refs(refs: Iterable[Ref]) -> Dict[str, Arg]:
 
 
 def prepare_args(
-    node: Optional[Union[Any, Iterable[Ref]]] = None,
-    extra_refs: Optional[Iterable[Ref]] = None,
+    node: Optional[Union[Any, Iterable[RefLike]]] = None,
+    extra_refs: Optional[Iterable[RefLike]] = None,
     extra_args: Optional[Dict[str, Arg]] = None,
 ) -> Dict[str, Arg]:
     """

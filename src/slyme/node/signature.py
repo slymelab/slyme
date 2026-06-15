@@ -31,7 +31,8 @@ from typing import (
 )
 from collections import ChainMap
 from slyme.utils.exception import enrich_exception
-from slyme.context import Context
+from slyme.context import Context, RefFactory
+from slyme.context.tree import CTX_EVAL_ENGINE
 
 __all__ = [
     "spec",
@@ -68,12 +69,14 @@ class Spec:
 
     def _build(self, value: Any = _MISSING) -> Any:
         if value is not _MISSING and value is not UNSET:
-            return value
-        if self.default is not _MISSING:
-            return self.default
-        if self.default_factory is not _MISSING:
-            return self.default_factory()
-        return UNDEFINED
+            result = value
+        elif self.default is not _MISSING:
+            result = self.default
+        elif self.default_factory is not _MISSING:
+            result = self.default_factory()
+        else:
+            return UNDEFINED
+        return CTX_EVAL_ENGINE.map(lambda x: x() if isinstance(x, RefFactory) else x, result)
 
     def should_eval(self, value: Any) -> bool:
         if self.auto_eval is _MISSING:
