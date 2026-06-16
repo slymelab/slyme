@@ -102,6 +102,10 @@ class CallKey(PyTreeKey):
     """
     Represents a function call.
 
+    .. deprecated:: 0.1.1
+        Will be removed in 0.2.0.  ``Ref.key_path`` is deprecated; use
+        ``@expression`` + ``Auto`` instead.
+
     If the function arguments are not hashable, this key falls back to identity semantics
     (object.__hash__ and self is other).
     """
@@ -112,6 +116,15 @@ class CallKey(PyTreeKey):
     is_hashable: bool = field(init=False, repr=False)
 
     def __post_init__(self):
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "CallKey is deprecated and will be removed in slyme 0.2.0. "
+            "It was only used by Ref.key_path, which is also deprecated. "
+            "Use @expression + Auto for dynamic value resolution instead.",
+            FutureWarning,
+            2,
+        )
         # Convert kwargs to MappingProxyType if needed
         if not isinstance(self.kwargs, types.MappingProxyType):
             object.__setattr__(self, "kwargs", types.MappingProxyType(self.kwargs))
@@ -156,6 +169,10 @@ class KeyPathExpr:
     """
     A proxy object to build KeyPaths using natural syntax.
 
+    .. deprecated:: 0.1.1
+        Will be removed in 0.2.0.  ``Ref.key_path`` is deprecated; use
+        ``@expression`` + ``Auto`` instead.
+
     Examples:
         P = KeyPathExpr()
         path = tuple(P.foo["bar"][0](1, a=2))
@@ -165,6 +182,16 @@ class KeyPathExpr:
     __slots__ = ("_keys",)
 
     def __init__(self, keys: tuple[PyTreeKey, ...] = ()):
+        if keys:
+            from slyme.utils.warning import warning_once
+
+            warning_once(
+                "KeyPathExpr is deprecated and will be removed in slyme 0.2.0. "
+                "It was only used by Ref.key_path, which is also deprecated. "
+                "Use @expression + Auto for dynamic value resolution instead.",
+                FutureWarning,
+                2,
+            )
         object.__setattr__(self, "_keys", keys)
 
     def _raise_immutable(self, *args, **kwargs):

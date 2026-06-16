@@ -39,6 +39,20 @@ class MutateResult:
 
 @dataclass(frozen=True)
 class Hook:
+    """.. deprecated:: 0.1.1
+        Will be removed in 0.2.0.  Context no longer supports hooks.
+    """
+
+    def __post_init__(self):
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "Hook is deprecated and will be removed in slyme 0.2.0. "
+            "Context no longer supports hooks.",
+            FutureWarning,
+            2,
+        )
+
     def on_extract(
         self,
         *,
@@ -72,7 +86,21 @@ class Hook:
 
 @dataclass(frozen=True)
 class HookChain(Hook):
+    """.. deprecated:: 0.1.1
+        Will be removed in 0.2.0.  Context no longer supports hooks.
+    """
+
     hooks: tuple[Hook, ...]
+
+    def __post_init__(self):
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "HookChain is deprecated and will be removed in slyme 0.2.0. "
+            "Context no longer supports hooks.",
+            FutureWarning,
+            2,
+        )
 
     def on_extract(
         self,

@@ -254,7 +254,20 @@ def resolve_arguments(
 ) -> dict[str, Any]:
     """
     Resolve arguments from scopes and overrides based on specs.
+
+    .. deprecated:: 0.1.1
+        Positional scopes are deprecated and will be removed in 0.2.0.
+        Use ``RefFactory`` (``R.x.y.z``) in keyword arguments instead.
     """
+    if scopes:
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "Node scope arguments are deprecated and will be removed in slyme 0.2.0. "
+            "Use RefFactory (R.x.y.z) in keyword arguments instead.",
+            FutureWarning,
+            3,
+        )
     # 1. Create a unified lookup map: overrides > last scope > ... > first scope
     # ChainMap looks up keys in the first mapping, then the second, and so on.
     unified_map = ChainMap(overrides, *reversed(scopes))

@@ -1,0 +1,48 @@
+# Copyright 2026 The SlymeLab Team
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Warning utilities with deduplication."""
+
+import warnings
+from functools import lru_cache
+from typing import Any, overload
+
+
+__all__ = ["warning_once"]
+
+
+@overload
+def warning_once(
+    message: str,
+    category: type[Warning] | None = None,
+    stacklevel: int = 1,
+    source: Any | None = None,
+) -> None: ...
+@overload
+def warning_once(
+    message: Warning,
+    category: Any = None,
+    stacklevel: int = 1,
+    source: Any | None = None,
+) -> None: ...
+@lru_cache(maxsize=None)
+def warning_once(message, category=None, stacklevel=1, source=None):
+    """Issue a warning at most once per ``(message, category, stacklevel, source)`` per session.
+
+    Signature mirrors :func:`warnings.warn`.  One extra frame is added internally
+    to account for this function.
+    """
+    if category is None and not isinstance(message, Warning):
+        category = UserWarning
+    warnings.warn(message, category=category, stacklevel=stacklevel + 1, source=source)

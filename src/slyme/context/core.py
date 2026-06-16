@@ -101,6 +101,15 @@ class Ref(Generic[_T]):
     def __post_init__(self) -> None:
         if not self.path:
             raise ValueError("Empty ref path")
+        if self.key_path:
+            from slyme.utils.warning import warning_once
+
+            warning_once(
+                "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
+                "Use @expression + Auto for dynamic value resolution instead.",
+                FutureWarning,
+                2,
+            )
         parts = tuple(self.path.split("."))
         if any(not p for p in parts):
             raise ValueError(f"Invalid ref path: {self.path!r}")
@@ -129,7 +138,19 @@ class Ref(Generic[_T]):
         Create a new Ref at a subpath relative to this Ref.
 
         Does NOT inherit key_path or metadata from the parent Ref by default.
+
+        .. deprecated:: 0.1.1
+            The *key_path* parameter is deprecated and will be removed in 0.2.0.
         """
+        if key_path is not _MISSING:
+            from slyme.utils.warning import warning_once
+
+            warning_once(
+                "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
+                "Use @expression + Auto for dynamic value resolution instead.",
+                FutureWarning,
+                2,
+            )
         new_path = f"{self.path}.{subpath}" if self.path else subpath
         kwargs = {}
         if key_path is not _MISSING:
@@ -187,6 +208,15 @@ class RefFactory:
         key_path: KeyPath = (),
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> Ref:
+        if key_path:
+            from slyme.utils.warning import warning_once
+
+            warning_once(
+                "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
+                "Use @expression + Auto for dynamic value resolution instead.",
+                FutureWarning,
+                2,
+            )
         path = object.__getattribute__(self, "_path")
         kwargs: dict[str, Any] = {}
         if key_path:
@@ -495,6 +525,9 @@ class ContextElement(ABC):
     async def async_extract(
         self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
     ) -> Any:
+        """.. deprecated:: 0.1.1
+            Will be removed in 0.2.0.  Use :meth:`extract` instead.
+        """
         pass
 
     @abstractmethod
@@ -515,6 +548,9 @@ class ContextElement(ABC):
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
+        """.. deprecated:: 0.1.1
+            Will be removed in 0.2.0.  Use :meth:`get` instead.
+        """
         pass
 
     @abstractmethod
@@ -540,6 +576,9 @@ class ContextElement(ABC):
     async def async_to_dict(
         self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
+        """.. deprecated:: 0.1.1
+            Will be removed in 0.2.0.  Use :meth:`to_dict` instead.
+        """
         pass
 
     def type_repr(self) -> str:
@@ -640,6 +679,14 @@ class Context(ContextElement):
             # Shallow conversion strictly for the top level.
             # Trusts user input for deep structure.
             root = ContextData(data)
+        if hook is not None:
+            from slyme.utils.warning import warning_once
+
+            warning_once(
+                "Context hook support is deprecated and will be removed in slyme 0.2.0.",
+                FutureWarning,
+                2,
+            )
         object.__setattr__(self, "_root", root)
         object.__setattr__(self, "_hook", hook)
 
@@ -647,6 +694,14 @@ class Context(ContextElement):
     def _from_context_data(
         cls, root: ContextData, hook: Optional["Hook"] = None
     ) -> "Context":
+        if hook is not None:
+            from slyme.utils.warning import warning_once
+
+            warning_once(
+                "Context hook support is deprecated and will be removed in slyme 0.2.0.",
+                FutureWarning,
+                2,
+            )
         obj = object.__new__(cls)
         object.__setattr__(obj, "_root", root)
         object.__setattr__(obj, "_hook", hook)
@@ -678,6 +733,14 @@ class Context(ContextElement):
     async def async_extract(
         self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
     ) -> Any:
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "Context.async_extract is deprecated and will be removed in slyme 0.2.0. "
+            "Use the synchronous extract() instead.",
+            FutureWarning,
+            2,
+        )
         ref_tree = CTX_EVAL_ENGINE.map(
             lambda x: x() if isinstance(x, RefFactory) else x, ref_tree
         )
@@ -763,6 +826,14 @@ class Context(ContextElement):
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "Context.async_get is deprecated and will be removed in slyme 0.2.0. "
+            "Use the synchronous get() instead.",
+            FutureWarning,
+            2,
+        )
         ref = to_ref(ref)
         try:
             return await self.async_extract(ref, apply_hook=apply_hook)
@@ -821,6 +892,14 @@ class Context(ContextElement):
     async def async_to_dict(
         self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "Context.async_to_dict is deprecated and will be removed in slyme 0.2.0. "
+            "Use the synchronous to_dict() instead.",
+            FutureWarning,
+            2,
+        )
         ref_tree = self._build_dict_ref_tree(ref)
         return await self.async_extract(ref_tree, apply_hook=apply_hook)
 
@@ -888,6 +967,14 @@ class Context(ContextElement):
         drops: Optional[Iterable[RefLike]] = None,
         apply_hook: bool = True,
     ) -> "Context":
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "Context.async_mutate is deprecated and will be removed in slyme 0.2.0. "
+            "Use the synchronous mutate() instead.",
+            FutureWarning,
+            2,
+        )
         if not updates and not drops:
             return self
 
@@ -1071,6 +1158,14 @@ class ContextView(ContextElement):
     async def async_extract(
         self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
     ) -> Any:
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "ContextView.async_extract is deprecated and will be removed in slyme 0.2.0. "
+            "Use the synchronous extract() instead.",
+            FutureWarning,
+            2,
+        )
         return await self._context.async_extract(
             self._adjust_ref_tree(ref_tree), apply_hook=apply_hook, **kwargs
         )
@@ -1091,6 +1186,14 @@ class ContextView(ContextElement):
         *,
         apply_hook: bool = True,
     ) -> Union[_T, _T2]:
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "ContextView.async_get is deprecated and will be removed in slyme 0.2.0. "
+            "Use the synchronous get() instead.",
+            FutureWarning,
+            2,
+        )
         return await self._context.async_get(
             self._adjust_ref(ref), default, apply_hook=apply_hook
         )
@@ -1112,6 +1215,14 @@ class ContextView(ContextElement):
     async def async_to_dict(
         self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
     ) -> dict[str, Any]:
+        from slyme.utils.warning import warning_once
+
+        warning_once(
+            "ContextView.async_to_dict is deprecated and will be removed in slyme 0.2.0. "
+            "Use the synchronous to_dict() instead.",
+            FutureWarning,
+            2,
+        )
         return await self._context.async_to_dict(
             self._adjust_ref(ref), apply_hook=apply_hook
         )
