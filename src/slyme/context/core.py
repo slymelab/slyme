@@ -190,15 +190,19 @@ class RefFactory:
     ``R.x.y.z(key_path=..., metadata=...)`` passes additional arguments to ``Ref``.
     """
 
-    __slots__ = ("_path",)
+    __slots__ = ("__path",)
 
     def __init__(self, path: str = "") -> None:
-        object.__setattr__(self, "_path", path)
+        object.__setattr__(self, "_RefFactory__path", path)
 
-    def __getattribute__(self, name: str) -> "RefFactory":
-        if name.startswith("_"):
-            return object.__getattribute__(self, name)
-        path = object.__getattribute__(self, "_path")
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"{type(self).__name__} is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"{type(self).__name__} is immutable")
+
+    def __getattr__(self, name: str) -> "RefFactory":
+        path = object.__getattribute__(self, "_RefFactory__path")
         new_path = f"{path}.{name}" if path else name
         return RefFactory(new_path)
 
@@ -217,7 +221,7 @@ class RefFactory:
                 FutureWarning,
                 2,
             )
-        path = object.__getattribute__(self, "_path")
+        path = object.__getattribute__(self, "_RefFactory__path")
         kwargs: dict[str, Any] = {}
         if key_path:
             kwargs["key_path"] = key_path
@@ -226,7 +230,7 @@ class RefFactory:
         return Ref(path, **kwargs)
 
     def __repr__(self) -> str:
-        path = object.__getattribute__(self, "_path")
+        path = object.__getattribute__(self, "_RefFactory__path")
         return f"R.{path}" if path else "R"
 
 
