@@ -28,7 +28,7 @@ Node 是 Slyme 中最核心的逻辑执行单元，它是函数式编程概念�
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def to_upper(ctx: Context, /, *, value: Ref[str]) -> Context:
@@ -43,15 +43,15 @@ def to_upper(ctx: Context, /, *, value: Ref[str]) -> Context:
 
 ```python
 # 1. 实例化为 Def (构建阶段)
-node_def = to_upper(value=Ref("name"))
+node_def = to_upper(value=R.name)
 
 # 2. 转换为 Exec (执行阶段)
 node_exec = node_def.prepare()
 
 # 3. 传入 Context 执行
-ctx = Context().set(Ref("name"), "Alice")
+ctx = Context().set(R.name, "Alice")
 new_ctx = node_exec(ctx)
-print(new_ctx.get(Ref("name")))  # 输出 ALICE
+print(new_ctx.get(R.name))  # 输出 ALICE
 ```
 
 ## @expression {#at-expression}
@@ -64,7 +64,7 @@ print(new_ctx.get(Ref("name")))  # 输出 ALICE
 
 ```python
 from slyme.node import expression
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @expression
 def get_greeting(ctx: Context, /, *, prefix: str, name: Ref[str]) -> str:
@@ -72,7 +72,7 @@ def get_greeting(ctx: Context, /, *, prefix: str, name: Ref[str]) -> str:
     return f"{prefix} {name_}"
 
 # 创建 @expression 实例
-expr = get_greeting(prefix="Hello", name=Ref("not_exist_path"))
+expr = get_greeting(prefix="Hello", name=R.not_exist_path)
 
 # 执行 @expression
 greeting = expr.prepare()(Context())  # 返回 "Hello Guest"
@@ -112,7 +112,7 @@ def logging_wrapper(ctx: Context, wrapped, call_next, /, *, level: str) -> Conte
 你可以通过 `.add_wrappers()` 方法将一个或多个 @wrapper 挂载到 @node 实例上：
 
 ```python
-node_def = to_upper(value=Ref("name")).add_wrappers(
+node_def = to_upper(value=R.name).add_wrappers(
     logging_wrapper(level="INFO")
 )
 
@@ -197,7 +197,7 @@ process_data(timeout=60)  # timeout=60, tags=()
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def dynamic_greet(
@@ -213,15 +213,15 @@ def dynamic_greet(
     print(f"Hello, {target}!")
     return ctx
 
-# 传入 Ref，那么运行时将会由框架内部自动调用 `ctx.get(Ref("user.name"))`，并将返回的结果作为 `target` 的值。
-node_def = dynamic_greet(target=Ref("user.name"))
+# 传入 Ref，那么运行时将会由框架内部自动调用 `ctx.get(R.user.name)`，并将返回的结果作为 `target` 的值。
+node_def = dynamic_greet(target=R.user.name)
 ```
 
 这种设计让 Node 的逻辑变得极其纯粹，完全解耦了“去哪取数据”与“如何处理数据”。另外，`Auto` 支持 Python 标准数据结构嗅探，例子如下：
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def process_data(
@@ -232,19 +232,19 @@ def process_data(
 ): ...
 
 process_data(data={
-    "id": Ref("user.id"),  # 运行时会被解析为具体的值
+    "id": R.user.id,  # 运行时会被解析为具体的值
     "name": some_expression(...),  # 运行时会被解析为具体的值
     "value": 3,  # 保持不变
     "tags": (
-        Ref("user.status"),  # 运行时会被解析为具体的值
-        Ref("user.membership"),  # 运行时会被解析为具体的值
+        R.user.status,  # 运行时会被解析为具体的值
+        R.user.membership,  # 运行时会被解析为具体的值
         some_expression2(...),  # 运行时会被解析为具体的值
     ),
 })
 ```
 
 ::: tip
-在执行时，标注了 `Auto` 的 `data` 参数会被 Slyme 框架自动深度求值，将其中包含的 Ref 和 @expression 全部自动调用（求值的对象就是 `process_data` 输入的 Context 参数），最后将得到的真实值注入到原始结构中。这个功能使得 Node 系列能够极致地解耦，我们可以像上面这样把不同的 Context 路径组合成一个期望的结构；也可以让某一个特定的 Context 路径直接存储这个结构（比如 `Ref("data")`），然后创建时使用 `process_data(data=Ref("data"))` 即可；还可以定义一个 `data_expression`，让它的返回值是符合这个结构的 dict。而这一切都不需要被 `process_data` 这个 @node 本身所关心，它只需要知道 `data` 参数会传入一个满足特定结构的 dict 即可。
+在执行时，标注了 `Auto` 的 `data` 参数会被 Slyme 框架自动深度求值，将其中包含的 Ref 和 @expression 全部自动调用（求值的对象就是 `process_data` 输入的 Context 参数），最后将得到的真实值注入到原始结构中。这个功能使得 Node 系列能够极致地解耦，我们可以像上面这样把不同的 Context 路径组合成一个期望的结构；也可以让某一个特定的 Context 路径直接存储这个结构（比如 `R.data`），然后创建时使用 `process_data(data=R.data)` 即可；还可以定义一个 `data_expression`，让它的返回值是符合这个结构的 dict。而这一切都不需要被 `process_data` 这个 @node 本身所关心，它只需要知道 `data` 参数会传入一个满足特定结构的 dict 即可。
 :::
 
 ::: tip
@@ -321,8 +321,8 @@ create_eval = create_dataset(
 Slyme 中，Node（@node，@expression，@wrapper）在调用 `.prepare()` 之前是可以动态修改的。比如：
 
 ```python
-my_node = dynamic_greet(target=Ref("user.name"))
-my_node["target"] = Ref("user.another_name")  # my_node 的 target 参数变成了 Ref("user.another_name")
+my_node = dynamic_greet(target=R.user.name)
+my_node["target"] = R.user.another_name  # my_node 的 target 参数变成了 R.user.another_name
 
 # NOTE: Node 支持深层修改
 another_node["nodes"][0]["value"] = ...
@@ -349,7 +349,7 @@ Node 中有一些常量用于实例化 Node 过程中的特殊标记：
 
 ```python
 from slyme.node import node, UNSET, UNDEFINED
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def process_data(
@@ -372,8 +372,8 @@ my_node["timeout"] = UNDEFINED  # NOTE: 此时 timeout 被显式地设置为 UND
 
 my_node2 = process_data(timeout=UNSET, tags=(2, 3))  # NOTE: timeout 被设置成 UNSET 因此触发了默认值逻辑，最终：timeout=30, tags=(2, 3), data=UNDEFINED
 # my_node2.prepare()  # 此时调用 `.prepare()` 会报错，因为 data 未被设置
-my_node2["data"] = Ref("user.data")
-my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=Ref("user.data")
+my_node2["data"] = R.user.data
+my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=R.user.data
 # my_node2_exec 可被后续调用执行了
 ```
 
@@ -389,7 +389,7 @@ my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=Ref("user.da
 
 ```python
 from slyme.node import async_node
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @async_node
 async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) -> Context:
@@ -404,11 +404,11 @@ async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) ->
 与同步 @node 一样，你需要先 `.prepare()`，然后在执行时使用 `await`：
 
 ```python
-node_def = fetch_user_data(url="https://api.example.com/user", user_data=Ref("user.data"))
+node_def = fetch_user_data(url="https://api.example.com/user", user_data=R.user.data)
 node_exec = node_def.prepare()
 
 new_ctx = await node_exec(Context())
-print(new_ctx.get(Ref("user.data")))  # {'id': 1, 'name': 'Alice'}
+print(new_ctx.get(R.user.data))  # {'id': 1, 'name': 'Alice'}
 ```
 
 ::: info

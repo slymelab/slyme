@@ -31,31 +31,6 @@ def llm_api(
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
     return ctx.set(responses, responses_)  # Write and return the new Context object
 ```
-
-```python [Manually Retrieving Values from Context]
-from typing import Union
-from slyme.context import Context, Ref
-from slyme.node import node, Expression
-
-@node
-def llm_api(
-    ctx: Context,
-    /,
-    *,
-    prompts: Union[Ref[list[str]], Expression[list[str]], list[str]],  # If not using Auto, we need to handle prompts differently based on type, or limit prompts to Expression type to simplify code // [!code highlight]
-    responses: Ref[list[str]],  # Ref object, similar to a dictionary key, used to read/write a specific path
-) -> Context:
-    # NOTE: Here we manually retrieve prompts from Context and handle them based on type
-    if isinstance(prompts, Ref):  # [!code highlight]
-        prompts_ = ctx.get(prompts)  # [!code highlight]
-    elif isinstance(prompts, Expression):  # [!code highlight]
-        prompts_ = prompts(ctx)  # [!code highlight]
-    else:  # [!code highlight]
-        prompts_ = prompts  # [!code highlight]
-    # NOTE: Here we simulate LLM responding to each prompt
-    responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts_]
-    return ctx.set(responses, responses_)  # Write and return the new Context object
-```
 :::
 
 A few notes when implementing @node functions:
@@ -130,54 +105,35 @@ So far, our core logic is complete, including `llm_api` (@node) for simulating L
 
 We recommend using @builder to build atomic components into specific execution flows. It automatically performs structural validation to ensure correct assembly.
 
-::: code-group
-```python [Using Scope for Automatic Injection (Recommended)]
+```python
 from slyme.builder import builder
-from slyme.context import Ref
-
-@builder
-def build_pipeline():
-    scope = {  # [!code highlight]
-        "articles": Ref("input.articles"),  # [!code highlight]
-        "responses": Ref("output.responses"),  # [!code highlight]
-    }  # [!code highlight]
-
-    return llm_api(
-        scope,  # [!code highlight]
-        prompts=format_article_prompts(scope),  # [!code highlight]
-    ).add_wrappers(timing(prefix="LLM API Call"))
-```
-
-```python [Manually Passing Parameters]
-from slyme.builder import builder
-from slyme.context import Ref
+from slyme.context import R
 
 @builder
 def build_pipeline():
     return llm_api(
-        responses=Ref("output.responses"),  # [!code highlight]
+        responses=R.output.responses,  # [!code highlight]
         prompts=format_article_prompts(
-            articles=Ref("input.articles"),  # [!code highlight]
+            articles=R.input.articles,  # [!code highlight]
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 ```
-:::
 
 A few notes:
 
-- The process of assembling Nodes is called **build-time**. During this, we need to fill in **build-time parameters** (i.e., **keyword-only parameters**, after `*`), which are entirely defined based on specific logic. Here we use Node's built-in scope injection to bind parameters. The benefit is that compared to manually passing various Ref parameters, scope injection only requires users to maintain a scope dictionary, which can automatically pass corresponding parameters based on function parameter names. This is very useful when Node structures are complex and there are many repeated fields, avoiding users from repeatedly writing parameter assignment statements like `value=Ref("foo.bar")`. The scope dictionary's key is of type `str`, corresponding to the user function's parameter name, which we call an "alias". For example, in the code above, `"articles": Ref("input.articles")`'s `"articles"` is the alias, corresponding to `format_article_prompts`'s `articles` parameter, while `Ref("input.articles")` represents the value to fill in, where `"input.articles"` corresponds to the actual path we stored in the Context object.
-- In the assembly process above, we added `timing` to `llm_api`'s wrappers list, so `timing` will be called when `llm_api` executes. We assigned `format_article_prompts` to `llm_api`'s `prompts` parameter. With the `Auto` annotation, `llm_api` function doesn't need to know about `format_article_prompts` at all — the parameter passed to the function is already the processed prompt list (`list[str]`) returned by `format_article_prompts`. Similarly, `format_article_prompts`'s `articles` parameter uses the `Auto` annotation, and at build-time we assign `Ref("input.articles")` to the `articles` parameter. At execution-time, it will automatically retrieve the value from Context based on the path and assign it to the `articles` parameter.
+- The process of assembling Nodes is called **build-time**. During this, we need to fill in **build-time parameters** (i.e., **keyword-only parameters**, after `*`), which are entirely defined based on specific logic. We use [`R` (RefFactory)](/guide/essentials/context#reffactory) to create `Ref` objects with concise dot-notation — `R.input.articles` is equivalent to `Ref("input.articles")` but more readable and type-safe. Simply pass `R`-based refs directly as keyword arguments to Node constructors.
+- In the assembly process above, we added `timing` to `llm_api`'s wrappers list, so `timing` will be called when `llm_api` executes. We assigned `format_article_prompts` to `llm_api`'s `prompts` parameter. With the `Auto` annotation, `llm_api` function doesn't need to know about `format_article_prompts` at all — the parameter passed to the function is already the processed prompt list (`list[str]`) returned by `format_article_prompts`. Similarly, `format_article_prompts`'s `articles` parameter uses the `Auto` annotation, and at build-time we assign `R.input.articles` to the `articles` parameter. At execution-time, it will automatically retrieve the value from Context based on the path and assign it to the `articles` parameter.
 
 ## Step 5: Run
 
 Finally, we call the above code and execute:
 
 ```python
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 
 ctx = Context().update({
     # NOTE: We inject the initial article data into Context
-    Ref("input.articles"): [
+    R.input.articles: [
         {"title": "Article 1", "content": "Content of Article 1"},
         {"title": "Article 2", "content": "Content of Article 2"},
     ],
@@ -185,7 +141,7 @@ ctx = Context().update({
 pipeline = build_pipeline()
 pipeline_exec = pipeline.prepare()  # Convert build-time to execution-time by calling prepare  // [!code highlight]
 ctx = pipeline_exec(ctx)  # Execute
-print(ctx.get(Ref("output.responses")))  # Print execution result
+print(ctx.get(R.output.responses))  # Print execution result
 ```
 
 ::: details Complete Code
@@ -193,7 +149,7 @@ print(ctx.get(Ref("output.responses")))  # Print execution result
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 from slyme.node import node, expression, wrapper, Auto, Node
 
 
@@ -240,20 +196,17 @@ def timing(
 
 @builder
 def build_pipeline():
-    scope = {
-        "articles": Ref("input.articles"),
-        "responses": Ref("output.responses"),
-    }
-
     return llm_api(
-        scope,
-        prompts=format_article_prompts(scope),
+        responses=R.output.responses,
+        prompts=format_article_prompts(
+            articles=R.input.articles,
+        ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
 if __name__ == "__main__":
     ctx = Context().update({
-    Ref("input.articles"): [
+        R.input.articles: [
             {"title": "Article 1", "content": "Content of Article 1"},
             {"title": "Article 2", "content": "Content of Article 2"},
         ],
@@ -261,7 +214,7 @@ if __name__ == "__main__":
     pipeline = build_pipeline()
     pipeline_exec = pipeline.prepare()
     ctx = pipeline_exec(ctx)
-    print(ctx.get(Ref("output.responses")))
+    print(ctx.get(R.output.responses))
 ```
 :::
 

@@ -22,6 +22,10 @@ user_ref = Ref("user")
 name_ref = Ref("user.profile.name")
 ```
 
+::: tip 最佳实践
+在实际使用中，推荐使用更简洁的 [`R` (RefFactory)](#reffactory) 简写：`R.user` 替代 `Ref("user")`，`R.user.profile.name` 替代 `Ref("user.profile.name")`。
+:::
+
 ### 派生 Ref
 
 `Ref` 提供了 `.at()` 方法，允许你基于当前路径快速派生出子路径：
@@ -71,7 +75,7 @@ def my_node(ctx: Context, /, *, hidden_size: Auto[int]) -> Context:
     return ctx
 
 # 将它们组合起来：
-my_node(hidden_size=get_hidden_size(model=Ref("model")))
+my_node(hidden_size=get_hidden_size(model=R.model))
 ```
 
 这种方式让 Node 保持完全解耦 — Node 只需要声明它需要一个 `hidden_size` 参数，而无需关心这个值是如何计算得到的。
@@ -90,16 +94,16 @@ from slyme.context import R
 # 属性访问记录了点分路径：
 # R.user.profile.name  记录了 "user.profile.name"
 
-# 调用它以创建 Ref：
-name_ref = R.user.profile.name()  # 等价于 Ref("user.profile.name")
+# 直接使用它 — 自动转换为 Ref：
+name_ref = R.user.profile.name  # 等价于 Ref("user.profile.name")
 ```
 
-`RefFactory` 是**不可变的** — 每次属性访问都会返回一个带有扩展路径的新 `RefFactory` 实例。它可以在任何需要 `Ref` 的地方使用（例如 `Context.get()`、`Context.set()` 或 Node 的关键字参数）：
+`RefFactory` 是**不可变的** — 每次属性访问都会返回一个带有扩展路径的新 `RefFactory` 实例。它可以在任何需要 `Ref` 的地方使用（例如 `Context.get()`、`Context.set()` 或 Node 的关键字参数），会被自动转换为 `Ref`：
 
 ```python
 from slyme.context import Context, R
 
-ctx = Context().set(R.status(), "active")
+ctx = Context().set(R.status, "active")
 
 # 创建 Ref 时传递额外的元数据：
 ref_with_meta = R.user.profile.name(metadata={"desc": "用户的显示名称"})
@@ -113,7 +117,7 @@ from slyme.context import Context, R
 
 @node
 def greet(ctx: Context, /, *, name: str, title: str) -> Context:
-    return ctx.set(R.greeting(), f"{title} {ctx.get(name)}")
+    return ctx.set(R.greeting, f"{title} {ctx.get(name)}")
 
 # 直接在关键字参数中使用 R
 node_def = greet(name=R.user.name, title=R.user.title)
@@ -132,12 +136,12 @@ node_def = greet(name=R.user.name, title=R.user.title)
 你可以通过 `update()` 方法来初始化一个 `Context`：
 
 ```python
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 
 ctx = Context().update({
-    Ref("user.profile.name"): "Alice",
-    Ref("user.profile.age"): 25,
-    Ref("status"): "active",
+    R.user.profile.name: "Alice",
+    R.user.profile.age: 25,
+    R.status: "active",
 })
 ```
 
@@ -163,13 +167,13 @@ Context({
 
 ```python
 # 获取顶层数据
-status = ctx.get(Ref("status"))  # 'active'
+status = ctx.get(R.status)  # 'active'
 
 # 获取深层嵌套数据
-name = ctx.get(Ref("user.profile.name"))  # 'Alice'
+name = ctx.get(R.user.profile.name)  # 'Alice'
 
 # 获取不存在的数据时提供默认值
-email = ctx.get(Ref("user.profile.email"), default="unknown")
+email = ctx.get(R.user.profile.email, default="unknown")
 ```
 
 另外，你可以使用 `extract()` 方法来实现更高级的结构化读取，支持任意嵌套的 Python 字典、列表、元组：
@@ -177,9 +181,9 @@ email = ctx.get(Ref("user.profile.email"), default="unknown")
 ```python
 profiles = ctx.extract([
     {
-        "age": Ref("user.profile.age"),
-        "name": Ref("user.profile.name"),
-        "status": Ref("status"),
+        "age": R.user.profile.age,
+        "name": R.user.profile.name,
+        "status": R.status,
     }
 ])
 ```
@@ -191,13 +195,13 @@ profiles = ctx.extract([
 ```
 
 ::: warning
-请注意，`ctx.extract()` 方法要求每一个叶子的值都是 `Ref` 对象，不允许混合普通值，比如 `ctx.extract([Ref("status"), 123])` 这样是不允许的。如果想要解析混合的结构，你应该使用更高级的 eval API（详见[依赖注入](/zh/guide/slyme-in-depth/dependency-injection)）：
+请注意，`ctx.extract()` 方法要求每一个叶子的值都是 `Ref` 对象，不允许混合普通值，比如 `ctx.extract([R.status, 123])` 这样是不允许的。如果想要解析混合的结构，你应该使用更高级的 eval API（详见[依赖注入](/zh/guide/slyme-in-depth/dependency-injection)）：
 
 ```python
 from slyme.node.eval import eval_tree
 
 # NOTE: 123 的值不会被解析，保持原样
-eval_tree(ctx, [Ref("status"), 123])  # ['active', 123]
+eval_tree(ctx, [R.status, 123])  # ['active', 123]
 ```
 :::
 
@@ -205,11 +209,11 @@ eval_tree(ctx, [Ref("status"), 123])  # ['active', 123]
 
 ```python
 # 检查路径是否存在。
-ctx.exists(Ref("user.profile"))  # True
-ctx.exists(Ref("user.profile.email"))  # False
+ctx.exists(R.user.profile)  # True
+ctx.exists(R.user.profile.email)  # False
 
 # 列出指定层级下的所有键（类似于字典的 `keys()`）
-ctx.keys(Ref("user.profile"))  # dict_keys(['name', 'age'])
+ctx.keys(R.user.profile)  # dict_keys(['name', 'age'])
 
 # 将 Context 递归转换为普通的 Python 字典。
 ctx.to_dict()  # {'user': {'profile': {'name': 'Alice', 'age': 25}}, 'status': 'active'}
@@ -221,17 +225,17 @@ ctx.to_dict()  # {'user': {'profile': {'name': 'Alice', 'age': 25}}, 'status': '
 
 ```python
 # 单个设置 (set)
-new_ctx = ctx.set(Ref("status"), "inactive")
+new_ctx = ctx.set(R.status, "inactive")
 # ctx 保持不变，new_ctx 中的 status 变为 inactive
 
 # 批量更新 (update)
 new_ctx = ctx.update({
-    Ref("user.profile.age"): 26,
-    Ref("user.profile.email"): "alice@example.com"
+    R.user.profile.age: 26,
+    R.user.profile.email: "alice@example.com"
 })
 
 # 删除 (delete)
-new_ctx = ctx.delete(Ref("user.profile.age"))
+new_ctx = ctx.delete(R.user.profile.age)
 ```
 
 ### 原子化事务 (mutate)
@@ -241,10 +245,10 @@ new_ctx = ctx.delete(Ref("user.profile.age"))
 ```python
 new_ctx = ctx.mutate(
     updates={
-        Ref("user.profile.status"): "verified"
+        R.user.profile.status: "verified"
     },
     drops=[
-        Ref("status") # 删除顶层 status
+        R.status # 删除顶层 status
     ]
 )
 ```
@@ -256,11 +260,11 @@ new_ctx = ctx.mutate(
 ```python
 new_ctx = ctx.mutate(
     updates={
-        Ref("user.profile.status"): "verified",
-        Ref("user.profile.name"): "Bob",
+        R.user.profile.status: "verified",
+        R.user.profile.name: "Bob",
     },
     drops=[
-        Ref("status")
+        R.status
     ]
 )
 diff = new_ctx.diff(ctx)
@@ -287,7 +291,7 @@ new_ctx = await ctx.async_mutate(updates={...}, drops=[...])
 **新范式 — 统一使用同步方法：**
 
 ```python
-value = ctx.get(Ref("path"))
+value = ctx.get(R.path)
 data = ctx.to_dict()
 new_ctx = ctx.mutate(updates={...}, drops=[...])
 ```

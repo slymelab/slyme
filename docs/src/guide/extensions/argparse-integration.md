@@ -61,7 +61,7 @@ Combining the type rules above, here is a complete demonstration:
 ```python
 from enum import Enum
 from typing import Literal, Optional
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 from slyme.context.metadata import Arg, ARG
 from slyme.cli import parse_and_inject
 from slyme.node import node, Auto
@@ -71,11 +71,11 @@ class ModelSize(Enum):
     BASE = "base"
 
 # 1. Define Refs with Arg metadata (demonstrating various data types)
-use_cache_ref = Ref("model.use_cache", metadata={ARG: Arg(default=True, help="Whether to use cache")})
-ports_ref = Ref("server.ports", metadata={ARG: Arg(type=list[int], default=[8080], help="List of ports")})
-config_ref = Ref("model.config", metadata={ARG: Arg(type=dict, help="Model configuration (JSON string)")})
-size_ref = Ref("model.size", metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
-mode_ref = Ref("run.mode", metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
+use_cache_ref = R.model.use_cache(metadata={ARG: Arg(default=True, help="Whether to use cache")})
+ports_ref = R.server.ports(metadata={ARG: Arg(type=list[int], default=[8080], help="List of ports")})
+config_ref = R.model.config(metadata={ARG: Arg(type=dict, help="Model configuration (JSON string)")})
+size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
+mode_ref = R.run.mode(metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
 
 # 2. Define Node
 @node

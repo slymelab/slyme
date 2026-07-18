@@ -712,9 +712,7 @@ class Context(ContextElement):
         return obj
 
     def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
-        ref_tree = CTX_EVAL_ENGINE.map(
-            lambda x: x() if isinstance(x, RefFactory) else x, ref_tree
-        )
+        ref_tree = CTX_EVAL_ENGINE.map(to_ref, ref_tree)
         refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
         values = tuple(self._resolve(ref.parts) for ref in refs)
         # NOTE: Check key_path
@@ -745,9 +743,7 @@ class Context(ContextElement):
             FutureWarning,
             2,
         )
-        ref_tree = CTX_EVAL_ENGINE.map(
-            lambda x: x() if isinstance(x, RefFactory) else x, ref_tree
-        )
+        ref_tree = CTX_EVAL_ENGINE.map(to_ref, ref_tree)
         refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
         values = tuple(self._resolve(ref.parts) for ref in refs)
         # NOTE: Check key_path

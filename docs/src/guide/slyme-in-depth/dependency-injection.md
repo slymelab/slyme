@@ -2,27 +2,36 @@
 
 In complex data flow and workflow orchestration, how to elegantly decouple "business logic" from "configuration data/runtime state" is a core challenge. Slyme adopts a functional-style design, providing a powerful **dependency injection** mechanism that allows Nodes to remain pure and only focus on business computation.
 
-Slyme currently implements dependency injection at two levels:
-1. **Build-time Injection**: Parameter injection when using Scope to initialize Nodes.
+Slyme implements dependency injection at two levels:
+1. **Build-time Injection**: Passing `Ref` and `Expression` references directly as keyword arguments to Node constructors, using [`R` (RefFactory)](/guide/essentials/context#reffactory) for concise syntax.
 2. **Runtime Injection**: Auto evaluation (Auto Eval) when Nodes execute.
 
 Below, we will deeply explore the specific implementation details of these two mechanisms.
 
-## 1. Node Initialization Based on Scope
+## 1. Build-time Injection with RefFactory
 
-When building workflows, we typically define various configuration items at different levels (such as global configuration, module configuration, component configuration). Slyme allows us, when creating Nodes, to pass multiple dictionaries (called Scope), and the underlying layer automatically injects needed parameters into Nodes through function signature analysis.
+When building workflows, you configure Nodes by passing `Ref` and `Expression` objects directly as keyword arguments. The recommended way to create `Ref` objects is via [`R` (RefFactory)](/guide/essentials/context#reffactory):
+
+```python
+from slyme.context import R
+
+# R.input.articles creates a RefFactory that auto-converts to Ref("input.articles")
+llm_api(responses=R.output.responses, prompts=format_article_prompts(articles=R.input.articles))
+```
+
+`RefFactory` is resolved transparently to `Ref` by all Slyme APIs (Context methods, Node constructors, etc.) via the `RefLike` type alias.
 
 ### 1.1 Signature Analysis
 
 During decorator application, Slyme uses `inspect.signature` and `typing.get_type_hints` to analyze function signatures and type hints. During this process, Slyme collects and merges `Spec` objects (containing default values, whether auto-evaluation is needed, etc.) for each build-time parameter, and records parameter names for later use.
 
-### 1.2 Scope Resolution
+### 1.2 Parameter Resolution
 
-When creating a Node (@node / @expression / @wrapper), it supports passing multiple positional arguments `*scopes` and keyword arguments `**kwargs`. The specific injection logic is completed by the `resolve_arguments` function:
+When creating a Node (@node / @expression / @wrapper), you pass keyword arguments `**kwargs` matching the function's parameter names. The `process_kwargs` function performs strict validation based on the `specs` generated in the previous step. It throws exceptions for unknown parameters (preventing typos), and fills in default values or calls `default_factory` for missing parameters according to the `Spec` definition.
 
-- **ChainMap Priority Chain**: Slyme internally uses the efficient standard library data structure `collections.ChainMap` to combine all Scopes. The combination order is `ChainMap(overrides, *reversed(scopes))`.
-- **Lookup Rules**: This means when looking up a parameter, it follows the priority order of **kwargs (explicit override) > last scope > ... > first scope**. If the same key exists in multiple scopes, the later passed scope overrides the previous ones.
-- **Parameter Cleaning**: After obtaining raw data through resolution, the `process_kwargs` function performs strict validation based on the `specs` generated in the previous step. It throws exceptions for unknown parameters (preventing typos), and fills in default values or calls `default_factory` for missing parameters according to the `Spec` definition.
+::: warning Deprecated
+Positional Scope dict injection (`my_node({"param": value})`) is **deprecated** since slyme 0.1.1. Use keyword arguments directly with `R.x.y.z` instead.
+:::
 
 ## 2. Node Auto Evaluation (Auto Eval)
 
@@ -52,7 +61,7 @@ The evaluation plan is generated across parameters. That is, if a Node has multi
 When `*Exec` is truly called via `__call__(ctx)`, the final step of dependency injection begins:
 
 1. **Execute Evaluation Plan**: Call `execute_eval_plan(ctx, eval_plan)`.
-2. **Batch Extraction**: The execution engine calls Evaluators in batches. For example, for all Ref objects, `ref_evaluator` calls the underlying efficient `ctx.extract(refs)` in one go to get values corresponding to all paths; for expressions, it passes `ctx` for batch computation. Note that when batch evaluating Refs, Context Hook is called only once (passing batched Refs and values), making it convenient for Hook developers to optimize performance.
+2. **Batch Extraction**: The execution engine calls Evaluators in batches. For example, for all Ref objects, `ref_evaluator` calls the underlying efficient `ctx.extract(refs)` in one go to get values corresponding to all paths; for expressions, it passes `ctx` for batch computation.
 3. **Structure Restoration (Unflatten)**: After obtaining all computed leaf node values, reassemble them into the original dict/list structure according to the original nested structure.
 4. **Transparent Execution**: Finally, these dynamically computed dependencies are merged with static `raw_kwargs` and passed to the developer-defined Node function. From the developer's perspective, they receive fully unpacked pure data.
 

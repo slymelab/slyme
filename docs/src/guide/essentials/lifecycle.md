@@ -10,7 +10,7 @@ When you call a `@node`, `@expression`, or `@wrapper` decorated function and pas
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 
 @node
 def process_data(ctx: Context, /, *, timeout: int = 30, data: Auto[list], max_len: int) -> Context:
@@ -33,7 +33,7 @@ This gives the system great flexibility. For example, you can fine-tune an exist
 ```python
 # Dynamic modification phase: fine-tune Def parameters
 my_node_def["timeout"] = 60
-my_node_def["data"] = [Ref("user.age"), Ref("user.name")]
+my_node_def["data"] = [R.user.age, R.user.name]
 ```
 
 ## 3. Prepare Phase
@@ -79,7 +79,7 @@ Please look at the comparison of the following two scenarios:
 ```python
 from typing import Any
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 
 @node
 def process(ctx: Context, /, *, data: Auto[Any]) -> Context:
@@ -91,14 +91,14 @@ def process(ctx: Context, /, *, data: Auto[Any]) -> Context:
 
 ```python
 # 1. Build: pass a Python list with multiple Refs inside
-node_def_a = process(data=[Ref("a"), Ref("b")])
+node_def_a = process(data=[R.a, R.b])
 
 # 2. Prepare: due to parameter freezing mechanism, the internal list structure is converted to tuple!
 exec_a = node_def_a.prepare()
-# At this point, exec_a's internal data parameter structure is actually: (Ref("a"), Ref("b"))
+# At this point, exec_a's internal data parameter structure is actually: (R.a, R.b)
 
 # 3. Execute: Auto auto-evaluation engine resolves this tuple and injects the final value
-ctx_a = Context().update({Ref("a"): 1, Ref("b"): 2})
+ctx_a = Context().update({R.a: 1, R.b: 2})
 exec_a(ctx_a)
 # Print output => Type: <class 'tuple'>, Value: (1, 2)
 ```
@@ -107,14 +107,14 @@ exec_a(ctx_a)
 
 ```python
 # 1. Build: pass a single Ref
-node_def_b = process(data=Ref("my_list"))
+node_def_b = process(data=R.my_list)
 
 # 2. Prepare: Ref itself is an immutable leaf node, remains unchanged
 exec_b = node_def_b.prepare()
-# At this point, exec_b's internal data parameter structure is still: Ref("my_list")
+# At this point, exec_b's internal data parameter structure is still: R.my_list
 
 # 3. Execute: Auto auto-evaluation engine resolves this Ref, directly retrieves the value from Context and injects it
-ctx_b = Context().set(Ref("my_list"), [1, 2])
+ctx_b = Context().set(R.my_list, [1, 2])
 exec_b(ctx_b)
 # Print output => Type: <class 'list'>, Value: [1, 2]
 ```

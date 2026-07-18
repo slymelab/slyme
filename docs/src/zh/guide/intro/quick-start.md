@@ -31,31 +31,6 @@ def llm_api(
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
     return ctx.set(responses, responses_)  # 写入并返回新的 Context 对象
 ```
-
-```python [手动通过 Context 获取值]
-from typing import Union
-from slyme.context import Context, Ref
-from slyme.node import node, Expression
-
-@node
-def llm_api(
-    ctx: Context,
-    /,
-    *,
-    prompts: Union[Ref[list[str]], Expression[list[str]], list[str]],  # 如果不使用 Auto，我们需要根据 prompts 的类型来分别处理，或者把 prompts 的类型限制为 Expression 以简化代码 // [!code highlight]
-    responses: Ref[list[str]],  # Ref 对象，类似于字典的 key，用于读取/写入特定的路径
-) -> Context:
-    # NOTE: 这里我们手动通过 Context 来获取 prompts 的值，根据 prompts 的类型进行不同的处理
-    if isinstance(prompts, Ref):  # [!code highlight]
-        prompts_ = ctx.get(prompts)  # [!code highlight]
-    elif isinstance(prompts, Expression):  # [!code highlight]
-        prompts_ = prompts(ctx)  # [!code highlight]
-    else:  # [!code highlight]
-        prompts_ = prompts  # [!code highlight]
-    # NOTE: 这里我们模拟 LLM 对每一个 prompt 做出了响应
-    responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts_]
-    return ctx.set(responses, responses_)  # 写入并返回新的 Context 对象
-```
 :::
 
 在实现 @node 函数的过程中，有几个注意点：
@@ -131,41 +106,23 @@ def timing(
 我们推荐使用 @builder 来将原子化的组件构建成具体的执行流程。它会自动进行结构校验，保证组装正确性。
 
 ::: code-group
-```python [使用 scope 进行自动注入（推荐）]
+```python
 from slyme.builder import builder
-from slyme.context import Ref
-
-@builder
-def build_pipeline():
-    scope = {  # [!code highlight]
-        "articles": Ref("input.articles"),  # [!code highlight]
-        "responses": Ref("output.responses"),  # [!code highlight]
-    }  # [!code highlight]
-
-    return llm_api(
-        scope,  # [!code highlight]
-        prompts=format_article_prompts(scope),  # [!code highlight]
-    ).add_wrappers(timing(prefix="LLM API Call"))
-```
-
-```python [手动传入参数]
-from slyme.builder import builder
-from slyme.context import Ref
+from slyme.context import R
 
 @builder
 def build_pipeline():
     return llm_api(
-        responses=Ref("output.responses"),  # [!code highlight]
+        responses=R.output.responses,  # [!code highlight]
         prompts=format_article_prompts(
-            articles=Ref("input.articles"),  # [!code highlight]
+            articles=R.input.articles,  # [!code highlight]
         ),
-    ).add_wrappers(timing(prefix="LLM API Call"))
+    ).add_wrappers(timing(prefix=”LLM API Call”))
 ```
-:::
 
 有几个需要注意的点：
-- 组装 Node 过程我们称之为**构建期**，在这个过程中，我们需要填入**构建期参数**（即**仅关键字参数**，在 `*` 之后），这些参数完全根据具体的逻辑来定义。在这里我们使用了 Node 自带的 scope 注入来绑定参数，它的好处是相比于我们手动地传入各种 Ref 参数，scope 注入只需要用户维护一个 scope 字典，即可根据函数的参数名来自动地传入对应的同名参数，这在 Node 结构复杂、重复字段比较多的场景下非常有用，避免了用户反复写 `value=Ref("foo.bar")` 这样的参数赋值语句。scope 字典的 key 是 `str` 类型，它对应的是用户函数的参数名，我们称之为“别名”。比如说，上面的代码中，`"articles": Ref("input.articles")` 的 `"articles"` 是别名，与 `format_article_prompts` 的 `articles` 参数对应，而 `Ref("input.articles")` 则代表着填入的值，其中 `"input.articles"` 对应的是我们在 Context 对象中存储的真实路径。
-- 上述组装过程中，我们将 `timing` 加入到 `llm_api` 的 wrappers 列表，那么 `timing` 会在 `llm_api` 执行的时候被调用。我们给 `llm_api` 的 `prompts` 参数赋值了 `format_article_prompts`，在 `Auto` 注解的加持下，`llm_api` 函数完全不需要知道 `format_article_prompts` 的存在，传入函数的参数是已经被 `format_article_prompts` 处理好之后返回的 prompt 列表（`list[str]`）。同理，`format_article_prompts` 的 `articles` 参数使用了 `Auto` 注解，而构建期我们给 `articles` 参数赋值了 `Ref("input.articles")`，那么执行期会自动根据路径从 Context 中取值，然后赋值给 `articles` 参数。
+- 组装 Node 过程我们称之为**构建期**，在这个过程中，我们需要填入**构建期参数**（即**仅关键字参数**，在 `*` 之后），这些参数完全根据具体的逻辑来定义。我们使用 [`R` (RefFactory)](/zh/guide/essentials/context#reffactory) 通过简洁的点号记法来创建 `Ref` 对象 — `R.input.articles` 等价于 `Ref(“input.articles”)`，但更加可读且类型安全。直接将 `R` 形式的引用作为关键字参数传入 Node 构造函数即可。
+- 上述组装过程中，我们将 `timing` 加入到 `llm_api` 的 wrappers 列表，那么 `timing` 会在 `llm_api` 执行的时候被调用。我们给 `llm_api` 的 `prompts` 参数赋值了 `format_article_prompts`，在 `Auto` 注解的加持下，`llm_api` 函数完全不需要知道 `format_article_prompts` 的存在，传入函数的参数是已经被 `format_article_prompts` 处理好之后返回的 prompt 列表（`list[str]`）。同理，`format_article_prompts` 的 `articles` 参数使用了 `Auto` 注解，而构建期我们给 `articles` 参数赋值了 `R.input.articles`，那么执行期会自动根据路径从 Context 中取值，然后赋值给 `articles` 参数。
 
 ## Step 5：运行
 
@@ -176,7 +133,7 @@ from slyme.context import Context, Ref
 
 ctx = Context().update({
     # NOTE: 我们给 Context 注入了初始所需的文章数据
-    Ref("input.articles"): [
+    R.input.articles: [
         {"title": "Article 1", "content": "Content of Article 1"},
         {"title": "Article 2", "content": "Content of Article 2"},
     ],
@@ -184,7 +141,7 @@ ctx = Context().update({
 pipeline = build_pipeline()
 pipeline_exec = pipeline.prepare()  # 通过调用 prepare 将构建期转换为执行期  // [!code highlight]
 ctx = pipeline_exec(ctx)  # 执行
-print(ctx.get(Ref("output.responses")))  # 打印执行结果
+print(ctx.get(R.output.responses))  # 打印执行结果
 ```
 
 ::: details 最终的完整代码
@@ -192,7 +149,7 @@ print(ctx.get(Ref("output.responses")))  # 打印执行结果
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 from slyme.node import node, expression, wrapper, Auto, Node
 
 
@@ -239,20 +196,17 @@ def timing(
 
 @builder
 def build_pipeline():
-    scope = {
-        "articles": Ref("input.articles"),
-        "responses": Ref("output.responses"),
-    }
-
     return llm_api(
-        scope,
-        prompts=format_article_prompts(scope),
+        responses=R.output.responses,
+        prompts=format_article_prompts(
+            articles=R.input.articles,
+        ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
 if __name__ == "__main__":
     ctx = Context().update({
-    Ref("input.articles"): [
+        R.input.articles: [
             {"title": "Article 1", "content": "Content of Article 1"},
             {"title": "Article 2", "content": "Content of Article 2"},
         ],
@@ -260,7 +214,7 @@ if __name__ == "__main__":
     pipeline = build_pipeline()
     pipeline_exec = pipeline.prepare()
     ctx = pipeline_exec(ctx)
-    print(ctx.get(Ref("output.responses")))
+    print(ctx.get(R.output.responses))
 ```
 :::
 

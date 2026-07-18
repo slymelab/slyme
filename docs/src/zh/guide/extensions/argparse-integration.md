@@ -61,7 +61,7 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 ```python
 from enum import Enum
 from typing import Literal, Optional
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 from slyme.context.metadata import Arg, ARG
 from slyme.cli import parse_and_inject
 from slyme.node import node, Auto
@@ -71,11 +71,11 @@ class ModelSize(Enum):
     BASE = "base"
 
 # 1. 定义带有 Arg 元数据的 Ref (演示不同数据类型)
-use_cache_ref = Ref("model.use_cache", metadata={ARG: Arg(default=True, help="是否使用缓存")})
-ports_ref = Ref("server.ports", metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")})
-config_ref = Ref("model.config", metadata={ARG: Arg(type=dict, help="模型配置(JSON字符串)")})
-size_ref = Ref("model.size", metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
-mode_ref = Ref("run.mode", metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
+use_cache_ref = R.model.use_cache(metadata={ARG: Arg(default=True, help="是否使用缓存")})
+ports_ref = R.server.ports(metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")})
+config_ref = R.model.config(metadata={ARG: Arg(type=dict, help="模型配置(JSON字符串)")})
+size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
+mode_ref = R.run.mode(metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
 
 # 2. 定义 Node
 @node

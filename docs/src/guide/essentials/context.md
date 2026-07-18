@@ -22,6 +22,10 @@ user_ref = Ref("user")
 name_ref = Ref("user.profile.name")
 ```
 
+::: tip Best Practice
+In practice, prefer using the [`R` (RefFactory)](#reffactory) shorthand for a more concise syntax: `R.user` instead of `Ref("user")`, and `R.user.profile.name` instead of `Ref("user.profile.name")`.
+:::
+
 ### Deriving Ref
 
 `Ref` provides an `.at()` method that allows you to quickly derive sub-paths based on the current path:
@@ -90,18 +94,18 @@ from slyme.context import R
 # Attribute access records a dotted path:
 # R.user.profile.name  records "user.profile.name"
 
-# Call it to create the Ref:
-name_ref = R.user.profile.name()  # Equivalent to Ref("user.profile.name")
+# Use it directly — automatically converted to Ref when needed:
+name_ref = R.user.profile.name  # Equivalent to Ref("user.profile.name")
 ```
 
-`RefFactory` is **immutable** — each attribute access returns a new `RefFactory` instance with the extended path. It can be used anywhere a `Ref` is expected (such as `Context.get()`, `Context.set()`, or Node keyword arguments):
+`RefFactory` is **immutable** — each attribute access returns a new `RefFactory` instance with the extended path. It can be used anywhere a `Ref` is expected (such as `Context.get()`, `Context.set()`, or Node keyword arguments). The conversion from `RefFactory` to `Ref` is handled transparently by the framework:
 
 ```python
 from slyme.context import Context, R
 
-ctx = Context().set(R.status(), "active")
+ctx = Context().set(R.status, "active")
 
-# Pass additional metadata when creating the Ref:
+# Call it to pass additional metadata when creating the Ref:
 ref_with_meta = R.user.profile.name(metadata={"desc": "User's display name"})
 ```
 
@@ -113,7 +117,7 @@ from slyme.context import Context, R
 
 @node
 def greet(ctx: Context, /, *, name: str, title: str) -> Context:
-    return ctx.set(R.greeting(), f"{title} {ctx.get(name)}")
+    return ctx.set(R.greeting, f"{title} {ctx.get(name)}")
 
 # Use R directly in keyword arguments
 node_def = greet(name=R.user.name, title=R.user.title)
@@ -132,12 +136,12 @@ Internally, `RefFactory` is resolved to `Ref` transparently — any API that acc
 You can initialize a `Context` using the `update()` method:
 
 ```python
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 
 ctx = Context().update({
-    Ref("user.profile.name"): "Alice",
-    Ref("user.profile.age"): 25,
-    Ref("status"): "active",
+    R.user.profile.name: "Alice",
+    R.user.profile.age: 25,
+    R.status: "active",
 })
 ```
 
@@ -163,13 +167,13 @@ Use the `get()` method with a `Ref` to retrieve data. If the path doesn't exist,
 
 ```python
 # Get top-level data
-status = ctx.get(Ref("status"))  # 'active'
+status = ctx.get(R.status)  # 'active'
 
 # Get deeply nested data
-name = ctx.get(Ref("user.profile.name"))  # 'Alice'
+name = ctx.get(R.user.profile.name)  # 'Alice'
 
 # Provide a default value when getting non-existent data
-email = ctx.get(Ref("user.profile.email"), default="unknown")
+email = ctx.get(R.user.profile.email, default="unknown")
 ```
 
 Additionally, you can use the `extract()` method for more advanced structured reading, supporting arbitrarily nested Python dictionaries, lists, and tuples:
@@ -177,9 +181,9 @@ Additionally, you can use the `extract()` method for more advanced structured re
 ```python
 profiles = ctx.extract([
     {
-        "age": Ref("user.profile.age"),
-        "name": Ref("user.profile.name"),
-        "status": Ref("status"),
+        "age": R.user.profile.age,
+        "name": R.user.profile.name,
+        "status": R.status,
     }
 ])
 ```
@@ -191,13 +195,13 @@ In the above example, thanks to the PyTree engine, Slyme resolves all Refs in ne
 ```
 
 ::: warning
-Note that the `ctx.extract()` method requires every leaf value to be a `Ref` object and does not allow mixing with regular values. For example, `ctx.extract([Ref("status"), 123])` is not allowed. If you want to parse mixed structures, you should use the more advanced eval API (see [Dependency Injection](/guide/slyme-in-depth/dependency-injection)):
+Note that the `ctx.extract()` method requires every leaf value to be a `Ref` object and does not allow mixing with regular values. For example, `ctx.extract([R.status, 123])` is not allowed. If you want to parse mixed structures, you should use the more advanced eval API (see [Dependency Injection](/guide/slyme-in-depth/dependency-injection)):
 
 ```python
 from slyme.node.eval import eval_tree
 
 # NOTE: The value 123 will not be parsed and remains as-is
-eval_tree(ctx, [Ref("status"), 123])  # ['active', 123]
+eval_tree(ctx, [R.status, 123])  # ['active', 123]
 ```
 :::
 
@@ -205,11 +209,11 @@ Other commonly used reading methods:
 
 ```python
 # Check if a path exists.
-ctx.exists(Ref("user.profile"))  # True
-ctx.exists(Ref("user.profile.email"))  # False
+ctx.exists(R.user.profile)  # True
+ctx.exists(R.user.profile.email)  # False
 
 # List all keys at a specified level (similar to dict's `keys()`).
-ctx.keys(Ref("user.profile"))  # dict_keys(['name', 'age'])
+ctx.keys(R.user.profile)  # dict_keys(['name', 'age'])
 
 # Convert Context recursively to a plain Python dictionary.
 ctx.to_dict()  # {'user': {'profile': {'name': 'Alice', 'age': 25}}, 'status': 'active'}
@@ -221,17 +225,17 @@ Since Context is structurally immutable, all modification methods **return a new
 
 ```python
 # Single setting (set)
-new_ctx = ctx.set(Ref("status"), "inactive")
+new_ctx = ctx.set(R.status, "inactive")
 # ctx remains unchanged, new_ctx's status becomes inactive
 
 # Batch update (update)
 new_ctx = ctx.update({
-    Ref("user.profile.age"): 26,
-    Ref("user.profile.email"): "alice@example.com"
+    R.user.profile.age: 26,
+    R.user.profile.email: "alice@example.com"
 })
 
 # Delete (delete)
-new_ctx = ctx.delete(Ref("user.profile.age"))
+new_ctx = ctx.delete(R.user.profile.age)
 ```
 
 ### Atomic Transactions (mutate)
@@ -241,10 +245,10 @@ If you need to perform complex updates and deletions simultaneously, you can use
 ```python
 new_ctx = ctx.mutate(
     updates={
-        Ref("user.profile.status"): "verified"
+        R.user.profile.status: "verified"
     },
     drops=[
-        Ref("status") # Delete top-level status
+        R.status  # Delete top-level status
     ]
 )
 ```
@@ -256,11 +260,11 @@ You can use the `.diff()` method to compare differences between two Context obje
 ```python
 new_ctx = ctx.mutate(
     updates={
-        Ref("user.profile.status"): "verified",
-        Ref("user.profile.name"): "Bob",
+        R.user.profile.status: "verified",
+        R.user.profile.name: "Bob",
     },
     drops=[
-        Ref("status")
+        R.status
     ]
 )
 diff = new_ctx.diff(ctx)
@@ -287,7 +291,7 @@ new_ctx = await ctx.async_mutate(updates={...}, drops=[...])
 **New pattern — use synchronous methods everywhere:**
 
 ```python
-value = ctx.get(Ref("path"))
+value = ctx.get(R.path)
 data = ctx.to_dict()
 new_ctx = ctx.mutate(updates={...}, drops=[...])
 ```

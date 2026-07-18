@@ -15,20 +15,16 @@ You can define a Builder like a normal function, just add the `@builder` decorat
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Ref
+from slyme.context import R
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
 
 @builder
 def create_data_pipeline(source_path: str):
-    scope = {
-        "config": Ref("process_config"),
-        "output": Ref("output_path"),
-    }
-    # 1. Instantiate each Node (Def phase)
+    # 1. Instantiate each Node (Def phase) — pass Refs directly via keyword arguments
     load_node = load_data(path=source_path)
-    process_node = process_data(scope)
-    save_node = save_data(scope)
+    process_node = process_data(config=R.process_config)
+    save_node = save_data(output=R.output_path)
 
     # 2. Assemble and return a complete Node tree
     return sequential(nodes=[load_node, process_node, save_node])
@@ -72,31 +68,24 @@ This is very useful when building different variants of pipelines, avoiding a lo
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Ref
-
-def base_scope():
-    return {
-        "config": Ref("default_config"),
-    }
+from slyme.context import R
 
 @builder
 def base_pipeline():
-    scope = base_scope()
     return sequential(nodes=[
         load_data(path="default_path"),
-        process_data(scope),
+        process_data(config=R.default_config),
     ])
 
 @builder
 def custom_pipeline(new_path: str):
-    my_scope = {"output": Ref("output_path")}
     # 1. Get the base Node tree
     pipeline = base_pipeline()
 
     # 2. Dynamically modify specific Node's build-time parameters
     pipeline["nodes"][0]["path"] = new_path
     pipeline["nodes"].append(
-        save_data(my_scope)
+        save_data(output=R.output_path)
     )
     return pipeline
 ```

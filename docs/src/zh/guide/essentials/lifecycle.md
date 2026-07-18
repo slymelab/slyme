@@ -10,7 +10,7 @@ Slyme 的 Node 体系采用了严格的**两阶段架构**（构建期 Def 与�
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 
 @node
 def process_data(ctx: Context, /, *, timeout: int = 30, data: Auto[list], max_len: int) -> Context:
@@ -33,7 +33,7 @@ my_node_def = process_data(max_len=1024)  # 此时 data 为 UNDEFINED
 ```python
 # 动态修改阶段：微调 Def 参数
 my_node_def["timeout"] = 60
-my_node_def["data"] = [Ref("user.age"), Ref("user.name")]
+my_node_def["data"] = [R.user.age, R.user.name]
 ```
 
 ## 3. 准备阶段 (Prepare)
@@ -91,14 +91,14 @@ def process(ctx: Context, /, *, data: Auto[Any]) -> Context:
 
 ```python
 # 1. 构建：传入一个 Python list，内部包含多个 Ref
-node_def_a = process(data=[Ref("a"), Ref("b")])
+node_def_a = process(data=[R.a, R.b])
 
 # 2. Prepare：由于参数冻结机制，内部的 list 结构被转换成了 tuple！
 exec_a = node_def_a.prepare()
-# 此时 exec_a 内部持有的 data 参数结构实际上是: (Ref("a"), Ref("b"))
+# 此时 exec_a 内部持有的 data 参数结构实际上是: (R.a, R.b)
 
 # 3. 执行：Auto 自动求值引擎解析这个 tuple，并注入最终值
-ctx_a = Context().update({Ref("a"): 1, Ref("b"): 2})
+ctx_a = Context().update({R.a: 1, R.b: 2})
 exec_a(ctx_a)
 # 打印输出 => Type: <class 'tuple'>, Value: (1, 2)
 ```
@@ -107,14 +107,14 @@ exec_a(ctx_a)
 
 ```python
 # 1. 构建：传入一个单独的 Ref
-node_def_b = process(data=Ref("my_list"))
+node_def_b = process(data=R.my_list)
 
 # 2. Prepare：Ref 本身是不可变的叶子节点，保持不变
 exec_b = node_def_b.prepare()
-# 此时 exec_b 内部持有的 data 参数结构仍然是: Ref("my_list")
+# 此时 exec_b 内部持有的 data 参数结构仍然是: R.my_list
 
 # 3. 执行：Auto 自动求值引擎解析这个 Ref，直接取出 Context 中的值并注入
-ctx_b = Context().set(Ref("my_list"), [1, 2])
+ctx_b = Context().set(R.my_list, [1, 2])
 exec_b(ctx_b)
 # 打印输出 => Type: <class 'list'>, Value: [1, 2]
 ```

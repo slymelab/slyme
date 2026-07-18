@@ -28,7 +28,7 @@ You can define a @node as follows:
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def to_upper(ctx: Context, /, *, value: Ref[str]) -> Context:
@@ -43,15 +43,15 @@ After definition, you can create a Def instance by calling it and passing config
 
 ```python
 # 1. Instantiate as Def (build phase)
-node_def = to_upper(value=Ref("name"))
+node_def = to_upper(value=R.name)
 
 # 2. Convert to Exec (execution phase)
 node_exec = node_def.prepare()
 
 # 3. Pass Context to execute
-ctx = Context().set(Ref("name"), "Alice")
+ctx = Context().set(R.name, "Alice")
 new_ctx = node_exec(ctx)
-print(new_ctx.get(Ref("name")))  # Output ALICE
+print(new_ctx.get(R.name))  # Output ALICE
 ```
 
 ## @expression {#at-expression}
@@ -64,7 +64,7 @@ Defining an @expression is very similar to @node:
 
 ```python
 from slyme.node import expression
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @expression
 def get_greeting(ctx: Context, /, *, prefix: str, name: Ref[str]) -> str:
@@ -72,7 +72,7 @@ def get_greeting(ctx: Context, /, *, prefix: str, name: Ref[str]) -> str:
     return f"{prefix} {name_}"
 
 # Create @expression instance
-expr = get_greeting(prefix="Hello", name=Ref("not_exist_path"))
+expr = get_greeting(prefix="Hello", name=R.not_exist_path)
 
 # Execute @expression
 greeting = expr.prepare()(Context())  # Returns "Hello Guest"
@@ -112,7 +112,7 @@ Here, `wrapped` is the @node instance wrapped by the current @wrapper, and `call
 You can mount one or more @wrappers to a @node instance using the `.add_wrappers()` method:
 
 ```python
-node_def = to_upper(value=Ref("name")).add_wrappers(
+node_def = to_upper(value=R.name).add_wrappers(
     logging_wrapper(level="INFO")
 )
 
@@ -197,7 +197,7 @@ This is one of Slyme's most powerful features. By setting `auto_eval=True` (or u
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def dynamic_greet(
@@ -213,15 +213,15 @@ def dynamic_greet(
     print(f"Hello, {target}!")
     return ctx
 
-# Pass a Ref, then at runtime the framework will automatically call `ctx.get(Ref("user.name"))`, and use the returned result as the `target` value.
-node_def = dynamic_greet(target=Ref("user.name"))
+# Pass a Ref, then at runtime the framework will automatically call `ctx.get(R.user.name)`, and use the returned result as the `target` value.
+node_def = dynamic_greet(target=R.user.name)
 ```
 
 This design makes Node logic extremely pure, completely decoupling "where to get data" from "how to process data". Additionally, `Auto` supports Python standard data structure sniffing, as follows:
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def process_data(
@@ -232,19 +232,19 @@ def process_data(
 ): ...
 
 process_data(data={
-    "id": Ref("user.id"),  # Will be resolved to actual value at runtime
+    "id": R.user.id,  # Will be resolved to actual value at runtime
     "name": some_expression(...),  # Will be resolved to actual value at runtime
     "value": 3,  # Remains unchanged
     "tags": (
-        Ref("user.status"),  # Will be resolved to actual value at runtime
-        Ref("user.membership"),  # Will be resolved to actual value at runtime
+        R.user.status,  # Will be resolved to actual value at runtime
+        R.user.membership,  # Will be resolved to actual value at runtime
         some_expression2(...),  # Will be resolved to actual value at runtime
     ),
 })
 ```
 
 ::: tip
-At execution time, the `data` parameter annotated with `Auto` is automatically deeply evaluated by the Slyme framework, automatically calling all contained Refs and @expressions (the evaluation object is the Context parameter input to `process_data`), and finally injecting the obtained actual values into the original structure. This feature enables the Node series to be extremely decoupled. We can combine different Context paths into an expected structure as shown above; we can also directly store this structure in a specific Context path (like `Ref("data")`), then use `process_data(data=Ref("data"))` at creation; we can also define a `data_expression` whose return value is a dict conforming to this structure. And none of this needs to be concerned by the `process_data` @node itself — it only needs to know that the `data` parameter will be passed a dict conforming to a specific structure.
+At execution time, the `data` parameter annotated with `Auto` is automatically deeply evaluated by the Slyme framework, automatically calling all contained Refs and @expressions (the evaluation object is the Context parameter input to `process_data`), and finally injecting the obtained actual values into the original structure. This feature enables the Node series to be extremely decoupled. We can combine different Context paths into an expected structure as shown above; we can also directly store this structure in a specific Context path (like `R.data`), then use `process_data(data=R.data)` at creation; we can also define a `data_expression` whose return value is a dict conforming to this structure. And none of this needs to be concerned by the `process_data` @node itself — it only needs to know that the `data` parameter will be passed a dict conforming to a specific structure.
 :::
 
 ::: tip
@@ -321,8 +321,8 @@ This approach is more explicit, type-safe, and readable. Since `RefFactory` is r
 In Slyme, Nodes (@node, @expression, @wrapper) can be dynamically modified before `.prepare()` is called. For example:
 
 ```python
-my_node = dynamic_greet(target=Ref("user.name"))
-my_node["target"] = Ref("user.another_name")  # my_node's target parameter becomes Ref("user.another_name")
+my_node = dynamic_greet(target=R.user.name)
+my_node["target"] = R.user.another_name  # my_node's target parameter becomes R.user.another_name
 
 # NOTE: Node supports deep modification
 another_node["nodes"][0]["value"] = ...
@@ -349,7 +349,7 @@ Examples:
 
 ```python
 from slyme.node import node, UNSET, UNDEFINED
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @node
 def process_data(
@@ -372,8 +372,8 @@ my_node["timeout"] = UNDEFINED  # NOTE: Now timeout is explicitly set to UNDEFIN
 
 my_node2 = process_data(timeout=UNSET, tags=(2, 3))  # NOTE: timeout is set to UNSET which triggers default value logic, final result: timeout=30, tags=(2, 3), data=UNDEFINED
 # my_node2.prepare()  # Calling `.prepare()` at this point will raise an error because data is not set
-my_node2["data"] = Ref("user.data")
-my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=Ref("user.data")
+my_node2["data"] = R.user.data
+my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=R.user.data
 # my_node2_exec can now be called for execution
 ```
 
@@ -389,7 +389,7 @@ To handle modern I/O-intensive tasks, Slyme provides complete async support. You
 
 ```python
 from slyme.node import async_node
-from slyme.context import Context, Ref
+from slyme.context import Context, Ref, R
 
 @async_node
 async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) -> Context:
@@ -404,11 +404,11 @@ async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) ->
 Like synchronous @node, you need to `.prepare()` first, then use `await` during execution:
 
 ```python
-node_def = fetch_user_data(url="https://api.example.com/user", user_data=Ref("user.data"))
+node_def = fetch_user_data(url="https://api.example.com/user", user_data=R.user.data)
 node_exec = node_def.prepare()
 
 new_ctx = await node_exec(Context())
-print(new_ctx.get(Ref("user.data")))  # {'id': 1, 'name': 'Alice'}
+print(new_ctx.get(R.user.data))  # {'id': 1, 'name': 'Alice'}
 ```
 
 ::: info
