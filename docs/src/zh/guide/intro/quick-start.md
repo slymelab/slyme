@@ -14,8 +14,7 @@ pip install slyme
 
 我们使用 @node 装饰器来装饰 `llm_api` 函数，其中 `llm_api` 的功能是接收一个 prompt 列表（batch 输入），根据 prompt 来调用 LLM 模型，最后将 LLM 的响应（batch 输出）写入到 `responses` 中。
 
-::: code-group
-```python [使用 Auto 自动注入（推荐）]
+```python
 from slyme.context import Context, Ref
 from slyme.node import node, Auto
 
@@ -31,7 +30,6 @@ def llm_api(
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
     return ctx.set(responses, responses_)  # 写入并返回新的 Context 对象
 ```
-:::
 
 在实现 @node 函数的过程中，有几个注意点：
 
@@ -105,7 +103,6 @@ def timing(
 
 我们推荐使用 @builder 来将原子化的组件构建成具体的执行流程。它会自动进行结构校验，保证组装正确性。
 
-::: code-group
 ```python
 from slyme.builder import builder
 from slyme.context import R

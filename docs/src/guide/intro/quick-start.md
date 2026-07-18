@@ -14,8 +14,7 @@ The project dependency only includes `Python >= 3.9` and `typing_extensions`.
 
 We use the @node decorator to decorate the `llm_api` function, where `llm_api` accepts a list of prompts (batch input), calls the LLM model based on the prompts, and writes the LLM response (batch output) to `responses`.
 
-::: code-group
-```python [Using Auto for Automatic Injection (Recommended)]
+```python
 from slyme.context import Context, Ref
 from slyme.node import node, Auto
 
@@ -31,7 +30,6 @@ def llm_api(
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
     return ctx.set(responses, responses_)  # Write and return the new Context object
 ```
-:::
 
 A few notes when implementing @node functions:
 
