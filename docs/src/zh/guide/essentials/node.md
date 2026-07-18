@@ -251,7 +251,13 @@ process_data(data={
 如果想深入了解 `Auto` 的工作原理，你可以参考[依赖注入](/zh/guide/slyme-in-depth/dependency-injection)章节。
 :::
 
-## 使用 Scope 来初始化 Node
+## 使用 Scope 来初始化 Node（已弃用）
+
+::: warning 已弃用
+向 Node 工厂函数传入位置参数 `dict`（Scope）的方式自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。请改用 [`RefFactory`](/zh/guide/essentials/context#reffactory)（`R.x.y.z`）在关键字参数中直接指定，代码更简洁、更显式。
+:::
+
+**旧范式 — 位置参数 Scope 字典（已弃用）：**
 
 Scope 是一个标准的 Python 字典，用于按名注入函数的参数。想象现在有很多 @node，它们都需要用到 `user_data` 这个自定义配置参数，正常情况下，你需要这样为他们赋值：
 
@@ -293,6 +299,22 @@ eval_scope = {"dataset": Ref("eval.data")}
 create_train = create_dataset(common_scope, train_scope)
 create_eval = create_dataset(common_scope, eval_scope)
 ```
+
+**新范式 — 在关键字参数中使用 `R`（RefFactory）：**
+
+```python
+from slyme.context import R
+
+# 直接在关键字参数中使用 R.x.y.z — 无需 Scope 字典
+create_train = create_dataset(
+    device=R.device, max_tokens=R.max_tokens, dataset=R.train.data
+)
+create_eval = create_dataset(
+    device=R.device, max_tokens=R.max_tokens, dataset=R.eval.data
+)
+```
+
+这种方式更加显式、类型安全且可读性更强。由于 `RefFactory` 会被透明地解析为 `Ref`，因此可以在任何需要 `Ref` 的地方使用。
 
 ## 动态修改 Node
 
@@ -348,7 +370,7 @@ my_node["tags"] = (1, 2)  # timeout=60, tags=(1, 2), data=UNDEFINED
 my_node["timeout"] = UNSET  # NOTE: 触发默认值逻辑，此时 timeout=30
 my_node["timeout"] = UNDEFINED  # NOTE: 此时 timeout 被显式地设置为 UNDEFINED，需要在 `.prepare()` 之前设置一个合法的值
 
-my_node2 = process_data({"timeout": 60}, timeout=UNSET, tags=(2, 3))  # NOTE: 按照 Scope 优先级，timeout 被设置成 UNSET 因此触发了默认值逻辑，最终：timeout=30, tags=(2, 3), data=UNDEFINED
+my_node2 = process_data(timeout=UNSET, tags=(2, 3))  # NOTE: timeout 被设置成 UNSET 因此触发了默认值逻辑，最终：timeout=30, tags=(2, 3), data=UNDEFINED
 # my_node2.prepare()  # 此时调用 `.prepare()` 会报错，因为 data 未被设置
 my_node2["data"] = Ref("user.data")
 my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=Ref("user.data")

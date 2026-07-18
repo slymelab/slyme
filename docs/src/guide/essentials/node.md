@@ -251,7 +251,13 @@ At execution time, the `data` parameter annotated with `Auto` is automatically d
 If you want to understand how `Auto` works in depth, you can refer to the [Dependency Injection](/guide/slyme-in-depth/dependency-injection) chapter.
 :::
 
-## Using Scope to Initialize Node
+## Using Scope to Initialize Node (Deprecated)
+
+::: warning Deprecated
+Passing positional `dict` arguments (Scope) to Node factories is **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Use [`RefFactory`](/guide/essentials/context#reffactory) (`R.x.y.z`) in keyword arguments instead for cleaner, more explicit code.
+:::
+
+**Old pattern — positional Scope dicts (deprecated):**
 
 Scope is a standard Python dictionary for injecting function parameters by name. Imagine many @nodes that all need the `user_data` custom configuration parameter. Normally, you would need to assign values like this:
 
@@ -293,6 +299,22 @@ eval_scope = {"dataset": Ref("eval.data")}
 create_train = create_dataset(common_scope, train_scope)
 create_eval = create_dataset(common_scope, eval_scope)
 ```
+
+**New pattern — use `R` (RefFactory) in keyword arguments:**
+
+```python
+from slyme.context import R
+
+# Use R.x.y.z directly in keyword arguments — no Scope dicts needed
+create_train = create_dataset(
+    device=R.device, max_tokens=R.max_tokens, dataset=R.train.data
+)
+create_eval = create_dataset(
+    device=R.device, max_tokens=R.max_tokens, dataset=R.eval.data
+)
+```
+
+This approach is more explicit, type-safe, and readable. Since `RefFactory` is resolved transparently to `Ref`, it works anywhere a `Ref` is expected.
 
 ## Dynamically Modifying Node
 
@@ -348,7 +370,7 @@ my_node["tags"] = (1, 2)  # timeout=60, tags=(1, 2), data=UNDEFINED
 my_node["timeout"] = UNSET  # NOTE: Triggers default value logic, now timeout=30
 my_node["timeout"] = UNDEFINED  # NOTE: Now timeout is explicitly set to UNDEFINED, needs a valid value before `.prepare()`
 
-my_node2 = process_data({"timeout": 60}, timeout=UNSET, tags=(2, 3))  # NOTE: According to Scope priority, timeout is set to UNSET which triggers default value logic, final result: timeout=30, tags=(2, 3), data=UNDEFINED
+my_node2 = process_data(timeout=UNSET, tags=(2, 3))  # NOTE: timeout is set to UNSET which triggers default value logic, final result: timeout=30, tags=(2, 3), data=UNDEFINED
 # my_node2.prepare()  # Calling `.prepare()` at this point will raise an error because data is not set
 my_node2["data"] = Ref("user.data")
 my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=Ref("user.data")

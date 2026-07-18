@@ -18,13 +18,15 @@ PyTree 的核心能力在于将复杂对象“展平”为一维的叶子节点�
 
 ## 精确的路径追踪 (Path Tracking)
 
-Slyme 的 PyTree 不仅仅处理数据，它还自带了精确的路径追踪系统。通过引入 `PyTreeKey`（及其子类如 `SequenceKey`、`MappingKey`、`AttributeKey`、`CallKey`），Slyme 在遍历树时可以精确记录每一个叶子节点在原结构中的位置。
+Slyme 的 PyTree 不仅仅处理数据，它还自带了精确的路径追踪系统。通过引入 `PyTreeKey`（及其子类如 `SequenceKey`、`MappingKey`、`AttributeKey`），Slyme 在遍历树时可以精确记录每一个叶子节点在原结构中的位置。
 
 * **`SequenceKey(index)`**：代表列表或元组中的索引。
 * **`MappingKey(key)`**：代表字典中的键。
 * **`AttributeKey(name)`**：代表对象的属性名。
 
-这种能力使得我们可以使用 `KeyPathExpr` (通常简写为 `P`) 以直观的 Python 语法构建和解析路径，从而在复杂的 Node 树中实现精准的依赖注入、状态修改和调试。
+::: warning 已弃用
+`CallKey`（`PyTreeKey` 的子类，用于函数调用路径）以及 `KeyPathExpr` / `P`（用于构建键路径的代理对象）自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。它们仅被已弃用的 `Ref.key_path` 所使用。请改用 [`@expression`](/zh/guide/essentials/node#at-expression) + [`Auto`](/zh/guide/essentials/node#spec) 来实现动态值解析。
+:::
 
 ## 实例隔离的引擎 (PyTreeEngine)
 

@@ -32,23 +32,96 @@ name_ref = profile_ref.at("name")  # 等价于 Ref("user.profile.name")
 ```
 
 ::: info
-`Ref` 在内部会缓存哈希值和拆分后的路径片段（`parts`），因此在执行期频繁使用 `Ref` 进行查找时具有极高的性能。除此之外，`Ref` 还可以携带 `metadata` 和 `key_path`（用于 [PyTree](/zh/guide/slyme-in-depth/pytree-in-slyme) 解析）等高级元数据，以支持命令行参数配置等功能。
+`Ref` 在内部会缓存哈希值和拆分后的路径片段（`parts`），因此在执行期频繁使用 `Ref` 进行查找时具有极高的性能。除此之外，`Ref` 还可以携带 `metadata` 等高级元数据，以支持命令行参数配置等功能。
 :::
 
-### Key Path
+::: warning 已弃用
+`Ref` 的 `key_path` 参数自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。请改用 [`@expression`](/zh/guide/essentials/node#at-expression) + [`Auto`](/zh/guide/essentials/node#spec) 来实现动态值解析。详见下方 [Key Path](#key-path) 章节的迁移指南。
+:::
 
-`Ref("a.b.c")` 的路径只能放问到 Context 本身的结构化数据，但是对叶子结点无法进一步穿透获取。Slyme 提供了 Key Path 功能，以增强对 Context 结构的访问。可以通过这个例子来理解：
+### Key Path（已弃用） {#key-path}
+
+::: warning 已弃用
+`Ref.key_path` 以及 `slyme.utils.pytree` 中的 `CallKey`、`KeyPathExpr`、`P` 代理对象自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。请改用 [`@expression`](/zh/guide/essentials/node#at-expression) + [`Auto`](/zh/guide/essentials/node#spec) 来实现动态值解析。
+:::
+
+**旧范式（已弃用）：**
 
 ```python
 from slyme.utils.pytree import P
 
-# 如果 `hidden_size` 直接存储在 Context 路径上，那么我们可以直接 get 得到
-ctx.get(Ref("hidden_size"))
-# 如果 `hidden_size` 需要从 Context 存储的 model 的 config 中获取，那么由于 model 本身是普通用户对象，不属于 Context 结构，因此我们可以使用 Key Path
+# 从 Context 中获取 model，再深入访问 model.config.hidden_size
 ctx.get(Ref("model", key_path=tuple(P.config.hidden_size)))
 ```
 
-请注意，其中的 `P` 是一个特殊的代理对象，支持点属性操作（`P.a`）、getitem 操作（`P[...]`）和调用操作（`P(*args, **kwargs)`）。上述例子的最终效果是，首先从 Context 的 `"model"` 路径获取值，然后对其调用 `.config.hidden_size`，并将最终结果返回。Key Path 功能是对 Node 的进一步解耦，Node 只需要声明自己需要一个 `hidden_size` 参数，而无需关心这个 `hidden_size` 是如何计算得到的。
+**新范式 — 使用 `@expression` + `Auto`：**
+
+```python
+from slyme.node import expression, Auto
+from slyme.context import Context, Ref
+
+@expression
+def get_hidden_size(ctx: Context, /, *, model: Auto[object]) -> int:
+    return model.config.hidden_size
+
+# 在需要 hidden_size 的 @node 中传入 expression：
+@node
+def my_node(ctx: Context, /, *, hidden_size: Auto[int]) -> Context:
+    # hidden_size 已经被解析为实际的 int 值
+    return ctx
+
+# 将它们组合起来：
+my_node(hidden_size=get_hidden_size(model=Ref("model")))
+```
+
+这种方式让 Node 保持完全解耦 — Node 只需要声明它需要一个 `hidden_size` 参数，而无需关心这个值是如何计算得到的。
+
+### RefFactory
+
+::: tip 0.1.1 新增
+`RefFactory` 是创建 `Ref` 对象的推荐方式，使用简洁的属性访问语法。
+:::
+
+Slyme 提供了一个全局的 `R` 实例（`RefFactory`）。使用 `R`，你可以通过点号记法创建 `Ref` 对象：
+
+```python
+from slyme.context import R
+
+# 属性访问记录了点分路径：
+# R.user.profile.name  记录了 "user.profile.name"
+
+# 调用它以创建 Ref：
+name_ref = R.user.profile.name()  # 等价于 Ref("user.profile.name")
+```
+
+`RefFactory` 是**不可变的** — 每次属性访问都会返回一个带有扩展路径的新 `RefFactory` 实例。它可以在任何需要 `Ref` 的地方使用（例如 `Context.get()`、`Context.set()` 或 Node 的关键字参数）：
+
+```python
+from slyme.context import Context, R
+
+ctx = Context().set(R.status(), "active")
+
+# 创建 Ref 时传递额外的元数据：
+ref_with_meta = R.user.profile.name(metadata={"desc": "用户的显示名称"})
+```
+
+`RefFactory` 与 Node 实例化无缝集成，提供了已弃用 Scope 模式的简洁替代方案：
+
+```python
+from slyme.node import node
+from slyme.context import Context, R
+
+@node
+def greet(ctx: Context, /, *, name: str, title: str) -> Context:
+    return ctx.set(R.greeting(), f"{title} {ctx.get(name)}")
+
+# 直接在关键字参数中使用 R
+node_def = greet(name=R.user.name, title=R.user.title)
+```
+
+::: info
+在内部，`RefFactory` 会被透明地解析为 `Ref` — 任何接受 `Ref` 的 API 也通过 `RefLike` 类型别名接受 `RefFactory`。
+:::
 
 ## Context
 
@@ -197,89 +270,32 @@ print(diff.flatten())  # {'status': (<DiffMissing.MARK: 1>, 'active'), 'user.pro
 
 其中，`slyme.context.DIFF_MISSING` 表示缺失值。`diff.flatten()` 返回的字典中，tuple 的第一个元素是新值，第二个元素是旧值。这就意味着，`DIFF_MISSING` 出现在第一个位置，表示值被删除；出现在第二个位置，表示值被新增；否则，表示值被修改。
 
-## 异步支持 {#async-support}
+## 异步支持（已弃用） {#async-support}
 
-在异步环境（如 `@async_node`）中，Slyme 提供了 Context 方法的对应异步版本，它们通常以 `async_` 开头：
-
-- `await ctx.async_get(ref)`
-- `await ctx.async_set(ref, value)`
-- `await ctx.async_update(updates)`
-- `await ctx.async_mutate(updates=..., drops=...)`
-- `await ctx.async_to_dict()`
-
-这使得你可以无缝地在同步和异步的 Node 中安全地操作 Context。值得注意的是，Context 本身是**本地存储且同步的**，异步环境的操作完全由 Context Hook 支持。
-
-## Context Hook
-
-为了提供更强大的扩展能力，`Context` 支持挂载 Hook。通过 Hook，你可以拦截并修改 Context 的读取（Extract）和写入（Mutate）行为。
-
-这在许多高级场景中非常有用，例如：
-- **数据转换**：在读取时自动反序列化，在写入时自动序列化。
-- **外部存储映射**：将特定路径的数据映射到外部存储（如 Redis 或数据库），使得 Context 就像一个虚拟的文件系统。
-
-### 自定义 Hook
-
-你可以通过继承 `slyme.context.Hook` 并重写相关方法来创建自定义的 Hook：
-
-```python
-from typing import Any
-from slyme.context import Hook, Context, Ref, ExtractResult, MutateResult
-
-class MyLoggingHook(Hook):
-    def on_extract(
-        self,
-        *,
-        ctx: Context,
-        refs: tuple[Ref, ...],
-        values: tuple[Any, ...],
-        **kwargs,
-    ) -> ExtractResult:
-        print(f"[Read] Paths: {[r.path for r in refs]}, Values: {values}")
-        # 必须返回 ExtractResult，你可以修改 values 来改变实际读取到的值
-        return ExtractResult(values=values)
-
-    def on_mutate(
-        self, 
-        *, 
-        ctx: Context, 
-        updates: dict[Ref, Any], 
-        drops: set[Ref], 
-        **kwargs
-    ) -> MutateResult:
-        print(f"[Write] Updates: {updates}, Drops: {drops}")
-        # 必须返回 MutateResult，你可以修改 updates 或 drops 来改变实际的写入行为
-        return MutateResult(updates=updates, drops=drops)
-```
-
-::: info
-对应的异步方法为 `on_async_extract` 和 `on_async_mutate`。默认情况下，如果你只实现了同步版本，异步版本会直接调用同步版本。但如果你需要执行真正的异步 I/O（比如查询数据库），你应该重写异步版本的方法。[异步支持](#async-support)章节中的方法实际调用的是异步的 Hook 方法。
+::: warning 已弃用
+`Context` 和 `ContextView` 上的所有 `async_*` 方法（`async_get`、`async_set`、`async_update`、`async_mutate`、`async_to_dict`、`async_extract`）自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。Context 本身是**本地存储且同步的** — 请直接使用同步方法替代。
 :::
 
-### 挂载 Hook
-
-在初始化 Context 时，通过 `hook` 参数将其实例化并挂载：
+**旧范式（已弃用）：**
 
 ```python
-ctx = Context(hook=MyLoggingHook())
-
-# 将会触发 on_mutate 打印日志
-new_ctx = ctx.set(Ref("status"), "active") 
-
-# 将会触发 on_extract 打印日志
-status = new_ctx.get(Ref("status"))
+value = await ctx.async_get(Ref("path"))
+data = await ctx.async_to_dict()
+new_ctx = await ctx.async_mutate(updates={...}, drops=[...])
 ```
 
-### HookChain
-
-如果你需要同时应用多个 Hook，可以使用 `HookChain` 将它们组合起来：
+**新范式 — 统一使用同步方法：**
 
 ```python
-from slyme.context import HookChain
-
-chain = HookChain(hooks=(HookA(), HookB(), HookC()))
-ctx = Context(hook=chain)
+value = ctx.get(Ref("path"))
+data = ctx.to_dict()
+new_ctx = ctx.mutate(updates={...}, drops=[...])
 ```
 
-在 `HookChain` 中，Hook 是按顺序执行的：
-- 对于 `extract`，上一个 Hook 修改后的 `values` 会作为下一个 Hook 的输入。
-- 对于 `mutate`，上一个 Hook 修改后的 `updates` 和 `drops` 会作为下一个 Hook 的输入。
+这些同步方法可以在同步和异步 Node 中正常工作 — 无需 `await`。
+
+## Context Hook（已弃用）
+
+::: warning 已弃用
+`Hook`、`HookChain` 以及 `Context.__init__()` 的 `hook=` 参数自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。Context 不再支持 Hook。如果你需要数据转换或拦截功能，请改用 [`@wrapper`](/zh/guide/essentials/node#at-wrapper) 节点在 Node 层面拦截执行。
+:::

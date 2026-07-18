@@ -32,23 +32,96 @@ name_ref = profile_ref.at("name")  # Equivalent to Ref("user.profile.name")
 ```
 
 ::: info
-Internally, `Ref` caches the hash value and split path segments (`parts`), providing extremely high performance when frequently using `Ref` for lookups during execution time. Additionally, `Ref` can carry `metadata` and `key_path` (used for [PyTree](/guide/slyme-in-depth/pytree-in-slyme) parsing) and other advanced metadata to support features like command-line argument configuration.
+Internally, `Ref` caches the hash value and split path segments (`parts`), providing extremely high performance when frequently using `Ref` for lookups during execution time. Additionally, `Ref` can carry `metadata` to support features like command-line argument configuration.
 :::
 
-### Key Path
+::: warning Deprecated
+The `key_path` parameter of `Ref` is **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Use [`@expression`](/guide/essentials/node#at-expression) + [`Auto`](/guide/essentials/node#spec) for dynamic value resolution instead. See the [Key Path](#key-path) section below for migration guidance.
+:::
 
-The path in `Ref("a.b.c")` can only access Context's own structured data, but cannot further penetrate into leaf nodes. Slyme provides Key Path functionality to enhance access to Context structures. You can understand this through the following example:
+### Key Path (Deprecated) {#key-path}
+
+::: warning Deprecated
+`Ref.key_path`, along with `CallKey`, `KeyPathExpr`, and the `P` proxy object from `slyme.utils.pytree`, are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Use [`@expression`](/guide/essentials/node#at-expression) + [`Auto`](/guide/essentials/node#spec) for dynamic value resolution instead.
+:::
+
+**Old pattern (deprecated):**
 
 ```python
 from slyme.utils.pytree import P
 
-# If `hidden_size` is directly stored on the Context path, we can directly get it
-ctx.get(Ref("hidden_size"))
-# If `hidden_size` needs to be obtained from the model config stored in Context, since model itself is a regular user object and does not belong to the Context structure, we can use Key Path
+# Get model from Context, then drill into model.config.hidden_size
 ctx.get(Ref("model", key_path=tuple(P.config.hidden_size)))
 ```
 
-Note that `P` is a special proxy object supporting dot attribute access (`P.a`), getitem access (`P[...]`), and call operations (`P(*args, **kwargs)`). The final effect of the above example is: first get the value from Context's `"model"` path, then call `.config.hidden_size` on it, and return the final result. Key Path functionality further decouples Nodes — a Node only needs to declare it needs a `hidden_size` parameter, without caring about how that `hidden_size` is computed.
+**New pattern — use `@expression` + `Auto`:**
+
+```python
+from slyme.node import expression, Auto
+from slyme.context import Context, Ref
+
+@expression
+def get_hidden_size(ctx: Context, /, *, model: Auto[object]) -> int:
+    return model.config.hidden_size
+
+# Then in a @node that needs hidden_size, pass the expression:
+@node
+def my_node(ctx: Context, /, *, hidden_size: Auto[int]) -> Context:
+    # hidden_size is already resolved to the actual int value
+    return ctx
+
+# Wire them together:
+my_node(hidden_size=get_hidden_size(model=Ref("model")))
+```
+
+This approach keeps Nodes fully decoupled — a Node only needs to declare it needs a `hidden_size` parameter, without caring about how that value is computed.
+
+### RefFactory
+
+::: tip New in 0.1.1
+`RefFactory` is the recommended way to create `Ref` objects using concise attribute-access syntax.
+:::
+
+Slyme provides a global `R` instance of `RefFactory`. Using `R`, you can create `Ref` objects with dot-notation:
+
+```python
+from slyme.context import R
+
+# Attribute access records a dotted path:
+# R.user.profile.name  records "user.profile.name"
+
+# Call it to create the Ref:
+name_ref = R.user.profile.name()  # Equivalent to Ref("user.profile.name")
+```
+
+`RefFactory` is **immutable** — each attribute access returns a new `RefFactory` instance with the extended path. It can be used anywhere a `Ref` is expected (such as `Context.get()`, `Context.set()`, or Node keyword arguments):
+
+```python
+from slyme.context import Context, R
+
+ctx = Context().set(R.status(), "active")
+
+# Pass additional metadata when creating the Ref:
+ref_with_meta = R.user.profile.name(metadata={"desc": "User's display name"})
+```
+
+`RefFactory` integrates seamlessly with Node instantiation, providing a clean alternative to the deprecated Scope pattern:
+
+```python
+from slyme.node import node
+from slyme.context import Context, R
+
+@node
+def greet(ctx: Context, /, *, name: str, title: str) -> Context:
+    return ctx.set(R.greeting(), f"{title} {ctx.get(name)}")
+
+# Use R directly in keyword arguments
+node_def = greet(name=R.user.name, title=R.user.title)
+```
+
+::: info
+Internally, `RefFactory` is resolved to `Ref` transparently — any API that accepts `Ref` also accepts `RefFactory` via the `RefLike` type alias.
+:::
 
 ## Context
 
@@ -197,89 +270,32 @@ print(diff.flatten())  # {'status': (<DiffMissing.MARK: 1>, 'active'), 'user.pro
 
 Here, `slyme.context.DIFF_MISSING` represents a missing value. In the dictionary returned by `diff.flatten()`, the first element of the tuple is the new value, and the second is the old value. This means `DIFF_MISSING` appearing in the first position indicates deletion; appearing in the second position indicates addition; otherwise, it indicates modification.
 
-## Async Support {#async-support}
+## Async Support (Deprecated) {#async-support}
 
-In async environments (such as `@async_node`), Slyme provides async versions of Context methods, usually prefixed with `async_`:
-
-- `await ctx.async_get(ref)`
-- `await ctx.async_set(ref, value)`
-- `await ctx.async_update(updates)`
-- `await ctx.async_mutate(updates=..., drops=...)`
-- `await ctx.async_to_dict()`
-
-This allows you to seamlessly and safely manipulate Context in both synchronous and asynchronous Nodes. Note that Context itself is **locally stored and synchronous**; async environment operations are fully supported by Context Hook.
-
-## Context Hook
-
-To provide greater extensibility, `Context` supports mounting Hooks. Through Hooks, you can intercept and modify Context's read (Extract) and write (Mutate) behaviors.
-
-This is very useful in many advanced scenarios, such as:
-- **Data Transformation**: Automatically deserialize on read, automatically serialize on write.
-- **External Storage Mapping**: Map data at specific paths to external storage (like Redis or databases), making Context behave like a virtual filesystem.
-
-### Custom Hook
-
-You can create custom Hooks by inheriting from `slyme.context.Hook` and overriding relevant methods:
-
-```python
-from typing import Any
-from slyme.context import Hook, Context, Ref, ExtractResult, MutateResult
-
-class MyLoggingHook(Hook):
-    def on_extract(
-        self,
-        *,
-        ctx: Context,
-        refs: tuple[Ref, ...],
-        values: tuple[Any, ...],
-        **kwargs,
-    ) -> ExtractResult:
-        print(f"[Read] Paths: {[r.path for r in refs]}, Values: {values}")
-        # Must return ExtractResult, you can modify values to change the actual read value
-        return ExtractResult(values=values)
-
-    def on_mutate(
-        self,
-        *,
-        ctx: Context,
-        updates: dict[Ref, Any],
-        drops: set[Ref],
-        **kwargs
-    ) -> MutateResult:
-        print(f"[Write] Updates: {updates}, Drops: {drops}")
-        # Must return MutateResult, you can modify updates or drops to change actual write behavior
-        return MutateResult(updates=updates, drops=drops)
-```
-
-::: info
-The corresponding async methods are `on_async_extract` and `on_async_mutate`. By default, if you only implement the sync version, the async version directly calls the sync version. But if you need to perform true async I/O (like querying a database), you should override the async version methods. The methods in the [Async Support](#async-support) chapter actually call the async Hook methods.
+::: warning Deprecated
+All `async_*` methods on `Context` and `ContextView` (`async_get`, `async_set`, `async_update`, `async_mutate`, `async_to_dict`, `async_extract`) are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Context is **locally stored and synchronous** — use the synchronous methods directly instead.
 :::
 
-### Mounting Hook
-
-During Context initialization, mount it via the `hook` parameter:
+**Old pattern (deprecated):**
 
 ```python
-ctx = Context(hook=MyLoggingHook())
-
-# Will trigger on_mutate to print logs
-new_ctx = ctx.set(Ref("status"), "active")
-
-# Will trigger on_extract to print logs
-status = new_ctx.get(Ref("status"))
+value = await ctx.async_get(Ref("path"))
+data = await ctx.async_to_dict()
+new_ctx = await ctx.async_mutate(updates={...}, drops=[...])
 ```
 
-### HookChain
-
-If you need to apply multiple Hooks simultaneously, you can use `HookChain` to combine them:
+**New pattern — use synchronous methods everywhere:**
 
 ```python
-from slyme.context import HookChain
-
-chain = HookChain(hooks=(HookA(), HookB(), HookC()))
-ctx = Context(hook=chain)
+value = ctx.get(Ref("path"))
+data = ctx.to_dict()
+new_ctx = ctx.mutate(updates={...}, drops=[...])
 ```
 
-In `HookChain`, Hooks are executed sequentially:
-- For `extract`, the `values` modified by the previous Hook become the input for the next Hook.
-- For `mutate`, the `updates` and `drops` modified by the previous Hook become the input for the next Hook.
+These synchronous methods work correctly in both sync and async Nodes — no `await` is needed.
+
+## Context Hook (Deprecated)
+
+::: warning Deprecated
+`Hook`, `HookChain`, and the `hook=` parameter on `Context.__init__()` are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Context no longer supports hooks. If you need data transformation or interception, use [`@wrapper`](/guide/essentials/node#at-wrapper) nodes to intercept execution at the Node level instead.
+:::

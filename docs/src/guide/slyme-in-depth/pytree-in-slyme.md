@@ -18,13 +18,15 @@ For example, for data of type `list[dict[str, int]]` like `[{"a": 1}, {"b": 2, "
 
 ## Precise Path Tracking
 
-Slyme's PyTree not only handles data, but also comes with a precise path tracking system. By introducing `PyTreeKey` (and its subclasses like `SequenceKey`, `MappingKey`, `AttributeKey`, `CallKey`), Slyme can precisely record each leaf node's position in the original structure during tree traversal.
+Slyme's PyTree not only handles data, but also comes with a precise path tracking system. By introducing `PyTreeKey` (and its subclasses like `SequenceKey`, `MappingKey`, `AttributeKey`), Slyme can precisely record each leaf node's position in the original structure during tree traversal.
 
 * **`SequenceKey(index)`**: Represents the index in a list or tuple.
 * **`MappingKey(key)`**: Represents the key in a dictionary.
 * **`AttributeKey(name)`**: Represents the attribute name of an object.
 
-This capability enables us to use `KeyPathExpr` (usually abbreviated as `P`) to construct and parse paths with intuitive Python syntax, thereby achieving precise dependency injection, state modification, and debugging in complex Node trees.
+::: warning Deprecated
+`CallKey` (a `PyTreeKey` subclass for function-call paths) and `KeyPathExpr` / `P` (the proxy object for building key paths) are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. They were only used by `Ref.key_path`, which is also deprecated. Use [`@expression`](/guide/essentials/node#at-expression) + [`Auto`](/guide/essentials/node#spec) for dynamic value resolution instead.
+:::
 
 ## Instance-Isolated Engine (PyTreeEngine)
 
