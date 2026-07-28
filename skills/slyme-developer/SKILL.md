@@ -7,12 +7,12 @@ description: Build, extend, debug, or review downstream Python applications that
 
 Treat Slyme as an installed dependency of the target codebase. Implement application workflows with its public APIs; do not edit Slyme internals.
 
-Before implementing Slyme code, read [references/annotated-example.md](references/annotated-example.md). Use its complete example as the canonical shape and its comments as correctness constraints.
+Before implementing Slyme code, read [references/annotated-example.md](references/annotated-example.md). Use its complete example as the canonical shape and its comments as correctness constraints. For async work, also read [references/async.md](references/async.md).
 
 ## Workflow
 
 1. Inspect the target project's dependency declaration and existing Slyme code. Match its supported Slyme version and local naming/module conventions.
-2. Model runtime state paths first. Prefer the global immutable `R` factory (`R.input.items`) over spelling `Ref("input.items")`.
+2. Model runtime state paths first. Create concrete Refs at the application or builder boundary with `R.input.items()` or `Ref(...)`; pass them into builders instead of storing Ref instances in module-level variables.
 3. Split behavior by responsibility:
    - Use `@node` for side effects or state transitions. Return a `Context`.
    - Use `@expression` for derived values. Return the derived value, not a `Context`.
@@ -77,6 +77,25 @@ Understand `Auto[T]` as `Annotated[T, spec(auto_eval=True)]`:
 - Keep definition-time mutation before `.prepare()`. Treat the prepared execution tree as frozen and reusable.
 - Leave `@builder` structure checking enabled unless measured construction overhead justifies `@builder(check_structure=False)`.
 
+## Architecture Rules
+
+- Keep nodes, expressions, and wrappers small, cohesive, and domain-oriented. Extract a primitive when it has a stable contract and more than one plausible composition; do not fragment straightforward logic into ceremonial one-line nodes.
+- Search the codebase for an existing primitive or builder before creating one. Prefer configuring and composing proven nodes over adding near-duplicates.
+- Keep policy out of primitives. Put workflow order, optional stages, environment variants, and product-specific choices in builders.
+- Design higher-order nodes around `Sequence[Node]` or `Sequence[Union[Node, AsyncNode]]` extension points. Execute them with `sequential_exec` or `async_sequential_exec`; avoid a single hard-coded child when callers may need zero, one, or many stages.
+- Make dependencies visible at assembly boundaries. Pass Refs and child nodes into builders/higher-order nodes; do not hide Context paths, mutable registries, prepared nodes, or environment-derived behavior in module globals.
+- Give each state transition a clear owner. Expressions derive values without writing state; wrappers implement cross-cutting policy; nodes perform explicit state or external effects.
+- Add a new abstraction only when its name and contract are clearer than the composition it replaces. Avoid generic “manager”, “handler”, or flag-heavy nodes that accumulate unrelated branches.
+- Preserve substitutability: a reusable node should depend on semantic inputs and outputs, not on a particular upstream builder or downstream consumer.
+- Test primitives as contracts and builders as compositions. A new variant should normally require a new builder or parameterization, not edits across existing nodes.
+
+## Async Differences
+
+- Use `@async_node`, `@async_expression`, and `@async_wrapper` only when the function awaits real asynchronous work; keep CPU-bound or synchronous primitives synchronous.
+- Async signatures follow the same `/` and `*` rules. An async wrapper must `await call_next(ctx)`, and prepared async nodes execute with `await node_exec(ctx)`.
+- `Auto` in async nodes uses async evaluation and can resolve async expressions.
+- Use `async_sequential` for a declarative mixed sync/async sequence and `await async_sequential_exec(ctx, nodes)` inside higher-order async nodes. Synchronous children are dispatched with `asyncio.to_thread`.
+
 ## CLI Arguments
 
 Attach `Arg` metadata to the same `Ref`/`R` used by the node, then call `parse_and_inject(context=ctx, extra_refs=[...])` before execution. This returns a new populated `Context`. The API also accepts `node=node_def` for dependency-tree discovery, but use it only after a focused test confirms that scanning works in the target Slyme version; prefer explicit `extra_refs` for portable downstream code.
@@ -90,6 +109,7 @@ Use `Arg(default=..., help=..., type=..., choices=..., required=..., nargs=..., 
 - Do not mutate a `Context` in place or ignore the `Context` returned by a node.
 - Do not manually `ctx.get()` an `Auto` parameter; it is already the resolved concrete value.
 - Do not call `.prepare()` repeatedly inside loops or request handlers when the definition is unchanged.
+- Do not keep application-specific Ref instances or prepared node trees as module globals. Construct and inject them at the composition/application boundary.
 - Do not make application code depend on `slyme` private modules when the symbol is exported from `slyme.node`, `slyme.context`, `slyme.builder`, or `slyme.cli`.
 
 ## Verification

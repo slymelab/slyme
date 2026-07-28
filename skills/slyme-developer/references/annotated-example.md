@@ -5,7 +5,7 @@ Read this example before writing Slyme application code. Adapt domain names and 
 ```python
 from collections.abc import Callable, Sequence
 from time import perf_counter
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from slyme.builder import builder
 from slyme.cli import parse_and_inject
@@ -13,19 +13,31 @@ from slyme.context import ARG, Arg, Context, R, Ref
 from slyme.node import Auto, Node, expression, node, sequential, wrapper
 
 
-# A Ref is a path, not the value at that path. R is the preferred RefFactory.
-# Calling the final R segment attaches metadata while preserving the same path.
-INPUT_ITEMS = R.input.items(
-    metadata={
-        ARG: Arg(
-            type=list[str],
-            required=True,
-            help="Items to normalize",
-            aliases=["-i"],
-        )
-    }
-)
-OUTPUT_ITEMS = R.output.items
+class PipelineRefs(NamedTuple):
+    input_items: Ref[list[str]]
+    output_items: Ref[list[str]]
+    output_payload: Ref[dict[str, object]]
+    mode: Ref[str]
+
+
+def create_pipeline_refs() -> PipelineRefs:
+    # Create concrete Refs at the assembly boundary, not as module globals.
+    # Calling an R path produces a Ref and can attach metadata.
+    return PipelineRefs(
+        input_items=R.input.items(
+            metadata={
+                ARG: Arg(
+                    type=list[str],
+                    required=True,
+                    help="Items to normalize",
+                    aliases=["-i"],
+                )
+            }
+        ),
+        output_items=R.output.items(),
+        output_payload=R.output.payload(),
+        mode=R.config.mode(),
+    )
 
 
 @expression
@@ -51,9 +63,9 @@ def store_items(
 ) -> Context:
     # `items` is a value because it is Auto; `output` remains a Ref because the
     # node decides where to write. Context is immutable, so return the new one.
-    items_ = list(dict.fromkeys(items))
-    # When a Ref and concrete value coexist, name the value with one trailing `_`.
-    return ctx.set(output, items_)
+    output_ = list(dict.fromkeys(items))
+    # `output` points to the same Context path whose concrete value is `output_`.
+    return ctx.set(output, output_)
 
 
 @node
@@ -66,8 +78,8 @@ def write_payload(
 ) -> Context:
     # Auto supports PyTrees: Ref/R and expression leaves are evaluated deeply;
     # constants stay unchanged; dict/list/tuple structure is reconstructed.
-    payload_ = {**payload, "written": True}
-    return ctx.set(output, payload_)
+    output_ = {**payload, "written": True}
+    return ctx.set(output, output_)
 
 
 @wrapper
@@ -89,38 +101,38 @@ def timing(
 
 
 @builder
-def build_pipeline(*, prefix: str = "normalized:") -> Node:
+def build_pipeline(*, refs: PipelineRefs, prefix: str = "normalized:") -> Node:
     # A builder runs at build time: instantiate and compose Def objects only.
     normalize_and_store = store_items(
-        items=normalize_items(items=INPUT_ITEMS, prefix=prefix),
-        output=OUTPUT_ITEMS,
+        items=normalize_items(items=refs.input_items, prefix=prefix),
+        output=refs.output_items,
     ).add_wrappers(timing(label="normalize"))
 
     payload = {
         # All of these are leaves in one Auto PyTree.
-        "items": OUTPUT_ITEMS,              # RefFactory -> Context value
-        "count_source": OUTPUT_ITEMS,       # another independently resolved leaf
-        "labels": ("slyme", R.config.mode), # constant + RefFactory in a tuple
-        "version": 1,                       # literal remains unchanged
+        "items": refs.output_items,        # Ref -> Context value
+        "labels": ("slyme", refs.mode),    # constant + Ref in a tuple
+        "version": 1,                      # literal remains unchanged
     }
 
     return sequential(
         nodes=[
             normalize_and_store,
-            write_payload(payload=payload, output=R.output.payload),
+            write_payload(payload=payload, output=refs.output_payload),
         ]
     )
 
 
 def run(argv: Optional[Sequence[str]] = None) -> Context:
-    node_def = build_pipeline()
+    refs = create_pipeline_refs()
+    node_def = build_pipeline(refs=refs)
 
     # Register CLI refs explicitly. `node=node_def` can discover dependencies in
     # versions where node-tree scanning is verified, but extra_refs is portable.
     # parse_and_inject returns a new Context when `context` is provided.
     ctx = parse_and_inject(
-        context=Context().set(R.config.mode, "batch"),
-        extra_refs=[INPUT_ITEMS],
+        context=Context().set(refs.mode, "batch"),
+        extra_refs=[refs.input_items],
         cli_args=list(argv) if argv is not None else None,
     )
 
@@ -151,18 +163,36 @@ def repeat(
 
 If `latest` were `Auto[float]`, Slyme would resolve it once from the context entering `repeat`; it would not change inside the loop.
 
+Prefer a sequence-shaped extension point when no per-child inspection is needed:
+
+```python
+from slyme.node import sequential_exec
+
+
+@node
+def run_stages(
+    ctx: Context,
+    /,
+    *,
+    stages: Sequence[Node],
+) -> Context:
+    # Callers may provide any reusable zero/one/many-stage composition.
+    return sequential_exec(ctx, stages)
+```
+
 ## Focused Test Shape
 
 ```python
 def test_pipeline() -> None:
+    refs = create_pipeline_refs()
     original = Context().update({
-        INPUT_ITEMS: [" B ", "a", "a"],
-        R.config.mode: "test",
+        refs.input_items: [" B ", "a", "a"],
+        refs.mode: "test",
     })
 
-    result = build_pipeline(prefix="x:").prepare()(original)
+    result = build_pipeline(refs=refs, prefix="x:").prepare()(original)
 
-    assert result.get(OUTPUT_ITEMS) == ["x:b", "x:a"]
-    assert result.get(R.output.payload)["items"] == ["x:b", "x:a"]
-    assert not original.exists(OUTPUT_ITEMS)  # Copy-on-write preserved the input.
+    assert result.get(refs.output_items) == ["x:b", "x:a"]
+    assert result.get(refs.output_payload)["items"] == ["x:b", "x:a"]
+    assert not original.exists(refs.output_items)  # Copy-on-write preserved input.
 ```
