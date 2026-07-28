@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slyme Developer"
+  short_description: "Build downstream applications with the Slyme framework"
+  default_prompt: "Use $slyme-developer to implement this workflow with Slyme."

@@ -1,9 +1,10 @@
 const guideEn = [
   {
-    text: 'Introduction',
+    text: 'Get Started',
     items: [
       { text: 'What is slyme?', link: '/guide/intro/what-is-slyme' },
       { text: 'Quick Start', link: '/guide/intro/quick-start' },
+      { text: 'Using the Slyme Skill', link: '/guide/intro/using-slyme-skill' },
     ],
     collapsed: false,
   },
@@ -48,10 +49,11 @@ const sidebarEn = {
 
 const guideZh = [
   {
-    text: '简介',
+    text: '开始使用',
     items: [
       { text: 'Slyme 是什么？', link: '/zh/guide/intro/what-is-slyme' },
       { text: '快速上手', link: '/zh/guide/intro/quick-start' },
+      { text: '使用 Slyme Skill', link: '/zh/guide/intro/using-slyme-skill' },
     ],
     collapsed: false,
   },
