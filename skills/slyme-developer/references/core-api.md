@@ -13,62 +13,104 @@ from slyme.node import Auto, Node, expression, node, sequential_exec, wrapper
 
 @expression
 def calculate_value(
-    ctx: Context,  # Framework-supplied runtime parameter.
-    /,
+    # Parameters before `/` are runtime parameters supplied by Slyme.
+    # @node and @expression receive exactly one: Context.
+    ctx: Context,
+    /,  # Separates runtime parameters from build-time parameters.
     *,
-    value: Auto[float],  # Keyword-only build parameter; receives a resolved value.
-    scale: float = 2.0,  # Plain build-time configuration.
+    # Parameters after `*` are build-time parameters and must be passed by keyword.
+    # Auto means the caller may bind a Ref or @expression. Before this function
+    # body starts, Slyme resolves it against ctx and injects the concrete float.
+    value: Auto[float],
+    # A parameter without Auto is ordinary static configuration. It is bound
+    # while building the definition and reused unchanged during execution.
+    scale: float = 2.0,
 ) -> float:
-    return value * scale  # Expressions return values and do not update Context.
+    # Expressions derive and return a value. They do not update Context.
+    return value * scale
 
 
 @node
-def increment(ctx: Context, /, *, counter: Ref[int]) -> Context:
+def increment(
+    ctx: Context,
+    /,
+    *,
+    # Keep Ref itself when the function decides when to read or write this path.
+    # Name it `counter`, not `counter_ref` or `ref_counter`.
+    counter: Ref[int],
+) -> Context:
+    # The Ref and the concrete value of the same path coexist in this scope, so
+    # the value is named with exactly one trailing underscore.
     counter_ = ctx.get(counter) + 1
-    # Ref keeps the domain name; its value uses one trailing underscore.
+    # Context is immutable: set returns the next Context and does not mutate ctx.
     return ctx.set(counter, counter_)
 
 
 @node
 def execute(
-    ctx: Context,
+    ctx: Context,  # Runtime Context; Slyme supplies it when the Exec is called.
     /,
     *,
-    auto_with_ref: Auto[dict],              # A Ref is resolved through Context.
-    auto_with_expression: Auto[float],       # An expression is evaluated.
-    auto_with_pytree: Auto[tuple[object, ...]],  # Ref/expression leaves are resolved deeply.
-    output: Ref[dict],                       # Keep Ref when this node writes the path.
-    changing: Ref[int],                      # Keep Ref for reads after child nodes run.
-    loop_nodes: Sequence[Node],              # Flexible higher-order extension point.
+    # In build(), this receives a Ref. At runtime, Auto performs ctx.get(ref)
+    # before entering the body, so this parameter is already the concrete dict.
+    auto_with_ref: Auto[dict],
+    # In build(), this receives an @expression definition. At runtime, Slyme
+    # evaluates that expression and injects its float return value.
+    auto_with_expression: Auto[float],
+    # Auto traverses nested PyTrees and resolves every Ref/@expression leaf while
+    # preserving the prepared container structure and ordinary literal leaves.
+    auto_with_pytree: Auto[tuple[object, ...]],
+    # Do not use Auto for a path this node must update: the Ref is required by set.
+    output: Ref[dict],
+    # Do not use Auto when the latest value must be read after child nodes run.
+    # Auto would only contain the snapshot taken when execute() was entered.
+    changing: Ref[int],
+    # Higher-order intrusion points should be containers rather than fixed fields
+    # like first_node/second_node. A builder can inject zero, one, or many nodes.
+    loop_nodes: Sequence[Node],
     final_nodes: Sequence[Node],
+    # Static control-flow configuration remains an ordinary build-time value.
     rounds: int = 1,
 ) -> Context:
     for _ in range(rounds):
+        # Parent prepare() recursively prepares contained Node definitions.
+        # sequential_exec threads each returned Context into the next child.
         ctx = sequential_exec(ctx, loop_nodes)
 
+    # A second node container provides another independently extensible position.
     ctx = sequential_exec(ctx, final_nodes)
-    changing_ = ctx.get(changing)  # Read the latest Context, not an Auto snapshot.
+
+    # Read only after all children have run so the value reflects their updates.
+    changing_ = ctx.get(changing)
+
+    # `output` is the destination Ref; `output_` is the value for that same path.
     output_ = {
         "from_ref": auto_with_ref,
         "from_expression": auto_with_expression,
         "from_pytree": auto_with_pytree,
         "latest": changing_,
     }
-    ctx = ctx.update({changing: changing_})  # Batch updates use the returned Context.
+
+    # update() can write multiple paths atomically. Always retain its return value.
+    ctx = ctx.update({changing: changing_})
+    # @node must return Context. set() returns the final updated Context.
     return ctx.set(output, output_)
 
 
 @wrapper
 def trace(
+    # @wrapper has exactly these three runtime parameters, in this order.
     ctx: Context,
-    wrapped: Node,
-    call_next: Callable[[Context], Context],
-    /,  # A wrapper has exactly these three runtime parameters in this order.
+    wrapped: Node,  # The Node on which this wrapper is mounted.
+    call_next: Callable[[Context], Context],  # Next wrapper or wrapped Node.
+    /,
     *,
-    name: str,
+    name: str,  # Wrapper-specific build-time configuration.
 ) -> Context:
     print(f"{name}: start")
-    ctx = call_next(ctx)  # Continue the wrapper/node chain.
+    # A normal onion-style wrapper calls the next layer and keeps its Context.
+    # Omitting this call intentionally short-circuits the wrapped Node.
+    ctx = call_next(ctx)
     print(f"{name}: end")
     return ctx
 
@@ -82,18 +124,27 @@ def build(
     counter: Ref[int],
     output: Ref[dict],
 ) -> Node:
+    # @builder executes only assembly code and returns the outermost Node Def.
+    # Calling calculate_value(), increment(), or execute() here does not run them.
+    # Wrappers may only be attached to a Node through add_wrappers().
     return execute(
+        # Auto + Ref: source is resolved with the runtime Context.
         auto_with_ref=source,
+        # Auto + Expression: calculate_value is evaluated before execute runs.
         auto_with_expression=calculate_value(value=score),
+        # Auto + PyTree: Ref and Expression leaves may occur at arbitrary depth.
         auto_with_pytree=[
             label,
             {"score": score},
             calculate_value(value=score, scale=3.0),
         ],
-        # At prepare(), the list is frozen to a tuple. Resolved Ref/expression
-        # values retain their own types and are not recursively frozen.
+        # At prepare(), mutable definition containers are frozen: this list becomes
+        # a tuple and its dict becomes a read-only mapping. At runtime, the values
+        # returned by Ref/expression evaluation retain their own types; a list read
+        # from Context, for example, remains that list rather than being frozen.
         changing=counter,
         output=output,
+        # Reuse the same atomic Node in multiple higher-order intrusion points.
         loop_nodes=[increment(counter=counter)],
         final_nodes=[increment(counter=counter)],
         rounds=2,
@@ -101,9 +152,12 @@ def build(
 
 
 def run() -> Context:
-    # Create concrete Refs at the application boundary, never as module globals.
+    # R.a.b is the concise path factory for Ref("a.b"). Call it to create a
+    # concrete Ref, optionally with metadata. Keep application Refs local to the
+    # assembly boundary rather than storing them as module-level global state.
     source = R.input.source()
     score = R.input.score(
+        # Arg metadata lets slyme.cli expose this same Context dependency as CLI.
         metadata={ARG: Arg(type=float, required=True, help="Input score")}
     )
     label = R.input.label()
@@ -117,6 +171,9 @@ def run() -> Context:
         counter=counter,
         output=output,
     )
+
+    # Context.update writes several hierarchical Ref paths and returns a new Context.
+    # parse_and_inject likewise returns a new Context when `context` is supplied.
     ctx = parse_and_inject(
         context=Context().update({
             source: {"name": "example"},
@@ -127,7 +184,9 @@ def run() -> Context:
         cli_args=["--input.score", "2.5"],
     )
 
-    node_exec = node_def.prepare()  # Freeze once after assembly.
+    # Build/modify the Def first, then prepare exactly once at the application
+    # boundary. The resulting immutable Exec can be safely reused.
+    node_exec = node_def.prepare()
     return node_exec(ctx)
 ```
 
