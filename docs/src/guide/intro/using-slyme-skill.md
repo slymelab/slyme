@@ -15,7 +15,8 @@ skills/
     ├── agents/
     │   └── openai.yaml
     └── references/
-        └── annotated-example.md
+        ├── core-api.md
+        └── async.md
 ```
 
 Treat the complete `slyme-developer` directory as one package. Keep its relative directory structure intact so the agent can load the annotated example referenced by `SKILL.md`.
@@ -79,4 +80,3 @@ keyword-only parameters, Context updates, and wrapper composition.
 ```
 
 The Skill directs the agent to inspect the target project's installed Slyme version and existing conventions before making changes.
-

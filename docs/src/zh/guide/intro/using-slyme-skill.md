@@ -15,7 +15,8 @@ skills/
     ├── agents/
     │   └── openai.yaml
     └── references/
-        └── annotated-example.md
+        ├── core-api.md
+        └── async.md
 ```
 
 请将完整的 `slyme-developer` 目录视为一个独立包，并保留其相对目录结构，以便代理读取 `SKILL.md` 引用的注释示例。
@@ -79,4 +80,3 @@ keyword-only 参数、Context 更新以及 wrapper 组合是否正确。
 ```
 
 Skill 会要求代理在修改代码前检查目标项目安装的 Slyme 版本和已有约定。
-
