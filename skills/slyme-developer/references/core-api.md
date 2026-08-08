@@ -1,16 +1,21 @@
 # Core API by Example
 
-The comments are part of the example: preserve these semantics while adapting names and domain logic.
+Treat these snippets as the canonical best-practice template for Slyme code. Follow their structure, lifecycle, signatures, naming, and composition patterns while adapting names and domain logic. The comments are normative and the snippets compose into one module.
+
+## Imports
 
 ```python
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from slyme.builder import builder
 from slyme.cli import parse_and_inject
 from slyme.context import ARG, Arg, Context, R, Ref
 from slyme.node import Auto, Node, expression, node, sequential_exec, wrapper
+```
 
+## Expressions and dependency injection
 
+```python
 @expression
 def calculate_value(
     # Parameters before `/` are runtime parameters supplied by Slyme.
@@ -28,8 +33,11 @@ def calculate_value(
 ) -> float:
     # Expressions derive and return a value. They do not update Context.
     return value * scale
+```
 
+## Atomic state transitions
 
+```python
 @node
 def increment(
     ctx: Context,
@@ -44,8 +52,39 @@ def increment(
     counter_ = ctx.get(counter) + 1
     # Context is immutable: set returns the next Context and does not mutate ctx.
     return ctx.set(counter, counter_)
+```
+
+## Fixed and keyed composition slots
+
+```python
+@node
+def conditional(
+    ctx: Context,
+    /,
+    *,
+    enabled: Auto[bool],
+    enabled_node: Node,
+    disabled_node: Node,
+) -> Context:
+    # Use named Node parameters when the children have fixed, distinct roles.
+    return enabled_node(ctx) if enabled else disabled_node(ctx)
 
 
+@node
+def dispatch(
+    ctx: Context,
+    /,
+    *,
+    key: Auto[str],
+    branches: Mapping[str, Node],
+) -> Context:
+    # A Mapping makes the set of keyed branches an extensible composition slot.
+    return branches[key](ctx)
+```
+
+## Ordered composition slots and parameter evaluation
+
+```python
 @node
 def execute(
     ctx: Context,  # Runtime Context; Slyme supplies it when the Exec is called.
@@ -65,8 +104,8 @@ def execute(
     # Do not use Auto when the latest value must be read after child nodes run.
     # Auto would only contain the snapshot taken when execute() was entered.
     changing: Ref[int],
-    # Higher-order intrusion points should be containers rather than fixed fields
-    # like first_node/second_node. A builder can inject zero, one, or many nodes.
+    # Each Sequence is an ordered, extensible composition slot. Keep loop and
+    # final execution as separate slots because they are distinct phases.
     loop_nodes: Sequence[Node],
     final_nodes: Sequence[Node],
     # Static control-flow configuration remains an ordinary build-time value.
@@ -95,8 +134,11 @@ def execute(
     ctx = ctx.update({changing: changing_})
     # @node must return Context. set() returns the final updated Context.
     return ctx.set(output, output_)
+```
 
+## Wrappers
 
+```python
 @wrapper
 def trace(
     # @wrapper has exactly these three runtime parameters, in this order.
@@ -113,8 +155,11 @@ def trace(
     ctx = call_next(ctx)
     print(f"{name}: end")
     return ctx
+```
 
+## Build-time assembly
 
+```python
 @builder
 def build(
     *,
@@ -144,13 +189,16 @@ def build(
         # from Context, for example, remains that list rather than being frozen.
         changing=counter,
         output=output,
-        # Reuse the same atomic Node in multiple higher-order intrusion points.
+        # Reuse the same atomic Node in multiple higher-order composition slots.
         loop_nodes=[increment(counter=counter)],
         final_nodes=[increment(counter=counter)],
         rounds=2,
     ).add_wrappers(trace(name="execute"))
+```
 
+## Application boundary
 
+```python
 def run() -> Context:
     # R.a.b is the concise path factory for Ref("a.b"). Call it to create a
     # concrete Ref, optionally with metadata. Keep application Refs local to the
@@ -189,6 +237,8 @@ def run() -> Context:
     node_exec = node_def.prepare()
     return node_exec(ctx)
 ```
+
+## Evaluation and structure rules
 
 `Auto` is `Annotated[T, spec(auto_eval=True)]`. It resolves against the Context entering the current node, so it is a snapshot. In a higher-order loop, retain a `Ref` and call `ctx.get(ref)` when the value must reflect child-node updates.
 

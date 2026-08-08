@@ -37,7 +37,7 @@ async def execute_async(
     *,
     value: Auto[dict],
     output: Ref[dict],
-    # A mixed sequence keeps the higher-order intrusion point extensible.
+    # A mixed sequence keeps the higher-order composition slot extensible.
     nodes: Sequence[Union[Node, AsyncNode]],
 ) -> Context:
     # async_sequential_exec awaits AsyncNode children. Synchronous Node children
