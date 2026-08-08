@@ -17,13 +17,9 @@ Slyme has distinct build and execution phases. Building produces mutable `*Def` 
 
 ## Architecture
 
-Design nodes, expressions, and wrappers as small abstractions with one reason to change. Do not map each requirement phase directly to one node: cleaning versus validation, API work versus retry/concurrency, and aggregation versus persistence are separate contracts even when currently used once. If a function both coordinates work and performs domain work, split the coordinator from the injected operations. Compose policy in builders rather than growing flag-heavy nodes.
+Decompose the execution flow from top to bottom into atomic operations and steps, then represent each with Slyme `@node`, `@expression`, or `@wrapper`. Model complex control flow with higher-order `@node`s; follow the concrete composition guidance in the references.
 
-Reuse an existing primitive before adding another. Prefer parameterization and composition over near-duplicate nodes; add a new node only when it establishes a distinct, reusable contract.
-
-For higher-order nodes, expose extension points as sequences or mappings of nodes instead of fixed parameters such as `input_node`, `process_node`, and `output_node`. Execute sequences with `sequential_exec` or `async_sequential_exec` so builders can inject zero, one, or many stages without changing the higher-order node.
-
-Create application-specific Refs at the assembly boundary and pass them explicitly. Do not keep Ref instances or prepared trees in module globals. Keep expressions free of state writes, wrappers focused on cross-cutting policy, and each state transition owned by a clear node.
+Reuse existing Nodes whenever possible. Extend behavior through composition before introducing new Nodes.
 
 ## API by example
 
