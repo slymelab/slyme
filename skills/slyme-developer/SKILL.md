@@ -1,17 +1,19 @@
 ---
 name: slyme-developer
-description: Build, extend, debug, or review downstream Python applications that use Slyme. Use for Slyme node trees, Context/Ref/Auto dependency injection, builders, wrappers, async flows, CLI metadata, or architecture decisions. Do not use for maintaining Slyme framework internals.
+description: API guidance, architectural best practices, and code-style conventions for projects built with Slyme. Use when designing, developing, reviewing, or debugging applications based on the Slyme framework.
 ---
 
 # Develop with Slyme
 
-Treat Slyme as an installed dependency. Inspect the target project's Slyme version and existing nodes before coding.
-
 ## Mental model
 
-Slyme separates definition from execution. Decorated factories produce mutable node definitions; `.prepare()` freezes the complete tree into a reusable execution object. Execution threads an immutable `Context` through the tree. `Ref` identifies state, `Auto` resolves `Ref` and expression dependencies before a function body runs, and builders own assembly.
+Slyme has distinct build and execution phases. Building produces mutable `*Def` objects whose Node structure, wrappers, and parameters may be freely assembled or modified. Calling `.prepare()` recursively freezes the complete Node tree and its parameters—including parameter PyTree containers—and produces an immutable `*Exec` tree. Execute the workflow by calling the prepared root Node with a `Context`; the prepared tree can then be reused.
 
-Use `@node` for state transitions or effects, `@expression` for derived values, `@wrapper` for cross-cutting behavior, and `@builder` for composition. Define runtime parameters before `/`, build-time parameters after `*`, prepare once at the application boundary, and retain every returned `Context`.
+- `@node` defines an execution unit for state transitions, side effects, or higher-order control flow.
+- `@expression` derives a value for other Nodes without updating state.
+- `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.
+- `@builder` is a build-time factory that assembles and validates reusable Node trees; it does not perform runtime work.
+- `Context` is the structurally immutable state passed through execution. Nodes produce the next Context rather than mutating shared state in place.
 
 ## Architecture
 
