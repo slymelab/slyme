@@ -29,7 +29,7 @@ import sys
 from typing import Any, Dict, Optional
 
 from slyme.runner.boundary import project
-from slyme.runner.execute import get_builder, load_module, run_node, source_module
+from slyme.runner.execute import get_builder, load_module, seed_inputs, source_module
 from slyme.runner.io import capture_stdio, emit_envelope
 from slyme.runner.protocol import KIND_CALL, error_payload, make_envelope
 
@@ -95,7 +95,7 @@ def _run(request: Dict[str, Any]) -> Any:
 
 def _run_module(mod: Any, entry: str, input_data: Any, select: Any) -> Any:
     node_def = get_builder(mod, entry)
-    final_ctx = run_node(node_def, input_data)
+    final_ctx = node_def.run(inputs=seed_inputs(input_data))
     return project(final_ctx, node_def, select)
 
 

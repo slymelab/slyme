@@ -23,7 +23,7 @@ import sys
 import tempfile
 from typing import Any, Dict, Iterator, List, Optional
 
-from slyme.context import Context, Ref
+from slyme.context import Ref
 
 
 def _flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
@@ -40,14 +40,19 @@ def _flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
     return out
 
 
-def seed_context(input_data: Any) -> "Context":
-    """Inject nested initial data into a fresh Context as dotted Ref paths."""
+def seed_inputs(input_data: Any) -> Dict[Ref, Any]:
+    """Flatten nested envelope data into a ``{Ref(path): value}`` input mapping.
+
+    The JSON envelope nests values (e.g. ``{"input": {"root": "/x"}}``) while the
+    Context is a flat dotted-path namespace; this returns
+    ``{Ref("input.root"): "/x"}`` for ``Node.run(inputs=...)``.
+    """
     flat = (
         _flatten(input_data)
         if isinstance(input_data, dict)
         else {"input": input_data}
     )
-    return Context().update({Ref(k): v for k, v in flat.items()})
+    return {Ref(k): v for k, v in flat.items()}
 
 
 def load_module(module: str, sys_path: Optional[List[str]]) -> Any:
@@ -81,7 +86,3 @@ def get_builder(mod: Any, entry: str) -> Any:
     if node_def is None:
         raise ValueError(f"builder '{entry}' returned None")
     return node_def
-
-
-def run_node(node_def: Any, input_data: Any) -> Any:
-    return node_def.prepare()(seed_context(input_data))
