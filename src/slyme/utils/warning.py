@@ -16,7 +16,7 @@
 
 import warnings
 from functools import lru_cache
-from typing import Any, overload
+from typing import Any, Optional, Type, overload
 
 
 __all__ = ["warning_once"]
@@ -25,16 +25,16 @@ __all__ = ["warning_once"]
 @overload
 def warning_once(
     message: str,
-    category: type[Warning] | None = None,
+    category: Optional[Type[Warning]] = None,
     stacklevel: int = 1,
-    source: Any | None = None,
+    source: Optional[Any] = None,
 ) -> None: ...
 @overload
 def warning_once(
     message: Warning,
     category: Any = None,
     stacklevel: int = 1,
-    source: Any | None = None,
+    source: Optional[Any] = None,
 ) -> None: ...
 @lru_cache(maxsize=None)
 def warning_once(message, category=None, stacklevel=1, source=None):

@@ -28,7 +28,7 @@ You can define a @node as follows:
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref, R
+from slyme.context import ARG, Arg, Context, Ref, R
 
 @node
 def to_upper(ctx: Context, /, *, value: Ref[str]) -> Context:
@@ -39,20 +39,22 @@ Note the `/` and `*` in the parameter signature — they are essential. `ctx` mu
 
 ### Executing Node
 
-After definition, you can create a Def instance by calling it and passing configuration parameters, then prepare and execute it:
+Declare every Context value required before execution with `Arg` metadata, then use `run()` as the application-level entry point:
 
 ```python
-# 1. Instantiate as Def (build phase)
-node_def = to_upper(value=R.name)
-
-# 2. Convert to Exec (execution phase)
-node_exec = node_def.prepare()
-
-# 3. Pass Context to execute
-ctx = Context().set(R.name, "Alice")
-new_ctx = node_exec(ctx)
-print(new_ctx.get(R.name))  # Output ALICE
+node_def = to_upper(
+    value=R.name(metadata={ARG: Arg(type=str, required=True)})
+)
+value = node_def.run(
+    inputs={R.name: "Alice"},
+    outputs=R.name,
+)
+print(value)  # Output: ALICE
 ```
+
+`run()` prepares a Def automatically, creates or extends a Context, validates the inputs declared by `Arg`, executes the Node, and extracts the requested output Ref PyTree. Omit `outputs` to receive the final Context. With an output schema, set `return_context=True` to receive `(output, context)`.
+
+For lower-level execution, or when reusing one immutable executable while managing Context explicitly, call `node_def.prepare()` once and invoke the resulting Exec directly.
 
 ## @expression {#at-expression}
 
@@ -401,14 +403,12 @@ async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) ->
 
 ### Executing @async_node
 
-Like synchronous @node, you need to `.prepare()` first, then use `await` during execution:
+Async Nodes expose the same high-level contract; await `run()` at the application boundary:
 
 ```python
 node_def = fetch_user_data(url="https://api.example.com/user", user_data=R.user.data)
-node_exec = node_def.prepare()
-
-new_ctx = await node_exec(Context())
-print(new_ctx.get(R.user.data))  # {'id': 1, 'name': 'Alice'}
+user_data = await node_def.run(outputs=R.user.data)
+print(user_data)  # {'id': 1, 'name': 'Alice'}
 ```
 
 ::: info

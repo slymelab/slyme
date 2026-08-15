@@ -42,4 +42,4 @@ As mentioned earlier, [Node](/guide/essentials/node) is Slyme's basic execution 
 In Slyme, build-time and execution-time are two distinct concepts, corresponding to different points in time (see [Lifecycle](/guide/essentials/lifecycle)).
 
 - **Build-time**: During build-time, users assemble Node structures and can make arbitrary modifications to them.
-- **Execution-time**: During execution-time, users convert the built Node structure into a fixed execution structure through the `.prepare()` method, for safe and efficient execution.
+- **Execution-time**: During execution-time, the built Node structure is converted into a fixed execution structure for safe and efficient execution. The high-level `.run()` method performs this automatically; `.prepare()` exposes the immutable Exec for lower-level reuse.

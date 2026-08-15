@@ -41,7 +41,8 @@ def collect_refs(element: Any) -> List[Ref]:
 
     # We iterate using NODE_ENGINE which knows how to traverse Node structures
     for _, leaf in NODE_ENGINE.iter_with_key_path(element, is_leaf=is_leaf):
-        refs.append(to_ref(leaf))
+        if isinstance(leaf, (Ref, RefFactory)):
+            refs.append(to_ref(leaf))
 
     return refs
 

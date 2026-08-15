@@ -38,7 +38,7 @@ my_node_def["data"] = [R.user.age, R.user.name]
 
 ## 3. 准备阶段 (Prepare)
 
-当 Node 树的结构和参数修改完成后，你需要调用 `.prepare()` 方法。这一步标志着 Node 从“构建期”正式跨越到“执行期”，它会返回一个**不可变的执行对象（Exec）**。
+当 Node 树的结构和参数修改完成后，`.prepare()` 标志着 Node 从“构建期”进入“执行期”，并返回一个**不可变的执行对象（Exec）**。应用层的 `run()` 会自动完成这一步；只有在需要复用 Exec 或自行管理 Context 时，才需要显式调用 `.prepare()`。
 
 ```python
 # 准备阶段：将 Def 转换为不可变的 Exec
@@ -61,12 +61,14 @@ my_node_exec = my_node_def.prepare()
 
 ## 4. 执行阶段 (Execute)
 
-最终，将 `Context` 传入 Exec 对象，触发真正的业务逻辑执行：
+在底层执行边界，将 `Context` 传入 Exec 对象，触发业务逻辑：
 
 ```python
 # 执行阶段：传入 Context 执行业务逻辑
 new_ctx = my_node_exec(Context())
 ```
+
+普通应用调用应优先使用 `node.run(inputs=..., outputs=...)`；它会统一完成输入准备、required `Arg` 校验、prepare、执行和输出提取。
 
 在这个阶段，Slyme 最强大的特性之一——**Auto 自动求值与注入**——将会发挥作用。框架会深度遍历被冻结的参数结构，将其中的 Ref 和 @expression 解析为 Context 中的真实值，并注入给目标函数。
 

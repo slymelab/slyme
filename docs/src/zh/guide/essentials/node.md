@@ -28,7 +28,7 @@ Node 是 Slyme 中最核心的逻辑执行单元，它是函数式编程概念�
 
 ```python
 from slyme.node import node, Auto
-from slyme.context import Context, Ref, R
+from slyme.context import ARG, Arg, Context, Ref, R
 
 @node
 def to_upper(ctx: Context, /, *, value: Ref[str]) -> Context:
@@ -39,20 +39,22 @@ def to_upper(ctx: Context, /, *, value: Ref[str]) -> Context:
 
 ### 执行 Node
 
-定义完成后，你可以通过调用它并传入配置参数来创建一个 Def 实例，然后准备并执行它：
+使用 `Arg` 元数据声明执行前必需的所有 Context 值，然后以 `run()` 作为应用层调用入口：
 
 ```python
-# 1. 实例化为 Def (构建阶段)
-node_def = to_upper(value=R.name)
-
-# 2. 转换为 Exec (执行阶段)
-node_exec = node_def.prepare()
-
-# 3. 传入 Context 执行
-ctx = Context().set(R.name, "Alice")
-new_ctx = node_exec(ctx)
-print(new_ctx.get(R.name))  # 输出 ALICE
+node_def = to_upper(
+    value=R.name(metadata={ARG: Arg(type=str, required=True)})
+)
+value = node_def.run(
+    inputs={R.name: "Alice"},
+    outputs=R.name,
+)
+print(value)  # 输出：ALICE
 ```
+
+`run()` 会自动 prepare Def、创建或扩展 Context、校验 `Arg` 声明的输入、执行 Node，并按指定的输出 Ref PyTree 提取结果。不传 `outputs` 时返回最终 Context；指定输出 schema 并设置 `return_context=True` 时返回 `(output, context)`。
+
+对于底层执行，或者需要自行管理 Context 并重复使用同一个不可变 Exec 的场景，可以调用一次 `node_def.prepare()`，然后直接执行所得 Exec。
 
 ## @expression {#at-expression}
 
@@ -401,14 +403,12 @@ async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) ->
 
 ### 执行 @async_node
 
-与同步 @node 一样，你需要先 `.prepare()`，然后在执行时使用 `await`：
+异步 Node 提供与同步 Node 相同的高层调用协议；在应用边界 `await run()` 即可：
 
 ```python
 node_def = fetch_user_data(url="https://api.example.com/user", user_data=R.user.data)
-node_exec = node_def.prepare()
-
-new_ctx = await node_exec(Context())
-print(new_ctx.get(R.user.data))  # {'id': 1, 'name': 'Alice'}
+user_data = await node_def.run(outputs=R.user.data)
+print(user_data)  # {'id': 1, 'name': 'Alice'}
 ```
 
 ::: info

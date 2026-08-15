@@ -105,14 +105,16 @@ We recommend using @builder to build atomic components into specific execution f
 
 ```python
 from slyme.builder import builder
-from slyme.context import R
+from slyme.context import ARG, Arg, R
 
 @builder
 def build_pipeline():
     return llm_api(
         responses=R.output.responses,  # [!code highlight]
         prompts=format_article_prompts(
-            articles=R.input.articles,  # [!code highlight]
+            articles=R.input.articles(  # [!code highlight]
+                metadata={ARG: Arg(type=list[dict], required=True)}
+            ),
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 ```
@@ -127,19 +129,16 @@ A few notes:
 Finally, we call the above code and execute:
 
 ```python
-from slyme.context import Context, R
+from slyme.context import R
 
-ctx = Context().update({
-    # NOTE: We inject the initial article data into Context
-    R.input.articles: [
+responses = build_pipeline().run(
+    inputs={R.input.articles: [
         {"title": "Article 1", "content": "Content of Article 1"},
         {"title": "Article 2", "content": "Content of Article 2"},
-    ],
-})
-pipeline = build_pipeline()
-pipeline_exec = pipeline.prepare()  # Convert build-time to execution-time by calling prepare  // [!code highlight]
-ctx = pipeline_exec(ctx)  # Execute
-print(ctx.get(R.output.responses))  # Print execution result
+    ]},
+    outputs=R.output.responses,
+)
+print(responses)
 ```
 
 ::: details Complete Code
@@ -147,7 +146,7 @@ print(ctx.get(R.output.responses))  # Print execution result
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import Context, R
+from slyme.context import ARG, Arg, Context, R, Ref
 from slyme.node import node, expression, wrapper, Auto, Node
 
 
@@ -197,22 +196,22 @@ def build_pipeline():
     return llm_api(
         responses=R.output.responses,
         prompts=format_article_prompts(
-            articles=R.input.articles,
+            articles=R.input.articles(
+                metadata={ARG: Arg(type=list[dict], required=True)}
+            ),
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
 if __name__ == "__main__":
-    ctx = Context().update({
-        R.input.articles: [
+    responses = build_pipeline().run(
+        inputs={R.input.articles: [
             {"title": "Article 1", "content": "Content of Article 1"},
             {"title": "Article 2", "content": "Content of Article 2"},
-        ],
-    })
-    pipeline = build_pipeline()
-    pipeline_exec = pipeline.prepare()
-    ctx = pipeline_exec(ctx)
-    print(ctx.get(R.output.responses))
+        ]},
+        outputs=R.output.responses,
+    )
+    print(responses)
 ```
 :::
 

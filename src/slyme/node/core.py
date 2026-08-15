@@ -36,7 +36,7 @@ from typing import (
 )
 from typing_extensions import ParamSpec, Concatenate, Self
 from slyme.utils.exception import enrich_exception
-from slyme.context import Context, RefFactory
+from slyme.context import Context, RefFactory, RefLike
 from .exception import (
     NodeTerminate,
     NodeExceptionRecord,
@@ -309,6 +309,41 @@ class Node(BaseNode):
     def __call__(self, ctx: Context) -> Context:
         pass
 
+    def run(
+        self,
+        context: Optional[Context] = None,
+        /,
+        *,
+        inputs: Optional[Mapping[RefLike, Any]] = None,
+        outputs: Any = None,
+        return_context: bool = False,
+        use_argparse: bool = False,
+        cli_args: Optional[Sequence[str]] = None,
+    ) -> Any:
+        """Prepare inputs, execute this Node, and optionally extract outputs."""
+        prepared = self.prepare()
+        if prepared is not self:
+            return prepared.run(
+                context,
+                inputs=inputs,
+                outputs=outputs,
+                return_context=return_context,
+                use_argparse=use_argparse,
+                cli_args=cli_args,
+            )
+
+        from .runner import run_node
+
+        return run_node(
+            self,
+            context,
+            inputs=inputs,
+            outputs=outputs,
+            return_context=return_context,
+            use_argparse=use_argparse,
+            cli_args=cli_args,
+        )
+
 
 class NodeDef(_DefMixin, Node):
     """
@@ -434,6 +469,41 @@ class AsyncNode(BaseNode):
     @abstractmethod
     async def __call__(self, ctx: Context) -> Context:
         pass
+
+    async def run(
+        self,
+        context: Optional[Context] = None,
+        /,
+        *,
+        inputs: Optional[Mapping[RefLike, Any]] = None,
+        outputs: Any = None,
+        return_context: bool = False,
+        use_argparse: bool = False,
+        cli_args: Optional[Sequence[str]] = None,
+    ) -> Any:
+        """Prepare inputs, execute this async Node, and optionally extract outputs."""
+        prepared = self.prepare()
+        if prepared is not self:
+            return await prepared.run(
+                context,
+                inputs=inputs,
+                outputs=outputs,
+                return_context=return_context,
+                use_argparse=use_argparse,
+                cli_args=cli_args,
+            )
+
+        from .runner import run_async_node
+
+        return await run_async_node(
+            self,
+            context,
+            inputs=inputs,
+            outputs=outputs,
+            return_context=return_context,
+            use_argparse=use_argparse,
+            cli_args=cli_args,
+        )
 
 
 class AsyncNodeDef(_DefMixin, AsyncNode):

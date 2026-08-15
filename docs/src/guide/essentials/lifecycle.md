@@ -38,7 +38,7 @@ my_node_def["data"] = [R.user.age, R.user.name]
 
 ## 3. Prepare Phase
 
-When the Node tree structure and parameters are fully modified, you need to call the `.prepare()` method. This step marks the Node's formal transition from "build-time" to "execution-time", returning an **immutable execution object (Exec)**.
+When the Node tree structure and parameters are fully modified, `.prepare()` marks the transition from "build-time" to "execution-time" and returns an **immutable execution object (Exec)**. The application-level `run()` method performs this step automatically; call `.prepare()` explicitly when you want to reuse an Exec or manage Context yourself.
 
 ```python
 # Prepare phase: convert Def to immutable Exec
@@ -61,12 +61,14 @@ This means once prepare is complete, the Node's parameter structure is completel
 
 ## 4. Execute Phase
 
-Finally, pass `Context` to the Exec object to trigger the actual business logic execution:
+At the low-level execution boundary, pass `Context` to the Exec object to trigger the business logic:
 
 ```python
 # Execute phase: pass Context to execute business logic
 new_ctx = my_node_exec(Context())
 ```
+
+For normal application calls, prefer `node.run(inputs=..., outputs=...)`; it combines input preparation, required-`Arg` validation, prepare, execution, and output extraction.
 
 During this phase, one of Slyme's most powerful features — **Auto auto-evaluation and injection** — takes effect. The framework deeply traverses the frozen parameter structure, resolves Refs and @expressions in it to actual values in Context, and injects them into the target function.
 

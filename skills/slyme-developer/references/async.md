@@ -70,4 +70,4 @@ async def retry(
     raise AssertionError("unreachable")
 ```
 
-Prepared async nodes execute with `await node_exec(ctx)`. `async_sequential` builds a declarative mixed sequence; `async_sequential_exec` runs one inside a higher-order async node and dispatches synchronous children through `asyncio.to_thread`. Do not perform blocking I/O directly in an async function.
+Use `await node.run(...)` at the application boundary; it follows the same input, output, and Context contract as synchronous `Node.run(...)`. Call a prepared async Exec directly only when managing Context explicitly. `async_sequential` builds a declarative mixed sequence; `async_sequential_exec` runs one inside a higher-order async node and dispatches synchronous children through `asyncio.to_thread`. Do not perform blocking I/O directly in an async function.

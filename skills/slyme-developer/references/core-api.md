@@ -8,7 +8,6 @@ Treat these snippets as the canonical best-practice template for Slyme code. Fol
 from collections.abc import Callable, Mapping, Sequence
 
 from slyme.builder import builder
-from slyme.cli import parse_and_inject
 from slyme.context import ARG, Arg, Context, R, Ref
 from slyme.node import Auto, Node, expression, node, sequential_exec, wrapper
 ```
@@ -169,7 +168,9 @@ def build() -> Node:
     # Wrappers may only be attached to a Node through add_wrappers().
     return execute(
         # Auto + Ref: source is resolved with the runtime Context.
-        auto_with_ref=R.input.source,
+        auto_with_ref=R.input.source(
+            metadata={ARG: Arg(type=dict, required=True, help="Input payload")}
+        ),
         # Auto + Expression: calculate_value is evaluated before execute runs.
         auto_with_expression=calculate_value(
             value=R.input.score(
@@ -178,7 +179,9 @@ def build() -> Node:
         ),
         # Auto + PyTree: Ref and Expression leaves may occur at arbitrary depth.
         auto_with_pytree=[
-            R.input.label,
+            R.input.label(
+                metadata={ARG: Arg(type=str, required=True, help="Input label")}
+            ),
             {"score": R.input.score},
             calculate_value(value=R.input.score, scale=3.0),
         ],
@@ -186,7 +189,7 @@ def build() -> Node:
         # a tuple and its dict becomes a read-only mapping. At runtime, the values
         # returned by Ref/expression evaluation retain their own types; a list read
         # from Context, for example, remains that list rather than being frozen.
-        changing=R.state.counter,
+        changing=R.state.counter(metadata={ARG: Arg(type=int, default=0)}),
         output=R.output.result,
         # Reuse the same atomic Node in multiple higher-order composition slots.
         loop_nodes=[increment(counter=R.state.counter)],
@@ -198,28 +201,27 @@ def build() -> Node:
 ## Application boundary
 
 ```python
-def run() -> Context:
+def run() -> tuple[dict[str, object], Context]:
     node_def = build()
 
-    # Context.update writes several hierarchical Ref paths and returns a new Context.
-    # Use R.a.b directly for a Ref path when no metadata is required.
-    ctx = parse_and_inject(
-        context=Context().update({
+    # run() prepares a Def, creates a Context, resolves Arg inputs, validates all
+    # required values, executes the Node, and extracts the requested output PyTree.
+    output, ctx = node_def.run(
+        inputs={
             R.input.source: {"name": "example"},
             R.input.label: "label",
-            R.state.counter: 0,
-        }),
-        # Slyme traverses the Node tree and discovers its Ref dependencies,
-        # including the Arg metadata on R.input.score(). Do not repeat tree-owned
-        # dependencies in extra_refs; reserve it for Refs outside the Node tree.
-        node=node_def,
+        },
+        outputs={
+            "result": R.output.result,
+            "counter": R.state.counter,
+        },
+        return_context=True,
+        # Arg metadata in the Node tree is discovered automatically; extra_refs
+        # are unnecessary for tree-owned inputs.
+        use_argparse=True,
         cli_args=["--input.score", "2.5"],
     )
-
-    # Build/modify the Def first, then prepare exactly once at the application
-    # boundary. The resulting immutable Exec can be safely reused.
-    node_exec = node_def.prepare()
-    return node_exec(ctx)
+    return output, ctx
 ```
 
 ## Evaluation and structure rules

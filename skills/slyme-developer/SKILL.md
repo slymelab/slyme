@@ -7,7 +7,11 @@ description: API guidance, architectural best practices, and code-style conventi
 
 ## Mental model
 
-Slyme has distinct build and execution phases. Building produces mutable `*Def` objects whose Node structure, wrappers, and parameters may be freely assembled or modified. Calling `.prepare()` recursively freezes the complete Node tree and its parameters—including parameter PyTree containers—and produces an immutable `*Exec` tree. Execute the workflow by calling the prepared root Node with a `Context`; the prepared tree can then be reused.
+Slyme has distinct build and execution phases. Building produces mutable `*Def` objects whose Node structure, wrappers, and parameters may be freely assembled or modified. Calling `.prepare()` recursively freezes the complete Node tree and its parameters—including parameter PyTree containers—and produces an immutable `*Exec` tree.
+
+Use the root Node's `.run(...)` method as the application boundary. It prepares a Def automatically, creates or extends a `Context`, resolves and validates external inputs declared by `Arg` metadata, executes the Node, and extracts an optional output Ref PyTree into ordinary Python values. Every Context value that must exist before the Node tree starts should be declared as an `Arg`; pass concrete values through `inputs`, or enable argparse when values should come from the command line. Omit `outputs` to receive the final `Context`, or use `return_context=True` with an output schema when both the extracted value and final Context are needed. Prepare and call an Exec directly only for lower-level execution where Context orchestration is intentionally managed by the caller.
+
+Expose this application-boundary contract only on synchronous and asynchronous `@node`s. Expressions derive values inside a Node tree and wrappers modify a mounted Node's execution; neither is an independently runnable workflow boundary.
 
 - `@node` defines an execution unit for state transitions, side effects, or higher-order execution composition.
 - `@expression` derives a value for other Nodes without updating state.

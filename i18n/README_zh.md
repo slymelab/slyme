@@ -40,7 +40,7 @@ pip install slyme
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import Context, Ref
+from slyme.context import ARG, Arg, Context, R, Ref
 from slyme.node import node, expression, wrapper, Auto, Node
 
 
@@ -73,31 +73,26 @@ def timing(ctx: Context, wrapped: Node, call_next: Callable[[Context], Context],
 # 4. 在构建时组装流水线
 @builder
 def build_pipeline():
-    scope = {
-        "articles": Ref("input.articles"),
-        "responses": Ref("output.responses"),
-    }
     return llm_api(
-        scope,
-        prompts=format_prompts(scope),
+        responses=R.output.responses,
+        prompts=format_prompts(
+            articles=R.input.articles(
+                metadata={ARG: Arg(type=list[dict], required=True)}
+            )
+        ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
 # 5. 在运行时执行
 if __name__ == "__main__":
-    # 向 Context 注入初始数据
-    ctx = Context().update({
-        Ref("input.articles"): [
+    responses = build_pipeline().run(
+        inputs={R.input.articles: [
             {"title": "Article 1", "content": "Content 1"},
             {"title": "Article 2", "content": "Content 2"},
-        ],
-    })
-
-    # 准备并运行
-    pipeline_exec = build_pipeline().prepare()
-    ctx = pipeline_exec(ctx)
-
-    print(ctx.get(Ref("output.responses")))
+        ]},
+        outputs=R.output.responses,
+    )
+    print(responses)
 ```
 
 ## 核心优势

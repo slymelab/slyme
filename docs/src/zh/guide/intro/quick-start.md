@@ -105,16 +105,18 @@ def timing(
 
 ```python
 from slyme.builder import builder
-from slyme.context import R
+from slyme.context import ARG, Arg, R
 
 @builder
 def build_pipeline():
     return llm_api(
         responses=R.output.responses,  # [!code highlight]
         prompts=format_article_prompts(
-            articles=R.input.articles,  # [!code highlight]
+            articles=R.input.articles(  # [!code highlight]
+                metadata={ARG: Arg(type=list[dict], required=True)}
+            ),
         ),
-    ).add_wrappers(timing(prefix=”LLM API Call”))
+    ).add_wrappers(timing(prefix="LLM API Call"))
 ```
 
 有几个需要注意的点：
@@ -126,19 +128,16 @@ def build_pipeline():
 最终，我们调用上述代码并执行：
 
 ```python
-from slyme.context import Context, Ref
+from slyme.context import R
 
-ctx = Context().update({
-    # NOTE: 我们给 Context 注入了初始所需的文章数据
-    R.input.articles: [
+responses = build_pipeline().run(
+    inputs={R.input.articles: [
         {"title": "Article 1", "content": "Content of Article 1"},
         {"title": "Article 2", "content": "Content of Article 2"},
-    ],
-})
-pipeline = build_pipeline()
-pipeline_exec = pipeline.prepare()  # 通过调用 prepare 将构建期转换为执行期  // [!code highlight]
-ctx = pipeline_exec(ctx)  # 执行
-print(ctx.get(R.output.responses))  # 打印执行结果
+    ]},
+    outputs=R.output.responses,
+)
+print(responses)
 ```
 
 ::: details 最终的完整代码
@@ -146,7 +145,7 @@ print(ctx.get(R.output.responses))  # 打印执行结果
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import Context, R
+from slyme.context import ARG, Arg, Context, R, Ref
 from slyme.node import node, expression, wrapper, Auto, Node
 
 
@@ -196,22 +195,22 @@ def build_pipeline():
     return llm_api(
         responses=R.output.responses,
         prompts=format_article_prompts(
-            articles=R.input.articles,
+            articles=R.input.articles(
+                metadata={ARG: Arg(type=list[dict], required=True)}
+            ),
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
 if __name__ == "__main__":
-    ctx = Context().update({
-        R.input.articles: [
+    responses = build_pipeline().run(
+        inputs={R.input.articles: [
             {"title": "Article 1", "content": "Content of Article 1"},
             {"title": "Article 2", "content": "Content of Article 2"},
-        ],
-    })
-    pipeline = build_pipeline()
-    pipeline_exec = pipeline.prepare()
-    ctx = pipeline_exec(ctx)
-    print(ctx.get(R.output.responses))
+        ]},
+        outputs=R.output.responses,
+    )
+    print(responses)
 ```
 :::
 
