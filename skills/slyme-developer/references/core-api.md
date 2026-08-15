@@ -161,37 +161,36 @@ def trace(
 
 ```python
 @builder
-def build(
-    *,
-    source: Ref[dict],
-    score: Ref[float],
-    label: Ref[str],
-    counter: Ref[int],
-    output: Ref[dict],
-) -> Node:
+def build() -> Node:
     # @builder executes only assembly code and returns the outermost Node Def.
     # Calling calculate_value(), increment(), or execute() here does not run them.
+    # Create application Refs where the Node tree is assembled instead of
+    # threading them through the builder's public interface.
     # Wrappers may only be attached to a Node through add_wrappers().
     return execute(
         # Auto + Ref: source is resolved with the runtime Context.
-        auto_with_ref=source,
+        auto_with_ref=R.input.source,
         # Auto + Expression: calculate_value is evaluated before execute runs.
-        auto_with_expression=calculate_value(value=score),
+        auto_with_expression=calculate_value(
+            value=R.input.score(
+                metadata={ARG: Arg(type=float, required=True, help="Input score")}
+            )
+        ),
         # Auto + PyTree: Ref and Expression leaves may occur at arbitrary depth.
         auto_with_pytree=[
-            label,
-            {"score": score},
-            calculate_value(value=score, scale=3.0),
+            R.input.label,
+            {"score": R.input.score},
+            calculate_value(value=R.input.score, scale=3.0),
         ],
         # At prepare(), mutable definition containers are frozen: this list becomes
         # a tuple and its dict becomes a read-only mapping. At runtime, the values
         # returned by Ref/expression evaluation retain their own types; a list read
         # from Context, for example, remains that list rather than being frozen.
-        changing=counter,
-        output=output,
+        changing=R.state.counter,
+        output=R.output.result,
         # Reuse the same atomic Node in multiple higher-order composition slots.
-        loop_nodes=[increment(counter=counter)],
-        final_nodes=[increment(counter=counter)],
+        loop_nodes=[increment(counter=R.state.counter)],
+        final_nodes=[increment(counter=R.state.counter)],
         rounds=2,
     ).add_wrappers(trace(name="execute"))
 ```
@@ -200,35 +199,20 @@ def build(
 
 ```python
 def run() -> Context:
-    # R.a.b is the concise path factory for Ref("a.b"). Call it to create a
-    # concrete Ref, optionally with metadata. Keep application Refs local to the
-    # assembly boundary rather than storing them as module-level global state.
-    source = R.input.source()
-    score = R.input.score(
-        # Arg metadata lets slyme.cli expose this same Context dependency as CLI.
-        metadata={ARG: Arg(type=float, required=True, help="Input score")}
-    )
-    label = R.input.label()
-    counter = R.state.counter()
-    output = R.output.result()
-
-    node_def = build(
-        source=source,
-        score=score,
-        label=label,
-        counter=counter,
-        output=output,
-    )
+    node_def = build()
 
     # Context.update writes several hierarchical Ref paths and returns a new Context.
-    # parse_and_inject likewise returns a new Context when `context` is supplied.
+    # Use R.a.b directly for a Ref path when no metadata is required.
     ctx = parse_and_inject(
         context=Context().update({
-            source: {"name": "example"},
-            label: "label",
-            counter: 0,
+            R.input.source: {"name": "example"},
+            R.input.label: "label",
+            R.state.counter: 0,
         }),
-        extra_refs=[score],
+        # Slyme traverses the Node tree and discovers its Ref dependencies,
+        # including the Arg metadata on R.input.score(). Do not repeat tree-owned
+        # dependencies in extra_refs; reserve it for Refs outside the Node tree.
+        node=node_def,
         cli_args=["--input.score", "2.5"],
     )
 
