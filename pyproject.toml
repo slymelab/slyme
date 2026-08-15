@@ -24,6 +24,9 @@ dependencies = [
     "typing-extensions>=4.0.0",
 ]
 
+[project.scripts]
+slyme = "slyme.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/slymelab/slyme"
 

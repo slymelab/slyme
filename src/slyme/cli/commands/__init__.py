@@ -12,26 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .core import Context, Ref, RefFactory, R, RefLike, to_ref, Config as ContextConfig, DIFF_MISSING
-from .metadata import ARG, HELP, OUTPUT, TYPE, Arg
-from .hook import Hook, HookChain, ExtractResult, MutateResult
+"""Subcommands for the ``slyme`` runner CLI.
 
-__all__ = [
-    "Context",
-    "Ref",
-    "RefFactory",
-    "R",
-    "RefLike",
-    "to_ref",
-    "ContextConfig",
-    "DIFF_MISSING",
-    "ARG",
-    "Arg",
-    "HELP",
-    "OUTPUT",
-    "TYPE",
-    "Hook",
-    "HookChain",
-    "ExtractResult",
-    "MutateResult",
-]
+Each module exposes ``register(subparsers)`` (adds its subparser and sets its
+``handler``) and ``run(args) -> int``.
+"""
+
+from . import call, discover, info, nodes
+
+__all__ = ["call", "discover", "info", "nodes"]

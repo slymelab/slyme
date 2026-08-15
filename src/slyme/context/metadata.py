@@ -21,6 +21,7 @@ __all__ = [
     "ARG",
     "Arg",
     "HELP",
+    "OUTPUT",
     "TYPE",
 ]
 
@@ -28,6 +29,7 @@ __all__ = [
 ARG = "node.arg"
 HELP = "node.help"
 TYPE = "node.type"
+OUTPUT = "node.output"
 
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
