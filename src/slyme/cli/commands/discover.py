@@ -61,46 +61,83 @@ def _collect_refs(node) -> List[str]:
     return sorted(refs)
 
 
-def _discover_dir(workflow_dir: str) -> List[Dict[str, Any]]:
-    index: List[Dict[str, Any]] = []
+def _read_doc(path: str) -> str:
     try:
-        files = sorted(
-            f for f in os.listdir(workflow_dir) if f.endswith(".py") and not f.startswith("_")
+        with open(path, "r", encoding="utf-8") as fh:
+            return ast.get_docstring(ast.parse(fh.read(), filename=path)) or ""
+    except Exception:
+        return ""
+
+
+def _discover_dir(workflow_dir: str):
+    """Walk a directory tree into ``folders`` and ``workflows``.
+
+    A folder (a directory holding an ``__init__.py``) is a workflow set whose
+    description is that file's docstring. A regular ``.py`` file is also a
+    workflow set whose description is its top docstring; its top-level
+    ``@builder`` functions are the executable workflows. Nothing is imported
+    or executed.
+    """
+    folders: List[Dict[str, Any]] = []
+    workflows: List[Dict[str, Any]] = []
+    if not os.path.isdir(workflow_dir):
+        return folders, workflows
+    for dirpath, dirnames, filenames in os.walk(workflow_dir):
+        # Skip hidden and underscore-prefixed trees (e.g. `__pycache__`).
+        dirnames[:] = sorted(
+            d for d in dirnames if not d.startswith("_") and not d.startswith(".")
         )
-    except FileNotFoundError:
-        return index
-    for fname in files:
-        module = fname[:-3]
-        path = os.path.join(workflow_dir, fname)
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                tree = ast.parse(fh.read(), filename=path)
-        except Exception:
-            continue
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_builder(node):
-                index.append(
-                    {
-                        "name": f"{module}.{node.name}",
-                        "module": module,
-                        "entry": node.name,
-                        "doc": ast.get_docstring(node) or "",
-                        "refs": _collect_refs(node),
-                    }
-                )
-    return index
+        rel = os.path.relpath(dirpath, workflow_dir)
+        pkg = rel.replace(os.sep, ".") if rel != "." else ""
+        if "__init__.py" in filenames and pkg:
+            folders.append(
+                {"path": pkg, "doc": _read_doc(os.path.join(dirpath, "__init__.py"))}
+            )
+        for fname in sorted(filenames):
+            if not fname.endswith(".py") or fname.startswith("_"):
+                continue
+            stem = fname[:-3]
+            module = f"{pkg}.{stem}" if pkg else stem
+            path = os.path.join(dirpath, fname)
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    tree = ast.parse(fh.read(), filename=path)
+            except Exception:
+                continue
+            module_doc = ast.get_docstring(tree) or ""
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_builder(node):
+                    workflows.append(
+                        {
+                            "name": f"{module}.{node.name}",
+                            "module": module,
+                            "entry": node.name,
+                            "doc": ast.get_docstring(node) or "",
+                            "moduleDoc": module_doc,
+                            "refs": _collect_refs(node),
+                        }
+                    )
+    return folders, workflows
 
 
-def _discover(paths: List[str]) -> List[Dict[str, Any]]:
-    index: List[Dict[str, Any]] = []
-    seen = set()
+def _discover(paths: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    folders: List[Dict[str, Any]] = []
+    workflows: List[Dict[str, Any]] = []
+    seen_folders = set()
+    seen_workflows = set()
     for p in paths:
-        for item in _discover_dir(p):
-            key = item["name"]
-            if key not in seen:
-                seen.add(key)
-                index.append(item)
-    return index
+        f, w = _discover_dir(p)
+        for item in f:
+            if item["path"] not in seen_folders:
+                seen_folders.add(item["path"])
+                folders.append(item)
+        for item in w:
+            if item["name"] not in seen_workflows:
+                seen_workflows.add(item["name"])
+                workflows.append(item)
+    folders.sort(key=lambda item: item["path"])
+    workflows.sort(key=lambda item: item["name"])
+    return {"folders": folders, "workflows": workflows}
 
 
 def run(args) -> int:
