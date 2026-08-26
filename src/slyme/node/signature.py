@@ -76,7 +76,9 @@ class Spec:
             result = self.default_factory()
         else:
             return UNDEFINED
-        return CTX_EVAL_ENGINE.map(lambda x: x() if isinstance(x, RefFactory) else x, result)
+        return CTX_EVAL_ENGINE.map(
+            lambda x: x() if isinstance(x, RefFactory) else x, result
+        )
 
     def should_eval(self, value: Any) -> bool:
         if self.auto_eval is _MISSING:

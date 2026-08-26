@@ -33,9 +33,11 @@ from typing import (
     Iterable,
     Sequence,
     Awaitable,
+    Literal,
 )
-from typing_extensions import ParamSpec, Concatenate, Self
+from typing_extensions import ParamSpec, Concatenate, Protocol, Self
 from slyme.utils.exception import enrich_exception
+from slyme.utils.warning import warning_once
 from slyme.context import Context, RefFactory, RefLike
 from .exception import (
     NodeTerminate,
@@ -54,9 +56,13 @@ from .signature import (
 
 __all__ = [
     "Config",
+    "ExecutionMode",
     "node",
     "expression",
     "wrapper",
+    "async_node",
+    "async_expression",
+    "async_wrapper",
     "NodeElement",
     "Node",
     "NodeDef",
@@ -81,6 +87,7 @@ __all__ = [
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+ExecutionMode = Literal["sync", "async"]
 
 # Update: NodeFunc now must return Context to align with the chain protocol.
 NodeFunc = Callable[Concatenate[Context, _P], Context]
@@ -118,6 +125,14 @@ def _ensure_context_return(func: Callable[_P, Any]) -> Callable[_P, Context]:
 
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> Context:
         result = func(*args, **kwargs)
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()
+            raise TypeError(
+                "Synchronous Node returned an Awaitable. "
+                "Use 'async def' or @node(mode='async'). "
+                f"Function: {func}"
+            )
         if not isinstance(result, Context):
             raise TypeError(
                 f"Node execution return type mismatch. "
@@ -138,6 +153,14 @@ def _ensure_async_context_return(
 
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> Context:
         result = await func(*args, **kwargs)
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()
+            raise TypeError(
+                "Async Node returned another Awaitable. "
+                "Await it inside the Node before returning. "
+                f"Function: {func}"
+            )
         if not isinstance(result, Context):
             raise TypeError(
                 f"Node execution return type mismatch. "
@@ -1385,27 +1408,16 @@ def _node(func: NodeFunc[_P], /, *, resolve_type_hints: bool) -> NodeFactory[_P]
     return NodeFactory(func, analysis.specs, analysis.public_signature)
 
 
-@overload
-def node(
-    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
-) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
-@overload
-def node(
-    func: NodeFunc[_P], /, *, resolve_type_hints: bool = True
-) -> NodeFactory[_P]: ...
-def node(
-    func: Union[NodeFunc[_P], _Missing] = _MISSING,
-    /,
-    *,
-    resolve_type_hints: bool = True,
-) -> Union[
-    Callable[[NodeFunc[_P]], NodeFactory[_P]],
-    NodeFactory[_P],
-]:
-    if func is _MISSING:
-        return partial(_node, resolve_type_hints=resolve_type_hints)
-    else:
-        return _node(func, resolve_type_hints=resolve_type_hints)
+def _async_node(
+    func: AsyncNodeFunc[_P], /, *, resolve_type_hints: bool
+) -> AsyncNodeFactory[_P]:
+    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
+    if len(analysis.pos_only_params) != 1:
+        raise TypeError(
+            f"@node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
+            f"but found {len(analysis.pos_only_params)}."
+        )
+    return AsyncNodeFactory(func, analysis.specs, analysis.public_signature)
 
 
 def _expression(
@@ -1420,35 +1432,22 @@ def _expression(
     return ExpressionFactory(func, analysis.specs, analysis.public_signature)
 
 
-@overload
-def expression(
-    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
-) -> Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]]: ...
-@overload
-def expression(
-    func: ExpressionFunc[_P, _R], /, *, resolve_type_hints: bool = True
-) -> ExpressionFactory[_P, _R]: ...
-def expression(
-    func: Union[ExpressionFunc[_P, _R], _Missing] = _MISSING,
-    /,
-    *,
-    resolve_type_hints: bool = True,
-) -> Union[
-    Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]],
-    ExpressionFactory[_P, _R],
-]:
-    if func is _MISSING:
-        return partial(_expression, resolve_type_hints=resolve_type_hints)
-    else:
-        return _expression(func, resolve_type_hints=resolve_type_hints)
+def _async_expression(
+    func: AsyncExpressionFunc[_P, _R], /, *, resolve_type_hints: bool
+) -> AsyncExpressionFactory[_P, _R]:
+    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
+    if len(analysis.pos_only_params) != 1:
+        raise TypeError(
+            f"@expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
+            f"but found {len(analysis.pos_only_params)}."
+        )
+    return AsyncExpressionFactory(func, analysis.specs, analysis.public_signature)
 
 
 def _wrapper(
     func: WrapperFunc[_P], /, *, resolve_type_hints: bool
 ) -> WrapperFactory[_P]:
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    # Wrapper signature: (ctx, wrapped, call_next, **kwargs)
-    # The first 3 arguments should be positional-only.
     if len(analysis.pos_only_params) != 3:
         raise TypeError(
             f"@wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
@@ -1457,39 +1456,289 @@ def _wrapper(
     return WrapperFactory(func, analysis.specs, analysis.public_signature)
 
 
+def _async_wrapper(
+    func: AsyncWrapperFunc[_P], /, *, resolve_type_hints: bool
+) -> AsyncWrapperFactory[_P]:
+    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
+    if len(analysis.pos_only_params) != 3:
+        raise TypeError(
+            f"@wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
+            f"but found {len(analysis.pos_only_params)}."
+        )
+    return AsyncWrapperFactory(func, analysis.specs, analysis.public_signature)
+
+
+class _AutoNodeDecorator(Protocol):
+    @overload
+    def __call__(self, func: NodeFunc[_P], /) -> NodeFactory[_P]: ...
+    @overload
+    def __call__(self, func: AsyncNodeFunc[_P], /) -> AsyncNodeFactory[_P]: ...
+
+
+class _AutoExpressionDecorator(Protocol):
+    @overload
+    def __call__(
+        self, func: ExpressionFunc[_P, _R], /
+    ) -> ExpressionFactory[_P, _R]: ...
+    @overload
+    def __call__(
+        self, func: AsyncExpressionFunc[_P, _R], /
+    ) -> AsyncExpressionFactory[_P, _R]: ...
+
+
+class _AutoWrapperDecorator(Protocol):
+    @overload
+    def __call__(self, func: WrapperFunc[_P], /) -> WrapperFactory[_P]: ...
+    @overload
+    def __call__(self, func: AsyncWrapperFunc[_P], /) -> AsyncWrapperFactory[_P]: ...
+
+
+def _is_async_callable(func: Callable[..., Any]) -> bool:
+    """Return whether *func* is declared with ``async def``.
+
+    Return annotations are intentionally ignored. A synchronous function that
+    returns an Awaitable must opt in with ``mode="async"``.
+    """
+    unwrapped = inspect.unwrap(func)
+    if inspect.iscoroutinefunction(unwrapped):
+        return True
+    call = getattr(unwrapped, "__call__", None)
+    return call is not None and inspect.iscoroutinefunction(call)
+
+
+def _resolve_execution_mode(
+    func: Callable[..., Any],
+    mode: Optional[ExecutionMode],
+    decorator_name: str,
+) -> ExecutionMode:
+    if mode not in (None, "sync", "async"):
+        raise ValueError(
+            f"@{decorator_name} mode must be 'sync', 'async', or None, got {mode!r}."
+        )
+    detected_async = _is_async_callable(func)
+    if mode is None:
+        return "async" if detected_async else "sync"
+    if mode == "sync" and detected_async:
+        raise TypeError(
+            f"@{decorator_name}(mode='sync') cannot decorate an async function."
+        )
+    return mode
+
+
+def _dispatch_node(
+    func: Callable[..., Any],
+    /,
+    *,
+    mode: Optional[ExecutionMode],
+    resolve_type_hints: bool,
+) -> Union[NodeFactory[Any], AsyncNodeFactory[Any]]:
+    resolved_mode = _resolve_execution_mode(func, mode, "node")
+    if resolved_mode == "async":
+        return _async_node(func, resolve_type_hints=resolve_type_hints)
+    return _node(func, resolve_type_hints=resolve_type_hints)
+
+
+def _dispatch_expression(
+    func: Callable[..., Any],
+    /,
+    *,
+    mode: Optional[ExecutionMode],
+    resolve_type_hints: bool,
+) -> Union[ExpressionFactory[Any, Any], AsyncExpressionFactory[Any, Any]]:
+    resolved_mode = _resolve_execution_mode(func, mode, "expression")
+    if resolved_mode == "async":
+        return _async_expression(func, resolve_type_hints=resolve_type_hints)
+    return _expression(func, resolve_type_hints=resolve_type_hints)
+
+
+def _dispatch_wrapper(
+    func: Callable[..., Any],
+    /,
+    *,
+    mode: Optional[ExecutionMode],
+    resolve_type_hints: bool,
+) -> Union[WrapperFactory[Any], AsyncWrapperFactory[Any]]:
+    resolved_mode = _resolve_execution_mode(func, mode, "wrapper")
+    if resolved_mode == "async":
+        return _async_wrapper(func, resolve_type_hints=resolve_type_hints)
+    return _wrapper(func, resolve_type_hints=resolve_type_hints)
+
+
+@overload
+def node(
+    func: NodeFunc[_P],
+    /,
+    *,
+    mode: Optional[Literal["sync"]] = None,
+    resolve_type_hints: bool = True,
+) -> NodeFactory[_P]: ...
+@overload
+def node(
+    func: AsyncNodeFunc[_P],
+    /,
+    *,
+    mode: Optional[Literal["async"]] = None,
+    resolve_type_hints: bool = True,
+) -> AsyncNodeFactory[_P]: ...
+@overload
+def node(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: Literal["sync"],
+    resolve_type_hints: bool = True,
+) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
+@overload
+def node(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: Literal["async"],
+    resolve_type_hints: bool = True,
+) -> Callable[[AsyncNodeFunc[_P]], AsyncNodeFactory[_P]]: ...
+@overload
+def node(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: None = None,
+    resolve_type_hints: bool = True,
+) -> _AutoNodeDecorator: ...
+def node(
+    func: Union[Callable[..., Any], _Missing] = _MISSING,
+    /,
+    *,
+    mode: Optional[ExecutionMode] = None,
+    resolve_type_hints: bool = True,
+) -> Any:
+    """Create a synchronous or asynchronous Node factory.
+
+    With ``mode=None``, ``async def`` callables are detected by inspection; all
+    other callables are synchronous. Use ``mode="async"`` for a regular
+    function that returns an Awaitable.
+    """
+    if func is _MISSING:
+        return partial(_dispatch_node, mode=mode, resolve_type_hints=resolve_type_hints)
+    return _dispatch_node(func, mode=mode, resolve_type_hints=resolve_type_hints)
+
+
+@overload
+def expression(
+    func: ExpressionFunc[_P, _R],
+    /,
+    *,
+    mode: Optional[Literal["sync"]] = None,
+    resolve_type_hints: bool = True,
+) -> ExpressionFactory[_P, _R]: ...
+@overload
+def expression(
+    func: AsyncExpressionFunc[_P, _R],
+    /,
+    *,
+    mode: Optional[Literal["async"]] = None,
+    resolve_type_hints: bool = True,
+) -> AsyncExpressionFactory[_P, _R]: ...
+@overload
+def expression(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: Literal["sync"],
+    resolve_type_hints: bool = True,
+) -> Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]]: ...
+@overload
+def expression(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: Literal["async"],
+    resolve_type_hints: bool = True,
+) -> Callable[[AsyncExpressionFunc[_P, _R]], AsyncExpressionFactory[_P, _R]]: ...
+@overload
+def expression(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: None = None,
+    resolve_type_hints: bool = True,
+) -> _AutoExpressionDecorator: ...
+def expression(
+    func: Union[Callable[..., Any], _Missing] = _MISSING,
+    /,
+    *,
+    mode: Optional[ExecutionMode] = None,
+    resolve_type_hints: bool = True,
+) -> Any:
+    """Create a synchronous or asynchronous Expression factory."""
+    if func is _MISSING:
+        return partial(
+            _dispatch_expression, mode=mode, resolve_type_hints=resolve_type_hints
+        )
+    return _dispatch_expression(func, mode=mode, resolve_type_hints=resolve_type_hints)
+
+
 @overload
 def wrapper(
-    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
+    func: WrapperFunc[_P],
+    /,
+    *,
+    mode: Optional[Literal["sync"]] = None,
+    resolve_type_hints: bool = True,
+) -> WrapperFactory[_P]: ...
+@overload
+def wrapper(
+    func: AsyncWrapperFunc[_P],
+    /,
+    *,
+    mode: Optional[Literal["async"]] = None,
+    resolve_type_hints: bool = True,
+) -> AsyncWrapperFactory[_P]: ...
+@overload
+def wrapper(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: Literal["sync"],
+    resolve_type_hints: bool = True,
 ) -> Callable[[WrapperFunc[_P]], WrapperFactory[_P]]: ...
 @overload
 def wrapper(
-    func: WrapperFunc[_P], /, *, resolve_type_hints: bool = True
-) -> WrapperFactory[_P]: ...
-def wrapper(
-    func: Union[WrapperFunc[_P], _Missing] = _MISSING,
+    func: _Missing = _MISSING,
     /,
     *,
+    mode: Literal["async"],
     resolve_type_hints: bool = True,
-) -> Union[
-    Callable[[WrapperFunc[_P]], WrapperFactory[_P]],
-    WrapperFactory[_P],
-]:
+) -> Callable[[AsyncWrapperFunc[_P]], AsyncWrapperFactory[_P]]: ...
+@overload
+def wrapper(
+    func: _Missing = _MISSING,
+    /,
+    *,
+    mode: None = None,
+    resolve_type_hints: bool = True,
+) -> _AutoWrapperDecorator: ...
+def wrapper(
+    func: Union[Callable[..., Any], _Missing] = _MISSING,
+    /,
+    *,
+    mode: Optional[ExecutionMode] = None,
+    resolve_type_hints: bool = True,
+) -> Any:
+    """Create a synchronous or asynchronous Wrapper factory."""
     if func is _MISSING:
-        return partial(_wrapper, resolve_type_hints=resolve_type_hints)
-    else:
-        return _wrapper(func, resolve_type_hints=resolve_type_hints)
-
-
-def _async_node(
-    func: AsyncNodeFunc[_P], /, *, resolve_type_hints: bool
-) -> AsyncNodeFactory[_P]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 1:
-        raise TypeError(
-            f"@async_node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
-            f"but found {len(analysis.pos_only_params)}."
+        return partial(
+            _dispatch_wrapper, mode=mode, resolve_type_hints=resolve_type_hints
         )
-    return AsyncNodeFactory(func, analysis.specs, analysis.public_signature)
+    return _dispatch_wrapper(func, mode=mode, resolve_type_hints=resolve_type_hints)
+
+
+def _warn_deprecated_async_decorator(old_name: str, new_name: str) -> None:
+    warning_once(
+        f"@{old_name} is deprecated and will be removed in slyme 0.2.0; "
+        f"use @{new_name} or @{new_name}(mode='async') instead.",
+        FutureWarning,
+        stacklevel=3,
+    )
 
 
 @overload
@@ -1505,26 +1754,13 @@ def async_node(
     /,
     *,
     resolve_type_hints: bool = True,
-) -> Union[
-    Callable[[AsyncNodeFunc[_P]], AsyncNodeFactory[_P]],
-    AsyncNodeFactory[_P],
-]:
-    if func is _MISSING:
-        return partial(_async_node, resolve_type_hints=resolve_type_hints)
-    else:
-        return _async_node(func, resolve_type_hints=resolve_type_hints)
+) -> Any:
+    """Deprecated alias scheduled for removal in 0.2.0.
 
-
-def _async_expression(
-    func: AsyncExpressionFunc[_P, _R], /, *, resolve_type_hints: bool
-) -> AsyncExpressionFactory[_P, _R]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 1:
-        raise TypeError(
-            f"@async_expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
-            f"but found {len(analysis.pos_only_params)}."
-        )
-    return AsyncExpressionFactory(func, analysis.specs, analysis.public_signature)
+    Use ``node`` or ``node(mode="async")`` instead.
+    """
+    _warn_deprecated_async_decorator("async_node", "node")
+    return node(func, mode="async", resolve_type_hints=resolve_type_hints)
 
 
 @overload
@@ -1540,26 +1776,13 @@ def async_expression(
     /,
     *,
     resolve_type_hints: bool = True,
-) -> Union[
-    Callable[[AsyncExpressionFunc[_P, _R]], AsyncExpressionFactory[_P, _R]],
-    AsyncExpressionFactory[_P, _R],
-]:
-    if func is _MISSING:
-        return partial(_async_expression, resolve_type_hints=resolve_type_hints)
-    else:
-        return _async_expression(func, resolve_type_hints=resolve_type_hints)
+) -> Any:
+    """Deprecated alias scheduled for removal in 0.2.0.
 
-
-def _async_wrapper(
-    func: AsyncWrapperFunc[_P], /, *, resolve_type_hints: bool
-) -> AsyncWrapperFactory[_P]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 3:
-        raise TypeError(
-            f"@async_wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
-            f"but found {len(analysis.pos_only_params)}."
-        )
-    return AsyncWrapperFactory(func, analysis.specs, analysis.public_signature)
+    Use ``expression`` or ``expression(mode="async")`` instead.
+    """
+    _warn_deprecated_async_decorator("async_expression", "expression")
+    return expression(func, mode="async", resolve_type_hints=resolve_type_hints)
 
 
 @overload
@@ -1575,14 +1798,13 @@ def async_wrapper(
     /,
     *,
     resolve_type_hints: bool = True,
-) -> Union[
-    Callable[[AsyncWrapperFunc[_P]], AsyncWrapperFactory[_P]],
-    AsyncWrapperFactory[_P],
-]:
-    if func is _MISSING:
-        return partial(_async_wrapper, resolve_type_hints=resolve_type_hints)
-    else:
-        return _async_wrapper(func, resolve_type_hints=resolve_type_hints)
+) -> Any:
+    """Deprecated alias scheduled for removal in 0.2.0.
+
+    Use ``wrapper`` or ``wrapper(mode="async")`` instead.
+    """
+    _warn_deprecated_async_decorator("async_wrapper", "wrapper")
+    return wrapper(func, mode="async", resolve_type_hints=resolve_type_hints)
 
 
 from .tree import NODE_ENGINE, NODE_PREPARE_ENGINE

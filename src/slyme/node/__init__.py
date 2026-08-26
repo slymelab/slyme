@@ -14,6 +14,7 @@
 
 from .core import (
     Config as NodeConfig,
+    ExecutionMode,
     NodeElement,
     Node,
     Expression,
@@ -46,6 +47,7 @@ from .common import (
 
 __all__ = [
     "NodeConfig",
+    "ExecutionMode",
     "NodeElement",
     "Node",
     "Expression",

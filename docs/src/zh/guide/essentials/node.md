@@ -385,15 +385,15 @@ my_node2_exec = my_node2.prepare()  # timeout=30, tags=(2, 3), data=R.user.data
 
 ## 异步支持 (Async Node) {#async-node}
 
-为了应对现代 I/O 密集型任务，Slyme 提供了完整的异步支持。你可以使用 `@async_node`、`@async_expression` 和 `@async_wrapper` 来定义对应的异步版本。
+为了应对现代 I/O 密集型任务，Slyme 提供了完整的异步支持。`@node`、`@expression` 和 `@wrapper` 会通过检查被装饰的函数，自动识别普通函数和 `async def` 函数，因此同步与异步代码使用同一组装饰器。
 
-### 创建 @async_node
+### 创建异步 @node
 
 ```python
-from slyme.node import async_node
+from slyme.node import node
 from slyme.context import Context, Ref, R
 
-@async_node
+@node
 async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) -> Context:
     # 假设 do_fetch 是某个异步请求函数
     # data = await do_fetch(url)
@@ -401,7 +401,7 @@ async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) ->
     return ctx.set(user_data, data)
 ```
 
-### 执行 @async_node
+### 执行异步 @node
 
 异步 Node 提供与同步 Node 相同的高层调用协议；在应用边界 `await run()` 即可：
 
@@ -412,7 +412,11 @@ print(user_data)  # {'id': 1, 'name': 'Alice'}
 ```
 
 ::: info
-如果你在一个 `@async_node` 中使用了 `auto_eval=True` / `Auto`，Slyme 会智能地切换到异步解析模式，以支持内部可能包含的 `AsyncExpression`。这在底层是由统一的 `EvaluatorRegistry` 驱动的。
+自动判断只检查函数本身是否由 `async def` 定义，不使用返回值类型提示。如果普通 `def` 函数返回 Awaitable，请显式使用 `@node(mode="async")`；`@expression` 和 `@wrapper` 也支持相同的 `mode` 参数。必要时也可用 `mode="sync"` 显式限定同步模式。
+:::
+
+::: warning 弃用说明
+`@async_node`、`@async_expression` 和 `@async_wrapper` 已弃用，并将在 Slyme 0.2.0 中移除。请分别迁移到统一的 `@node`、`@expression` 和 `@wrapper`；普通 `def` 返回 Awaitable 的特殊情况使用 `mode="async"`。
 :::
 
 ## 内置通用节点 {#common-nodes}

@@ -30,7 +30,7 @@ As mentioned earlier, [Node](/guide/essentials/node) is Slyme's basic execution 
 - [**@wrapper**](/guide/essentials/node#at-wrapper): @wrapper functions like middleware, responsible for intercepting, modifying, or enhancing the Node's execution process, such as adding logs before/after @node execution, recording performance, handling exceptions, etc.
 
 ::: info
-@node / @expression / @wrapper all have corresponding async versions (@async_node / @async_expression / @async_wrapper) for execution in async environments.
+@node / @expression / @wrapper support both regular functions and `async def` functions. The legacy @async_node / @async_expression / @async_wrapper decorators are deprecated and will be removed in Slyme 0.2.0.
 :::
 
 ### Builder

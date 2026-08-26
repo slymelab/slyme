@@ -385,15 +385,15 @@ If you want to understand the complete behavior of Node (@node, @expression, @wr
 
 ## Async Support (Async Node) {#async-node}
 
-To handle modern I/O-intensive tasks, Slyme provides complete async support. You can use `@async_node`, `@async_expression`, and `@async_wrapper` to define corresponding async versions.
+To handle modern I/O-intensive tasks, Slyme provides complete async support. `@node`, `@expression`, and `@wrapper` inspect the decorated function and automatically distinguish regular functions from `async def` functions, so synchronous and asynchronous code use the same decorators.
 
-### Creating @async_node
+### Creating an async @node
 
 ```python
-from slyme.node import async_node
+from slyme.node import node
 from slyme.context import Context, Ref, R
 
-@async_node
+@node
 async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) -> Context:
     # Assume do_fetch is some async request function
     # data = await do_fetch(url)
@@ -401,7 +401,7 @@ async def fetch_user_data(ctx: Context, /, *, url: str, user_data: Ref[dict]) ->
     return ctx.set(user_data, data)
 ```
 
-### Executing @async_node
+### Executing an async @node
 
 Async Nodes expose the same high-level contract; await `run()` at the application boundary:
 
@@ -412,7 +412,11 @@ print(user_data)  # {'id': 1, 'name': 'Alice'}
 ```
 
 ::: info
-If you use `auto_eval=True` / `Auto` in an `@async_node`, Slyme will intelligently switch to async resolution mode to support possibly included `AsyncExpression`. This is driven by the unified `EvaluatorRegistry` underneath.
+Automatic detection only checks whether the function itself was declared with `async def`; it does not use return type annotations. If a regular `def` returns an Awaitable, use `@node(mode="async")` explicitly. `@expression` and `@wrapper` support the same `mode` parameter. You can also use `mode="sync"` when an explicit synchronous constraint is useful.
+:::
+
+::: warning Deprecation
+`@async_node`, `@async_expression`, and `@async_wrapper` are deprecated and will be removed in Slyme 0.2.0. Migrate to the unified `@node`, `@expression`, and `@wrapper` decorators respectively; use `mode="async"` for the special case where a regular `def` returns an Awaitable.
 :::
 
 ## Built-in Common Nodes {#common-nodes}

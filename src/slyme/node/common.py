@@ -16,7 +16,7 @@ import asyncio
 from typing import Union
 from collections.abc import Iterable, Sequence
 from slyme.context import Context
-from .core import Node, node, AsyncNode, async_node
+from .core import Node, node, AsyncNode
 
 __all__ = [
     "sequential_exec",
@@ -78,7 +78,7 @@ async def async_sequential_exec(
     return ctx
 
 
-@async_node
+@node
 async def async_sequential(
     ctx: Context, /, *, nodes: Sequence[Union[Node, AsyncNode]]
 ) -> Context:

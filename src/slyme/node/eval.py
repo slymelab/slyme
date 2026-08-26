@@ -172,7 +172,8 @@ EVALUATOR_REGISTRY.register(
 )
 
 EVALUATOR_REGISTRY.register(
-    EvaluatorDef(sync_func=ref_evaluator, async_func=async_ref_evaluator), key=RefFactory
+    EvaluatorDef(sync_func=ref_evaluator, async_func=async_ref_evaluator),
+    key=RefFactory,
 )
 
 
