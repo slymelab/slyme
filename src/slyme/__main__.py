@@ -12,14 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Command main entry: ``python -m slyme`` and the ``slyme`` console script."""
+"""Experimental ``python -m slyme`` and ``slyme`` command entry point.
+
+This runner CLI is a prototype and may receive breaking changes before
+stabilization.
+"""
 
 import argparse
 import sys
 from typing import List, Optional
 
 import slyme
-from slyme.cli.commands import call, discover, info, nodes
+from slyme.cli.command import call, discover, info, nodes
+from slyme.runner._experimental import (
+    warn_experimental_runner as _warn_experimental_runner,
+)
 from slyme.runner.io import emit_envelope
 from slyme.runner.protocol import error_payload, make_envelope
 
@@ -41,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """Run the experimental Slyme runner CLI."""
+    _warn_experimental_runner(stacklevel=2)
     parser = build_parser()
     args = parser.parse_args(argv)
     handler = getattr(args, "handler", None)

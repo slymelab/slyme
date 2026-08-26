@@ -12,6 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Experimental runner prototype.
+
+The public API and wire format may receive breaking changes before this
+package is stabilized.
+"""
+
+from ._experimental import warn_experimental_runner as _warn_experimental_runner
+
+_warn_experimental_runner(stacklevel=2)
+
 from .protocol import (
     KIND_CALL,
     KIND_DISCOVER,

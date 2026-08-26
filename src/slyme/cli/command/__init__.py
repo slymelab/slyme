@@ -12,11 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Subcommands for the ``slyme`` runner CLI.
+"""Experimental subcommands for the ``slyme`` runner CLI.
 
 Each module exposes ``register(subparsers)`` (adds its subparser and sets its
 ``handler``) and ``run(args) -> int``.
+
+This package is a prototype and its commands may receive breaking changes
+before stabilization.
 """
+
+from slyme.runner._experimental import (
+    warn_experimental_runner as _warn_experimental_runner,
+)
+
+_warn_experimental_runner(stacklevel=2)
 
 from . import call, discover, info, nodes
 
