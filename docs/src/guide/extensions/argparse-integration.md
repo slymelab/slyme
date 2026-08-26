@@ -8,7 +8,7 @@ Slyme provides a built-in `slyme.cli` module to automatically map `Ref` dependen
 
 ## Core Concepts: `Arg` and `ARG` Metadata
 
-In Slyme, any `Ref` can carry metadata describing how it should behave in the command line. This is achieved using the `Arg` dataclass and the `ARG` key from `slyme.context.metadata`.
+In Slyme, any `Ref` can carry metadata describing how it should behave as an external input. This is achieved using the `Arg` dataclass and the `ARG` metadata key, both exported from `slyme.context`.
 
 `Arg` contains a rich set of configuration options, designed to be compatible with mainstream CLI and configuration tools:
 
@@ -16,7 +16,7 @@ In Slyme, any `Ref` can carry metadata describing how it should behave in the co
 - **`help`**: The help description for the argument.
 - **`type`**: The argument type. If not provided, Slyme will try to infer it automatically based on the type of `default`.
 - **`choices`**: The allowed range of values for the argument.
-- **`required`**: Whether the argument must be provided in the command line.
+- **`required`**: Whether the external input is required. `Node.run()` accepts it from `inputs`, an existing Context, or the command line when `use_argparse=True`.
 - **`nargs`**: The number of command-line arguments to consume.
 - **`aliases`**: Aliases for the argument (e.g., `["-lr"]`).
 - **`metavar`**: The name displayed in the help message.
@@ -60,10 +60,8 @@ Combining the type rules above, here is a complete demonstration:
 
 ```python
 from enum import Enum
-from typing import Literal, Optional
-from slyme.context import Context, R
-from slyme.context.metadata import Arg, ARG
-from slyme.cli import parse_and_inject
+from typing import Literal
+from slyme.context import ARG, Arg, Context, R
 from slyme.node import node, Auto
 
 class ModelSize(Enum):
@@ -73,7 +71,7 @@ class ModelSize(Enum):
 # 1. Define Refs with Arg metadata (demonstrating various data types)
 use_cache_ref = R.model.use_cache(metadata={ARG: Arg(default=True, help="Whether to use cache")})
 ports_ref = R.server.ports(metadata={ARG: Arg(type=list[int], default=[8080], help="List of ports")})
-config_ref = R.model.config(metadata={ARG: Arg(type=dict, help="Model configuration (JSON string)")})
+config_ref = R.model.config(metadata={ARG: Arg(type=dict, required=True, help="Model configuration (JSON string)")})
 size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
 mode_ref = R.run.mode(metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
 
@@ -102,32 +100,42 @@ if __name__ == "__main__":
         mode=mode_ref
     )
 
-    ctx = Context()
-    
     # Simulating command line execution:
     # python main.py --no-model-use-cache --server.ports 80 443 --model.config '{"debug": true}' --model.size base --run.mode test
-    
-    # Automatically parse CLI arguments and inject into Context
-    ctx = parse_and_inject(context=ctx, node=server_node)
-    
-    # 4. Prepare Exec and Execute Node
-    server_exec = server_node.prepare()
-    server_exec(ctx)
+
+    # Discover Arg metadata, parse the CLI, validate required inputs, prepare,
+    # and execute through the normal application boundary.
+    final_context = server_node.run(use_argparse=True)
 ```
 
 ## Core API Reference
 
+### `Node.run`
+
+For an executable Node tree, `run()` is the recommended application boundary. Set `use_argparse=True` to discover every `Arg` in the tree and parse command-line values. Values already supplied by `context` or `inputs` satisfy required arguments and become parser defaults; explicit CLI values take precedence.
+
+```python
+result = node_def.run(
+    use_argparse=True,
+    cli_args=["--model.config", '{"debug": true}'],
+)
+```
+
+Omit `cli_args` to parse `sys.argv[1:]`. As with every `run()` call, you may also pass an existing Context as the first positional argument, provide programmatic `inputs`, select an `outputs` Ref PyTree, or request `(output, context)` with `return_context=True`.
+
+If `cli_args` is provided while `use_argparse=False`, `run()` raises `ValueError` instead of silently ignoring it.
+
 ### `parse_and_inject`
 
-This is the primary high-level API used to parse arguments and selectively inject them into a `Context`.
+This is the lower-level API for parsing arguments independently of Node execution and optionally injecting them into a `Context`.
 
 ```python
 def parse_and_inject(
     context: Optional[Context] = None,
     parser: Optional[argparse.ArgumentParser] = None,
     cli_args: Optional[List[str]] = None,
-    node: Optional[Union[Any, Iterable[Ref]]] = None,
-    extra_refs: Optional[Iterable[Ref]] = None,
+    node: Optional[Union[Any, Iterable[RefLike]]] = None,
+    extra_refs: Optional[Iterable[RefLike]] = None,
     extra_args: Optional[Dict[str, Arg]] = None,
 ) -> Union[Dict[str, Any], Context]:
 ```

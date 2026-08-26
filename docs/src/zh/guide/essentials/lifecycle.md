@@ -81,7 +81,7 @@ new_ctx = my_node_exec(Context())
 ```python
 from typing import Any
 from slyme.node import node, Auto
-from slyme.context import Context, Ref
+from slyme.context import Context, R
 
 @node
 def process(ctx: Context, /, *, data: Auto[Any]) -> Context:

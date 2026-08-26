@@ -54,6 +54,8 @@ print(value)  # Output: ALICE
 
 `run()` prepares a Def automatically, creates or extends a Context, validates the inputs declared by `Arg`, executes the Node, and extracts the requested output Ref PyTree. Omit `outputs` to receive the final Context. With an output schema, set `return_context=True` to receive `(output, context)`.
 
+For command-line inputs, set `use_argparse=True`; optionally pass `cli_args` explicitly, or omit it to parse `sys.argv[1:]`. See [Argparse Integration](/guide/extensions/argparse-integration) for the full input model and precedence rules.
+
 For lower-level execution, or when reusing one immutable executable while managing Context explicitly, call `node_def.prepare()` once and invoke the resulting Exec directly.
 
 ## @expression {#at-expression}
@@ -416,7 +418,7 @@ Automatic detection only checks whether the function itself was declared with `a
 :::
 
 ::: warning Deprecation
-`@async_node`, `@async_expression`, and `@async_wrapper` are deprecated and will be removed in Slyme 0.2.0. Migrate to the unified `@node`, `@expression`, and `@wrapper` decorators respectively; use `mode="async"` for the special case where a regular `def` returns an Awaitable.
+`@async_node`, `@async_expression`, and `@async_wrapper` are deprecated since Slyme 0.1.1 and will be removed in 0.2.0. Migrate to the unified `@node`, `@expression`, and `@wrapper` decorators respectively; use `mode="async"` for the special case where a regular `def` returns an Awaitable.
 :::
 
 ## Built-in Common Nodes {#common-nodes}

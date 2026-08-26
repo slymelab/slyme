@@ -30,7 +30,7 @@ Slyme (发音为 /slaɪm/) 是一个高度可组合的函数式执行框架。�
 - [**@wrapper**](/zh/guide/essentials/node#at-wrapper): @wrapper  的作用类似于中间件，它负责拦截、修改或增强 Node 的执行过程，例如在 @node 执行前或执行后添加日志、记录性能、处理异常等。
 
 ::: info
-@node / @expression / @wrapper 同时支持普通函数与 `async def` 函数。旧的 @async_node / @async_expression / @async_wrapper 已弃用，并将在 Slyme 0.2.0 中移除。
+@node / @expression / @wrapper 同时支持普通函数与 `async def` 函数。旧的 @async_node / @async_expression / @async_wrapper 自 Slyme 0.1.1 起已弃用，并将在 0.2.0 中移除。
 :::
 
 ### Builder

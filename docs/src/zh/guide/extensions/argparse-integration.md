@@ -8,7 +8,7 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 
 ## 核心概念：`Arg` 与 `ARG` 元数据
 
-在 Slyme 中，任何 `Ref` 都可以携带描述自身在命令行中如何表现的元数据。这是通过 `slyme.context.metadata` 中的 `Arg` 数据类和 `ARG` 键来实现的。
+在 Slyme 中，任何 `Ref` 都可以携带描述自身如何作为外部输入的元数据。这是通过 `Arg` 数据类和 `ARG` 元数据键实现的，两者都可以直接从 `slyme.context` 导入。
 
 `Arg` 包含了丰富的配置项，兼容主流的命令行和配置工具设计：
 
@@ -16,7 +16,7 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 - **`help`**：参数的帮助描述信息。
 - **`type`**：参数类型。如果不提供，Slyme 会尝试根据 `default` 的类型进行自动推断。
 - **`choices`**：允许的参数值范围。
-- **`required`**：是否必须在命令行中提供。
+- **`required`**：外部输入是否必需。`Node.run()` 可以从 `inputs`、已有 Context，或者在 `use_argparse=True` 时从命令行获得该输入。
 - **`nargs`**：消费的命令行参数个数。
 - **`aliases`**：参数的别名（例如 `["-lr"]`）。
 - **`metavar`**：在帮助信息中显示的名称。
@@ -60,10 +60,8 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 
 ```python
 from enum import Enum
-from typing import Literal, Optional
-from slyme.context import Context, R
-from slyme.context.metadata import Arg, ARG
-from slyme.cli import parse_and_inject
+from typing import Literal
+from slyme.context import ARG, Arg, Context, R
 from slyme.node import node, Auto
 
 class ModelSize(Enum):
@@ -73,7 +71,7 @@ class ModelSize(Enum):
 # 1. 定义带有 Arg 元数据的 Ref (演示不同数据类型)
 use_cache_ref = R.model.use_cache(metadata={ARG: Arg(default=True, help="是否使用缓存")})
 ports_ref = R.server.ports(metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")})
-config_ref = R.model.config(metadata={ARG: Arg(type=dict, help="模型配置(JSON字符串)")})
+config_ref = R.model.config(metadata={ARG: Arg(type=dict, required=True, help="模型配置(JSON字符串)")})
 size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
 mode_ref = R.run.mode(metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
 
@@ -102,32 +100,42 @@ if __name__ == "__main__":
         mode=mode_ref
     )
 
-    ctx = Context()
-    
     # 模拟在命令行执行：
     # python main.py --no-model-use-cache --server.ports 80 443 --model.config '{"debug": true}' --model.size base --run.mode test
-    
-    # 自动解析命令行参数并注入 Context
-    ctx = parse_and_inject(context=ctx, node=server_node)
-    
-    # 4. 转换为 Exec 并执行
-    server_exec = server_node.prepare()
-    server_exec(ctx)
+
+    # 通过标准应用边界发现 Arg 元数据、解析命令行、校验必需输入、
+    # prepare 并执行 Node。
+    final_context = server_node.run(use_argparse=True)
 ```
 
 ## 核心 API 参考
 
+### `Node.run`
+
+对于可执行的 Node 树，`run()` 是推荐的应用边界。设置 `use_argparse=True` 后，它会发现树中的所有 `Arg` 并解析命令行参数。已经通过 `context` 或 `inputs` 提供的值可以满足必需参数，并成为解析器默认值；显式传入的命令行值优先级更高。
+
+```python
+result = node_def.run(
+    use_argparse=True,
+    cli_args=["--model.config", '{"debug": true}'],
+)
+```
+
+省略 `cli_args` 时会解析 `sys.argv[1:]`。与其他 `run()` 调用一样，你也可以把已有 Context 作为第一个位置参数传入，通过 `inputs` 提供程序输入，通过 `outputs` 指定待提取的 Ref PyTree，或者设置 `return_context=True` 返回 `(output, context)`。
+
+如果在 `use_argparse=False` 时提供 `cli_args`，`run()` 会抛出 `ValueError`，而不是静默忽略这些参数。
+
 ### `parse_and_inject`
 
-最常用的高级 API，用于解析参数并选择性地将其注入到 `Context` 中。
+这是一个底层 API，用于独立于 Node 执行过程解析参数，并可选择将结果注入 `Context`。
 
 ```python
 def parse_and_inject(
     context: Optional[Context] = None,
     parser: Optional[argparse.ArgumentParser] = None,
     cli_args: Optional[List[str]] = None,
-    node: Optional[Union[Any, Iterable[Ref]]] = None,
-    extra_refs: Optional[Iterable[Ref]] = None,
+    node: Optional[Union[Any, Iterable[RefLike]]] = None,
+    extra_refs: Optional[Iterable[RefLike]] = None,
     extra_args: Optional[Dict[str, Arg]] = None,
 ) -> Union[Dict[str, Any], Context]:
 ```

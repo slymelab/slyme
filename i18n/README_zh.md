@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
 ## 文档
 
-要深入了解 Slyme 的架构，包括 Context 管理、依赖注入和生命周期钩子，请参阅我们的官方文档站点。
+要深入了解 Slyme 的架构，包括 Context 管理、依赖注入和 Node 生命周期，请参阅我们的官方文档站点。
 
 **👉 [阅读 Slyme 官方文档](https://slymelab.github.io/slyme/)**
 

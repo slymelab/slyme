@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
 ## Documentation
 
-To dive deeper into Slyme's architecture, including Context management, Dependency Injection, and Lifecycle hooks, please refer to our official documentation site.
+To dive deeper into Slyme's architecture, including Context management, dependency injection, and the Node lifecycle, please refer to our official documentation site.
 
 **👉 [Read the Official Slyme Documentation](https://slymelab.github.io/slyme/)**
 

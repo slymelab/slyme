@@ -61,7 +61,7 @@ ctx.get(Ref("model", key_path=tuple(P.config.hidden_size)))
 **新范式 — 使用 `@expression` + `Auto`：**
 
 ```python
-from slyme.node import expression, Auto
+from slyme.node import expression, node, Auto
 from slyme.context import Context, Ref
 
 @expression
@@ -113,11 +113,13 @@ ref_with_meta = R.user.profile.name(metadata={"desc": "用户的显示名称"})
 
 ```python
 from slyme.node import node
-from slyme.context import Context, R
+from slyme.context import Context, R, Ref
 
 @node
-def greet(ctx: Context, /, *, name: str, title: str) -> Context:
-    return ctx.set(R.greeting, f"{title} {ctx.get(name)}")
+def greet(ctx: Context, /, *, name: Ref[str], title: Ref[str]) -> Context:
+    name_ = ctx.get(name)
+    title_ = ctx.get(title)
+    return ctx.set(R.greeting, f"{title_} {name_}")
 
 # 直接在关键字参数中使用 R
 node_def = greet(name=R.user.name, title=R.user.title)
@@ -277,7 +279,7 @@ print(diff.flatten())  # {'status': (<DiffMissing.MARK: 1>, 'active'), 'user.pro
 ## 异步支持（已弃用） {#async-support}
 
 ::: warning 已弃用
-`Context` 和 `ContextView` 上的所有 `async_*` 方法（`async_get`、`async_set`、`async_update`、`async_mutate`、`async_to_dict`、`async_extract`）自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。Context 本身是**本地存储且同步的** — 请直接使用同步方法替代。
+`Context` 和 `ContextView` 上的所有 `async_*` 方法自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除，包括 `async_get`、`async_extract`、`async_to_dict`、`async_mutate`、`async_update`、`async_drop`、`async_set`、`async_update_tree`、`async_delete` 和 `async_clear`。Context 本身是**本地存储且同步的** — 请直接使用对应的同步方法替代。
 :::
 
 **旧范式（已弃用）：**
@@ -301,5 +303,5 @@ new_ctx = ctx.mutate(updates={...}, drops=[...])
 ## Context Hook（已弃用）
 
 ::: warning 已弃用
-`Hook`、`HookChain` 以及 `Context.__init__()` 的 `hook=` 参数自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。Context 不再支持 Hook。如果你需要数据转换或拦截功能，请改用 [`@wrapper`](/zh/guide/essentials/node#at-wrapper) 节点在 Node 层面拦截执行。
+`Hook`、`HookChain` 以及 `Context.__init__()` 的 `hook=` 参数自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。它们目前仅为迁移而暂时保留，不应继续用于新代码。如果你需要数据转换或拦截功能，请改用 [`@wrapper`](/zh/guide/essentials/node#at-wrapper) 节点在 Node 层面拦截执行。
 :::

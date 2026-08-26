@@ -54,6 +54,8 @@ print(value)  # 输出：ALICE
 
 `run()` 会自动 prepare Def、创建或扩展 Context、校验 `Arg` 声明的输入、执行 Node，并按指定的输出 Ref PyTree 提取结果。不传 `outputs` 时返回最终 Context；指定输出 schema 并设置 `return_context=True` 时返回 `(output, context)`。
 
+如需从命令行读取输入，请设置 `use_argparse=True`；可以显式传入 `cli_args`，也可以省略它以解析 `sys.argv[1:]`。完整的输入模型和优先级规则请参阅[自动参数解析](/zh/guide/extensions/argparse-integration)。
+
 对于底层执行，或者需要自行管理 Context 并重复使用同一个不可变 Exec 的场景，可以调用一次 `node_def.prepare()`，然后直接执行所得 Exec。
 
 ## @expression {#at-expression}
@@ -416,7 +418,7 @@ print(user_data)  # {'id': 1, 'name': 'Alice'}
 :::
 
 ::: warning 弃用说明
-`@async_node`、`@async_expression` 和 `@async_wrapper` 已弃用，并将在 Slyme 0.2.0 中移除。请分别迁移到统一的 `@node`、`@expression` 和 `@wrapper`；普通 `def` 返回 Awaitable 的特殊情况使用 `mode="async"`。
+`@async_node`、`@async_expression` 和 `@async_wrapper` 自 Slyme 0.1.1 起已弃用，并将在 0.2.0 中移除。请分别迁移到统一的 `@node`、`@expression` 和 `@wrapper`；普通 `def` 返回 Awaitable 的特殊情况使用 `mode="async"`。
 :::
 
 ## 内置通用节点 {#common-nodes}

@@ -61,7 +61,7 @@ ctx.get(Ref("model", key_path=tuple(P.config.hidden_size)))
 **New pattern — use `@expression` + `Auto`:**
 
 ```python
-from slyme.node import expression, Auto
+from slyme.node import expression, node, Auto
 from slyme.context import Context, Ref
 
 @expression
@@ -113,11 +113,13 @@ ref_with_meta = R.user.profile.name(metadata={"desc": "User's display name"})
 
 ```python
 from slyme.node import node
-from slyme.context import Context, R
+from slyme.context import Context, R, Ref
 
 @node
-def greet(ctx: Context, /, *, name: str, title: str) -> Context:
-    return ctx.set(R.greeting, f"{title} {ctx.get(name)}")
+def greet(ctx: Context, /, *, name: Ref[str], title: Ref[str]) -> Context:
+    name_ = ctx.get(name)
+    title_ = ctx.get(title)
+    return ctx.set(R.greeting, f"{title_} {name_}")
 
 # Use R directly in keyword arguments
 node_def = greet(name=R.user.name, title=R.user.title)
@@ -277,7 +279,7 @@ Here, `slyme.context.DIFF_MISSING` represents a missing value. In the dictionary
 ## Async Support (Deprecated) {#async-support}
 
 ::: warning Deprecated
-All `async_*` methods on `Context` and `ContextView` (`async_get`, `async_set`, `async_update`, `async_mutate`, `async_to_dict`, `async_extract`) are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Context is **locally stored and synchronous** — use the synchronous methods directly instead.
+All `async_*` methods on `Context` and `ContextView` are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. This includes `async_get`, `async_extract`, `async_to_dict`, `async_mutate`, `async_update`, `async_drop`, `async_set`, `async_update_tree`, `async_delete`, and `async_clear`. Context is **locally stored and synchronous** — use the corresponding synchronous methods directly instead.
 :::
 
 **Old pattern (deprecated):**
@@ -301,5 +303,5 @@ These synchronous methods work correctly in both sync and async Nodes — no `aw
 ## Context Hook (Deprecated)
 
 ::: warning Deprecated
-`Hook`, `HookChain`, and the `hook=` parameter on `Context.__init__()` are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Context no longer supports hooks. If you need data transformation or interception, use [`@wrapper`](/guide/essentials/node#at-wrapper) nodes to intercept execution at the Node level instead.
+`Hook`, `HookChain`, and the `hook=` parameter on `Context.__init__()` are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. They remain available temporarily for migration but should not be used in new code. If you need data transformation or interception, use [`@wrapper`](/guide/essentials/node#at-wrapper) nodes to intercept execution at the Node level instead.
 :::
