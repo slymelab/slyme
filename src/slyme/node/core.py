@@ -89,19 +89,16 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 ExecutionMode = Literal["sync", "async"]
 
-# Update: NodeFunc now must return Context to align with the chain protocol.
-NodeFunc = Callable[Concatenate[Context, _P], Context]
+NodeFunc = Callable[Concatenate[Context, _P], None]
 ExpressionFunc = Callable[Concatenate[Context, _P], _R]
-# Wrapper definition: (ctx, wrapped, call_next, ...args) -> Context
-# call_next definition: (Context) -> Context
 WrapperFunc = Callable[
-    Concatenate[Context, "Node", Callable[[Context], Context], _P], Context
+    Concatenate[Context, "Node", Callable[[Context], None], _P], None
 ]
-AsyncNodeFunc = Callable[Concatenate[Context, _P], Awaitable[Context]]
+AsyncNodeFunc = Callable[Concatenate[Context, _P], Awaitable[None]]
 AsyncExpressionFunc = Callable[Concatenate[Context, _P], Awaitable[_R]]
 AsyncWrapperFunc = Callable[
-    Concatenate[Context, "AsyncNode", Callable[[Context], Awaitable[Context]], _P],
-    Awaitable[Context],
+    Concatenate[Context, "AsyncNode", Callable[[Context], Awaitable[None]], _P],
+    Awaitable[None],
 ]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
@@ -118,12 +115,12 @@ class Config:
     check_return_type: bool = True
 
 
-def _ensure_context_return(func: Callable[_P, Any]) -> Callable[_P, Context]:
+def _ensure_none_return(func: Callable[_P, Any]) -> Callable[_P, None]:
     """
-    Wrap a callable to ensure it returns a Context object.
+    Wrap a Node callable to ensure it mutates Context and returns None.
     """
 
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> Context:
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
         result = func(*args, **kwargs)
         if inspect.isawaitable(result):
             if inspect.iscoroutine(result):
@@ -133,25 +130,25 @@ def _ensure_context_return(func: Callable[_P, Any]) -> Callable[_P, Context]:
                 "Use 'async def' or @node(mode='async'). "
                 f"Function: {func}"
             )
-        if not isinstance(result, Context):
+        if result is not None:
             raise TypeError(
                 f"Node execution return type mismatch. "
-                f"Expected 'Context', but got '{type(result).__name__}'. "
+                f"Expected 'None', but got '{type(result).__name__}'. "
                 f"Function: {func}"
             )
-        return result
+        return None
 
     return wrapper
 
 
-def _ensure_async_context_return(
+def _ensure_async_none_return(
     func: Callable[_P, Awaitable[Any]],
-) -> Callable[_P, Awaitable[Context]]:
+) -> Callable[_P, Awaitable[None]]:
     """
-    Wrap an async callable to ensure it returns a Context object.
+    Wrap an async Node callable to ensure it mutates Context and returns None.
     """
 
-    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> Context:
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
         result = await func(*args, **kwargs)
         if inspect.isawaitable(result):
             if inspect.iscoroutine(result):
@@ -161,13 +158,13 @@ def _ensure_async_context_return(
                 "Await it inside the Node before returning. "
                 f"Function: {func}"
             )
-        if not isinstance(result, Context):
+        if result is not None:
             raise TypeError(
                 f"Node execution return type mismatch. "
-                f"Expected 'Context', but got '{type(result).__name__}'. "
+                f"Expected 'None', but got '{type(result).__name__}'. "
                 f"Function: {func}"
             )
-        return result
+        return None
 
     return wrapper
 
@@ -329,7 +326,7 @@ class Node(BaseNode):
     wrappers: Sequence["Wrapper"]  # Changed: Union[...] -> Sequence
 
     @abstractmethod
-    def __call__(self, ctx: Context) -> Context:
+    def __call__(self, ctx: Context) -> None:
         pass
 
     def run(
@@ -413,8 +410,7 @@ class NodeExec(_ExecMixin, Node):
     Immutable execution version of a Node.
     """
 
-    # composed_func signature: (Context) -> Context
-    _prepared_func: Callable[[Context], Context]
+    _prepared_func: Callable[[Context], None]
     wrappers: tuple["Wrapper", ...]
 
     def __init__(
@@ -438,33 +434,33 @@ class NodeExec(_ExecMixin, Node):
         object.__setattr__(self, "_kwargs", kwargs)
         # --- Composition Logic (Onion Model) ---
         # 1. Inner Core: Bind kwargs to the user function.
-        # Signature: (Context) -> Context
+        # Signature: (Context) -> None
         raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
         if not eval_kwargs:
-            chain: Callable[[Context], Context] = partial(func, **raw_kwargs)
+            chain: Callable[[Context], None] = partial(func, **raw_kwargs)
         else:
             eval_plan = prepare_eval_plan(eval_kwargs)
 
-            def chain(ctx: Context) -> Context:
+            def chain(ctx: Context) -> None:
                 return func(ctx, **raw_kwargs, **execute_eval_plan(ctx, eval_plan))
 
         if Config.check_return_type:
-            chain = _ensure_context_return(chain)
+            chain = _ensure_none_return(chain)
 
         # 2. Build the middleware chain.
         # Wrappers are applied from inside out (reversed order of list).
         for wrapper in reversed(wrappers):
-            # wrapper is WrapperExec which is callable: (ctx, wrapped, call_next) -> Context
+            # wrapper is WrapperExec which is callable: (ctx, wrapped, call_next) -> None
             # We partially apply `wrapped` (self) and `call_next` (current chain head)
-            # to create the new chain head: (Context) -> Context
+            # to create the new chain head: (Context) -> None
             chain = partial(wrapper, wrapped=self, call_next=chain)
         object.__setattr__(self, "_prepared_func", chain)
 
     def prepare(self) -> Self:
         return self
 
-    def __call__(self, ctx: Context) -> Context:
+    def __call__(self, ctx: Context) -> None:
         try:
             # Execute the pre-composed chain
             return self._prepared_func(ctx)
@@ -490,7 +486,7 @@ class AsyncNode(BaseNode):
     wrappers: Sequence["AsyncWrapper"]
 
     @abstractmethod
-    async def __call__(self, ctx: Context) -> Context:
+    async def __call__(self, ctx: Context) -> None:
         pass
 
     async def run(
@@ -570,7 +566,7 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
     Immutable execution version of an AsyncNode.
     """
 
-    _prepared_func: Callable[[Context], Awaitable[Context]]
+    _prepared_func: Callable[[Context], Awaitable[None]]
     wrappers: tuple["AsyncWrapper", ...]
 
     def __init__(
@@ -600,13 +596,13 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
         else:
             eval_plan = prepare_eval_plan(eval_kwargs)
 
-            async def chain(ctx: Context) -> Context:
+            async def chain(ctx: Context) -> None:
                 return await func(
                     ctx, **raw_kwargs, **await async_execute_eval_plan(ctx, eval_plan)
                 )
 
         if Config.check_return_type:
-            chain = _ensure_async_context_return(chain)
+            chain = _ensure_async_none_return(chain)
 
         for wrapper in reversed(wrappers):
             chain = partial(wrapper, wrapped=self, call_next=chain)
@@ -615,7 +611,7 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
     def prepare(self) -> Self:
         return self
 
-    async def __call__(self, ctx: Context) -> Context:
+    async def __call__(self, ctx: Context) -> None:
         try:
             return await self._prepared_func(ctx)
         except (NodeTerminate, ExpressionExceptionRecord) as e:
@@ -817,8 +813,8 @@ class Wrapper(BaseWrapper):
         self,
         ctx: Context,
         wrapped: Node,
-        call_next: Callable[[Context], Context],
-    ) -> Context:
+        call_next: Callable[[Context], None],
+    ) -> None:
         pass
 
 
@@ -850,10 +846,10 @@ class WrapperExec(_ExecMixin, Wrapper):
     Immutable execution version of a Wrapper.
     """
 
-    # composed_func signature: (ctx, wrapped, call_next) -> Context
+    # composed_func signature: (ctx, wrapped, call_next) -> None
     _prepared_func: Callable[
-        [Context, Node, Callable[[Context], Context]],
-        Context,
+        [Context, Node, Callable[[Context], None]],
+        None,
     ]
 
     def __init__(
@@ -883,8 +879,8 @@ class WrapperExec(_ExecMixin, Wrapper):
             def prepared_func(
                 ctx: Context,
                 wrapped: Node,
-                call_next: Callable[[Context], Context],
-            ) -> Context:
+                call_next: Callable[[Context], None],
+            ) -> None:
                 return func(
                     ctx,
                     wrapped,
@@ -894,7 +890,7 @@ class WrapperExec(_ExecMixin, Wrapper):
                 )
 
         if Config.check_return_type:
-            prepared_func = _ensure_context_return(prepared_func)
+            prepared_func = _ensure_none_return(prepared_func)
         object.__setattr__(self, "_prepared_func", prepared_func)
 
     def prepare(self) -> Self:
@@ -904,8 +900,8 @@ class WrapperExec(_ExecMixin, Wrapper):
         self,
         ctx: Context,
         wrapped: Node,
-        call_next: Callable[[Context], Context],
-    ) -> Context:
+        call_next: Callable[[Context], None],
+    ) -> None:
         try:
             return self._prepared_func(ctx, wrapped, call_next)
         except NodeException:
@@ -928,8 +924,8 @@ class AsyncWrapper(BaseWrapper):
         self,
         ctx: Context,
         wrapped: AsyncNode,
-        call_next: Callable[[Context], Awaitable[Context]],
-    ) -> Context:
+        call_next: Callable[[Context], Awaitable[None]],
+    ) -> None:
         pass
 
 
@@ -962,8 +958,8 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
     """
 
     _prepared_func: Callable[
-        [Context, Node, Callable[[Context], Awaitable[Context]]],
-        Awaitable[Context],
+        [Context, Node, Callable[[Context], Awaitable[None]]],
+        Awaitable[None],
     ]
 
     def __init__(
@@ -993,8 +989,8 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
             async def prepared_func(
                 ctx: Context,
                 wrapped: AsyncNode,
-                call_next: Callable[[Context], Awaitable[Context]],
-            ) -> Context:
+                call_next: Callable[[Context], Awaitable[None]],
+            ) -> None:
                 return await func(
                     ctx,
                     wrapped,
@@ -1004,7 +1000,7 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
                 )
 
         if Config.check_return_type:
-            prepared_func = _ensure_async_context_return(prepared_func)
+            prepared_func = _ensure_async_none_return(prepared_func)
         object.__setattr__(self, "_prepared_func", prepared_func)
 
     def prepare(self) -> Self:
@@ -1014,8 +1010,8 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
         self,
         ctx: Context,
         wrapped: AsyncNode,
-        call_next: Callable[[Context], Awaitable[Context]],
-    ) -> Context:
+        call_next: Callable[[Context], Awaitable[None]],
+    ) -> None:
         try:
             return await self._prepared_func(ctx, wrapped, call_next)
         except NodeException:

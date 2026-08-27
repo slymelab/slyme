@@ -363,7 +363,7 @@ def parse_and_inject(
     High-level entry point to parse arguments and optionally inject them into a Context.
 
     Args:
-        context: Optional Context to inject parsed values into. If provided, returns a new Context.
+        context: Optional Context to inject parsed values into in place.
         parser: Optional existing parser to extend.
         cli_args: Command line arguments to parse (defaults to sys.argv[1:]).
         node: Node element to collect refs from.
@@ -371,7 +371,7 @@ def parse_and_inject(
         extra_args: Additional arguments to add/override.
 
     Returns:
-        If context is provided: A new Context with injected values.
+        If context is provided: The same Context after injection.
         If context is None: A dictionary of parsed values.
     """
     # 1. Prepare Arguments
@@ -403,4 +403,5 @@ def parse_and_inject(
         if key:
             updates[Ref(key)] = value
 
-    return context.mutate(updates=updates)
+    context.mutate(updates=updates)
+    return context

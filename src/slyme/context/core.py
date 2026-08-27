@@ -257,35 +257,19 @@ class ContextData(dict[str, Any]):
     Internal dictionary implementation used to distinguish structural elements
     from user-provided dictionary values.
 
-    Acts as the core "Smart Node" for the Context, handling recursive Copy-On-Write logic.
+    Acts as the mutable data node for Context while preserving the distinction
+    between context structure and user-provided dictionary values.
     """
 
     __slots__ = ()
 
-    def _raise_immutable(self, *args, **kwargs):
-        raise TypeError(
-            f"{type(self).__name__} is immutable. "
-            "Use functional modifications (e.g. context.mutate/update/drop) to create a new instance."
-        )
-
-    # Disable all mutable methods via assignment to minimize boilerplate
-    __setitem__ = _raise_immutable
-    __delitem__ = _raise_immutable
-    pop = _raise_immutable
-    popitem = _raise_immutable
-    clear = _raise_immutable
-    update = _raise_immutable
-    setdefault = _raise_immutable
-    # Disable in-place operators
-    __ior__ = _raise_immutable
-
-    def mutate(
+    def _mutated(
         self,
         updates: dict[tuple[str, ...], Any],
         drops: set[tuple[str, ...]],
-    ) -> "ContextData":
+    ) -> Union["ContextData", _Missing]:
         """
-        Core recursive Copy-On-Write (COW) algorithm for simultaneous updates and drops.
+        Build the result of simultaneous updates and drops without modifying self.
 
         Semantics:
         - Logically, drops are executed first, then updates.
@@ -386,13 +370,26 @@ class ContextData(dict[str, Any]):
 
             # Enrich both ContextPathError (structural issues) and ValueError (update conflicts)
             with enrich_exception(head, exc_types=(ContextPathError, ValueError)):
-                new_child = child.mutate(sub_updates, sub_drops)
+                new_child = child._mutated(sub_updates, sub_drops)
                 if new_child is _MISSING:
                     new_data.pop(head, None)
                 else:
                     new_data[head] = new_child
 
         return ContextData(new_data)
+
+    def mutate(
+        self,
+        updates: dict[tuple[str, ...], Any],
+        drops: set[tuple[str, ...]],
+    ) -> None:
+        """Atomically apply structural updates and drops in place."""
+        new_data = self._mutated(updates, drops)
+        if new_data is self:
+            return
+        self.clear()
+        if new_data is not _MISSING:
+            self.update(new_data)
 
 
 @dataclass(frozen=True)
@@ -462,7 +459,9 @@ def diff_context_data(
 ) -> ContextDiff:
     """
     Compute the recursive difference between two ContextData objects.
-    Optimized for Copy-On-Write (COW) structures by skipping identical subtrees.
+
+    Both inputs are live mutable mappings. Callers that need a before/after diff
+    must retain an independent copy of the earlier state.
     """
     if left is right:
         return ContextDiff()
@@ -488,7 +487,7 @@ def diff_context_data(
         val_left = left[k]
         val_right = right[k]
 
-        # Optimization: Skip identical objects (COW sharing)
+        # Shared objects necessarily expose the same current mutable state.
         if val_left is val_right:
             continue
 
@@ -661,8 +660,7 @@ class ContextElement(ABC):
 @dataclass(frozen=True, repr=False)
 class Context(ContextElement):
     """
-    Immutable Context implementation with efficient Copy-On-Write (COW) updates.
-    Wraps a root `ContextData`.
+    Context with a frozen outer identity and mutable `ContextData` contents.
 
     The main **runtime** context container for the node execution.
     """
@@ -921,7 +919,7 @@ class Context(ContextElement):
         updates: Optional[Mapping[RefLike, Any]] = None,
         drops: Optional[Iterable[RefLike]] = None,
         apply_hook: bool = True,
-    ) -> "Context":
+    ) -> None:
         """
         Apply a transaction-like set of modifications (updates and drops) atomically.
 
@@ -929,11 +927,10 @@ class Context(ContextElement):
             updates: A mapping of References to new values.
             drops: An iterable of References to remove.
 
-        Returns:
-            A new Context instance with the changes applied.
+        The mutation is atomic and returns ``None``.
         """
         if not updates and not drops:
-            return self
+            return None
 
         updates = {to_ref(k): v for k, v in updates.items()} if updates else {}
         drops = {to_ref(r) for r in drops} if drops else set()
@@ -953,12 +950,7 @@ class Context(ContextElement):
         raw_updates = {r.parts: v for r, v in updates.items()}
         raw_drops = {r.parts for r in drops}
 
-        # Delegate to the root ContextData
-        new_root = self._root.mutate(raw_updates, raw_drops)
-        # Edge Case: If the root itself resulted in MISSING (dropped), we reset to empty.
-        if new_root is _MISSING:
-            new_root = ContextData()
-        return self._from_context_data(new_root, hook=self._hook)
+        self._root.mutate(raw_updates, raw_drops)
 
     async def async_mutate(
         self,
@@ -966,7 +958,7 @@ class Context(ContextElement):
         updates: Optional[Mapping[RefLike, Any]] = None,
         drops: Optional[Iterable[RefLike]] = None,
         apply_hook: bool = True,
-    ) -> "Context":
+    ) -> None:
         from slyme.utils.warning import warning_once
 
         warning_once(
@@ -976,7 +968,7 @@ class Context(ContextElement):
             2,
         )
         if not updates and not drops:
-            return self
+            return None
 
         updates = {to_ref(k): v for k, v in updates.items()} if updates else {}
         drops = {to_ref(r) for r in drops} if drops else set()
@@ -998,48 +990,43 @@ class Context(ContextElement):
         raw_updates = {r.parts: v for r, v in updates.items()}
         raw_drops = {r.parts for r in drops}
 
-        # Delegate to the root ContextData
-        new_root = self._root.mutate(raw_updates, raw_drops)
-        # Edge Case: If the root itself resulted in MISSING (dropped), we reset to empty.
-        if new_root is _MISSING:
-            new_root = ContextData()
-        return self._from_context_data(new_root, hook=self._hook)
+        self._root.mutate(raw_updates, raw_drops)
 
     # --- Convenience Interfaces ---
     def update(
         self, updates: Mapping[RefLike, Any], *, apply_hook: bool = True
-    ) -> "Context":
+    ) -> None:
         """Batch update convenience interface."""
-        return self.mutate(updates=updates, apply_hook=apply_hook)
+        self.mutate(updates=updates, apply_hook=apply_hook)
 
     async def async_update(
         self, updates: Mapping[RefLike, Any], *, apply_hook: bool = True
-    ) -> "Context":
-        return await self.async_mutate(updates=updates, apply_hook=apply_hook)
+    ) -> None:
+        await self.async_mutate(updates=updates, apply_hook=apply_hook)
 
-    def drop(self, refs: Iterable[RefLike], *, apply_hook: bool = True) -> "Context":
+    def drop(self, refs: Iterable[RefLike], *, apply_hook: bool = True) -> None:
         """Batch delete convenience interface."""
-        return self.mutate(drops=refs, apply_hook=apply_hook)
+        self.mutate(drops=refs, apply_hook=apply_hook)
 
     async def async_drop(
         self, refs: Iterable[RefLike], *, apply_hook: bool = True
-    ) -> "Context":
-        return await self.async_mutate(drops=refs, apply_hook=apply_hook)
+    ) -> None:
+        await self.async_mutate(drops=refs, apply_hook=apply_hook)
 
-    def set(self, ref: RefLike, value: _T, *, apply_hook: bool = True) -> "Context":
+    def set(self, ref: RefLike, value: _T, *, apply_hook: bool = True) -> None:
         """Single set convenience interface."""
         ref = to_ref(ref)
-        return self.mutate(updates={ref: value}, apply_hook=apply_hook)
+        self.mutate(updates={ref: value}, apply_hook=apply_hook)
 
     async def async_set(
         self, ref: RefLike, value: _T, *, apply_hook: bool = True
-    ) -> "Context":
+    ) -> None:
         ref = to_ref(ref)
-        return await self.async_mutate(updates={ref: value}, apply_hook=apply_hook)
+        await self.async_mutate(updates={ref: value}, apply_hook=apply_hook)
 
     def update_tree(
         self, ref_tree: Any, value_tree: Any, *, apply_hook: bool = True
-    ) -> "Context":
+    ) -> None:
         """
         Recursively update the context using a structure of references (ref_tree)
         and a matching structure of values (value_tree).
@@ -1050,18 +1037,17 @@ class Context(ContextElement):
             value_tree: A nested structure matching the shape of ref_tree, containing
                         the values to be updated at the corresponding references.
 
-        Returns:
-            A new Context instance with the updates applied.
+        The context is updated in place and the method returns ``None``.
         """
         updates = {
             to_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
-        return self.mutate(updates=updates, apply_hook=apply_hook)
+        self.mutate(updates=updates, apply_hook=apply_hook)
 
     async def async_update_tree(
         self, ref_tree: Any, value_tree: Any, *, apply_hook: bool = True
-    ) -> "Context":
+    ) -> None:
         """
         Recursively update the context using a structure of references (ref_tree)
         and a matching structure of values (value_tree).
@@ -1072,25 +1058,24 @@ class Context(ContextElement):
             value_tree: A nested structure matching the shape of ref_tree, containing
                         the values to be updated at the corresponding references.
 
-        Returns:
-            A new Context instance with the updates applied.
+        The context is updated in place and the method returns ``None``.
         """
         updates = {
             to_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
-        return await self.async_mutate(updates=updates, apply_hook=apply_hook)
+        await self.async_mutate(updates=updates, apply_hook=apply_hook)
 
-    def delete(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
+    def delete(self, ref: RefLike, *, apply_hook: bool = True) -> None:
         """Single delete convenience interface."""
         ref = to_ref(ref)
-        return self.mutate(drops=[ref], apply_hook=apply_hook)
+        self.mutate(drops=[ref], apply_hook=apply_hook)
 
-    async def async_delete(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
+    async def async_delete(self, ref: RefLike, *, apply_hook: bool = True) -> None:
         ref = to_ref(ref)
-        return await self.async_mutate(drops=[ref], apply_hook=apply_hook)
+        await self.async_mutate(drops=[ref], apply_hook=apply_hook)
 
-    def clear(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
+    def clear(self, ref: RefLike, *, apply_hook: bool = True) -> None:
         """
         Clear all contents under a reference but keep the path.
         Raises ContextPathError if the target is not a container (ContextData).
@@ -1104,9 +1089,9 @@ class Context(ContextElement):
             )
 
         # 2. Update with empty ContextData
-        return self.mutate(updates={ref: ContextData()}, apply_hook=apply_hook)
+        self.mutate(updates={ref: ContextData()}, apply_hook=apply_hook)
 
-    async def async_clear(self, ref: RefLike, *, apply_hook: bool = True) -> "Context":
+    async def async_clear(self, ref: RefLike, *, apply_hook: bool = True) -> None:
         """
         Clear all contents under a reference but keep the path.
         Raises ContextPathError if the target is not a container (ContextData).
@@ -1120,9 +1105,7 @@ class Context(ContextElement):
             )
 
         # 2. Update with empty ContextData
-        return await self.async_mutate(
-            updates={ref: ContextData()}, apply_hook=apply_hook
-        )
+        await self.async_mutate(updates={ref: ContextData()}, apply_hook=apply_hook)
 
 
 @dataclass(frozen=True, repr=False)

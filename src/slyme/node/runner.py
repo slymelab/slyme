@@ -37,7 +37,7 @@ def _prepare_context(
         )
 
     if inputs:
-        context = context.update(inputs)
+        context.update(inputs)
 
     args = prepare_args(node=node)
 
@@ -69,7 +69,7 @@ def _prepare_context(
             if not arg.is_missing(default):
                 defaults[ref] = default
         if defaults:
-            context = context.update(defaults)
+            context.update(defaults)
 
     missing = [
         path
@@ -117,7 +117,7 @@ def run_node(
         use_argparse=use_argparse,
         cli_args=cli_args,
     )
-    context = node(context)
+    node(context)
     return _format_result(
         context,
         outputs=outputs,
@@ -144,7 +144,7 @@ async def run_async_node(
         use_argparse=use_argparse,
         cli_args=cli_args,
     )
-    context = await node(context)
+    await node(context)
     return _format_result(
         context,
         outputs=outputs,

@@ -26,70 +26,68 @@ __all__ = [
 ]
 
 
-def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> Context:
+def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None:
     """
-    Sequentially execute a list of nodes, passing the context from one to the next.
+    Sequentially execute nodes against the same mutable context.
 
     Args:
         ctx (Context): The initial context to pass through the nodes.
         nodes (Iterable[Node]): An iterable of nodes to execute.
 
     Returns:
-        Context: The final context after all nodes have been executed.
+        None.
     """
     for node_ in nodes:
-        ctx = node_(ctx)
-    return ctx
+        node_(ctx)
 
 
 @node
-def sequential(ctx: Context, /, *, nodes: Sequence[Node]) -> Context:
+def sequential(ctx: Context, /, *, nodes: Sequence[Node]) -> None:
     """
-    Sequentially execute a list of nodes, passing the context from one to the next.
+    Sequentially execute nodes against the same mutable context.
 
     Args:
         ctx (Context): The initial context to pass through the nodes.
         nodes (Sequence[Node]): A sequence of nodes to execute.
 
     Returns:
-        Context: The final context after all nodes have been executed.
+        None.
     """
-    return sequential_exec(ctx, nodes)
+    sequential_exec(ctx, nodes)
 
 
 async def async_sequential_exec(
     ctx: Context, nodes: Iterable[Union[Node, AsyncNode]]
-) -> Context:
+) -> None:
     """
-    Sequentially execute a list of nodes, passing the context from one to the next.
+    Sequentially execute nodes against the same mutable context.
 
     Args:
         ctx (Context): The initial context to pass through the nodes.
         nodes (Iterable[Union[Node, AsyncNode]]): An iterable of nodes to execute.
 
     Returns:
-        Context: The final context after all nodes have been executed.
+        None.
     """
     for node_ in nodes:
         if isinstance(node_, AsyncNode):
-            ctx = await node_(ctx)
+            await node_(ctx)
         else:
-            ctx = await asyncio.to_thread(node_, ctx)
-    return ctx
+            await asyncio.to_thread(node_, ctx)
 
 
 @node
 async def async_sequential(
     ctx: Context, /, *, nodes: Sequence[Union[Node, AsyncNode]]
-) -> Context:
+) -> None:
     """
-    Sequentially execute a list of nodes, passing the context from one to the next.
+    Sequentially execute nodes against the same mutable context.
 
     Args:
         ctx (Context): The initial context to pass through the nodes.
         nodes (Sequence[Union[Node, AsyncNode]]): A sequence of nodes to execute.
 
     Returns:
-        Context: The final context after all nodes have been executed.
+        None.
     """
-    return await async_sequential_exec(ctx, nodes)
+    await async_sequential_exec(ctx, nodes)
