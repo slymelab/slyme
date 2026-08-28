@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from .core import (
-    Config as NodeConfig,
     ExecutionMode,
     NodeElement,
     Node,
@@ -46,7 +45,6 @@ from .common import (
 )
 
 __all__ = [
-    "NodeConfig",
     "ExecutionMode",
     "NodeElement",
     "Node",

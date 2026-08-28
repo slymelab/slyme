@@ -55,7 +55,6 @@ from .signature import (
 )
 
 __all__ = [
-    "Config",
     "ExecutionMode",
     "node",
     "expression",
@@ -109,64 +108,6 @@ def _prepare_map(x: Any) -> Any:
     if isinstance(x, RefFactory):
         return x()
     return x
-
-
-class Config:
-    check_return_type: bool = True
-
-
-def _ensure_none_return(func: Callable[_P, Any]) -> Callable[_P, None]:
-    """
-    Wrap a Node callable to ensure it mutates Context and returns None.
-    """
-
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
-        result = func(*args, **kwargs)
-        if inspect.isawaitable(result):
-            if inspect.iscoroutine(result):
-                result.close()
-            raise TypeError(
-                "Synchronous Node returned an Awaitable. "
-                "Use 'async def' or @node(mode='async'). "
-                f"Function: {func}"
-            )
-        if result is not None:
-            raise TypeError(
-                f"Node execution return type mismatch. "
-                f"Expected 'None', but got '{type(result).__name__}'. "
-                f"Function: {func}"
-            )
-        return None
-
-    return wrapper
-
-
-def _ensure_async_none_return(
-    func: Callable[_P, Awaitable[Any]],
-) -> Callable[_P, Awaitable[None]]:
-    """
-    Wrap an async Node callable to ensure it mutates Context and returns None.
-    """
-
-    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
-        result = await func(*args, **kwargs)
-        if inspect.isawaitable(result):
-            if inspect.iscoroutine(result):
-                result.close()
-            raise TypeError(
-                "Async Node returned another Awaitable. "
-                "Await it inside the Node before returning. "
-                f"Function: {func}"
-            )
-        if result is not None:
-            raise TypeError(
-                f"Node execution return type mismatch. "
-                f"Expected 'None', but got '{type(result).__name__}'. "
-                f"Function: {func}"
-            )
-        return None
-
-    return wrapper
 
 
 def _prepare_eval(
@@ -445,9 +386,6 @@ class NodeExec(_ExecMixin, Node):
             def chain(ctx: Context) -> None:
                 return func(ctx, **raw_kwargs, **execute_eval_plan(ctx, eval_plan))
 
-        if Config.check_return_type:
-            chain = _ensure_none_return(chain)
-
         # 2. Build the middleware chain.
         # Wrappers are applied from inside out (reversed order of list).
         for wrapper in reversed(wrappers):
@@ -600,9 +538,6 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
                 return await func(
                     ctx, **raw_kwargs, **await async_execute_eval_plan(ctx, eval_plan)
                 )
-
-        if Config.check_return_type:
-            chain = _ensure_async_none_return(chain)
 
         for wrapper in reversed(wrappers):
             chain = partial(wrapper, wrapped=self, call_next=chain)
@@ -889,8 +824,6 @@ class WrapperExec(_ExecMixin, Wrapper):
                     **execute_eval_plan(ctx, eval_plan),
                 )
 
-        if Config.check_return_type:
-            prepared_func = _ensure_none_return(prepared_func)
         object.__setattr__(self, "_prepared_func", prepared_func)
 
     def prepare(self) -> Self:
@@ -999,8 +932,6 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
                     **await async_execute_eval_plan(ctx, eval_plan),
                 )
 
-        if Config.check_return_type:
-            prepared_func = _ensure_async_none_return(prepared_func)
         object.__setattr__(self, "_prepared_func", prepared_func)
 
     def prepare(self) -> Self:
