@@ -74,9 +74,6 @@ async def retry(
 
 Automatic mode detection checks the callable itself, not its return annotation.
 For the uncommon case where a regular `def` returns an Awaitable, explicitly
-use `@node(mode="async")`, `@expression(mode="async")`, or
-`@wrapper(mode="async")`. The legacy `@async_node`, `@async_expression`, and
-`@async_wrapper` decorators are deprecated in Slyme 0.1.1 and will be removed
-in 0.2.0.
+use `@node(mode="async")` or `@wrapper(mode="async")`.
 
 Use `await node.run(...)` at the application boundary; it follows the same input, output, and Context contract as synchronous `Node.run(...)`. Call a prepared async Exec directly only when managing Context explicitly. `async_sequential` builds a declarative mixed sequence; `async_sequential_exec` runs one inside a higher-order async node and dispatches synchronous children through `asyncio.to_thread`. Do not perform blocking I/O directly in an async function.

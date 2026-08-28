@@ -27,18 +27,10 @@ from typing import (
     cast,
     Optional,
     overload,
-    TYPE_CHECKING,
 )
 from typing_extensions import Self
-from slyme.utils.pytree import (
-    PyTreeEngine,
-    MappingKey,
-    KeyPath,
-)
+from slyme.utils.pytree import MappingKey
 from slyme.utils.exception import enrich_exception
-
-if TYPE_CHECKING:
-    from .hook import Hook
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
@@ -87,13 +79,9 @@ Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 @dataclass(frozen=True, repr=False, eq=False)
 class Ref(Generic[_T]):
-    """Immutable dotted ref with cached hash and split parts.
-
-    NOTE: Ref.key_path can only resolve leaf values.
-    """
+    """Immutable dotted ref with cached hash and split parts."""
 
     path: str
-    key_path: KeyPath = ()
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
     parts: tuple[str, ...] = field(init=False)
     hash: int = field(init=False)
@@ -101,60 +89,29 @@ class Ref(Generic[_T]):
     def __post_init__(self) -> None:
         if not self.path:
             raise ValueError("Empty ref path")
-        if self.key_path:
-            from slyme.utils.warning import warning_once
-
-            warning_once(
-                "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
-                "Use @node + Auto for dynamic value resolution instead.",
-                FutureWarning,
-                2,
-            )
         parts = tuple(self.path.split("."))
         if any(not p for p in parts):
             raise ValueError(f"Invalid ref path: {self.path!r}")
         # Bypass frozen=True to set fields
         object.__setattr__(self, "parts", parts)
-        object.__setattr__(self, "hash", hash((parts, self.key_path)))
+        object.__setattr__(self, "hash", hash(parts))
         if not isinstance(self.metadata, types.MappingProxyType):
             object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
-
-    def _resolve(self, pytree) -> _T:
-        return PyTreeEngine.get_element(pytree, self.key_path)
 
     def update_metadata(self, metadata: Mapping[str, Any]) -> "Ref[_T]":
         """Returns a new Ref with updated metadata (merging with existing)."""
         new_metadata = dict(self.metadata)
         new_metadata.update(metadata)
-        return Ref(self.path, key_path=self.key_path, metadata=new_metadata)
+        return Ref(self.path, metadata=new_metadata)
 
     def at(
         self,
         subpath: str,
-        key_path: Union[KeyPath, _Missing] = _MISSING,
         metadata: Union[Optional[Mapping[str, Any]], _Missing] = _MISSING,
     ) -> "Ref":
-        """
-        Create a new Ref at a subpath relative to this Ref.
-
-        Does NOT inherit key_path or metadata from the parent Ref by default.
-
-        .. deprecated:: 0.1.1
-            The *key_path* parameter is deprecated and will be removed in 0.2.0.
-        """
-        if key_path is not _MISSING:
-            from slyme.utils.warning import warning_once
-
-            warning_once(
-                "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
-                "Use @node + Auto for dynamic value resolution instead.",
-                FutureWarning,
-                2,
-            )
+        """Create a new Ref at a subpath relative to this Ref."""
         new_path = f"{self.path}.{subpath}" if self.path else subpath
         kwargs = {}
-        if key_path is not _MISSING:
-            kwargs["key_path"] = key_path
         if metadata is not _MISSING:
             kwargs["metadata"] = metadata
         return Ref(new_path, **kwargs)
@@ -163,21 +120,13 @@ class Ref(Generic[_T]):
         return self.hash
 
     def __eq__(self, other: Any) -> bool:
-        return (
-            isinstance(other, Ref)
-            and self.parts == other.parts
-            and self.key_path == other.key_path
-        )
+        return isinstance(other, Ref) and self.parts == other.parts
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.extra_repr()})"
 
     def extra_repr(self) -> str:
         repr_items = [f"path={self.path!r}"]
-        if self.key_path:
-            repr_items.append(
-                f"key_path_expr={PyTreeEngine.codify_key_path(self.key_path)}"
-            )
         if self.metadata:
             repr_items.append(f"metadata={self.metadata!r}")
         return ", ".join(repr_items)
@@ -187,7 +136,7 @@ class RefFactory:
     """Immutable factory that records attribute access as a dotted path.
 
     R.x.y.z records ``"x.y.z"``. Calling ``R.x.y.z()`` creates ``Ref("x.y.z")``.
-    ``R.x.y.z(key_path=..., metadata=...)`` passes additional arguments to ``Ref``.
+    ``R.x.y.z(metadata=...)`` passes metadata to ``Ref``.
     """
 
     __slots__ = ("__path",)
@@ -209,22 +158,10 @@ class RefFactory:
     def __call__(
         self,
         *,
-        key_path: KeyPath = (),
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> Ref:
-        if key_path:
-            from slyme.utils.warning import warning_once
-
-            warning_once(
-                "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
-                "Use @node + Auto for dynamic value resolution instead.",
-                FutureWarning,
-                2,
-            )
         path = object.__getattribute__(self, "_RefFactory__path")
         kwargs: dict[str, Any] = {}
-        if key_path:
-            kwargs["key_path"] = key_path
         if metadata is not None:
             kwargs["metadata"] = metadata
         return Ref(path, **kwargs)
@@ -521,16 +458,7 @@ class ContextElement(ABC):
     __slots__ = ()
 
     @abstractmethod
-    def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
-        pass
-
-    @abstractmethod
-    async def async_extract(
-        self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
-    ) -> Any:
-        """.. deprecated:: 0.1.1
-            Will be removed in 0.2.0.  Use :meth:`extract` instead.
-        """
+    def extract(self, ref_tree: Any) -> Any:
         pass
 
     @abstractmethod
@@ -538,22 +466,7 @@ class ContextElement(ABC):
         self,
         ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
-        *,
-        apply_hook: bool = True,
     ) -> Union[_T, _T2]:
-        pass
-
-    @abstractmethod
-    async def async_get(
-        self,
-        ref: RefLike,
-        default: Union[_T2, _Missing] = _MISSING,
-        *,
-        apply_hook: bool = True,
-    ) -> Union[_T, _T2]:
-        """.. deprecated:: 0.1.1
-            Will be removed in 0.2.0.  Use :meth:`get` instead.
-        """
         pass
 
     @abstractmethod
@@ -569,19 +482,8 @@ class ContextElement(ABC):
         pass
 
     @abstractmethod
-    def to_dict(
-        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
-    ) -> dict[str, Any]:
+    def to_dict(self, ref: Optional[RefLike] = None) -> dict[str, Any]:
         """Convert to standard python dictionary recursively."""
-        pass
-
-    @abstractmethod
-    async def async_to_dict(
-        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
-    ) -> dict[str, Any]:
-        """.. deprecated:: 0.1.1
-            Will be removed in 0.2.0.  Use :meth:`to_dict` instead.
-        """
         pass
 
     def type_repr(self) -> str:
@@ -603,7 +505,7 @@ class ContextElement(ABC):
 
         item_blocks = []
         for key in keys:
-            val = self.get(Ref(key), apply_hook=False)
+            val = self.get(Ref(key))
             v_str = repr(val) if isinstance(val, ContextElement) else formatter(val)
 
             if newline:
@@ -666,13 +568,9 @@ class Context(ContextElement):
     """
 
     _root: ContextData = field(init=False)
-    _hook: Optional["Hook"] = field(default=None, init=False)
     data: InitVar[Optional[Mapping[str, Any]]] = None
-    hook: InitVar[Optional["Hook"]] = None
 
-    def __post_init__(
-        self, data: Optional[Mapping[str, Any]] = None, hook: Optional["Hook"] = None
-    ) -> None:
+    def __post_init__(self, data: Optional[Mapping[str, Any]] = None) -> None:
         if data is None:
             root = ContextData()
         elif isinstance(data, ContextData):
@@ -681,84 +579,23 @@ class Context(ContextElement):
             # Shallow conversion strictly for the top level.
             # Trusts user input for deep structure.
             root = ContextData(data)
-        if hook is not None:
-            from slyme.utils.warning import warning_once
-
-            warning_once(
-                "Context hook support is deprecated and will be removed in slyme 0.2.0.",
-                FutureWarning,
-                2,
-            )
         object.__setattr__(self, "_root", root)
-        object.__setattr__(self, "_hook", hook)
 
     @classmethod
-    def _from_context_data(
-        cls, root: ContextData, hook: Optional["Hook"] = None
-    ) -> "Context":
-        if hook is not None:
-            from slyme.utils.warning import warning_once
-
-            warning_once(
-                "Context hook support is deprecated and will be removed in slyme 0.2.0.",
-                FutureWarning,
-                2,
-            )
+    def _from_context_data(cls, root: ContextData) -> "Context":
         obj = object.__new__(cls)
         object.__setattr__(obj, "_root", root)
-        object.__setattr__(obj, "_hook", hook)
         return obj
 
-    def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
+    def extract(self, ref_tree: Any) -> Any:
         ref_tree = CTX_EVAL_ENGINE.map(to_ref, ref_tree)
         refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
         values = tuple(self._resolve(ref.parts) for ref in refs)
-        # NOTE: Check key_path
-        for ref, val in zip(refs, values):
-            if isinstance(val, ContextData) and ref.key_path:
-                raise ValueError("Ref.key_path can only resolve leaf values.")
-
-        if apply_hook and self._hook:
-            result = self._hook.on_extract(ctx=self, refs=refs, values=values, **kwargs)
-            values = result.values
 
         values = tuple(
             ContextView(self, ref.parts)
             if isinstance(val, ContextData)
-            else ref._resolve(val)
-            for ref, val in zip(refs, values)
-        )
-        return CTX_EVAL_ENGINE.unflatten(treedef, values)
-
-    async def async_extract(
-        self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
-    ) -> Any:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "Context.async_extract is deprecated and will be removed in slyme 0.2.0. "
-            "Use the synchronous extract() instead.",
-            FutureWarning,
-            2,
-        )
-        ref_tree = CTX_EVAL_ENGINE.map(to_ref, ref_tree)
-        refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
-        values = tuple(self._resolve(ref.parts) for ref in refs)
-        # NOTE: Check key_path
-        for ref, val in zip(refs, values):
-            if isinstance(val, ContextData) and ref.key_path:
-                raise ValueError("Ref.key_path can only resolve leaf values.")
-
-        if apply_hook and self._hook:
-            result = await self._hook.on_async_extract(
-                ctx=self, refs=refs, values=values, **kwargs
-            )
-            values = result.values
-
-        values = tuple(
-            ContextView(self, ref.parts)
-            if isinstance(val, ContextData)
-            else ref._resolve(val)
+            else val
             for ref, val in zip(refs, values)
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
@@ -782,59 +619,19 @@ class Context(ContextElement):
 
     # --- Read Operations ---
     @overload
-    def get(self, ref: RefLike, *, apply_hook: bool = True) -> _T: ...
+    def get(self, ref: RefLike) -> _T: ...
     @overload
     def get(
-        self, ref: RefLike, default: _T2, *, apply_hook: bool = True
+        self, ref: RefLike, default: _T2
     ) -> Union[_T, _T2]: ...
     def get(
         self,
         ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
-        *,
-        apply_hook: bool = True,
     ) -> Union[_T, _T2]:
         ref = to_ref(ref)
         try:
-            return self.extract(ref, apply_hook=apply_hook)
-        except ContextPathError:
-            if default is _MISSING:
-                raise
-            return default
-
-    @overload
-    async def async_get(
-        self,
-        ref: RefLike,
-        *,
-        apply_hook: bool = True,
-    ) -> _T: ...
-    @overload
-    async def async_get(
-        self,
-        ref: RefLike,
-        default: _T2,
-        *,
-        apply_hook: bool = True,
-    ) -> Union[_T, _T2]: ...
-    async def async_get(
-        self,
-        ref: RefLike,
-        default: Union[_T2, _Missing] = _MISSING,
-        *,
-        apply_hook: bool = True,
-    ) -> Union[_T, _T2]:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "Context.async_get is deprecated and will be removed in slyme 0.2.0. "
-            "Use the synchronous get() instead.",
-            FutureWarning,
-            2,
-        )
-        ref = to_ref(ref)
-        try:
-            return await self.async_extract(ref, apply_hook=apply_hook)
+            return self.extract(ref)
         except ContextPathError:
             if default is _MISSING:
                 raise
@@ -842,11 +639,6 @@ class Context(ContextElement):
 
     def exists(self, ref: RefLike) -> bool:
         ref = to_ref(ref)
-        if ref.key_path:
-            raise ValueError(
-                f"Ref.key_path must be empty for existence check (found {ref.key_path!r}). "
-                "Use get() to check leaf value existence."
-            )
         try:
             self._resolve(ref.parts)
             return True
@@ -857,11 +649,6 @@ class Context(ContextElement):
         if ref is None:
             return self._root.keys()
         ref = to_ref(ref)
-        if ref.key_path:
-            raise ValueError(
-                f"Ref.key_path must be empty for listing keys (found {ref.key_path!r}). "
-                "Context keys operation is structural and does not support leaf navigation."
-            )
         element = self._resolve(ref.parts)
         if isinstance(element, ContextData):
             return element.keys()
@@ -871,35 +658,14 @@ class Context(ContextElement):
         if ref is None:
             return self._root
         ref = to_ref(ref)
-        if ref.key_path:
-            raise ValueError(
-                f"Ref.key_path must be empty for converting to ContextData (found {ref.key_path!r}). "
-                "ContextData conversion is structural and does not support leaf navigation."
-            )
         val = self._resolve(ref.parts)
         if isinstance(val, ContextData):
             return val
         raise ContextPathError("Target is not a ContextData (container).")
 
-    def to_dict(
-        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
-    ) -> dict[str, Any]:
+    def to_dict(self, ref: Optional[RefLike] = None) -> dict[str, Any]:
         ref_tree = self._build_dict_ref_tree(ref)
-        return self.extract(ref_tree, apply_hook=apply_hook)
-
-    async def async_to_dict(
-        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
-    ) -> dict[str, Any]:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "Context.async_to_dict is deprecated and will be removed in slyme 0.2.0. "
-            "Use the synchronous to_dict() instead.",
-            FutureWarning,
-            2,
-        )
-        ref_tree = self._build_dict_ref_tree(ref)
-        return await self.async_extract(ref_tree, apply_hook=apply_hook)
+        return self.extract(ref_tree)
 
     def _resolve(self, parts: Iterable[str]) -> Any:
         current: Any = self._root
@@ -918,7 +684,6 @@ class Context(ContextElement):
         *,
         updates: Optional[Mapping[RefLike, Any]] = None,
         drops: Optional[Iterable[RefLike]] = None,
-        apply_hook: bool = True,
     ) -> None:
         """
         Apply a transaction-like set of modifications (updates and drops) atomically.
@@ -934,99 +699,26 @@ class Context(ContextElement):
 
         updates = {to_ref(k): v for k, v in updates.items()} if updates else {}
         drops = {to_ref(r) for r in drops} if drops else set()
-        # Validate Ref.key_path is empty for all mutation operations
-        invalid_updates = [r for r in updates if r.key_path]
-        invalid_drops = [r for r in drops if r.key_path]
-        if invalid_updates or invalid_drops:
-            raise ValueError(
-                f"Ref.key_path must be empty for mutation operations (found {invalid_updates!r} in updates "
-                f"and {invalid_drops!r} in drops). Mutation on a specific key path is ambiguous; operate "
-                "on the full path instead."
-            )
-
-        if apply_hook and self._hook:
-            result = self._hook.on_mutate(ctx=self, updates=updates, drops=drops)
-            updates, drops = result.updates, result.drops
-        raw_updates = {r.parts: v for r, v in updates.items()}
-        raw_drops = {r.parts for r in drops}
-
-        self._root.mutate(raw_updates, raw_drops)
-
-    async def async_mutate(
-        self,
-        *,
-        updates: Optional[Mapping[RefLike, Any]] = None,
-        drops: Optional[Iterable[RefLike]] = None,
-        apply_hook: bool = True,
-    ) -> None:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "Context.async_mutate is deprecated and will be removed in slyme 0.2.0. "
-            "Use the synchronous mutate() instead.",
-            FutureWarning,
-            2,
-        )
-        if not updates and not drops:
-            return None
-
-        updates = {to_ref(k): v for k, v in updates.items()} if updates else {}
-        drops = {to_ref(r) for r in drops} if drops else set()
-        # Validate Ref.key_path is empty for all mutation operations
-        invalid_updates = [r for r in updates if r.key_path]
-        invalid_drops = [r for r in drops if r.key_path]
-        if invalid_updates or invalid_drops:
-            raise ValueError(
-                f"Ref.key_path must be empty for mutation operations (found {invalid_updates!r} in updates "
-                f"and {invalid_drops!r} in drops). Mutation on a specific key path is ambiguous; operate "
-                "on the full path instead."
-            )
-
-        if apply_hook and self._hook:
-            result = await self._hook.on_async_mutate(
-                ctx=self, updates=updates, drops=drops
-            )
-            updates, drops = result.updates, result.drops
         raw_updates = {r.parts: v for r, v in updates.items()}
         raw_drops = {r.parts for r in drops}
 
         self._root.mutate(raw_updates, raw_drops)
 
     # --- Convenience Interfaces ---
-    def update(
-        self, updates: Mapping[RefLike, Any], *, apply_hook: bool = True
-    ) -> None:
+    def update(self, updates: Mapping[RefLike, Any]) -> None:
         """Batch update convenience interface."""
-        self.mutate(updates=updates, apply_hook=apply_hook)
+        self.mutate(updates=updates)
 
-    async def async_update(
-        self, updates: Mapping[RefLike, Any], *, apply_hook: bool = True
-    ) -> None:
-        await self.async_mutate(updates=updates, apply_hook=apply_hook)
-
-    def drop(self, refs: Iterable[RefLike], *, apply_hook: bool = True) -> None:
+    def drop(self, refs: Iterable[RefLike]) -> None:
         """Batch delete convenience interface."""
-        self.mutate(drops=refs, apply_hook=apply_hook)
+        self.mutate(drops=refs)
 
-    async def async_drop(
-        self, refs: Iterable[RefLike], *, apply_hook: bool = True
-    ) -> None:
-        await self.async_mutate(drops=refs, apply_hook=apply_hook)
-
-    def set(self, ref: RefLike, value: _T, *, apply_hook: bool = True) -> None:
+    def set(self, ref: RefLike, value: _T) -> None:
         """Single set convenience interface."""
         ref = to_ref(ref)
-        self.mutate(updates={ref: value}, apply_hook=apply_hook)
+        self.mutate(updates={ref: value})
 
-    async def async_set(
-        self, ref: RefLike, value: _T, *, apply_hook: bool = True
-    ) -> None:
-        ref = to_ref(ref)
-        await self.async_mutate(updates={ref: value}, apply_hook=apply_hook)
-
-    def update_tree(
-        self, ref_tree: Any, value_tree: Any, *, apply_hook: bool = True
-    ) -> None:
+    def update_tree(self, ref_tree: Any, value_tree: Any) -> None:
         """
         Recursively update the context using a structure of references (ref_tree)
         and a matching structure of values (value_tree).
@@ -1043,39 +735,14 @@ class Context(ContextElement):
             to_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
-        self.mutate(updates=updates, apply_hook=apply_hook)
+        self.mutate(updates=updates)
 
-    async def async_update_tree(
-        self, ref_tree: Any, value_tree: Any, *, apply_hook: bool = True
-    ) -> None:
-        """
-        Recursively update the context using a structure of references (ref_tree)
-        and a matching structure of values (value_tree).
-
-        Args:
-            ref_tree: A nested structure (list, tuple, dict, MappingProxyType) where
-                      leaves are references (Ref objects) that point to locations in the context.
-            value_tree: A nested structure matching the shape of ref_tree, containing
-                        the values to be updated at the corresponding references.
-
-        The context is updated in place and the method returns ``None``.
-        """
-        updates = {
-            to_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
-            for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
-        }
-        await self.async_mutate(updates=updates, apply_hook=apply_hook)
-
-    def delete(self, ref: RefLike, *, apply_hook: bool = True) -> None:
+    def delete(self, ref: RefLike) -> None:
         """Single delete convenience interface."""
         ref = to_ref(ref)
-        self.mutate(drops=[ref], apply_hook=apply_hook)
+        self.mutate(drops=[ref])
 
-    async def async_delete(self, ref: RefLike, *, apply_hook: bool = True) -> None:
-        ref = to_ref(ref)
-        await self.async_mutate(drops=[ref], apply_hook=apply_hook)
-
-    def clear(self, ref: RefLike, *, apply_hook: bool = True) -> None:
+    def clear(self, ref: RefLike) -> None:
         """
         Clear all contents under a reference but keep the path.
         Raises ContextPathError if the target is not a container (ContextData).
@@ -1089,23 +756,7 @@ class Context(ContextElement):
             )
 
         # 2. Update with empty ContextData
-        self.mutate(updates={ref: ContextData()}, apply_hook=apply_hook)
-
-    async def async_clear(self, ref: RefLike, *, apply_hook: bool = True) -> None:
-        """
-        Clear all contents under a reference but keep the path.
-        Raises ContextPathError if the target is not a container (ContextData).
-        """
-        ref = to_ref(ref)
-        # 1. Validate target is a container
-        val = self._resolve(ref.parts)
-        if not isinstance(val, ContextData):
-            raise ContextPathError(
-                f"Cannot clear '{ref.path}': not a container (ContextData)."
-            )
-
-        # 2. Update with empty ContextData
-        await self.async_mutate(updates={ref: ContextData()}, apply_hook=apply_hook)
+        self.mutate(updates={ref: ContextData()})
 
 
 @dataclass(frozen=True, repr=False)
@@ -1123,7 +774,7 @@ class ContextView(ContextElement):
         ref = to_ref(ref)
         new_parts = self._parts + ref.parts
         new_path = ".".join(new_parts)
-        return Ref(new_path, key_path=ref.key_path, metadata=ref.metadata)
+        return Ref(new_path, metadata=ref.metadata)
 
     def _adjust_ref_tree(self, ref_tree: Any) -> Any:
         def adjust(obj):
@@ -1133,53 +784,15 @@ class ContextView(ContextElement):
 
         return CTX_EVAL_ENGINE.map(adjust, ref_tree)
 
-    def extract(self, ref_tree: Any, *, apply_hook: bool = True, **kwargs) -> Any:
-        return self._context.extract(
-            self._adjust_ref_tree(ref_tree), apply_hook=apply_hook, **kwargs
-        )
-
-    async def async_extract(
-        self, ref_tree: Any, *, apply_hook: bool = True, **kwargs
-    ) -> Any:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "ContextView.async_extract is deprecated and will be removed in slyme 0.2.0. "
-            "Use the synchronous extract() instead.",
-            FutureWarning,
-            2,
-        )
-        return await self._context.async_extract(
-            self._adjust_ref_tree(ref_tree), apply_hook=apply_hook, **kwargs
-        )
+    def extract(self, ref_tree: Any) -> Any:
+        return self._context.extract(self._adjust_ref_tree(ref_tree))
 
     def get(
         self,
         ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
-        *,
-        apply_hook: bool = True,
     ) -> Union[_T, _T2]:
-        return self._context.get(self._adjust_ref(ref), default, apply_hook=apply_hook)
-
-    async def async_get(
-        self,
-        ref: RefLike,
-        default: Union[_T2, _Missing] = _MISSING,
-        *,
-        apply_hook: bool = True,
-    ) -> Union[_T, _T2]:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "ContextView.async_get is deprecated and will be removed in slyme 0.2.0. "
-            "Use the synchronous get() instead.",
-            FutureWarning,
-            2,
-        )
-        return await self._context.async_get(
-            self._adjust_ref(ref), default, apply_hook=apply_hook
-        )
+        return self._context.get(self._adjust_ref(ref), default)
 
     def exists(self, ref: RefLike) -> bool:
         return self._context.exists(self._adjust_ref(ref))
@@ -1190,25 +803,8 @@ class ContextView(ContextElement):
     def to_context_data(self, ref: Optional[RefLike] = None) -> ContextData:
         return self._context.to_context_data(self._adjust_ref(ref))
 
-    def to_dict(
-        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
-    ) -> dict[str, Any]:
-        return self._context.to_dict(self._adjust_ref(ref), apply_hook=apply_hook)
-
-    async def async_to_dict(
-        self, ref: Optional[RefLike] = None, *, apply_hook: bool = True
-    ) -> dict[str, Any]:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "ContextView.async_to_dict is deprecated and will be removed in slyme 0.2.0. "
-            "Use the synchronous to_dict() instead.",
-            FutureWarning,
-            2,
-        )
-        return await self._context.async_to_dict(
-            self._adjust_ref(ref), apply_hook=apply_hook
-        )
+    def to_dict(self, ref: Optional[RefLike] = None) -> dict[str, Any]:
+        return self._context.to_dict(self._adjust_ref(ref))
 
 
 from .tree import CONTEXT_ENGINE, CTX_EVAL_ENGINE

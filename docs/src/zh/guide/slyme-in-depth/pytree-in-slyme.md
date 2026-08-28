@@ -24,10 +24,6 @@ Slyme 的 PyTree 不仅仅处理数据，它还自带了精确的路径追踪系
 * **`MappingKey(key)`**：代表字典中的键。
 * **`AttributeKey(name)`**：代表对象的属性名。
 
-::: warning 已弃用
-`CallKey`（`PyTreeKey` 的子类，用于函数调用路径）以及 `KeyPathExpr` / `P`（用于构建键路径的代理对象）自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。它们仅被已弃用的 `Ref.key_path` 所使用。请改用 [`@expression`](/zh/guide/essentials/node#at-expression) + [`Auto`](/zh/guide/essentials/node#spec) 来实现动态值解析。
-:::
-
 ## 实例隔离的引擎 (PyTreeEngine)
 
 与 JAX 采用全局单一注册表不同，Slyme 引入了 `PyTreeEngine` 类的概念。这使得注册行为是实例隔离的（Instance-isolated）。

@@ -26,10 +26,8 @@ from typing import (
     get_origin,
     get_args,
     Mapping,
-    Sequence,
     TypeVar,
 )
-from collections import ChainMap
 from slyme.utils.exception import enrich_exception
 from slyme.context import Context, RefFactory
 from slyme.context.tree import CTX_EVAL_ENGINE
@@ -239,31 +237,3 @@ def process_kwargs(
         final_kwargs[name] = value
 
     return final_kwargs
-
-
-def resolve_arguments(
-    specs: Mapping[str, Spec],
-    scopes: Sequence[Mapping[str, Any]],
-    overrides: Mapping[str, Any],
-) -> dict[str, Any]:
-    """
-    Resolve arguments from scopes and overrides based on specs.
-
-    .. deprecated:: 0.1.1
-        Positional scopes are deprecated and will be removed in 0.2.0.
-        Use ``RefFactory`` (``R.x.y.z``) in keyword arguments instead.
-    """
-    if scopes:
-        from slyme.utils.warning import warning_once
-
-        warning_once(
-            "Node scope arguments are deprecated and will be removed in slyme 0.2.0. "
-            "Use RefFactory (R.x.y.z) in keyword arguments instead.",
-            FutureWarning,
-            3,
-        )
-    # 1. Create a unified lookup map: overrides > last scope > ... > first scope
-    # ChainMap looks up keys in the first mapping, then the second, and so on.
-    unified_map = ChainMap(overrides, *reversed(scopes))
-    # 2. Iterate through required parameters defined in the specs
-    return {name: unified_map[name] for name in specs if name in unified_map}

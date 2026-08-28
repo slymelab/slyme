@@ -14,7 +14,6 @@
 
 from .core import Context, Ref, RefFactory, R, RefLike, to_ref, Config as ContextConfig, DIFF_MISSING
 from .metadata import ARG, HELP, OUTPUT, TYPE, Arg
-from .hook import Hook, HookChain, ExtractResult, MutateResult
 
 __all__ = [
     "Context",
@@ -30,8 +29,4 @@ __all__ = [
     "HELP",
     "OUTPUT",
     "TYPE",
-    "Hook",
-    "HookChain",
-    "ExtractResult",
-    "MutateResult",
 ]

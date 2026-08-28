@@ -29,10 +29,6 @@ llm_api(responses=R.output.responses, prompts=format_article_prompts(articles=R.
 
 当创建 Node 时（@node / @expression / @wrapper），你传入匹配函数参数名的关键字参数 `**kwargs`。`process_kwargs` 函数会根据前一步生成的 `specs` 进行严格校验。它会抛出未知参数的异常（防止拼写错误），并为缺失的参数填充 `Spec` 中定义的默认值或调用 `default_factory`。
 
-::: warning 已弃用
-位置参数 Scope 字典注入（`my_node({"param": value})`）自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。请直接在关键字参数中使用 `R.x.y.z` 替代。
-:::
-
 ## 2. Node 自动求值 (Auto Eval)
 
 静态配置往往是不够的。在很多场景下，Node 所需的参数是动态的，比如依赖 Context 中上一步的计算结果，或者是某个延迟执行的表达式。Slyme 提供了自动求值（Auto Eval）机制，让 Node 可以在运行时透明地获取动态依赖。

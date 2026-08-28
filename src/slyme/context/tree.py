@@ -48,15 +48,13 @@ def _unflatten_context_data(children: Iterable[Any], aux: PyTreeAux) -> ContextD
 
 def _flatten_context(context: Context) -> tuple[Iterable[Any], PyTreeAux]:
     """Flatten Context -> (root_context_data, )."""
-    return (context._root,), PyTreeAux(
-        metadata={"hook": context._hook}, children_keys=(AttributeKey("_root"),)
-    )
+    return (context._root,), PyTreeAux(children_keys=(AttributeKey("_root"),))
 
 
 def _unflatten_context(children: Iterable[Any], aux: PyTreeAux) -> Context:
     """Unflatten Context."""
     (root,) = children
-    return Context._from_context_data(root, hook=aux.metadata["hook"])
+    return Context._from_context_data(root)
 
 
 CONTEXT_ENGINE.register(ContextData, _flatten_context_data, _unflatten_context_data)

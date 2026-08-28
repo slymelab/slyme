@@ -255,71 +255,6 @@ process_data(data={
 如果想深入了解 `Auto` 的工作原理，你可以参考[依赖注入](/zh/guide/slyme-in-depth/dependency-injection)章节。
 :::
 
-## 使用 Scope 来初始化 Node（已弃用）
-
-::: warning 已弃用
-向 Node 工厂函数传入位置参数 `dict`（Scope）的方式自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。请改用 [`RefFactory`](/zh/guide/essentials/context#reffactory)（`R.x.y.z`）在关键字参数中直接指定，代码更简洁、更显式。
-:::
-
-**旧范式 — 位置参数 Scope 字典（已弃用）：**
-
-Scope 是一个标准的 Python 字典，用于按名注入函数的参数。想象现在有很多 @node，它们都需要用到 `user_data` 这个自定义配置参数，正常情况下，你需要这样为他们赋值：
-
-```python
-user_data_ref = Ref("user.data")
-node1(user_data=user_data_ref)
-node2(user_data=user_data_ref)
-node3(user_data=user_data_ref)
-...
-```
-
-为了减少构建期的重复代码，Slyme 提供了 Scope 自动注入的功能，现在你可以直接使用一个 Scope 字典来初始化所有的 Node（字典的 key（str）对应的是函数的参数名称，value 对应的是具体构建期需要填入的值）：
-
-```python
-shared_scope = {"user_data": user_data_ref}
-node1(shared_scope)
-node2(shared_scope)
-node3(shared_scope)
-...
-```
-
-这在复杂 Node 结构下非常有用。在开发新的 Node 时，你可以参考已有的 Scope，采用同名的参数，这样实例化这个 Node 时可以直接传入 Scope 字典，即可自动绑定到对应的参数上。为了防止参数名冲突（比如两个 Node 都有 `value` 参数，但是他们的含义完全不同），Slyme 支持按优先级顺序进行查找：
-
-```python
-scope1 = {"value": Ref("value1")}
-scope2 = {"value": Ref("value2")}
-my_node(scope1, scope2, value=Ref("value3"))
-```
-
-优先级顺序是：关键字参数 > 最后的 Scope 位置参数 > ... > 第一个 Scope 位置参数，因此上面这个例子中，`value` 的参数解析优先级是 `Ref("value3")` > `Ref("value2")` > `Ref("value1")`，最终会使用 `Ref("value3")` 作为 `value` 的值。
-
-这样的分层设计使得 Node 的复用程度更高。比如对于 `create_dataset(dataset=...)` 的 @node，我们可以用 `train_scope` 和 `eval_scope` 来让同一个 `create_dataset` 函数按照配置分别实例化成一个创建训练集的 @node 和一个创建评测集的 @node，完全不需要修改 `create_dataset` 本身：
-
-```python
-common_scope = {"device": Ref("device"), "max_tokens": Ref("max_tokens")}
-train_scope = {"dataset": Ref("train.data")}
-eval_scope = {"dataset": Ref("eval.data")}
-
-create_train = create_dataset(common_scope, train_scope)
-create_eval = create_dataset(common_scope, eval_scope)
-```
-
-**新范式 — 在关键字参数中使用 `R`（RefFactory）：**
-
-```python
-from slyme.context import R
-
-# 直接在关键字参数中使用 R.x.y.z — 无需 Scope 字典
-create_train = create_dataset(
-    device=R.device, max_tokens=R.max_tokens, dataset=R.train.data
-)
-create_eval = create_dataset(
-    device=R.device, max_tokens=R.max_tokens, dataset=R.eval.data
-)
-```
-
-这种方式更加显式、类型安全且可读性更强。由于 `RefFactory` 会被透明地解析为 `Ref`，因此可以在任何需要 `Ref` 的地方使用。
-
 ## 动态修改 Node
 
 Slyme 中，Node（@node，@expression，@wrapper）在调用 `.prepare()` 之前是可以动态修改的。比如：
@@ -415,10 +350,6 @@ print(user_data)  # {'id': 1, 'name': 'Alice'}
 
 ::: info
 自动判断只检查函数本身是否由 `async def` 定义，不使用返回值类型提示。如果普通 `def` 函数返回 Awaitable，请显式使用 `@node(mode="async")`；`@expression` 和 `@wrapper` 也支持相同的 `mode` 参数。必要时也可用 `mode="sync"` 显式限定同步模式。
-:::
-
-::: warning 弃用说明
-`@async_node`、`@async_expression` 和 `@async_wrapper` 自 Slyme 0.1.1 起已弃用，并将在 0.2.0 中移除。请分别迁移到统一的 `@node`、`@expression` 和 `@wrapper`；普通 `def` 返回 Awaitable 的特殊情况使用 `mode="async"`。
 :::
 
 ## 内置通用节点 {#common-nodes}

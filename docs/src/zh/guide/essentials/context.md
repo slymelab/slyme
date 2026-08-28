@@ -39,47 +39,6 @@ name_ref = profile_ref.at("name")  # 等价于 Ref("user.profile.name")
 `Ref` 在内部会缓存哈希值和拆分后的路径片段（`parts`），因此在执行期频繁使用 `Ref` 进行查找时具有极高的性能。除此之外，`Ref` 还可以携带 `metadata` 等高级元数据，以支持命令行参数配置等功能。
 :::
 
-::: warning 已弃用
-`Ref` 的 `key_path` 参数自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。请改用 [`@expression`](/zh/guide/essentials/node#at-expression) + [`Auto`](/zh/guide/essentials/node#spec) 来实现动态值解析。详见下方 [Key Path](#key-path) 章节的迁移指南。
-:::
-
-### Key Path（已弃用） {#key-path}
-
-::: warning 已弃用
-`Ref.key_path` 以及 `slyme.utils.pytree` 中的 `CallKey`、`KeyPathExpr`、`P` 代理对象自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。请改用 [`@expression`](/zh/guide/essentials/node#at-expression) + [`Auto`](/zh/guide/essentials/node#spec) 来实现动态值解析。
-:::
-
-**旧范式（已弃用）：**
-
-```python
-from slyme.utils.pytree import P
-
-# 从 Context 中获取 model，再深入访问 model.config.hidden_size
-ctx.get(Ref("model", key_path=tuple(P.config.hidden_size)))
-```
-
-**新范式 — 使用 `@expression` + `Auto`：**
-
-```python
-from slyme.node import expression, node, Auto
-from slyme.context import Context, Ref
-
-@expression
-def get_hidden_size(ctx: Context, /, *, model: Auto[object]) -> int:
-    return model.config.hidden_size
-
-# 在需要 hidden_size 的 @node 中传入 expression：
-@node
-def my_node(ctx: Context, /, *, hidden_size: Auto[int]) -> Context:
-    # hidden_size 已经被解析为实际的 int 值
-    return ctx
-
-# 将它们组合起来：
-my_node(hidden_size=get_hidden_size(model=R.model))
-```
-
-这种方式让 Node 保持完全解耦 — Node 只需要声明它需要一个 `hidden_size` 参数，而无需关心这个值是如何计算得到的。
-
 ### RefFactory
 
 ::: tip 0.1.1 新增
@@ -275,33 +234,3 @@ print(diff.flatten())  # {'status': (<DiffMissing.MARK: 1>, 'active'), 'user.pro
 ```
 
 其中，`slyme.context.DIFF_MISSING` 表示缺失值。`diff.flatten()` 返回的字典中，tuple 的第一个元素是新值，第二个元素是旧值。这就意味着，`DIFF_MISSING` 出现在第一个位置，表示值被删除；出现在第二个位置，表示值被新增；否则，表示值被修改。
-
-## 异步支持（已弃用） {#async-support}
-
-::: warning 已弃用
-`Context` 和 `ContextView` 上的所有 `async_*` 方法自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除，包括 `async_get`、`async_extract`、`async_to_dict`、`async_mutate`、`async_update`、`async_drop`、`async_set`、`async_update_tree`、`async_delete` 和 `async_clear`。Context 本身是**本地存储且同步的** — 请直接使用对应的同步方法替代。
-:::
-
-**旧范式（已弃用）：**
-
-```python
-value = await ctx.async_get(Ref("path"))
-data = await ctx.async_to_dict()
-new_ctx = await ctx.async_mutate(updates={...}, drops=[...])
-```
-
-**新范式 — 统一使用同步方法：**
-
-```python
-value = ctx.get(R.path)
-data = ctx.to_dict()
-new_ctx = ctx.mutate(updates={...}, drops=[...])
-```
-
-这些同步方法可以在同步和异步 Node 中正常工作 — 无需 `await`。
-
-## Context Hook（已弃用）
-
-::: warning 已弃用
-`Hook`、`HookChain` 以及 `Context.__init__()` 的 `hook=` 参数自 slyme 0.1.1 起**已弃用**，并将在 0.2.0 中移除。它们目前仅为迁移而暂时保留，不应继续用于新代码。如果你需要数据转换或拦截功能，请改用 [`@wrapper`](/zh/guide/essentials/node#at-wrapper) 节点在 Node 层面拦截执行。
-:::

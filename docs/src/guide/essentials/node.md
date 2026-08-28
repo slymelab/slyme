@@ -255,71 +255,6 @@ At execution time, the `data` parameter annotated with `Auto` is automatically d
 If you want to understand how `Auto` works in depth, you can refer to the [Dependency Injection](/guide/slyme-in-depth/dependency-injection) chapter.
 :::
 
-## Using Scope to Initialize Node (Deprecated)
-
-::: warning Deprecated
-Passing positional `dict` arguments (Scope) to Node factories is **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Use [`RefFactory`](/guide/essentials/context#reffactory) (`R.x.y.z`) in keyword arguments instead for cleaner, more explicit code.
-:::
-
-**Old pattern — positional Scope dicts (deprecated):**
-
-Scope is a standard Python dictionary for injecting function parameters by name. Imagine many @nodes that all need the `user_data` custom configuration parameter. Normally, you would need to assign values like this:
-
-```python
-user_data_ref = Ref("user.data")
-node1(user_data=user_data_ref)
-node2(user_data=user_data_ref)
-node3(user_data=user_data_ref)
-...
-```
-
-To reduce repetitive code at build-time, Slyme provides Scope auto-injection. Now you can directly use a Scope dictionary to initialize all Nodes (dictionary key (`str`) corresponds to function parameter name, value corresponds to the specific value to fill in at build-time):
-
-```python
-shared_scope = {"user_data": user_data_ref}
-node1(shared_scope)
-node2(shared_scope)
-node3(shared_scope)
-...
-```
-
-This is very useful in complex Node structures. When developing new Nodes, you can reference existing Scopes and use parameter names consistently, so instantiating this Node can directly pass the Scope dictionary to automatically bind to corresponding parameters. To prevent parameter name conflicts (for example, two Nodes both have a `value` parameter but with completely different meanings), Slyme supports lookup by priority order:
-
-```python
-scope1 = {"value": Ref("value1")}
-scope2 = {"value": Ref("value2")}
-my_node(scope1, scope2, value=Ref("value3"))
-```
-
-The priority order is: keyword arguments > last Scope positional argument > ... > first Scope positional argument. Therefore, in the above example, the `value` parameter resolution priority is `Ref("value3")` > `Ref("value2")` > `Ref("value1")`, ultimately using `Ref("value3")` as the `value` parameter value.
-
-This layered design increases Node reusability. For example, for a @node `create_dataset(dataset=...)`, we can use `train_scope` and `eval_scope` to let the same `create_dataset` function instantiate into a training set @node and an evaluation set @node according to configuration, without modifying `create_dataset` itself at all:
-
-```python
-common_scope = {"device": Ref("device"), "max_tokens": Ref("max_tokens")}
-train_scope = {"dataset": Ref("train.data")}
-eval_scope = {"dataset": Ref("eval.data")}
-
-create_train = create_dataset(common_scope, train_scope)
-create_eval = create_dataset(common_scope, eval_scope)
-```
-
-**New pattern — use `R` (RefFactory) in keyword arguments:**
-
-```python
-from slyme.context import R
-
-# Use R.x.y.z directly in keyword arguments — no Scope dicts needed
-create_train = create_dataset(
-    device=R.device, max_tokens=R.max_tokens, dataset=R.train.data
-)
-create_eval = create_dataset(
-    device=R.device, max_tokens=R.max_tokens, dataset=R.eval.data
-)
-```
-
-This approach is more explicit, type-safe, and readable. Since `RefFactory` is resolved transparently to `Ref`, it works anywhere a `Ref` is expected.
-
 ## Dynamically Modifying Node
 
 In Slyme, Nodes (@node, @expression, @wrapper) can be dynamically modified before `.prepare()` is called. For example:
@@ -415,10 +350,6 @@ print(user_data)  # {'id': 1, 'name': 'Alice'}
 
 ::: info
 Automatic detection only checks whether the function itself was declared with `async def`; it does not use return type annotations. If a regular `def` returns an Awaitable, use `@node(mode="async")` explicitly. `@expression` and `@wrapper` support the same `mode` parameter. You can also use `mode="sync"` when an explicit synchronous constraint is useful.
-:::
-
-::: warning Deprecation
-`@async_node`, `@async_expression`, and `@async_wrapper` are deprecated since Slyme 0.1.1 and will be removed in 0.2.0. Migrate to the unified `@node`, `@expression`, and `@wrapper` decorators respectively; use `mode="async"` for the special case where a regular `def` returns an Awaitable.
 :::
 
 ## Built-in Common Nodes {#common-nodes}

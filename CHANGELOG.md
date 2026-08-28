@@ -8,6 +8,15 @@ breaking changes when they are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the legacy asynchronous decorator aliases; use `@node` and
+  `@wrapper`, which detect `async def` directly.
+- Removed positional Scope injection from Node factories.
+- Removed Context hooks and the asynchronous mirrors of locally synchronous
+  Context operations.
+- Removed `Ref.key_path` and its `CallKey`, `KeyPathExpr`, and `P` helpers.
+
 ## [0.1.1] - 2026-08-26
 
 ### Added
@@ -31,20 +40,6 @@ breaking changes when they are documented here.
   APIs.
 - Updated the documentation and examples to use `R`, `Arg`, and `Node.run()` as
   the recommended application-facing APIs.
-
-### Deprecated
-
-The following APIs are deprecated in 0.1.1 and scheduled for removal in 0.2.0:
-
-- `@async_node`, `@async_expression`, and `@async_wrapper`; use the unified
-  decorators instead.
-- Positional Scope dictionary injection; pass keyword arguments directly.
-- Context and ContextView `async_*` methods; Context storage is local and
-  synchronous.
-- Context hooks, `Hook`, and `HookChain`; use Node wrappers for execution
-  interception.
-- `Ref.key_path`, `CallKey`, `KeyPathExpr`, and `P`; use `@expression` and
-  `Auto` for dynamic value resolution.
 
 ### Fixed
 

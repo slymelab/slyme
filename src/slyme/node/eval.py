@@ -164,7 +164,7 @@ def ref_evaluator(ctx: Context, refs: Sequence[Ref]) -> Sequence[Any]:
 
 
 async def async_ref_evaluator(ctx: Context, refs: Sequence[Ref]) -> Sequence[Any]:
-    return await ctx.async_extract(refs)
+    return ctx.extract(refs)
 
 
 EVALUATOR_REGISTRY.register(

@@ -29,10 +29,6 @@ During decorator application, Slyme uses `inspect.signature` and `typing.get_typ
 
 When creating a Node (@node / @expression / @wrapper), you pass keyword arguments `**kwargs` matching the function's parameter names. The `process_kwargs` function performs strict validation based on the `specs` generated in the previous step. It throws exceptions for unknown parameters (preventing typos), and fills in default values or calls `default_factory` for missing parameters according to the `Spec` definition.
 
-::: warning Deprecated
-Positional Scope dict injection (`my_node({"param": value})`) is **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. Use keyword arguments directly with `R.x.y.z` instead.
-:::
-
 ## 2. Node Auto Evaluation (Auto Eval)
 
 Static configuration is often insufficient. In many scenarios, parameters needed by Nodes are dynamic, such as depending on the previous step's computation result in Context, or being a lazily executed expression. Slyme provides auto evaluation (Auto Eval) mechanism, allowing Nodes to transparently obtain dynamic dependencies at runtime.

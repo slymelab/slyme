@@ -24,10 +24,6 @@ Slyme's PyTree not only handles data, but also comes with a precise path trackin
 * **`MappingKey(key)`**: Represents the key in a dictionary.
 * **`AttributeKey(name)`**: Represents the attribute name of an object.
 
-::: warning Deprecated
-`CallKey` (a `PyTreeKey` subclass for function-call paths) and `KeyPathExpr` / `P` (the proxy object for building key paths) are **deprecated** since slyme 0.1.1 and will be removed in 0.2.0. They were only used by `Ref.key_path`, which is also deprecated. Use [`@expression`](/guide/essentials/node#at-expression) + [`Auto`](/guide/essentials/node#spec) for dynamic value resolution instead.
-:::
-
 ## Instance-Isolated Engine (PyTreeEngine)
 
 Unlike JAX which uses a global single registry, Slyme introduces the concept of `PyTreeEngine` class. This makes registration behavior instance-isolated.

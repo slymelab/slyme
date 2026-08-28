@@ -21,8 +21,6 @@ from .core import (
     wrapper,
     AsyncNode,
     AsyncWrapper,
-    async_node,
-    async_wrapper,
 )
 from .signature import spec, Auto, UNSET, UNDEFINED
 from .render import Config as RenderConfig
@@ -51,8 +49,6 @@ __all__ = [
     "wrapper",
     "AsyncNode",
     "AsyncWrapper",
-    "async_node",
-    "async_wrapper",
     "sequential_exec",
     "sequential",
     "async_sequential_exec",

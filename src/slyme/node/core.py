@@ -37,7 +37,6 @@ from typing import (
 )
 from typing_extensions import ParamSpec, Concatenate, Protocol, Self
 from slyme.utils.exception import enrich_exception
-from slyme.utils.warning import warning_once
 from slyme.context import Context, RefFactory, RefLike
 from .exception import (
     NodeTerminate,
@@ -49,7 +48,6 @@ from .signature import (
     Spec,
     process_kwargs,
     analyze_signature,
-    resolve_arguments,
     UNDEFINED,
 )
 
@@ -57,8 +55,6 @@ __all__ = [
     "ExecutionMode",
     "node",
     "wrapper",
-    "async_node",
-    "async_wrapper",
     "NodeElement",
     "Node",
     "NodeDef",
@@ -798,50 +794,9 @@ class NodeFactory(BaseFactory, Generic[_P, _R]):
         self._specs = specs
         self.__signature__ = signature
 
-    @overload
-    def __call__(
-        self,
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> NodeDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> NodeDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> NodeDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        scope3: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> NodeDef[_R]: ...
-    @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef[_R]: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef[_R]:
-        """
-        Create the node instance by resolving parameters from scopes and overrides.
-        """
-        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
-        # Process kwargs
+    def __call__(self, **kwargs: _P.kwargs) -> NodeDef[_R]:
         with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
+            final_kwargs = process_kwargs(self._specs, kwargs)
         # Note: wrappers are intentionally omitted to avoid parameter conflict.
         # Users should use .add_wrappers() explicitly.
         return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
@@ -859,50 +814,9 @@ class WrapperFactory(BaseFactory, Generic[_P]):
         self._specs = specs
         self.__signature__ = signature
 
-    @overload
-    def __call__(
-        self,
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> WrapperDef: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> WrapperDef: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> WrapperDef: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        scope3: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> WrapperDef: ...
-    @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> WrapperDef: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> WrapperDef:
-        """
-        Create the node instance by resolving parameters from scopes and overrides.
-        """
-        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
-        # Process kwargs
+    def __call__(self, **kwargs: _P.kwargs) -> WrapperDef:
         with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
+            final_kwargs = process_kwargs(self._specs, kwargs)
         return WrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
@@ -918,50 +832,9 @@ class AsyncNodeFactory(BaseFactory, Generic[_P, _R]):
         self._specs = specs
         self.__signature__ = signature
 
-    @overload
-    def __call__(
-        self,
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        scope3: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef[_R]: ...
-    @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef[_R]: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef[_R]:
-        """
-        Create the node instance by resolving parameters from scopes and overrides.
-        """
-        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
-        # Process kwargs
+    def __call__(self, **kwargs: _P.kwargs) -> AsyncNodeDef[_R]:
         with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
+            final_kwargs = process_kwargs(self._specs, kwargs)
         # Note: wrappers are intentionally omitted to avoid parameter conflict.
         # Users should use .add_wrappers() explicitly.
         return AsyncNodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
@@ -979,50 +852,9 @@ class AsyncWrapperFactory(BaseFactory, Generic[_P]):
         self._specs = specs
         self.__signature__ = signature
 
-    @overload
-    def __call__(
-        self,
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncWrapperDef: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncWrapperDef: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncWrapperDef: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        scope3: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncWrapperDef: ...
-    @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncWrapperDef: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncWrapperDef:
-        """
-        Create the node instance by resolving parameters from scopes and overrides.
-        """
-        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
-        # Process kwargs
+    def __call__(self, **kwargs: _P.kwargs) -> AsyncWrapperDef:
         with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
+            final_kwargs = process_kwargs(self._specs, kwargs)
         return AsyncWrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
@@ -1263,59 +1095,6 @@ def wrapper(
             _dispatch_wrapper, mode=mode, resolve_type_hints=resolve_type_hints
         )
     return _dispatch_wrapper(func, mode=mode, resolve_type_hints=resolve_type_hints)
-
-
-def _warn_deprecated_async_decorator(old_name: str, new_name: str) -> None:
-    warning_once(
-        f"@{old_name} is deprecated and will be removed in slyme 0.2.0; "
-        f"use @{new_name} or @{new_name}(mode='async') instead.",
-        FutureWarning,
-        stacklevel=3,
-    )
-
-
-@overload
-def async_node(
-    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
-) -> Callable[[AsyncNodeFunc[_P, _R]], AsyncNodeFactory[_P, _R]]: ...
-@overload
-def async_node(
-    func: AsyncNodeFunc[_P, _R], /, *, resolve_type_hints: bool = True
-) -> AsyncNodeFactory[_P, _R]: ...
-def async_node(
-    func: Union[AsyncNodeFunc[_P, _R], _Missing] = _MISSING,
-    /,
-    *,
-    resolve_type_hints: bool = True,
-) -> Any:
-    """Deprecated alias scheduled for removal in 0.2.0.
-
-    Use ``node`` or ``node(mode="async")`` instead.
-    """
-    _warn_deprecated_async_decorator("async_node", "node")
-    return node(func, mode="async", resolve_type_hints=resolve_type_hints)
-
-
-@overload
-def async_wrapper(
-    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
-) -> Callable[[AsyncWrapperFunc[_P]], AsyncWrapperFactory[_P]]: ...
-@overload
-def async_wrapper(
-    func: AsyncWrapperFunc[_P], /, *, resolve_type_hints: bool = True
-) -> AsyncWrapperFactory[_P]: ...
-def async_wrapper(
-    func: Union[AsyncWrapperFunc[_P], _Missing] = _MISSING,
-    /,
-    *,
-    resolve_type_hints: bool = True,
-) -> Any:
-    """Deprecated alias scheduled for removal in 0.2.0.
-
-    Use ``wrapper`` or ``wrapper(mode="async")`` instead.
-    """
-    _warn_deprecated_async_decorator("async_wrapper", "wrapper")
-    return wrapper(func, mode="async", resolve_type_hints=resolve_type_hints)
 
 
 from .tree import NODE_ENGINE, NODE_PREPARE_ENGINE
