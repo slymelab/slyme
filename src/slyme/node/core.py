@@ -18,7 +18,6 @@ Core node module, consolidating base definitions and functional APIs.
 
 import types
 import inspect
-from abc import ABC, abstractmethod
 from enum import Enum
 from functools import partial, update_wrapper
 from typing import (
@@ -37,7 +36,7 @@ from typing import (
 )
 from typing_extensions import ParamSpec, Concatenate, Protocol, Self
 from slyme.utils.exception import enrich_exception
-from slyme.context import Context, RefFactory, RefLike
+from slyme.context import Context, RefLike
 from .exception import (
     NodeTerminate,
     NodeExceptionRecord,
@@ -57,17 +56,9 @@ __all__ = [
     "wrapper",
     "NodeElement",
     "Node",
-    "NodeDef",
-    "NodeExec",
     "Wrapper",
-    "WrapperDef",
-    "WrapperExec",
     "AsyncNode",
-    "AsyncNodeDef",
-    "AsyncNodeExec",
     "AsyncWrapper",
-    "AsyncWrapperDef",
-    "AsyncWrapperExec",
     "NODE_ENGINE",
 ]
 
@@ -93,11 +84,9 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
-def _prepare_map(x: Any) -> Any:
-    """Leaf transform for :func:`NODE_PREPARE_ENGINE.map`. Normalizes RefFactory→Ref."""
-    if isinstance(x, RefFactory):
-        return x()
-    return x
+def _snapshot_kwargs(kwargs: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Freeze built-in containers without traversing Node-related objects."""
+    return NODE_SNAPSHOT_ENGINE.map(lambda x: x, dict(kwargs))
 
 
 def _prepare_eval(
@@ -141,19 +130,11 @@ def _validate_kwargs(specs: Mapping[str, Spec], kwargs: Mapping[str, Any]) -> No
         raise ValueError(f"Missing required parameter(s): {undefined_args}.")
 
 
-class _DefMixin:
-    """
-    Mixin for mutable definition classes.
-    """
+class _MutableMixin:
+    """Controlled mutation for Node and Wrapper build parameters."""
 
     _specs: Mapping[str, Spec]
     _kwargs: dict[str, Any]
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        raise TypeError(
-            f"{type(self).__name__} is a definition and not callable. "
-            f"Please call `.prepare()` to obtain an Exec instance first."
-        )
 
     def __setitem__(self, key: str, value: Any) -> None:
         if key not in self._specs:
@@ -181,41 +162,13 @@ class _DefMixin:
         )
 
 
-class _ExecMixin:
-    """
-    Mixin for immutable execution classes.
-    """
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        raise TypeError(
-            f"{type(self).__name__} is immutable and does not support item assignment."
-        )
-
-    def __delattr__(self, name: str) -> None:
-        raise TypeError(f"{type(self).__name__} is immutable.")
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise TypeError(f"{type(self).__name__} is immutable.")
-
-
 # Node Family
-class NodeElement(ABC):
-    """
-    Base class for all node-related entities.
-    Abstract definition that separates API from implementation.
-    """
+class NodeElement:
+    """Base class for node-related graph elements."""
 
     _func: Callable
     _specs: Mapping[str, Spec]
     _kwargs: Mapping[str, Any]
-
-    @abstractmethod
-    def prepare(self) -> "NodeElement":
-        """
-        Prepare the node for execution.
-        Converts the Definition structure into an Execution structure.
-        """
-        pass
 
     @property
     def func(self) -> Callable:
@@ -248,58 +201,8 @@ class BaseNode(NodeElement):
     pass
 
 
-class Node(BaseNode, Generic[_R]):
-    """
-    Abstract base class for NodeDef and NodeExec.
-    """
-
-    _func: NodeFunc
-    wrappers: Sequence["Wrapper"]  # Changed: Union[...] -> Sequence
-
-    @abstractmethod
-    def __call__(self, ctx: Context) -> _R:
-        pass
-
-    def run(
-        self,
-        context: Optional[Context] = None,
-        /,
-        *,
-        inputs: Optional[Mapping[RefLike, Any]] = None,
-        outputs: Any = None,
-        return_context: bool = False,
-        use_argparse: bool = False,
-        cli_args: Optional[Sequence[str]] = None,
-    ) -> Any:
-        """Prepare inputs, execute this Node, and optionally extract outputs."""
-        prepared = self.prepare()
-        if prepared is not self:
-            return prepared.run(
-                context,
-                inputs=inputs,
-                outputs=outputs,
-                return_context=return_context,
-                use_argparse=use_argparse,
-                cli_args=cli_args,
-            )
-
-        from .runner import run_node
-
-        return run_node(
-            self,
-            context,
-            inputs=inputs,
-            outputs=outputs,
-            return_context=return_context,
-            use_argparse=use_argparse,
-            cli_args=cli_args,
-        )
-
-
-class NodeDef(_DefMixin, Node[_R]):
-    """
-    Mutable definition of a Node. Allows modification during build time.
-    """
+class Node(_MutableMixin, BaseNode, Generic[_R]):
+    """Mutable synchronous Node executed from a call-local snapshot."""
 
     _kwargs: dict[str, Any]
     wrappers: list["Wrapper"]
@@ -322,102 +225,40 @@ class NodeDef(_DefMixin, Node[_R]):
         self.wrappers.extend(wrappers)
         return self
 
-    def prepare(self) -> "NodeExec[_R]":
-        # Use the specialized NODE_PREPARE_PYTREE_ENGINE to perform a deep transform
-        # of the structure (List -> Tuple, Dict -> MappingProxy, Def -> Exec).
-        # We map strict identity because the transformation happens in the 'unflatten' phase
-        # of the registered types in NODE_PREPARE_PYTREE_ENGINE.
-        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "wrappers":
-            object.__setattr__(self, name, value)
-        else:
-            super().__setattr__(name, value)
-
-
-class NodeExec(_ExecMixin, Node[_R]):
-    """
-    Immutable execution version of a Node.
-    """
-
-    _prepared_func: Callable[[Context], _R]
-    wrappers: tuple["Wrapper", ...]
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: NodeFunc,
-        specs: Mapping[str, Spec],
-        wrappers: Iterable["Wrapper"],
-        kwargs: Mapping[str, Any],
-    ):
-        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
-            _validate_kwargs(specs, kwargs)
-
-        wrappers = tuple(wrappers)
-        if not isinstance(kwargs, types.MappingProxyType):
-            kwargs = types.MappingProxyType(kwargs)
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "wrappers", wrappers)
-        object.__setattr__(self, "_kwargs", kwargs)
-        # --- Composition Logic (Onion Model) ---
-        # 1. Inner Core: Bind kwargs to the user function.
-        # Signature: (Context) -> _R
-        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
-
-        if not eval_kwargs:
-            chain: Callable[[Context], _R] = partial(func, **raw_kwargs)
-        else:
-            eval_plan = prepare_eval_plan(eval_kwargs)
-
-            def chain(ctx: Context) -> _R:
-                return func(ctx, **raw_kwargs, **execute_eval_plan(ctx, eval_plan))
-
-        # 2. Build the middleware chain.
-        # Wrappers are applied from inside out (reversed order of list).
-        for wrapper in reversed(wrappers):
-            # wrapper is WrapperExec which is callable: (ctx, wrapped, call_next) -> Any
-            # We partially apply `wrapped` (self) and `call_next` (current chain head)
-            # to create the new chain head: (Context) -> _R
-            chain = partial(wrapper, wrapped=self, call_next=chain)
-        object.__setattr__(self, "_prepared_func", chain)
-
-    def prepare(self) -> Self:
-        return self
-
     def __call__(self, ctx: Context) -> _R:
         try:
-            # Execute the pre-composed chain
-            return self._prepared_func(ctx)
-        # Node Interrupts
+            kwargs = _snapshot_kwargs(self._kwargs)
+            wrappers = tuple(self.wrappers)
+            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+                _validate_kwargs(self._specs, kwargs)
+            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+            if not eval_kwargs:
+                chain: Callable[[Context], _R] = partial(
+                    self._func, **raw_kwargs
+                )
+            else:
+                eval_plan = prepare_eval_plan(eval_kwargs)
+
+                def chain(call_ctx: Context) -> _R:
+                    return self._func(
+                        call_ctx,
+                        **raw_kwargs,
+                        **execute_eval_plan(call_ctx, eval_plan),
+                    )
+
+            for wrapper_obj in reversed(wrappers):
+                chain = partial(wrapper_obj, wrapped=self, call_next=chain)
+            return chain(ctx)
         except NodeTerminate as e:
             if e.source_node is None:
                 e.source_node = self
             raise
-        # Direct Node Exceptions
         except NodeException:
             raise
-        # General Exceptions
         except Exception as e:
             raise NodeExceptionRecord(exception_node=self, exception=e) from e
 
-
-class AsyncNode(BaseNode, Generic[_R]):
-    """
-    Abstract base class for AsyncNodeDef and AsyncNodeExec.
-    """
-
-    _func: AsyncNodeFunc
-    wrappers: Sequence["AsyncWrapper"]
-
-    @abstractmethod
-    async def __call__(self, ctx: Context) -> _R:
-        pass
-
-    async def run(
+    def run(
         self,
         context: Optional[Context] = None,
         /,
@@ -428,21 +269,10 @@ class AsyncNode(BaseNode, Generic[_R]):
         use_argparse: bool = False,
         cli_args: Optional[Sequence[str]] = None,
     ) -> Any:
-        """Prepare inputs, execute this async Node, and optionally extract outputs."""
-        prepared = self.prepare()
-        if prepared is not self:
-            return await prepared.run(
-                context,
-                inputs=inputs,
-                outputs=outputs,
-                return_context=return_context,
-                use_argparse=use_argparse,
-                cli_args=cli_args,
-            )
+        """Execute this Node and optionally extract outputs."""
+        from .runner import run_node
 
-        from .runner import run_async_node
-
-        return await run_async_node(
+        return run_node(
             self,
             context,
             inputs=inputs,
@@ -452,11 +282,15 @@ class AsyncNode(BaseNode, Generic[_R]):
             cli_args=cli_args,
         )
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "wrappers":
+            object.__setattr__(self, name, value)
+        else:
+            super().__setattr__(name, value)
 
-class AsyncNodeDef(_DefMixin, AsyncNode[_R]):
-    """
-    Mutable definition of an AsyncNode.
-    """
+
+class AsyncNode(_MutableMixin, BaseNode, Generic[_R]):
+    """Mutable asynchronous Node executed from a call-local snapshot."""
 
     _kwargs: dict[str, Any]
     wrappers: list["AsyncWrapper"]
@@ -479,66 +313,30 @@ class AsyncNodeDef(_DefMixin, AsyncNode[_R]):
         self.wrappers.extend(wrappers)
         return self
 
-    def prepare(self) -> "AsyncNodeExec[_R]":
-        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "wrappers":
-            object.__setattr__(self, name, value)
-        else:
-            super().__setattr__(name, value)
-
-
-class AsyncNodeExec(_ExecMixin, AsyncNode[_R]):
-    """
-    Immutable execution version of an AsyncNode.
-    """
-
-    _prepared_func: Callable[[Context], Awaitable[_R]]
-    wrappers: tuple["AsyncWrapper", ...]
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: AsyncNodeFunc,
-        specs: Mapping[str, Spec],
-        wrappers: Iterable["AsyncWrapper"],
-        kwargs: Mapping[str, Any],
-    ):
-        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
-            _validate_kwargs(specs, kwargs)
-
-        wrappers = tuple(wrappers)
-        if not isinstance(kwargs, types.MappingProxyType):
-            kwargs = types.MappingProxyType(kwargs)
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "wrappers", wrappers)
-        object.__setattr__(self, "_kwargs", kwargs)
-
-        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
-
-        if not eval_kwargs:
-            chain = partial(func, **raw_kwargs)
-        else:
-            eval_plan = prepare_eval_plan(eval_kwargs)
-
-            async def chain(ctx: Context) -> _R:
-                return await func(
-                    ctx, **raw_kwargs, **await async_execute_eval_plan(ctx, eval_plan)
-                )
-
-        for wrapper in reversed(wrappers):
-            chain = partial(wrapper, wrapped=self, call_next=chain)
-        object.__setattr__(self, "_prepared_func", chain)
-
-    def prepare(self) -> Self:
-        return self
-
     async def __call__(self, ctx: Context) -> _R:
         try:
-            return await self._prepared_func(ctx)
+            kwargs = _snapshot_kwargs(self._kwargs)
+            wrappers = tuple(self.wrappers)
+            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+                _validate_kwargs(self._specs, kwargs)
+            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+            if not eval_kwargs:
+                chain: Callable[[Context], Awaitable[_R]] = partial(
+                    self._func, **raw_kwargs
+                )
+            else:
+                eval_plan = prepare_eval_plan(eval_kwargs)
+
+                async def chain(call_ctx: Context) -> _R:
+                    return await self._func(
+                        call_ctx,
+                        **raw_kwargs,
+                        **await async_execute_eval_plan(call_ctx, eval_plan),
+                    )
+
+            for wrapper_obj in reversed(wrappers):
+                chain = partial(wrapper_obj, wrapped=self, call_next=chain)
+            return await chain(ctx)
         except NodeTerminate as e:
             if e.source_node is None:
                 e.source_node = self
@@ -548,32 +346,43 @@ class AsyncNodeExec(_ExecMixin, AsyncNode[_R]):
         except Exception as e:
             raise NodeExceptionRecord(exception_node=self, exception=e) from e
 
+    async def run(
+        self,
+        context: Optional[Context] = None,
+        /,
+        *,
+        inputs: Optional[Mapping[RefLike, Any]] = None,
+        outputs: Any = None,
+        return_context: bool = False,
+        use_argparse: bool = False,
+        cli_args: Optional[Sequence[str]] = None,
+    ) -> Any:
+        """Execute this async Node and optionally extract outputs."""
+        from .runner import run_async_node
+
+        return await run_async_node(
+            self,
+            context,
+            inputs=inputs,
+            outputs=outputs,
+            return_context=return_context,
+            use_argparse=use_argparse,
+            cli_args=cli_args,
+        )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "wrappers":
+            object.__setattr__(self, name, value)
+        else:
+            super().__setattr__(name, value)
+
 
 class BaseWrapper(NodeElement):
     pass
 
 
-class Wrapper(BaseWrapper):
-    """
-    Abstract base class for WrapperDef and WrapperExec.
-    """
-
-    _func: WrapperFunc
-
-    @abstractmethod
-    def __call__(
-        self,
-        ctx: Context,
-        wrapped: Node[Any],
-        call_next: Callable[[Context], Any],
-    ) -> Any:
-        pass
-
-
-class WrapperDef(_DefMixin, Wrapper):
-    """
-    Mutable definition of a Wrapper.
-    """
+class Wrapper(_MutableMixin, BaseWrapper):
+    """Mutable synchronous Wrapper executed from a call-local snapshot."""
 
     _kwargs: dict[str, Any]  # Override: Mapping -> dict
 
@@ -589,63 +398,6 @@ class WrapperDef(_DefMixin, Wrapper):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-    def prepare(self) -> "WrapperExec":
-        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
-
-
-class WrapperExec(_ExecMixin, Wrapper):
-    """
-    Immutable execution version of a Wrapper.
-    """
-
-    # composed_func signature: (ctx, wrapped, call_next) -> Any
-    _prepared_func: Callable[
-        [Context, Node[Any], Callable[[Context], Any]],
-        Any,
-    ]
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: WrapperFunc,
-        specs: Mapping[str, Spec],
-        kwargs: Mapping[str, Any],
-    ):
-        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
-            _validate_kwargs(specs, kwargs)
-
-        if not isinstance(kwargs, types.MappingProxyType):
-            kwargs = types.MappingProxyType(kwargs)
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
-        # Optimization: Pre-bind kwargs using partial
-        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
-
-        if not eval_kwargs:
-            prepared_func = partial(func, **raw_kwargs)
-        else:
-            eval_plan = prepare_eval_plan(eval_kwargs)
-
-            def prepared_func(
-                ctx: Context,
-                wrapped: Node[Any],
-                call_next: Callable[[Context], Any],
-            ) -> Any:
-                return func(
-                    ctx,
-                    wrapped,
-                    call_next,
-                    **raw_kwargs,
-                    **execute_eval_plan(ctx, eval_plan),
-                )
-
-        object.__setattr__(self, "_prepared_func", prepared_func)
-
-    def prepare(self) -> Self:
-        return self
-
     def __call__(
         self,
         ctx: Context,
@@ -653,7 +405,15 @@ class WrapperExec(_ExecMixin, Wrapper):
         call_next: Callable[[Context], Any],
     ) -> Any:
         try:
-            return self._prepared_func(ctx, wrapped, call_next)
+            kwargs = _snapshot_kwargs(self._kwargs)
+            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+                _validate_kwargs(self._specs, kwargs)
+            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+            if eval_kwargs:
+                raw_kwargs.update(
+                    execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs))
+                )
+            return self._func(ctx, wrapped, call_next, **raw_kwargs)
         except NodeException:
             raise
         except Exception as e:
@@ -662,27 +422,8 @@ class WrapperExec(_ExecMixin, Wrapper):
             ) from e
 
 
-class AsyncWrapper(BaseWrapper):
-    """
-    Abstract base class for AsyncWrapperDef and AsyncWrapperExec.
-    """
-
-    _func: AsyncWrapperFunc
-
-    @abstractmethod
-    async def __call__(
-        self,
-        ctx: Context,
-        wrapped: AsyncNode[Any],
-        call_next: Callable[[Context], Awaitable[Any]],
-    ) -> Any:
-        pass
-
-
-class AsyncWrapperDef(_DefMixin, AsyncWrapper):
-    """
-    Mutable definition of an AsyncWrapper.
-    """
+class AsyncWrapper(_MutableMixin, BaseWrapper):
+    """Mutable asynchronous Wrapper executed from a call-local snapshot."""
 
     _kwargs: dict[str, Any]
 
@@ -698,62 +439,6 @@ class AsyncWrapperDef(_DefMixin, AsyncWrapper):
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_kwargs", kwargs)
 
-    def prepare(self) -> "AsyncWrapperExec":
-        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
-
-
-class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
-    """
-    Immutable execution version of an AsyncWrapper.
-    """
-
-    _prepared_func: Callable[
-        [Context, AsyncNode[Any], Callable[[Context], Awaitable[Any]]],
-        Awaitable[Any],
-    ]
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: AsyncWrapperFunc,
-        specs: Mapping[str, Spec],
-        kwargs: Mapping[str, Any],
-    ):
-        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
-            _validate_kwargs(specs, kwargs)
-
-        if not isinstance(kwargs, types.MappingProxyType):
-            kwargs = types.MappingProxyType(kwargs)
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
-
-        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
-
-        if not eval_kwargs:
-            prepared_func = partial(func, **raw_kwargs)
-        else:
-            eval_plan = prepare_eval_plan(eval_kwargs)
-
-            async def prepared_func(
-                ctx: Context,
-                wrapped: AsyncNode[Any],
-                call_next: Callable[[Context], Awaitable[Any]],
-            ) -> Any:
-                return await func(
-                    ctx,
-                    wrapped,
-                    call_next,
-                    **raw_kwargs,
-                    **await async_execute_eval_plan(ctx, eval_plan),
-                )
-
-        object.__setattr__(self, "_prepared_func", prepared_func)
-
-    def prepare(self) -> Self:
-        return self
-
     async def __call__(
         self,
         ctx: Context,
@@ -761,7 +446,17 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
         call_next: Callable[[Context], Awaitable[Any]],
     ) -> Any:
         try:
-            return await self._prepared_func(ctx, wrapped, call_next)
+            kwargs = _snapshot_kwargs(self._kwargs)
+            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+                _validate_kwargs(self._specs, kwargs)
+            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+            if eval_kwargs:
+                raw_kwargs.update(
+                    await async_execute_eval_plan(
+                        ctx, prepare_eval_plan(eval_kwargs)
+                    )
+                )
+            return await self._func(ctx, wrapped, call_next, **raw_kwargs)
         except NodeException:
             raise
         except Exception as e:
@@ -794,12 +489,12 @@ class NodeFactory(BaseFactory, Generic[_P, _R]):
         self._specs = specs
         self.__signature__ = signature
 
-    def __call__(self, **kwargs: _P.kwargs) -> NodeDef[_R]:
+    def __call__(self, **kwargs: _P.kwargs) -> Node[_R]:
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
         # Note: wrappers are intentionally omitted to avoid parameter conflict.
         # Users should use .add_wrappers() explicitly.
-        return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
+        return Node(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
 class WrapperFactory(BaseFactory, Generic[_P]):
@@ -814,10 +509,10 @@ class WrapperFactory(BaseFactory, Generic[_P]):
         self._specs = specs
         self.__signature__ = signature
 
-    def __call__(self, **kwargs: _P.kwargs) -> WrapperDef:
+    def __call__(self, **kwargs: _P.kwargs) -> Wrapper:
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
-        return WrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
+        return Wrapper(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
 class AsyncNodeFactory(BaseFactory, Generic[_P, _R]):
@@ -832,12 +527,12 @@ class AsyncNodeFactory(BaseFactory, Generic[_P, _R]):
         self._specs = specs
         self.__signature__ = signature
 
-    def __call__(self, **kwargs: _P.kwargs) -> AsyncNodeDef[_R]:
+    def __call__(self, **kwargs: _P.kwargs) -> AsyncNode[_R]:
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
         # Note: wrappers are intentionally omitted to avoid parameter conflict.
         # Users should use .add_wrappers() explicitly.
-        return AsyncNodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
+        return AsyncNode(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
 class AsyncWrapperFactory(BaseFactory, Generic[_P]):
@@ -852,10 +547,10 @@ class AsyncWrapperFactory(BaseFactory, Generic[_P]):
         self._specs = specs
         self.__signature__ = signature
 
-    def __call__(self, **kwargs: _P.kwargs) -> AsyncWrapperDef:
+    def __call__(self, **kwargs: _P.kwargs) -> AsyncWrapper:
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
-        return AsyncWrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
+        return AsyncWrapper(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
 def _node(
@@ -1097,6 +792,6 @@ def wrapper(
     return _dispatch_wrapper(func, mode=mode, resolve_type_hints=resolve_type_hints)
 
 
-from .tree import NODE_ENGINE, NODE_PREPARE_ENGINE
+from .tree import NODE_ENGINE, NODE_SNAPSHOT_ENGINE
 from .render import get_render_string
 from .eval import prepare_eval_plan, execute_eval_plan, async_execute_eval_plan

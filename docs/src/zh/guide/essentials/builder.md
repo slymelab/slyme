@@ -1,6 +1,6 @@
 # Builder
 
-在 Slyme 中，随着业务逻辑的复杂度增加，你往往需要组合大量的 Node（如 `@node`、`@expression`、`@wrapper`）来构建一棵复杂的执行树（Node 树）。为了更好地管理和复用这些构建逻辑，Slyme 引入了 **Builder** 的概念，并提供了 `@builder` 装饰器。
+在 Slyme 中，随着业务逻辑变得复杂，通常会将多个 `@node` 和 `@wrapper` 组合成 Node 图。`@builder` 装饰器用于组织和复用这些组装逻辑。
 
 简单来说，Builder 就是一个专门用来实例化和组装 Node 的工厂函数。
 
@@ -21,7 +21,7 @@ from slyme.context import R
 
 @builder
 def create_data_pipeline(source_path: str):
-    # 1. 实例化各个 Node (Def 阶段) — 通过关键字参数直接传入 Ref
+    # 1. 实例化各个 Node — 通过关键字参数直接传入 Ref
     load_node = load_data(path=source_path)
     process_node = process_data(config=R.process_config)
     save_node = save_data(output=R.output_path)
@@ -30,14 +30,11 @@ def create_data_pipeline(source_path: str):
     return sequential(nodes=[load_node, process_node, save_node])
 ```
 
-调用 Builder 函数并不会执行 Node，它仅仅是执行了内部的组装逻辑并返回了最外层的 Node Def 实例：
+调用 Builder 函数并不会执行 Node，它只执行内部组装逻辑并返回最外层的 Node 实例：
 
 ```python
-pipeline_def = create_data_pipeline("/path/to/data")
-
-# 转换为 Exec (执行阶段)
-pipeline_exec = pipeline_def.prepare()
-# ctx = pipeline_exec(ctx)
+pipeline = create_data_pipeline("/path/to/data")
+# ctx = pipeline(ctx)
 ```
 
 ::: tip
@@ -61,7 +58,7 @@ def fast_internal_builder():
 
 ## 组合与动态修改
 
-Builder 最大的优势在于**可复用性**。你可以让一个 Builder 调用另一个 Builder，并且得益于 Slyme Node 在 `.prepare()` 之前可动态修改的特性，你可以轻松地对已有构建结果进行微调。
+Builder 最大的优势在于**可复用性**。一个 Builder 可以调用另一个 Builder，返回的动态 Node 图可以在调用前或两次调用之间继续修改。
 
 这在构建不同变体的流水线时非常有用，避免了大量重复的模板代码：
 

@@ -185,18 +185,17 @@ def node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
             raise RuntimeError(
                 f"Cannot evaluate AsyncNode in synchronous context: {node}"
             )
-        results.append(node.prepare()(ctx))
+        results.append(node(ctx))
     return results
 
 
 async def async_node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
 
     async def _evaluate_single(node: Any) -> Any:
-        prepared = node.prepare()
-        if isinstance(prepared, AsyncNode):
-            return await prepared(ctx)
+        if isinstance(node, AsyncNode):
+            return await node(ctx)
         else:
-            return await asyncio.to_thread(prepared, ctx)
+            return await asyncio.to_thread(node, ctx)
 
     return await asyncio.gather(*(_evaluate_single(node) for node in nodes))
 

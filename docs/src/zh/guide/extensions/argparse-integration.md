@@ -91,7 +91,7 @@ def start_server(
     return ctx
 
 if __name__ == "__main__":
-    # 3. 实例化为 Def 阶段
+    # 3. 实例化 Node
     server_node = start_server(
         use_cache=use_cache_ref, 
         ports=ports_ref, 

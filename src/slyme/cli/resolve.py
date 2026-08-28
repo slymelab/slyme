@@ -31,8 +31,7 @@ __all__ = ["collect_refs", "resolve_args_from_refs", "prepare_args"]
 
 def collect_refs(element: Any) -> List[Ref]:
     """
-    Collect all Ref objects from a node structure (NodeDef, NodeExec, etc.)
-    using the NODE_ENGINE.
+    Collect all Ref objects from a Node structure using NODE_ENGINE.
     """
     refs: List[Ref] = []
 

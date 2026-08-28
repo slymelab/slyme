@@ -1,6 +1,6 @@
 # Builder
 
-In Slyme, as business logic complexity increases, you often need to compose many Nodes (such as `@node`, `@expression`, `@wrapper`) to build a complex execution tree (Node tree). To better manage and reuse these building logics, Slyme introduced the concept of **Builder** and provides the `@builder` decorator.
+In Slyme, as business logic complexity increases, you often compose many `@node` and `@wrapper` objects into a Node graph. The `@builder` decorator organizes and reuses that assembly logic.
 
 Simply put, Builder is a factory function specifically for instantiating and assembling Nodes.
 
@@ -21,7 +21,7 @@ from slyme.context import R
 
 @builder
 def create_data_pipeline(source_path: str):
-    # 1. Instantiate each Node (Def phase) — pass Refs directly via keyword arguments
+    # 1. Instantiate each Node — pass Refs directly via keyword arguments
     load_node = load_data(path=source_path)
     process_node = process_data(config=R.process_config)
     save_node = save_data(output=R.output_path)
@@ -30,14 +30,11 @@ def create_data_pipeline(source_path: str):
     return sequential(nodes=[load_node, process_node, save_node])
 ```
 
-Calling a Builder function does not execute the Node — it merely executes the internal assembly logic and returns the outermost Node Def instance:
+Calling a Builder function does not execute the Node—it runs only the assembly logic and returns the outermost Node instance:
 
 ```python
-pipeline_def = create_data_pipeline("/path/to/data")
-
-# Convert to Exec (execution phase)
-pipeline_exec = pipeline_def.prepare()
-# ctx = pipeline_exec(ctx)
+pipeline = create_data_pipeline("/path/to/data")
+# ctx = pipeline(ctx)
 ```
 
 ::: tip
@@ -61,7 +58,7 @@ def fast_internal_builder():
 
 ## Composition and Dynamic Modification
 
-Builder's biggest advantage is **reusability**. You can have one Builder call another Builder, and thanks to Slyme Node's modifiable nature before `.prepare()`, you can easily fine-tune existing building results.
+Builder's biggest advantage is **reusability**. One Builder can call another, and the returned live Node graph can be modified before or between calls.
 
 This is very useful when building different variants of pipelines, avoiding a lot of repetitive template code:
 

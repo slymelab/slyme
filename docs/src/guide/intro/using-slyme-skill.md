@@ -1,6 +1,6 @@
 # Using the Slyme Skill
 
-Slyme provides an [Agent Skill](https://agentskills.io/) for coding agents that develop downstream applications with the framework. It teaches agents the recommended patterns for `@node`, `@expression`, `@wrapper`, `@builder`, `Context`, `Ref`, `Auto`, PyTrees, and CLI arguments.
+Slyme provides an [Agent Skill](https://agentskills.io/) for coding agents that develop downstream applications with the framework. It teaches agents the recommended patterns for `@node`, `@wrapper`, `@builder`, `Context`, `Ref`, `Auto`, PyTrees, and CLI arguments.
 
 The Skill is intended for projects that **use** Slyme. It does not instruct an agent to maintain or modify the Slyme framework itself.
 
@@ -71,7 +71,7 @@ After installing the Skill, give the agent a normal application-development requ
 
 ```text
 Use $slyme-developer to build a Slyme pipeline that loads records,
-normalizes them with an expression, and writes the result to Context.
+normalizes them with an node, and writes the result to Context.
 ```
 
 ```text

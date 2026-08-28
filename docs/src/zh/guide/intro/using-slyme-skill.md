@@ -1,6 +1,6 @@
 # 使用 Slyme Skill
 
-Slyme 提供了一个面向 Coding Agent 的 Agent Skill，用于帮助代理在其他项目中基于 Slyme 开发应用。它包含 `@node`、`@expression`、`@wrapper`、`@builder`、`Context`、`Ref`、`Auto`、PyTree 和命令行参数等推荐用法。
+Slyme 提供了一个面向 Coding Agent 的 Agent Skill，用于帮助代理在其他项目中基于 Slyme 开发应用。它包含 `@node`、`@wrapper`、`@builder`、`Context`、`Ref`、`Auto`、PyTree 和命令行参数等推荐用法。
 
 该 Skill 面向的是**使用** Slyme 的下游项目，不会指导代理维护或修改 Slyme 框架本身。
 
@@ -71,7 +71,7 @@ cp -R /path/to/slyme/skills/slyme-developer .claude/skills/
 
 ```text
 使用 $slyme-developer 构建一个 Slyme pipeline：
-读取记录，通过 expression 标准化，并将结果写入 Context。
+读取记录，通过 node 标准化，并将结果写入 Context。
 ```
 
 ```text

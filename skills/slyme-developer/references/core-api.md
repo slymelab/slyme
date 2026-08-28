@@ -1,231 +1,73 @@
-# Core API by Example
+# Core API
 
-Treat these snippets as the canonical best-practice template for Slyme code. Follow their structure, lifecycle, signatures, naming, and composition patterns while adapting names and domain logic. The comments are normative and the snippets compose into one module.
-
-## Imports
+## Value-producing and effectful Nodes
 
 ```python
-from collections.abc import Callable, Mapping, Sequence
-
-from slyme.builder import builder
 from slyme.context import ARG, Arg, Context, R, Ref
-from slyme.node import Auto, Node, expression, node, sequential_exec, wrapper
-```
+from slyme.node import Auto, Node, node, sequential_exec, wrapper
 
-## Expressions and dependency injection
 
-```python
-@expression
-def calculate_value(
-    # Parameters before `/` are runtime parameters supplied by Slyme.
-    # @node and @expression receive exactly one: Context.
-    ctx: Context,
-    /,  # Separates runtime parameters from build-time parameters.
-    *,
-    # Parameters after `*` are build-time parameters and must be passed by keyword.
-    # Auto means the caller may bind a Ref or @expression. Before this function
-    # body starts, Slyme resolves it against ctx and injects the concrete float.
-    value: Auto[float],
-    # A parameter without Auto is ordinary static configuration. It is bound
-    # while building the definition and reused unchanged during execution.
-    scale: float = 2.0,
-) -> float:
-    # Expressions derive and return a value. They do not update Context.
+@node
+def calculate(ctx, *, value: Auto[float], scale: float = 1.0) -> float:
     return value * scale
-```
-
-## Atomic state transitions
-
-```python
-@node
-def increment(
-    ctx: Context,
-    /,
-    *,
-    # Keep Ref itself when the function decides when to read or write this path.
-    # Name it `counter`, not `counter_ref` or `ref_counter`.
-    counter: Ref[int],
-) -> Context:
-    # The Ref and the concrete value of the same path coexist in this scope, so
-    # the value is named with exactly one trailing underscore.
-    counter_ = ctx.get(counter) + 1
-    # Context is immutable: set returns the next Context and does not mutate ctx.
-    return ctx.set(counter, counter_)
-```
-
-## Fixed and keyed composition slots
-
-```python
-@node
-def conditional(
-    ctx: Context,
-    /,
-    *,
-    enabled: Auto[bool],
-    enabled_node: Node,
-    disabled_node: Node,
-) -> Context:
-    # Use named Node parameters when the children have fixed, distinct roles.
-    return enabled_node(ctx) if enabled else disabled_node(ctx)
 
 
 @node
-def dispatch(
-    ctx: Context,
-    /,
-    *,
-    key: Auto[str],
-    branches: Mapping[str, Node],
-) -> Context:
-    # A Mapping makes the set of keyed branches an extensible composition slot.
-    return branches[key](ctx)
-```
+def increment(ctx, *, counter: Ref[int]) -> None:
+    ctx.set(counter, ctx.get(counter) + 1)
 
-## Ordered composition slots and parameter evaluation
 
-```python
 @node
 def execute(
-    ctx: Context,  # Runtime Context; Slyme supplies it when the Exec is called.
-    /,
+    ctx,
     *,
-    # In build(), this receives a Ref. At runtime, Auto performs ctx.get(ref)
-    # before entering the body, so this parameter is already the concrete dict.
-    auto_with_ref: Auto[dict],
-    # In build(), this receives an @expression definition. At runtime, Slyme
-    # evaluates that expression and injects its float return value.
-    auto_with_expression: Auto[float],
-    # Auto traverses nested PyTrees and resolves every Ref/@expression leaf while
-    # preserving the prepared container structure and ordinary literal leaves.
-    auto_with_pytree: Auto[tuple[object, ...]],
-    # Do not use Auto for a path this node must update: the Ref is required by set.
-    output: Ref[dict],
-    # Do not use Auto when the latest value must be read after child nodes run.
-    # Auto would only contain the snapshot taken when execute() was entered.
-    changing: Ref[int],
-    # Each Sequence is an ordered, extensible composition slot. Keep loop and
-    # final execution as separate slots because they are distinct phases.
-    loop_nodes: Sequence[Node],
-    final_nodes: Sequence[Node],
-    # Static control-flow configuration remains an ordinary build-time value.
-    rounds: int = 1,
-) -> Context:
-    for _ in range(rounds):
-        # Parent prepare() recursively prepares contained Node definitions.
-        # sequential_exec threads each returned Context into the next child.
-        ctx = sequential_exec(ctx, loop_nodes)
-
-    # A second node container provides another independently extensible position.
-    ctx = sequential_exec(ctx, final_nodes)
-
-    # Read only after all children have run so the value reflects their updates.
-    changing_ = ctx.get(changing)
-
-    # `output` is the destination Ref; `output_` is the value for that same path.
-    output_ = {
-        "from_ref": auto_with_ref,
-        "from_expression": auto_with_expression,
-        "from_pytree": auto_with_pytree,
-        "latest": changing_,
-    }
-
-    # update() can write multiple paths atomically. Always retain its return value.
-    ctx = ctx.update({changing: changing_})
-    # @node must return Context. set() returns the final updated Context.
-    return ctx.set(output, output_)
+    derived: Auto[float],
+    children: tuple[Node, ...],
+    output: Ref[float],
+) -> float:
+    sequential_exec(ctx, children)
+    ctx.set(output, derived)
+    return derived
 ```
+
+A Node function has exactly one non-keyword-only runtime parameter. All build parameters are keyword-only. `Auto` resolves registered leaves such as `Ref` and value-producing `Node`; omit it when the function needs the object itself.
+
+Context mutation methods modify data in place and return `None`. A Node may return any value.
 
 ## Wrappers
 
 ```python
 @wrapper
-def trace(
-    # @wrapper has exactly these three runtime parameters, in this order.
-    ctx: Context,
-    wrapped: Node,  # The Node on which this wrapper is mounted.
-    call_next: Callable[[Context], Context],  # Next wrapper or wrapped Node.
-    /,
-    *,
-    name: str,  # Wrapper-specific build-time configuration.
-) -> Context:
-    print(f"{name}: start")
-    # A normal onion-style wrapper calls the next layer and keeps its Context.
-    # Omitting this call intentionally short-circuits the wrapped Node.
-    ctx = call_next(ctx)
-    print(f"{name}: end")
-    return ctx
+def trace(ctx, wrapped: Node, call_next, *, name: str):
+    print(name, "start")
+    try:
+        return call_next(ctx)
+    finally:
+        print(name, "end")
 ```
 
-## Build-time assembly
+A Wrapper has exactly three non-keyword-only runtime parameters. Attach it only through `node.add_wrappers(...)`.
+
+## Assembly and execution
 
 ```python
-@builder
-def build() -> Node:
-    # @builder executes only assembly code and returns the outermost Node Def.
-    # Calling calculate_value(), increment(), or execute() here does not run them.
-    # Create application Refs where the Node tree is assembled instead of
-    # threading them through the builder's public interface.
-    # Wrappers may only be attached to a Node through add_wrappers().
-    return execute(
-        # Auto + Ref: source is resolved with the runtime Context.
-        auto_with_ref=R.input.source(
-            metadata={ARG: Arg(type=dict, required=True, help="Input payload")}
+root = execute(
+    derived=calculate(
+        value=R.input.value(
+            metadata={ARG: Arg(type=float, required=True)}
         ),
-        # Auto + Expression: calculate_value is evaluated before execute runs.
-        auto_with_expression=calculate_value(
-            value=R.input.score(
-                metadata={ARG: Arg(type=float, required=True, help="Input score")}
-            )
-        ),
-        # Auto + PyTree: Ref and Expression leaves may occur at arbitrary depth.
-        auto_with_pytree=[
-            R.input.label(
-                metadata={ARG: Arg(type=str, required=True, help="Input label")}
-            ),
-            {"score": R.input.score},
-            calculate_value(value=R.input.score, scale=3.0),
-        ],
-        # At prepare(), mutable definition containers are frozen: this list becomes
-        # a tuple and its dict becomes a read-only mapping. At runtime, the values
-        # returned by Ref/expression evaluation retain their own types; a list read
-        # from Context, for example, remains that list rather than being frozen.
-        changing=R.state.counter(metadata={ARG: Arg(type=int, default=0)}),
-        output=R.output.result,
-        # Reuse the same atomic Node in multiple higher-order composition slots.
-        loop_nodes=[increment(counter=R.state.counter)],
-        final_nodes=[increment(counter=R.state.counter)],
-        rounds=2,
-    ).add_wrappers(trace(name="execute"))
+        scale=2.0,
+    ),
+    children=(increment(counter=R.state.counter),),
+    output=R.output.result,
+).add_wrappers(trace(name="execute"))
+
+result = root.run(
+    inputs={R.input.value: 3.0, R.state.counter: 0},
+    outputs=R.output.result,
+)
 ```
 
-## Application boundary
+The Node graph stays mutable. Each invocation freezes only ordinary containers in the current Node or Wrapper parameter mapping; Node-like values remain leaves. A change affects subsequent calls without an explicit prepare phase.
 
-```python
-def run() -> tuple[dict[str, object], Context]:
-    node_def = build()
-
-    # run() prepares a Def, creates a Context, resolves Arg inputs, validates all
-    # required values, executes the Node, and extracts the requested output PyTree.
-    output, ctx = node_def.run(
-        inputs={
-            R.input.source: {"name": "example"},
-            R.input.label: "label",
-        },
-        outputs={
-            "result": R.output.result,
-            "counter": R.state.counter,
-        },
-        return_context=True,
-        # Arg metadata in the Node tree is discovered automatically; extra_refs
-        # are unnecessary for tree-owned inputs.
-        use_argparse=True,
-        cli_args=["--input.score", "2.5"],
-    )
-    return output, ctx
-```
-
-## Evaluation and structure rules
-
-`Auto` is `Annotated[T, spec(auto_eval=True)]`. It resolves against the Context entering the current node, so it is a snapshot. In a higher-order loop, retain a `Ref` and call `ctx.get(ref)` when the value must reflect child-node updates.
-
-Node structure is directional: nodes may contain nodes and expressions; expressions may contain expressions; wrappers attach only through `.add_wrappers(...)`. Use `sequential(nodes=[...])` when the whole pipeline is a simple linear composition.
+Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

@@ -91,7 +91,7 @@ def start_server(
     return ctx
 
 if __name__ == "__main__":
-    # 3. Instantiate Node Def
+    # 3. Instantiate the Node
     server_node = start_server(
         use_cache=use_cache_ref, 
         ports=ports_ref, 

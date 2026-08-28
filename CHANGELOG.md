@@ -10,12 +10,21 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed the Def/Exec split and recursive `Node.prepare()` compilation model;
+  Node and Wrapper objects are now directly callable.
 - Removed the legacy asynchronous decorator aliases; use `@node` and
   `@wrapper`, which detect `async def` directly.
 - Removed positional Scope injection from Node factories.
 - Removed Context hooks and the asynchronous mirrors of locally synchronous
   Context operations.
 - Removed `Ref.key_path` and its `CallKey`, `KeyPathExpr`, and `P` helpers.
+
+### Changed
+
+- Each Node and Wrapper call now freezes only its local ordinary Python
+  containers and builds its evaluation and wrapper plan from that snapshot.
+  Node-like objects remain leaves, allowing future logical Slot graphs to
+  contain cycles without recursive preparation.
 
 ## [0.1.1] - 2026-08-26
 

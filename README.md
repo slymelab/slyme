@@ -34,25 +34,25 @@ pip install slyme
 
 ## Quick Start
 
-Here is a quick example demonstrating how to build a simple execution pipeline using Slyme's core primitives (`@node`, `@expression`, `@wrapper`, and `@builder`):
+Here is a quick example using Slyme's core primitives (`@node`, `@wrapper`, and `@builder`):
 
 ```python
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
 from slyme.context import ARG, Arg, Context, R, Ref
-from slyme.node import node, expression, wrapper, Auto, Node
+from slyme.node import node, wrapper, Auto, Node
 
 
 # 1. Define an execution node
 @node
 def llm_api(ctx: Context, /, *, prompts: Auto[list[str]], responses: Ref[list[str]]):
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
-    return ctx.set(responses, responses_)
+    ctx.set(responses, responses_)
 
 
-# 2. Define an expression for data transformation
-@expression
+# 2. Define a value-producing node
+@node
 def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
     return [
         f"Summarize: {article['title']}. Content: {article['content']}" 
@@ -62,12 +62,12 @@ def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
 
 # 3. Define a wrapper for middleware (e.g., performance timing)
 @wrapper
-def timing(ctx: Context, wrapped: Node, call_next: Callable[[Context], Context], /, *, prefix: str) -> Context:
+def timing(ctx: Context, wrapped: Node, call_next: Callable[[Context], object], /, *, prefix: str):
     start_time = time()
-    ctx = call_next(ctx)
+    result = call_next(ctx)
     end_time = time()
     print(f"[{prefix}] Finished successfully in {end_time - start_time:.4f} seconds.")
-    return ctx
+    return result
 
 
 # 4. Assemble the pipeline at Build-Time
@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to PyTree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Functional & Concurrency Safety:** The state exchanged between execution units (`Context`) is structurally immutable, utilizing a Copy-On-Write mechanism to make state management under concurrent execution simple and safe.
+**Explicit Runtime Isolation:** Context data is mutable, while call-local Node parameter snapshots keep each invocation structurally stable. Explicitly copy Context when execution branches need isolation.
 
 **Seamless Collaboration:** Highly decoupled Nodes communicate exclusively through Context. This allows teams to independently develop features and write unit tests, reducing "glue code" and deep system coupling.
 
