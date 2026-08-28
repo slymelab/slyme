@@ -84,29 +84,3 @@ class WrapperExceptionRecord(NodeException):
 
     def __str__(self) -> str:
         return f"exception_wrapper: {self.exception_node}, wrapped_node: {self.wrapped_node}"
-
-
-class ExpressionExceptionRecord(NodeException):
-    """Used to record the exception info raised by a ``Expression``."""
-
-    def __init__(self, exception_node, exception: Exception, source_node=None) -> None:
-        super().__init__(exception_node, exception, source_node)
-
-    @property
-    def exception_node(self):
-        return self.args[0]
-
-    @property
-    def exception(self):
-        return self.args[1]
-
-    @property
-    def source_node(self):
-        return self.args[2]
-
-    @source_node.setter
-    def source_node(self, value):
-        self.args = (self.args[0], self.args[1], value)
-
-    def __str__(self) -> str:
-        return f"exception_expression: {self.exception_node}, source_node: {self.source_node}"

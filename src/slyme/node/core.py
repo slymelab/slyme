@@ -43,7 +43,6 @@ from .exception import (
     NodeTerminate,
     NodeExceptionRecord,
     NodeException,
-    ExpressionExceptionRecord,
     WrapperExceptionRecord,
 )
 from .signature import (
@@ -57,27 +56,19 @@ from .signature import (
 __all__ = [
     "ExecutionMode",
     "node",
-    "expression",
     "wrapper",
     "async_node",
-    "async_expression",
     "async_wrapper",
     "NodeElement",
     "Node",
     "NodeDef",
     "NodeExec",
-    "Expression",
-    "ExpressionDef",
-    "ExpressionExec",
     "Wrapper",
     "WrapperDef",
     "WrapperExec",
     "AsyncNode",
     "AsyncNodeDef",
     "AsyncNodeExec",
-    "AsyncExpression",
-    "AsyncExpressionDef",
-    "AsyncExpressionExec",
     "AsyncWrapper",
     "AsyncWrapperDef",
     "AsyncWrapperExec",
@@ -88,16 +79,19 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 ExecutionMode = Literal["sync", "async"]
 
-NodeFunc = Callable[Concatenate[Context, _P], None]
-ExpressionFunc = Callable[Concatenate[Context, _P], _R]
+NodeFunc = Callable[Concatenate[Context, _P], _R]
 WrapperFunc = Callable[
-    Concatenate[Context, "Node", Callable[[Context], None], _P], None
+    Concatenate[Context, "Node[Any]", Callable[[Context], Any], _P], Any
 ]
-AsyncNodeFunc = Callable[Concatenate[Context, _P], Awaitable[None]]
-AsyncExpressionFunc = Callable[Concatenate[Context, _P], Awaitable[_R]]
+AsyncNodeFunc = Callable[Concatenate[Context, _P], Awaitable[_R]]
 AsyncWrapperFunc = Callable[
-    Concatenate[Context, "AsyncNode", Callable[[Context], Awaitable[None]], _P],
-    Awaitable[None],
+    Concatenate[
+        Context,
+        "AsyncNode[Any]",
+        Callable[[Context], Awaitable[Any]],
+        _P,
+    ],
+    Awaitable[Any],
 ]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
@@ -258,7 +252,7 @@ class BaseNode(NodeElement):
     pass
 
 
-class Node(BaseNode):
+class Node(BaseNode, Generic[_R]):
     """
     Abstract base class for NodeDef and NodeExec.
     """
@@ -267,7 +261,7 @@ class Node(BaseNode):
     wrappers: Sequence["Wrapper"]  # Changed: Union[...] -> Sequence
 
     @abstractmethod
-    def __call__(self, ctx: Context) -> None:
+    def __call__(self, ctx: Context) -> _R:
         pass
 
     def run(
@@ -306,7 +300,7 @@ class Node(BaseNode):
         )
 
 
-class NodeDef(_DefMixin, Node):
+class NodeDef(_DefMixin, Node[_R]):
     """
     Mutable definition of a Node. Allows modification during build time.
     """
@@ -332,7 +326,7 @@ class NodeDef(_DefMixin, Node):
         self.wrappers.extend(wrappers)
         return self
 
-    def prepare(self) -> "NodeExec":
+    def prepare(self) -> "NodeExec[_R]":
         # Use the specialized NODE_PREPARE_PYTREE_ENGINE to perform a deep transform
         # of the structure (List -> Tuple, Dict -> MappingProxy, Def -> Exec).
         # We map strict identity because the transformation happens in the 'unflatten' phase
@@ -346,12 +340,12 @@ class NodeDef(_DefMixin, Node):
             super().__setattr__(name, value)
 
 
-class NodeExec(_ExecMixin, Node):
+class NodeExec(_ExecMixin, Node[_R]):
     """
     Immutable execution version of a Node.
     """
 
-    _prepared_func: Callable[[Context], None]
+    _prepared_func: Callable[[Context], _R]
     wrappers: tuple["Wrapper", ...]
 
     def __init__(
@@ -375,35 +369,35 @@ class NodeExec(_ExecMixin, Node):
         object.__setattr__(self, "_kwargs", kwargs)
         # --- Composition Logic (Onion Model) ---
         # 1. Inner Core: Bind kwargs to the user function.
-        # Signature: (Context) -> None
+        # Signature: (Context) -> _R
         raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
 
         if not eval_kwargs:
-            chain: Callable[[Context], None] = partial(func, **raw_kwargs)
+            chain: Callable[[Context], _R] = partial(func, **raw_kwargs)
         else:
             eval_plan = prepare_eval_plan(eval_kwargs)
 
-            def chain(ctx: Context) -> None:
+            def chain(ctx: Context) -> _R:
                 return func(ctx, **raw_kwargs, **execute_eval_plan(ctx, eval_plan))
 
         # 2. Build the middleware chain.
         # Wrappers are applied from inside out (reversed order of list).
         for wrapper in reversed(wrappers):
-            # wrapper is WrapperExec which is callable: (ctx, wrapped, call_next) -> None
+            # wrapper is WrapperExec which is callable: (ctx, wrapped, call_next) -> Any
             # We partially apply `wrapped` (self) and `call_next` (current chain head)
-            # to create the new chain head: (Context) -> None
+            # to create the new chain head: (Context) -> _R
             chain = partial(wrapper, wrapped=self, call_next=chain)
         object.__setattr__(self, "_prepared_func", chain)
 
     def prepare(self) -> Self:
         return self
 
-    def __call__(self, ctx: Context) -> None:
+    def __call__(self, ctx: Context) -> _R:
         try:
             # Execute the pre-composed chain
             return self._prepared_func(ctx)
         # Node Interrupts
-        except (NodeTerminate, ExpressionExceptionRecord) as e:
+        except NodeTerminate as e:
             if e.source_node is None:
                 e.source_node = self
             raise
@@ -415,7 +409,7 @@ class NodeExec(_ExecMixin, Node):
             raise NodeExceptionRecord(exception_node=self, exception=e) from e
 
 
-class AsyncNode(BaseNode):
+class AsyncNode(BaseNode, Generic[_R]):
     """
     Abstract base class for AsyncNodeDef and AsyncNodeExec.
     """
@@ -424,7 +418,7 @@ class AsyncNode(BaseNode):
     wrappers: Sequence["AsyncWrapper"]
 
     @abstractmethod
-    async def __call__(self, ctx: Context) -> None:
+    async def __call__(self, ctx: Context) -> _R:
         pass
 
     async def run(
@@ -463,7 +457,7 @@ class AsyncNode(BaseNode):
         )
 
 
-class AsyncNodeDef(_DefMixin, AsyncNode):
+class AsyncNodeDef(_DefMixin, AsyncNode[_R]):
     """
     Mutable definition of an AsyncNode.
     """
@@ -489,7 +483,7 @@ class AsyncNodeDef(_DefMixin, AsyncNode):
         self.wrappers.extend(wrappers)
         return self
 
-    def prepare(self) -> "AsyncNodeExec":
+    def prepare(self) -> "AsyncNodeExec[_R]":
         return NODE_PREPARE_ENGINE.map(_prepare_map, self)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -499,12 +493,12 @@ class AsyncNodeDef(_DefMixin, AsyncNode):
             super().__setattr__(name, value)
 
 
-class AsyncNodeExec(_ExecMixin, AsyncNode):
+class AsyncNodeExec(_ExecMixin, AsyncNode[_R]):
     """
     Immutable execution version of an AsyncNode.
     """
 
-    _prepared_func: Callable[[Context], Awaitable[None]]
+    _prepared_func: Callable[[Context], Awaitable[_R]]
     wrappers: tuple["AsyncWrapper", ...]
 
     def __init__(
@@ -534,7 +528,7 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
         else:
             eval_plan = prepare_eval_plan(eval_kwargs)
 
-            async def chain(ctx: Context) -> None:
+            async def chain(ctx: Context) -> _R:
                 return await func(
                     ctx, **raw_kwargs, **await async_execute_eval_plan(ctx, eval_plan)
                 )
@@ -546,10 +540,10 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
     def prepare(self) -> Self:
         return self
 
-    async def __call__(self, ctx: Context) -> None:
+    async def __call__(self, ctx: Context) -> _R:
         try:
             return await self._prepared_func(ctx)
-        except (NodeTerminate, ExpressionExceptionRecord) as e:
+        except NodeTerminate as e:
             if e.source_node is None:
                 e.source_node = self
             raise
@@ -557,179 +551,6 @@ class AsyncNodeExec(_ExecMixin, AsyncNode):
             raise
         except Exception as e:
             raise NodeExceptionRecord(exception_node=self, exception=e) from e
-
-
-class BaseExpression(NodeElement):
-    pass
-
-
-class Expression(BaseExpression, Generic[_R]):
-    """
-    Abstract base class for ExpressionDef and ExpressionExec.
-    """
-
-    _func: ExpressionFunc
-
-    @abstractmethod
-    def __call__(self, ctx: Context) -> _R:
-        pass
-
-
-class ExpressionDef(_DefMixin, Expression[_R]):
-    """
-    Mutable definition of an Expression.
-    """
-
-    _kwargs: dict[str, Any]  # Override: Mapping -> dict
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: ExpressionFunc,
-        specs: Mapping[str, Spec],
-        kwargs: dict[str, Any],
-    ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
-
-    def prepare(self) -> "ExpressionExec[_R]":
-        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
-
-
-class ExpressionExec(_ExecMixin, Expression[_R]):
-    """
-    Immutable execution version of an Expression.
-    """
-
-    # composed_func signature: (Context) -> _R
-    _prepared_func: Callable[[Context], _R]
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: ExpressionFunc,
-        specs: Mapping[str, Spec],
-        kwargs: Mapping[str, Any],
-    ):
-        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
-            _validate_kwargs(specs, kwargs)
-
-        if not isinstance(kwargs, types.MappingProxyType):
-            kwargs = types.MappingProxyType(kwargs)
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
-        # Optimization: Pre-bind kwargs using partial
-        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
-
-        if not eval_kwargs:
-            prepared_func = partial(func, **raw_kwargs)
-        else:
-            eval_plan = prepare_eval_plan(eval_kwargs)
-
-            def prepared_func(ctx: Context) -> _R:
-                return func(ctx, **raw_kwargs, **execute_eval_plan(ctx, eval_plan))
-
-        object.__setattr__(self, "_prepared_func", prepared_func)
-
-    def prepare(self) -> Self:
-        return self
-
-    def __call__(self, ctx: Context) -> _R:
-        try:
-            return self._prepared_func(ctx)
-        except NodeException:
-            raise
-        except Exception as e:
-            raise ExpressionExceptionRecord(exception_node=self, exception=e) from e
-
-
-class AsyncExpression(BaseExpression, Generic[_R]):
-    """
-    Abstract base class for AsyncExpressionDef and AsyncExpressionExec.
-    """
-
-    _func: AsyncExpressionFunc
-
-    @abstractmethod
-    async def __call__(self, ctx: Context) -> _R:
-        pass
-
-
-class AsyncExpressionDef(_DefMixin, AsyncExpression[_R]):
-    """
-    Mutable definition of an AsyncExpression.
-    """
-
-    _kwargs: dict[str, Any]
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: AsyncExpressionFunc,
-        specs: Mapping[str, Spec],
-        kwargs: dict[str, Any],
-    ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
-
-    def prepare(self) -> "AsyncExpressionExec[_R]":
-        return NODE_PREPARE_ENGINE.map(_prepare_map, self)
-
-
-class AsyncExpressionExec(_ExecMixin, AsyncExpression[_R]):
-    """
-    Immutable execution version of an AsyncExpression.
-    """
-
-    _prepared_func: Callable[[Context], Awaitable[_R]]
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: AsyncExpressionFunc,
-        specs: Mapping[str, Spec],
-        kwargs: Mapping[str, Any],
-    ):
-        with enrich_exception(f"in execution initialization for '{func.__name__}'"):
-            _validate_kwargs(specs, kwargs)
-
-        if not isinstance(kwargs, types.MappingProxyType):
-            kwargs = types.MappingProxyType(kwargs)
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
-
-        raw_kwargs, eval_kwargs = _prepare_eval(specs, kwargs)
-
-        if not eval_kwargs:
-            prepared_func = partial(func, **raw_kwargs)
-        else:
-            eval_plan = prepare_eval_plan(eval_kwargs)
-
-            async def prepared_func(ctx: Context) -> _R:
-                return await func(
-                    ctx, **raw_kwargs, **await async_execute_eval_plan(ctx, eval_plan)
-                )
-
-        object.__setattr__(self, "_prepared_func", prepared_func)
-
-    def prepare(self) -> Self:
-        return self
-
-    async def __call__(self, ctx: Context) -> _R:
-        try:
-            return await self._prepared_func(ctx)
-        except NodeException:
-            raise
-        except Exception as e:
-            raise ExpressionExceptionRecord(exception_node=self, exception=e) from e
 
 
 class BaseWrapper(NodeElement):
@@ -747,9 +568,9 @@ class Wrapper(BaseWrapper):
     def __call__(
         self,
         ctx: Context,
-        wrapped: Node,
-        call_next: Callable[[Context], None],
-    ) -> None:
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any],
+    ) -> Any:
         pass
 
 
@@ -781,10 +602,10 @@ class WrapperExec(_ExecMixin, Wrapper):
     Immutable execution version of a Wrapper.
     """
 
-    # composed_func signature: (ctx, wrapped, call_next) -> None
+    # composed_func signature: (ctx, wrapped, call_next) -> Any
     _prepared_func: Callable[
-        [Context, Node, Callable[[Context], None]],
-        None,
+        [Context, Node[Any], Callable[[Context], Any]],
+        Any,
     ]
 
     def __init__(
@@ -813,9 +634,9 @@ class WrapperExec(_ExecMixin, Wrapper):
 
             def prepared_func(
                 ctx: Context,
-                wrapped: Node,
-                call_next: Callable[[Context], None],
-            ) -> None:
+                wrapped: Node[Any],
+                call_next: Callable[[Context], Any],
+            ) -> Any:
                 return func(
                     ctx,
                     wrapped,
@@ -832,9 +653,9 @@ class WrapperExec(_ExecMixin, Wrapper):
     def __call__(
         self,
         ctx: Context,
-        wrapped: Node,
-        call_next: Callable[[Context], None],
-    ) -> None:
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any],
+    ) -> Any:
         try:
             return self._prepared_func(ctx, wrapped, call_next)
         except NodeException:
@@ -856,9 +677,9 @@ class AsyncWrapper(BaseWrapper):
     async def __call__(
         self,
         ctx: Context,
-        wrapped: AsyncNode,
-        call_next: Callable[[Context], Awaitable[None]],
-    ) -> None:
+        wrapped: AsyncNode[Any],
+        call_next: Callable[[Context], Awaitable[Any]],
+    ) -> Any:
         pass
 
 
@@ -891,8 +712,8 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
     """
 
     _prepared_func: Callable[
-        [Context, Node, Callable[[Context], Awaitable[None]]],
-        Awaitable[None],
+        [Context, AsyncNode[Any], Callable[[Context], Awaitable[Any]]],
+        Awaitable[Any],
     ]
 
     def __init__(
@@ -921,9 +742,9 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
 
             async def prepared_func(
                 ctx: Context,
-                wrapped: AsyncNode,
-                call_next: Callable[[Context], Awaitable[None]],
-            ) -> None:
+                wrapped: AsyncNode[Any],
+                call_next: Callable[[Context], Awaitable[Any]],
+            ) -> Any:
                 return await func(
                     ctx,
                     wrapped,
@@ -940,9 +761,9 @@ class AsyncWrapperExec(_ExecMixin, AsyncWrapper):
     async def __call__(
         self,
         ctx: Context,
-        wrapped: AsyncNode,
-        call_next: Callable[[Context], Awaitable[None]],
-    ) -> None:
+        wrapped: AsyncNode[Any],
+        call_next: Callable[[Context], Awaitable[Any]],
+    ) -> Any:
         try:
             return await self._prepared_func(ctx, wrapped, call_next)
         except NodeException:
@@ -965,7 +786,7 @@ class BaseFactory:
         return f"<{type(self).__name__} of {self._func.__name__}>"
 
 
-class NodeFactory(BaseFactory, Generic[_P]):
+class NodeFactory(BaseFactory, Generic[_P, _R]):
     def __init__(
         self,
         func: Callable,
@@ -983,7 +804,7 @@ class NodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> NodeDef: ...
+    ) -> NodeDef[_R]: ...
     @overload
     def __call__(
         self,
@@ -991,7 +812,7 @@ class NodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> NodeDef: ...
+    ) -> NodeDef[_R]: ...
     @overload
     def __call__(
         self,
@@ -1000,7 +821,7 @@ class NodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> NodeDef: ...
+    ) -> NodeDef[_R]: ...
     @overload
     def __call__(
         self,
@@ -1010,10 +831,10 @@ class NodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> NodeDef: ...
+    ) -> NodeDef[_R]: ...
     @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef[_R]: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> NodeDef[_R]:
         """
         Create the node instance by resolving parameters from scopes and overrides.
         """
@@ -1024,65 +845,6 @@ class NodeFactory(BaseFactory, Generic[_P]):
         # Note: wrappers are intentionally omitted to avoid parameter conflict.
         # Users should use .add_wrappers() explicitly.
         return NodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
-
-
-class ExpressionFactory(BaseFactory, Generic[_P, _R]):
-    def __init__(
-        self,
-        func: Callable,
-        specs: Mapping[str, Spec],
-        signature: inspect.Signature,
-    ):
-        update_wrapper(self, func)
-        self._func = func
-        self._specs = specs
-        self.__signature__ = signature
-
-    @overload
-    def __call__(
-        self,
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> ExpressionDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> ExpressionDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> ExpressionDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        scope3: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> ExpressionDef[_R]: ...
-    @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> ExpressionDef[_R]: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> ExpressionDef[_R]:
-        """
-        Create the node instance by resolving parameters from scopes and overrides.
-        """
-        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
-        # Process kwargs
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
-        return ExpressionDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
 class WrapperFactory(BaseFactory, Generic[_P]):
@@ -1144,7 +906,7 @@ class WrapperFactory(BaseFactory, Generic[_P]):
         return WrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
-class AsyncNodeFactory(BaseFactory, Generic[_P]):
+class AsyncNodeFactory(BaseFactory, Generic[_P, _R]):
     def __init__(
         self,
         func: Callable,
@@ -1162,7 +924,7 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef: ...
+    ) -> AsyncNodeDef[_R]: ...
     @overload
     def __call__(
         self,
@@ -1170,7 +932,7 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef: ...
+    ) -> AsyncNodeDef[_R]: ...
     @overload
     def __call__(
         self,
@@ -1179,7 +941,7 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef: ...
+    ) -> AsyncNodeDef[_R]: ...
     @overload
     def __call__(
         self,
@@ -1189,10 +951,10 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
         /,
         *_: _P.args,
         **kwargs: _P.kwargs,
-    ) -> AsyncNodeDef: ...
+    ) -> AsyncNodeDef[_R]: ...
     @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef:
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef[_R]: ...
+    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncNodeDef[_R]:
         """
         Create the node instance by resolving parameters from scopes and overrides.
         """
@@ -1203,67 +965,6 @@ class AsyncNodeFactory(BaseFactory, Generic[_P]):
         # Note: wrappers are intentionally omitted to avoid parameter conflict.
         # Users should use .add_wrappers() explicitly.
         return AsyncNodeDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
-
-
-class AsyncExpressionFactory(BaseFactory, Generic[_P, _R]):
-    def __init__(
-        self,
-        func: Callable,
-        specs: Mapping[str, Spec],
-        signature: inspect.Signature,
-    ):
-        update_wrapper(self, func)
-        self._func = func
-        self._specs = specs
-        self.__signature__ = signature
-
-    @overload
-    def __call__(
-        self,
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncExpressionDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncExpressionDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncExpressionDef[_R]: ...
-    @overload
-    def __call__(
-        self,
-        scope1: Mapping[str, Any],
-        scope2: Mapping[str, Any],
-        scope3: Mapping[str, Any],
-        /,
-        *_: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> AsyncExpressionDef[_R]: ...
-    @overload
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncExpressionDef[_R]: ...
-    def __call__(self, *scopes: Any, **kwargs: Any) -> AsyncExpressionDef[_R]:
-        """
-        Create the node instance by resolving parameters from scopes and overrides.
-        """
-        resolved_kwargs = resolve_arguments(self._specs, scopes, kwargs)
-        # Process kwargs
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, resolved_kwargs)
-        return AsyncExpressionDef(
-            func=self._func, specs=self._specs, kwargs=final_kwargs
-        )
 
 
 class AsyncWrapperFactory(BaseFactory, Generic[_P]):
@@ -1325,7 +1026,9 @@ class AsyncWrapperFactory(BaseFactory, Generic[_P]):
         return AsyncWrapperDef(func=self._func, specs=self._specs, kwargs=final_kwargs)
 
 
-def _node(func: NodeFunc[_P], /, *, resolve_type_hints: bool) -> NodeFactory[_P]:
+def _node(
+    func: NodeFunc[_P, _R], /, *, resolve_type_hints: bool
+) -> NodeFactory[_P, _R]:
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
@@ -1336,8 +1039,8 @@ def _node(func: NodeFunc[_P], /, *, resolve_type_hints: bool) -> NodeFactory[_P]
 
 
 def _async_node(
-    func: AsyncNodeFunc[_P], /, *, resolve_type_hints: bool
-) -> AsyncNodeFactory[_P]:
+    func: AsyncNodeFunc[_P, _R], /, *, resolve_type_hints: bool
+) -> AsyncNodeFactory[_P, _R]:
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
     if len(analysis.pos_only_params) != 1:
         raise TypeError(
@@ -1345,30 +1048,6 @@ def _async_node(
             f"but found {len(analysis.pos_only_params)}."
         )
     return AsyncNodeFactory(func, analysis.specs, analysis.public_signature)
-
-
-def _expression(
-    func: ExpressionFunc[_P, _R], /, *, resolve_type_hints: bool
-) -> ExpressionFactory[_P, _R]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 1:
-        raise TypeError(
-            f"@expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
-            f"but found {len(analysis.pos_only_params)}."
-        )
-    return ExpressionFactory(func, analysis.specs, analysis.public_signature)
-
-
-def _async_expression(
-    func: AsyncExpressionFunc[_P, _R], /, *, resolve_type_hints: bool
-) -> AsyncExpressionFactory[_P, _R]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 1:
-        raise TypeError(
-            f"@expression '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
-            f"but found {len(analysis.pos_only_params)}."
-        )
-    return AsyncExpressionFactory(func, analysis.specs, analysis.public_signature)
 
 
 def _wrapper(
@@ -1397,20 +1076,11 @@ def _async_wrapper(
 
 class _AutoNodeDecorator(Protocol):
     @overload
-    def __call__(self, func: NodeFunc[_P], /) -> NodeFactory[_P]: ...
-    @overload
-    def __call__(self, func: AsyncNodeFunc[_P], /) -> AsyncNodeFactory[_P]: ...
-
-
-class _AutoExpressionDecorator(Protocol):
+    def __call__(self, func: NodeFunc[_P, _R], /) -> NodeFactory[_P, _R]: ...
     @overload
     def __call__(
-        self, func: ExpressionFunc[_P, _R], /
-    ) -> ExpressionFactory[_P, _R]: ...
-    @overload
-    def __call__(
-        self, func: AsyncExpressionFunc[_P, _R], /
-    ) -> AsyncExpressionFactory[_P, _R]: ...
+        self, func: AsyncNodeFunc[_P, _R], /
+    ) -> AsyncNodeFactory[_P, _R]: ...
 
 
 class _AutoWrapperDecorator(Protocol):
@@ -1458,24 +1128,11 @@ def _dispatch_node(
     *,
     mode: Optional[ExecutionMode],
     resolve_type_hints: bool,
-) -> Union[NodeFactory[Any], AsyncNodeFactory[Any]]:
+) -> Union[NodeFactory[Any, Any], AsyncNodeFactory[Any, Any]]:
     resolved_mode = _resolve_execution_mode(func, mode, "node")
     if resolved_mode == "async":
         return _async_node(func, resolve_type_hints=resolve_type_hints)
     return _node(func, resolve_type_hints=resolve_type_hints)
-
-
-def _dispatch_expression(
-    func: Callable[..., Any],
-    /,
-    *,
-    mode: Optional[ExecutionMode],
-    resolve_type_hints: bool,
-) -> Union[ExpressionFactory[Any, Any], AsyncExpressionFactory[Any, Any]]:
-    resolved_mode = _resolve_execution_mode(func, mode, "expression")
-    if resolved_mode == "async":
-        return _async_expression(func, resolve_type_hints=resolve_type_hints)
-    return _expression(func, resolve_type_hints=resolve_type_hints)
 
 
 def _dispatch_wrapper(
@@ -1493,20 +1150,20 @@ def _dispatch_wrapper(
 
 @overload
 def node(
-    func: NodeFunc[_P],
+    func: NodeFunc[_P, _R],
     /,
     *,
     mode: Optional[Literal["sync"]] = None,
     resolve_type_hints: bool = True,
-) -> NodeFactory[_P]: ...
+) -> NodeFactory[_P, _R]: ...
 @overload
 def node(
-    func: AsyncNodeFunc[_P],
+    func: AsyncNodeFunc[_P, _R],
     /,
     *,
     mode: Optional[Literal["async"]] = None,
     resolve_type_hints: bool = True,
-) -> AsyncNodeFactory[_P]: ...
+) -> AsyncNodeFactory[_P, _R]: ...
 @overload
 def node(
     func: _Missing = _MISSING,
@@ -1514,7 +1171,7 @@ def node(
     *,
     mode: Literal["sync"],
     resolve_type_hints: bool = True,
-) -> Callable[[NodeFunc[_P]], NodeFactory[_P]]: ...
+) -> Callable[[NodeFunc[_P, _R]], NodeFactory[_P, _R]]: ...
 @overload
 def node(
     func: _Missing = _MISSING,
@@ -1522,7 +1179,7 @@ def node(
     *,
     mode: Literal["async"],
     resolve_type_hints: bool = True,
-) -> Callable[[AsyncNodeFunc[_P]], AsyncNodeFactory[_P]]: ...
+) -> Callable[[AsyncNodeFunc[_P, _R]], AsyncNodeFactory[_P, _R]]: ...
 @overload
 def node(
     func: _Missing = _MISSING,
@@ -1547,61 +1204,6 @@ def node(
     if func is _MISSING:
         return partial(_dispatch_node, mode=mode, resolve_type_hints=resolve_type_hints)
     return _dispatch_node(func, mode=mode, resolve_type_hints=resolve_type_hints)
-
-
-@overload
-def expression(
-    func: ExpressionFunc[_P, _R],
-    /,
-    *,
-    mode: Optional[Literal["sync"]] = None,
-    resolve_type_hints: bool = True,
-) -> ExpressionFactory[_P, _R]: ...
-@overload
-def expression(
-    func: AsyncExpressionFunc[_P, _R],
-    /,
-    *,
-    mode: Optional[Literal["async"]] = None,
-    resolve_type_hints: bool = True,
-) -> AsyncExpressionFactory[_P, _R]: ...
-@overload
-def expression(
-    func: _Missing = _MISSING,
-    /,
-    *,
-    mode: Literal["sync"],
-    resolve_type_hints: bool = True,
-) -> Callable[[ExpressionFunc[_P, _R]], ExpressionFactory[_P, _R]]: ...
-@overload
-def expression(
-    func: _Missing = _MISSING,
-    /,
-    *,
-    mode: Literal["async"],
-    resolve_type_hints: bool = True,
-) -> Callable[[AsyncExpressionFunc[_P, _R]], AsyncExpressionFactory[_P, _R]]: ...
-@overload
-def expression(
-    func: _Missing = _MISSING,
-    /,
-    *,
-    mode: None = None,
-    resolve_type_hints: bool = True,
-) -> _AutoExpressionDecorator: ...
-def expression(
-    func: Union[Callable[..., Any], _Missing] = _MISSING,
-    /,
-    *,
-    mode: Optional[ExecutionMode] = None,
-    resolve_type_hints: bool = True,
-) -> Any:
-    """Create a synchronous or asynchronous Expression factory."""
-    if func is _MISSING:
-        return partial(
-            _dispatch_expression, mode=mode, resolve_type_hints=resolve_type_hints
-        )
-    return _dispatch_expression(func, mode=mode, resolve_type_hints=resolve_type_hints)
 
 
 @overload
@@ -1671,13 +1273,13 @@ def _warn_deprecated_async_decorator(old_name: str, new_name: str) -> None:
 @overload
 def async_node(
     func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
-) -> Callable[[AsyncNodeFunc[_P]], AsyncNodeFactory[_P]]: ...
+) -> Callable[[AsyncNodeFunc[_P, _R]], AsyncNodeFactory[_P, _R]]: ...
 @overload
 def async_node(
-    func: AsyncNodeFunc[_P], /, *, resolve_type_hints: bool = True
-) -> AsyncNodeFactory[_P]: ...
+    func: AsyncNodeFunc[_P, _R], /, *, resolve_type_hints: bool = True
+) -> AsyncNodeFactory[_P, _R]: ...
 def async_node(
-    func: Union[AsyncNodeFunc[_P], _Missing] = _MISSING,
+    func: Union[AsyncNodeFunc[_P, _R], _Missing] = _MISSING,
     /,
     *,
     resolve_type_hints: bool = True,
@@ -1688,28 +1290,6 @@ def async_node(
     """
     _warn_deprecated_async_decorator("async_node", "node")
     return node(func, mode="async", resolve_type_hints=resolve_type_hints)
-
-
-@overload
-def async_expression(
-    func: _Missing = _MISSING, /, *, resolve_type_hints: bool = True
-) -> Callable[[AsyncExpressionFunc[_P, _R]], AsyncExpressionFactory[_P, _R]]: ...
-@overload
-def async_expression(
-    func: AsyncExpressionFunc[_P, _R], /, *, resolve_type_hints: bool = True
-) -> AsyncExpressionFactory[_P, _R]: ...
-def async_expression(
-    func: Union[AsyncExpressionFunc[_P, _R], _Missing] = _MISSING,
-    /,
-    *,
-    resolve_type_hints: bool = True,
-) -> Any:
-    """Deprecated alias scheduled for removal in 0.2.0.
-
-    Use ``expression`` or ``expression(mode="async")`` instead.
-    """
-    _warn_deprecated_async_decorator("async_expression", "expression")
-    return expression(func, mode="async", resolve_type_hints=resolve_type_hints)
 
 
 @overload

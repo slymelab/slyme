@@ -29,16 +29,12 @@ from slyme.utils.pytree import (
 from slyme.utils.pytree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 from .core import (
     NodeDef,
-    ExpressionDef,
     WrapperDef,
     NodeExec,
-    ExpressionExec,
     WrapperExec,
     AsyncNodeDef,
-    AsyncExpressionDef,
     AsyncWrapperDef,
     AsyncNodeExec,
-    AsyncExpressionExec,
     AsyncWrapperExec,
 )
 
@@ -109,46 +105,6 @@ def _unflatten_node_def_to_exec(children: Iterable[Any], aux: PyTreeAux) -> Node
     )
 
 
-# ExpressionDef Logic
-def _flatten_expression_def(
-    obj: ExpressionDef,
-) -> tuple[Iterable[Any], PyTreeAux]:
-    """
-    Flatten ExpressionDef.
-    """
-    keys = tuple(obj._kwargs.keys())
-    children = tuple(obj._kwargs.values())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-    metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(
-        children_keys=rich_keys, metadata=metadata, cls=ExpressionDef
-    )
-
-
-def _unflatten_expression_def(children: Iterable[Any], aux: PyTreeAux) -> ExpressionDef:
-    """
-    Reconstruct ExpressionDef (Standard Engine).
-    """
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
-    return ExpressionDef(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
-    )
-
-
-def _unflatten_expression_def_to_exec(
-    children: Iterable[Any], aux: PyTreeAux
-) -> ExpressionExec:
-    """
-    Transform ExpressionDef into ExpressionExec (Prepare Engine).
-    """
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
-    return ExpressionExec(
-        func=aux.metadata["func"],
-        specs=aux.metadata["specs"],
-        kwargs=kwargs,
-    )
-
-
 # WrapperDef Logic
 def _flatten_wrapper_def(obj: WrapperDef) -> tuple[Iterable[Any], PyTreeAux]:
     """
@@ -212,27 +168,6 @@ def _unflatten_node_exec(children: Iterable[Any], aux: PyTreeAux) -> NodeExec:
     )
 
 
-def _flatten_expression_exec(
-    obj: ExpressionExec,
-) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(obj._kwargs.keys())
-    children = tuple(obj._kwargs.values())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-    metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(
-        children_keys=rich_keys, metadata=metadata, cls=ExpressionExec
-    )
-
-
-def _unflatten_expression_exec(
-    children: Iterable[Any], aux: PyTreeAux
-) -> ExpressionExec:
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
-    return ExpressionExec(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
-    )
-
-
 def _flatten_wrapper_exec(obj: WrapperExec) -> tuple[Iterable[Any], PyTreeAux]:
     keys = tuple(obj._kwargs.keys())
     children = tuple(obj._kwargs.values())
@@ -285,39 +220,6 @@ def _unflatten_async_node_def_to_exec(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
         wrappers=wrappers,
-        kwargs=kwargs,
-    )
-
-
-# AsyncExpressionDef Logic
-def _flatten_async_expression_def(
-    obj: AsyncExpressionDef,
-) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(obj._kwargs.keys())
-    children = tuple(obj._kwargs.values())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-    metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(
-        children_keys=rich_keys, metadata=metadata, cls=AsyncExpressionDef
-    )
-
-
-def _unflatten_async_expression_def(
-    children: Iterable[Any], aux: PyTreeAux
-) -> AsyncExpressionDef:
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
-    return AsyncExpressionDef(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
-    )
-
-
-def _unflatten_async_expression_def_to_exec(
-    children: Iterable[Any], aux: PyTreeAux
-) -> AsyncExpressionExec:
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
-    return AsyncExpressionExec(
-        func=aux.metadata["func"],
-        specs=aux.metadata["specs"],
         kwargs=kwargs,
     )
 
@@ -380,27 +282,6 @@ def _unflatten_async_node_exec(
     )
 
 
-def _flatten_async_expression_exec(
-    obj: AsyncExpressionExec,
-) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(obj._kwargs.keys())
-    children = tuple(obj._kwargs.values())
-    rich_keys = tuple(MappingKey(k) for k in keys)
-    metadata = {"func": obj._func, "specs": obj._specs}
-    return children, PyTreeAux(
-        children_keys=rich_keys, metadata=metadata, cls=AsyncExpressionExec
-    )
-
-
-def _unflatten_async_expression_exec(
-    children: Iterable[Any], aux: PyTreeAux
-) -> AsyncExpressionExec:
-    kwargs = {cast("MappingKey", k).key: v for k, v in zip(aux.children_keys, children)}
-    return AsyncExpressionExec(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
-    )
-
-
 def _flatten_async_wrapper_exec(
     obj: AsyncWrapperExec,
 ) -> tuple[Iterable[Any], PyTreeAux]:
@@ -457,29 +338,14 @@ def _unflatten_to_mapping_proxy(
 # --- NODE_PYTREE_ENGINE (Def -> Def, Exec -> Exec) ---
 NODE_ENGINE.register(NodeDef, _flatten_node_def, _unflatten_node_def, strict=True)
 NODE_ENGINE.register(
-    ExpressionDef, _flatten_expression_def, _unflatten_expression_def, strict=True
-)
-NODE_ENGINE.register(
     WrapperDef, _flatten_wrapper_def, _unflatten_wrapper_def, strict=True
 )
 NODE_ENGINE.register(NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True)
-NODE_ENGINE.register(
-    ExpressionExec,
-    _flatten_expression_exec,
-    _unflatten_expression_exec,
-    strict=True,
-)
 NODE_ENGINE.register(
     WrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
 )
 NODE_ENGINE.register(
     AsyncNodeDef, _flatten_async_node_def, _unflatten_async_node_def, strict=True
-)
-NODE_ENGINE.register(
-    AsyncExpressionDef,
-    _flatten_async_expression_def,
-    _unflatten_async_expression_def,
-    strict=True,
 )
 NODE_ENGINE.register(
     AsyncWrapperDef,
@@ -489,12 +355,6 @@ NODE_ENGINE.register(
 )
 NODE_ENGINE.register(
     AsyncNodeExec, _flatten_async_node_exec, _unflatten_async_node_exec, strict=True
-)
-NODE_ENGINE.register(
-    AsyncExpressionExec,
-    _flatten_async_expression_exec,
-    _unflatten_async_expression_exec,
-    strict=True,
 )
 NODE_ENGINE.register(
     AsyncWrapperExec,
@@ -514,12 +374,6 @@ NODE_PREPARE_ENGINE.register(
     NodeDef, _flatten_node_def, _unflatten_node_def_to_exec, strict=True
 )
 NODE_PREPARE_ENGINE.register(
-    ExpressionDef,
-    _flatten_expression_def,
-    _unflatten_expression_def_to_exec,
-    strict=True,
-)
-NODE_PREPARE_ENGINE.register(
     WrapperDef,
     _flatten_wrapper_def,
     _unflatten_wrapper_def_to_exec,
@@ -528,12 +382,6 @@ NODE_PREPARE_ENGINE.register(
 # Exec Identity (Exec -> Exec)
 NODE_PREPARE_ENGINE.register(
     NodeExec, _flatten_node_exec, _unflatten_node_exec, strict=True
-)
-NODE_PREPARE_ENGINE.register(
-    ExpressionExec,
-    _flatten_expression_exec,
-    _unflatten_expression_exec,
-    strict=True,
 )
 NODE_PREPARE_ENGINE.register(
     WrapperExec, _flatten_wrapper_exec, _unflatten_wrapper_exec, strict=True
@@ -545,12 +393,6 @@ NODE_PREPARE_ENGINE.register(
     strict=True,
 )
 NODE_PREPARE_ENGINE.register(
-    AsyncExpressionDef,
-    _flatten_async_expression_def,
-    _unflatten_async_expression_def_to_exec,
-    strict=True,
-)
-NODE_PREPARE_ENGINE.register(
     AsyncWrapperDef,
     _flatten_async_wrapper_def,
     _unflatten_async_wrapper_def_to_exec,
@@ -558,12 +400,6 @@ NODE_PREPARE_ENGINE.register(
 )
 NODE_PREPARE_ENGINE.register(
     AsyncNodeExec, _flatten_async_node_exec, _unflatten_async_node_exec, strict=True
-)
-NODE_PREPARE_ENGINE.register(
-    AsyncExpressionExec,
-    _flatten_async_expression_exec,
-    _unflatten_async_expression_exec,
-    strict=True,
 )
 NODE_PREPARE_ENGINE.register(
     AsyncWrapperExec,

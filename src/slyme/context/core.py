@@ -106,7 +106,7 @@ class Ref(Generic[_T]):
 
             warning_once(
                 "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
-                "Use @expression + Auto for dynamic value resolution instead.",
+                "Use @node + Auto for dynamic value resolution instead.",
                 FutureWarning,
                 2,
             )
@@ -147,7 +147,7 @@ class Ref(Generic[_T]):
 
             warning_once(
                 "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
-                "Use @expression + Auto for dynamic value resolution instead.",
+                "Use @node + Auto for dynamic value resolution instead.",
                 FutureWarning,
                 2,
             )
@@ -217,7 +217,7 @@ class RefFactory:
 
             warning_once(
                 "Ref.key_path is deprecated and will be removed in slyme 0.2.0. "
-                "Use @expression + Auto for dynamic value resolution instead.",
+                "Use @node + Auto for dynamic value resolution instead.",
                 FutureWarning,
                 2,
             )

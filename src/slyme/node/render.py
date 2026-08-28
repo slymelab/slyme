@@ -25,7 +25,6 @@ from slyme.context import Ref
 from .core import (
     NodeElement,
     BaseNode,
-    BaseExpression,
     BaseWrapper,
 )
 from .tree import NODE_ENGINE
@@ -35,7 +34,6 @@ __all__ = ["get_render_string", "Config"]
 # Registry to determine the category of an object during rendering.
 RENDER_TYPE_REGISTRY = TypeRegistry[Any, str]("render_category")
 RENDER_TYPE_REGISTRY.register("nodes", key=BaseNode)
-RENDER_TYPE_REGISTRY.register("expressions", key=BaseExpression)
 RENDER_TYPE_REGISTRY.register("wrappers", key=BaseWrapper)
 RENDER_TYPE_REGISTRY.register("refs", key=Ref)
 
@@ -48,14 +46,13 @@ class Config:
     tree_spacer: str = "    "
     group_connector: str = "│ => "
     # Optional filter for displayed categories. If None, all categories are shown.
-    visible_categories: Optional[tuple[str, ...]] = ("wrappers", "expressions", "nodes")
+    visible_categories: Optional[tuple[str, ...]] = ("wrappers", "nodes")
     # Types that should use the "Grouped" rendering strategy.
     _grouped_render_types: tuple[type, ...] = (NodeElement,)
     # Configuration for grouped rendering: (Category Name, Display Title)
     _category_config: tuple[tuple[str, str], ...] = (
         ("wrappers", "@wrappers"),
         ("refs", "#refs"),
-        ("expressions", "$expressions"),
         ("nodes", "(nodes)"),
     )
 

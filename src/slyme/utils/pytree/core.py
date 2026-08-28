@@ -104,7 +104,7 @@ class CallKey(PyTreeKey):
 
     .. deprecated:: 0.1.1
         Will be removed in 0.2.0.  ``Ref.key_path`` is deprecated; use
-        ``@expression`` + ``Auto`` instead.
+        ``@node`` + ``Auto`` instead.
 
     If the function arguments are not hashable, this key falls back to identity semantics
     (object.__hash__ and self is other).
@@ -121,7 +121,7 @@ class CallKey(PyTreeKey):
         warning_once(
             "CallKey is deprecated and will be removed in slyme 0.2.0. "
             "It was only used by Ref.key_path, which is also deprecated. "
-            "Use @expression + Auto for dynamic value resolution instead.",
+            "Use @node + Auto for dynamic value resolution instead.",
             FutureWarning,
             2,
         )
@@ -171,7 +171,7 @@ class KeyPathExpr:
 
     .. deprecated:: 0.1.1
         Will be removed in 0.2.0.  ``Ref.key_path`` is deprecated; use
-        ``@expression`` + ``Auto`` instead.
+        ``@node`` + ``Auto`` instead.
 
     Examples:
         P = KeyPathExpr()
@@ -188,7 +188,7 @@ class KeyPathExpr:
             warning_once(
                 "KeyPathExpr is deprecated and will be removed in slyme 0.2.0. "
                 "It was only used by Ref.key_path, which is also deprecated. "
-                "Use @expression + Auto for dynamic value resolution instead.",
+                "Use @node + Auto for dynamic value resolution instead.",
                 FutureWarning,
                 2,
             )

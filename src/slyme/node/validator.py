@@ -26,10 +26,8 @@ from .core import (
     BaseWrapper,
     NodeElement,
     Node,
-    Expression,
     Wrapper,
     AsyncNode,
-    AsyncExpression,
     AsyncWrapper,
 )
 from .tree import NODE_ENGINE
@@ -72,29 +70,6 @@ def _validate_node_structure(obj: Node, key: PyTreeKey, leaves: list[Any]) -> No
             if isinstance(leaf, Wrapper) != is_wrappers_attr:
                 raise NodeStructureError(
                     f"Invalid wrapper placement: Wrappers must be in {type_name}.wrappers."
-                )
-
-
-@VALIDATION_REGISTRY.register(key=Expression)
-def _validate_expression_structure(
-    obj: Expression,
-    key: PyTreeKey,
-    leaves: list[Any],
-) -> None:
-    """Validator for Expression."""
-    type_name = obj.type_repr()
-    path_info = key.codify(type_name)
-
-    with enrich_exception(f"at {path_info}"):
-        # Rule: Downward closure
-        for leaf in leaves:
-            if isinstance(leaf, BaseNode):
-                raise NodeStructureError(
-                    f"Invalid containment: {type_name} cannot hold Node."
-                )
-            if isinstance(leaf, BaseWrapper):
-                raise NodeStructureError(
-                    f"Invalid containment: {type_name} cannot hold Wrapper."
                 )
 
 
@@ -141,29 +116,6 @@ def _validate_async_node_structure(
             if isinstance(leaf, AsyncWrapper) != is_wrappers_attr:
                 raise NodeStructureError(
                     f"Invalid wrapper placement: Wrappers must be in {type_name}.wrappers."
-                )
-
-
-@VALIDATION_REGISTRY.register(key=AsyncExpression)
-def _validate_async_expression_structure(
-    obj: AsyncExpression,
-    key: PyTreeKey,
-    leaves: list[Any],
-) -> None:
-    """Validator for AsyncExpression."""
-    type_name = obj.type_repr()
-    path_info = key.codify(type_name)
-
-    with enrich_exception(f"at {path_info}"):
-        # Rule: Downward closure
-        for leaf in leaves:
-            if isinstance(leaf, BaseNode):
-                raise NodeStructureError(
-                    f"Invalid containment: {type_name} cannot hold Node."
-                )
-            if isinstance(leaf, BaseWrapper):
-                raise NodeStructureError(
-                    f"Invalid containment: {type_name} cannot hold Wrapper."
                 )
 
 

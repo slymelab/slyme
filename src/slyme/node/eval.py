@@ -19,7 +19,7 @@ from slyme.context import Context, Ref, RefFactory
 from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import PyTreeDef
-from .core import Expression, AsyncExpression
+from .core import Node, AsyncNode
 
 __all__ = [
     "eval_tree",
@@ -177,34 +177,33 @@ EVALUATOR_REGISTRY.register(
 )
 
 
-# Expression
-def expression_evaluator(ctx: Context, expressions: Sequence[Any]) -> Sequence[Any]:
+# Node
+def node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
     results = []
-    for expr in expressions:
-        if isinstance(expr, AsyncExpression):
+    for node in nodes:
+        if isinstance(node, AsyncNode):
             raise RuntimeError(
-                f"Cannot evaluate AsyncExpression in synchronous context: {expr}"
+                f"Cannot evaluate AsyncNode in synchronous context: {node}"
             )
-        results.append(expr(ctx))
+        results.append(node.prepare()(ctx))
     return results
 
 
-async def async_expression_evaluator(
-    ctx: Context, expressions: Sequence[Any]
-) -> Sequence[Any]:
+async def async_node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
 
-    async def _evaluate_single(expr: Any) -> Any:
-        if isinstance(expr, AsyncExpression):
-            return await expr(ctx)
+    async def _evaluate_single(node: Any) -> Any:
+        prepared = node.prepare()
+        if isinstance(prepared, AsyncNode):
+            return await prepared(ctx)
         else:
-            return await asyncio.to_thread(expr, ctx)
+            return await asyncio.to_thread(prepared, ctx)
 
-    return await asyncio.gather(*(_evaluate_single(expr) for expr in expressions))
+    return await asyncio.gather(*(_evaluate_single(node) for node in nodes))
 
 
-SHARED_EXPRESSION_EVALUATOR = EvaluatorDef(
-    sync_func=expression_evaluator, async_func=async_expression_evaluator
+SHARED_NODE_EVALUATOR = EvaluatorDef(
+    sync_func=node_evaluator, async_func=async_node_evaluator
 )
 
-EVALUATOR_REGISTRY.register(SHARED_EXPRESSION_EVALUATOR, key=Expression)
-EVALUATOR_REGISTRY.register(SHARED_EXPRESSION_EVALUATOR, key=AsyncExpression)
+EVALUATOR_REGISTRY.register(SHARED_NODE_EVALUATOR, key=Node)
+EVALUATOR_REGISTRY.register(SHARED_NODE_EVALUATOR, key=AsyncNode)
