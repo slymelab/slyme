@@ -46,8 +46,8 @@ from .exception import (
 )
 from .signature import (
     Spec,
-    process_kwargs,
     analyze_signature,
+    UNSET,
     UNDEFINED,
 )
 
@@ -112,27 +112,20 @@ def _prepare_eval(
     return raw_kwargs, eval_kwargs
 
 
-def _validate_kwargs(specs: Mapping[str, Spec], kwargs: Mapping[str, Any]) -> None:
+def _validate_inputs(specs: Mapping[str, Spec], params: Mapping[str, Any]) -> None:
+    """Reject parameters that are not declared by the decorated function."""
     allowed_names = set(specs.keys())
-    input_names = set(kwargs.keys())
-
-    # 1. Exact match check
-    unknown_args = input_names - allowed_names
-    missing_args = allowed_names - input_names
-
-    if unknown_args or missing_args:
-        msg_parts = []
-        if unknown_args:
-            msg_parts.append(f"unexpected keyword argument(s) {list(unknown_args)}")
-        if missing_args:
-            msg_parts.append(f"missing required argument(s) {list(missing_args)}")
-
+    unknown_args = set(params.keys()) - allowed_names
+    if unknown_args:
         raise TypeError(
-            f"Got {' and '.join(msg_parts)}. Allowed arguments: {list(allowed_names)}."
+            f"Got unexpected keyword argument(s) {list(unknown_args)}. "
+            f"Allowed arguments: {list(allowed_names)}."
         )
 
-    # 2. Check for UNDEFINED values
-    undefined_args = [k for k, v in kwargs.items() if v is UNDEFINED]
+
+def _validate_ready(params: Mapping[str, Any]) -> None:
+    """Reject unresolved required parameters at the call boundary."""
+    undefined_args = [name for name, value in params.items() if value is UNDEFINED]
     if undefined_args:
         raise ValueError(f"Missing required parameter(s): {undefined_args}.")
 
@@ -150,11 +143,11 @@ class NodeElement:
         specs: Mapping[str, Spec],
         params: Mapping[str, Any],
     ) -> None:
-        _validate_kwargs(specs, params)
         self._func = func
         self._specs = specs
-        for name, value in params.items():
-            setattr(self, name, value)
+        _validate_inputs(specs, params)
+        for name in specs:
+            setattr(self, name, params[name] if name in params else UNSET)
 
     @property
     def func(self) -> Callable:
@@ -217,7 +210,7 @@ class Node(NodeElement, Generic[_R]):
             kwargs = _snapshot_params(self)
             wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_kwargs(self._specs, kwargs)
+                _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
             if not eval_kwargs:
                 chain: Callable[[Context], _R] = partial(self._func, **raw_kwargs)
@@ -294,7 +287,7 @@ class AsyncNode(NodeElement, Generic[_R]):
             kwargs = _snapshot_params(self)
             wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_kwargs(self._specs, kwargs)
+                _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
             if not eval_kwargs:
                 chain: Callable[[Context], Awaitable[_R]] = partial(
@@ -369,7 +362,7 @@ class Wrapper(NodeElement):
         try:
             kwargs = _snapshot_params(self)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_kwargs(self._specs, kwargs)
+                _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
             if eval_kwargs:
                 raw_kwargs.update(
@@ -406,7 +399,7 @@ class AsyncWrapper(NodeElement):
         try:
             kwargs = _snapshot_params(self)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_kwargs(self._specs, kwargs)
+                _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
             if eval_kwargs:
                 raw_kwargs.update(
@@ -422,7 +415,7 @@ class AsyncWrapper(NodeElement):
 
 
 # Functional Factory & Decorators
-def _validate_parameter_names(
+def _validate_conflicts(
     element_type: type[NodeElement],
     specs: Mapping[str, Spec],
     func: Callable,
@@ -473,10 +466,9 @@ class _FactoryBase(Generic[_P, _E]):
 
     def __call__(self, **kwargs: _P.kwargs) -> _E:
         with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return self.element_type(
-            func=self._func, specs=self._specs, params=final_kwargs
-        )
+            return self.element_type(
+                func=self._func, specs=self._specs, params=kwargs
+            )
 
 
 class NodeFactory(_FactoryBase[_P, _E]):
@@ -521,7 +513,7 @@ def _decorate(
             f"but found {len(analysis.runtime_params)}. "
             "All build arguments must be keyword-only."
         )
-    _validate_parameter_names(element_type, analysis.specs, func)
+    _validate_conflicts(element_type, analysis.specs, func)
     return factory_type(
         func,
         analysis.specs,

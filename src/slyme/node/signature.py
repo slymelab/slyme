@@ -205,35 +205,3 @@ def analyze_signature(
         public_signature=public_signature,
         specs=types.MappingProxyType(specs),
     )
-
-
-def process_kwargs(
-    specs: Mapping[str, Spec],
-    kwargs: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Validate and process kwargs:
-    1. Check for unexpected arguments.
-    2. Check for missing required arguments.
-    3. Inject Spec-resolved values.
-    """
-    allowed_names = set(specs.keys())
-    input_names = set(kwargs.keys())
-
-    # 1. Strict Subset Check
-    unknown_args = input_names - allowed_names
-    if unknown_args:
-        raise TypeError(
-            f"Got unexpected keyword argument(s) {list(unknown_args)}. "
-            f"Allowed arguments: {list(allowed_names)}."
-        )
-
-    # 2. Apply Specs
-    final_kwargs = {}
-    for name, spec_obj in specs.items():
-        value = kwargs.get(name, _MISSING)
-        with enrich_exception(f"for parameter '{name}'"):
-            value = spec_obj._build(value)
-        final_kwargs[name] = value
-
-    return final_kwargs

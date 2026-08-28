@@ -31,6 +31,9 @@ breaking changes when they are documented here.
   containers and builds its evaluation and wrapper plan from that snapshot.
   Node-like objects remain leaves, allowing future logical Slot graphs to
   contain cycles without recursive preparation.
+- Node and Wrapper construction now binds every declared parameter through one
+  `Spec` build path. Missing required parameters remain `UNDEFINED` until the
+  call boundary instead of being rejected or processed by a second kwargs path.
 
 ## [0.1.1] - 2026-08-26
 
