@@ -13,7 +13,7 @@ def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
     return timeout, data
 
 task = process(data=[R.user.age, R.user.name])
-task["timeout"] = 60
+task.timeout = 60
 ```
 
 Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新编译整张图，并会从下一次调用开始生效。

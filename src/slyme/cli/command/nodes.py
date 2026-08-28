@@ -70,8 +70,8 @@ def _walk_nodes(node_def: Any) -> List[Dict[str, Any]]:
             )
             for w in getattr(x, "wrappers", []):
                 walk(w, path + ".wrappers")
-            for k, v in x.kwargs.items():
-                walk(v, f"{path}.{k}" if path else k)
+            for name in x.specs:
+                walk(getattr(x, name), f"{path}.{name}" if path else name)
         elif isinstance(x, (list, tuple)):
             for i, v in enumerate(x):
                 walk(v, f"{path}[{i}]")
@@ -148,7 +148,10 @@ def register(subparsers) -> None:
     )
     p.add_argument("--source", help="Inline pipeline source (alternative to --module).")
     p.add_argument(
-        "--sys-path", action="append", default=None, help="Extra import dir; repeatable."
+        "--sys-path",
+        action="append",
+        default=None,
+        help="Extra import dir; repeatable.",
     )
     p.add_argument(
         "--result-file",

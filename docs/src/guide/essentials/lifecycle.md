@@ -13,7 +13,7 @@ def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
     return timeout, data
 
 task = process(data=[R.user.age, R.user.name])
-task["timeout"] = 60
+task.timeout = 60
 ```
 
 Node parameters and wrappers may be changed between calls. A change never requires recompiling the whole graph and becomes visible on the next call.

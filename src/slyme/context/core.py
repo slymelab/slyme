@@ -593,9 +593,7 @@ class Context(ContextElement):
         values = tuple(self._resolve(ref.parts) for ref in refs)
 
         values = tuple(
-            ContextView(self, ref.parts)
-            if isinstance(val, ContextData)
-            else val
+            ContextView(self, ref.parts) if isinstance(val, ContextData) else val
             for ref, val in zip(refs, values)
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
@@ -621,9 +619,7 @@ class Context(ContextElement):
     @overload
     def get(self, ref: RefLike) -> _T: ...
     @overload
-    def get(
-        self, ref: RefLike, default: _T2
-    ) -> Union[_T, _T2]: ...
+    def get(self, ref: RefLike, default: _T2) -> Union[_T, _T2]: ...
     def get(
         self,
         ref: RefLike,

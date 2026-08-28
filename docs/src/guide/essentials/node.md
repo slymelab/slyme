@@ -62,12 +62,14 @@ Missing required build parameters are represented by `UNDEFINED` and rejected wh
 
 ## Dynamic modification
 
-Node and Wrapper parameters remain mutable between calls:
+Node and Wrapper parameters are real instance attributes and remain mutable between calls:
 
 ```python
-root["child"]["value"] = 10
+root.child.value = 10
 assert root(Context()) == 11
 ```
+
+Parameter names may not conflict with framework attributes such as `run`, `func`, `specs`, or `wrappers`. Parameters cannot be deleted; assign another value or `UNDEFINED` instead.
 
 At call time, ordinary parameter containers are recursively frozen (`list` to `tuple`, `dict` to a read-only mapping). Node and Wrapper objects remain leaves, preventing the snapshot operation from traversing composition cycles.
 

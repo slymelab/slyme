@@ -41,9 +41,9 @@ PYTREE_ENGINE_REGISTRY.register(NODE_SNAPSHOT_ENGINE, key="node_snapshot")
 def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
     children = [obj.wrappers]
     keys = [AttributeKey("wrappers")]
-    for name, value in obj._kwargs.items():
-        children.append(value)
-        keys.append(MappingKey(name))
+    for name in obj._specs:
+        children.append(getattr(obj, name))
+        keys.append(AttributeKey(name))
     return tuple(children), PyTreeAux(
         children_keys=tuple(keys),
         metadata={"func": obj._func, "specs": obj._specs},
@@ -54,18 +54,18 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
 def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Node:
     iterator = zip(aux.children_keys, children)
     _, wrappers = next(iterator)
-    kwargs = {cast("MappingKey", key).key: value for key, value in iterator}
+    params = {cast("AttributeKey", key).name: value for key, value in iterator}
     return Node(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
         wrappers=wrappers,
-        kwargs=kwargs,
+        params=params,
     )
 
 
 def _flatten_wrapper(obj: Wrapper) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(MappingKey(name) for name in obj._kwargs)
-    return tuple(obj._kwargs.values()), PyTreeAux(
+    keys = tuple(AttributeKey(name) for name in obj._specs)
+    return tuple(getattr(obj, name) for name in obj._specs), PyTreeAux(
         children_keys=keys,
         metadata={"func": obj._func, "specs": obj._specs},
         cls=Wrapper,
@@ -73,21 +73,21 @@ def _flatten_wrapper(obj: Wrapper) -> tuple[Iterable[Any], PyTreeAux]:
 
 
 def _unflatten_wrapper(children: Iterable[Any], aux: PyTreeAux) -> Wrapper:
-    kwargs = {
-        cast("MappingKey", key).key: value
+    params = {
+        cast("AttributeKey", key).name: value
         for key, value in zip(aux.children_keys, children)
     }
     return Wrapper(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
+        func=aux.metadata["func"], specs=aux.metadata["specs"], params=params
     )
 
 
 def _flatten_async_node(obj: AsyncNode) -> tuple[Iterable[Any], PyTreeAux]:
     children = [obj.wrappers]
     keys = [AttributeKey("wrappers")]
-    for name, value in obj._kwargs.items():
-        children.append(value)
-        keys.append(MappingKey(name))
+    for name in obj._specs:
+        children.append(getattr(obj, name))
+        keys.append(AttributeKey(name))
     return tuple(children), PyTreeAux(
         children_keys=tuple(keys),
         metadata={"func": obj._func, "specs": obj._specs},
@@ -98,33 +98,31 @@ def _flatten_async_node(obj: AsyncNode) -> tuple[Iterable[Any], PyTreeAux]:
 def _unflatten_async_node(children: Iterable[Any], aux: PyTreeAux) -> AsyncNode:
     iterator = zip(aux.children_keys, children)
     _, wrappers = next(iterator)
-    kwargs = {cast("MappingKey", key).key: value for key, value in iterator}
+    params = {cast("AttributeKey", key).name: value for key, value in iterator}
     return AsyncNode(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
         wrappers=wrappers,
-        kwargs=kwargs,
+        params=params,
     )
 
 
 def _flatten_async_wrapper(obj: AsyncWrapper) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(MappingKey(name) for name in obj._kwargs)
-    return tuple(obj._kwargs.values()), PyTreeAux(
+    keys = tuple(AttributeKey(name) for name in obj._specs)
+    return tuple(getattr(obj, name) for name in obj._specs), PyTreeAux(
         children_keys=keys,
         metadata={"func": obj._func, "specs": obj._specs},
         cls=AsyncWrapper,
     )
 
 
-def _unflatten_async_wrapper(
-    children: Iterable[Any], aux: PyTreeAux
-) -> AsyncWrapper:
-    kwargs = {
-        cast("MappingKey", key).key: value
+def _unflatten_async_wrapper(children: Iterable[Any], aux: PyTreeAux) -> AsyncWrapper:
+    params = {
+        cast("AttributeKey", key).name: value
         for key, value in zip(aux.children_keys, children)
     }
     return AsyncWrapper(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], kwargs=kwargs
+        func=aux.metadata["func"], specs=aux.metadata["specs"], params=params
     )
 
 
@@ -156,9 +154,7 @@ def _unflatten_to_mapping_proxy(
 
 NODE_ENGINE.register(Node, _flatten_node, _unflatten_node, strict=True)
 NODE_ENGINE.register(Wrapper, _flatten_wrapper, _unflatten_wrapper, strict=True)
-NODE_ENGINE.register(
-    AsyncNode, _flatten_async_node, _unflatten_async_node, strict=True
-)
+NODE_ENGINE.register(AsyncNode, _flatten_async_node, _unflatten_async_node, strict=True)
 NODE_ENGINE.register(
     AsyncWrapper, _flatten_async_wrapper, _unflatten_async_wrapper, strict=True
 )

@@ -22,8 +22,6 @@ from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import AttributeKey, PyTreeKey
 from slyme.utils.exception import enrich_exception
 from .core import (
-    BaseNode,
-    BaseWrapper,
     NodeElement,
     Node,
     Wrapper,
@@ -86,11 +84,11 @@ def _validate_wrapper_structure(
     with enrich_exception(f"at {path_info}"):
         # Rule: Downward closure
         for leaf in leaves:
-            if isinstance(leaf, BaseNode):
+            if isinstance(leaf, (Node, AsyncNode)):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Node."
                 )
-            if isinstance(leaf, BaseWrapper):
+            if isinstance(leaf, (Wrapper, AsyncWrapper)):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Wrapper."
                 )
@@ -132,11 +130,11 @@ def _validate_async_wrapper_structure(
     with enrich_exception(f"at {path_info}"):
         # Rule: Downward closure
         for leaf in leaves:
-            if isinstance(leaf, BaseNode):
+            if isinstance(leaf, (Node, AsyncNode)):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Node."
                 )
-            if isinstance(leaf, BaseWrapper):
+            if isinstance(leaf, (Wrapper, AsyncWrapper)):
                 raise NodeStructureError(
                     f"Invalid containment: {type_name} cannot hold Wrapper."
                 )

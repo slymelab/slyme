@@ -24,8 +24,10 @@ from slyme.utils.registry import TypeRegistry
 from slyme.context import Ref
 from .core import (
     NodeElement,
-    BaseNode,
-    BaseWrapper,
+    Node,
+    AsyncNode,
+    Wrapper,
+    AsyncWrapper,
 )
 from .tree import NODE_ENGINE
 
@@ -33,8 +35,10 @@ __all__ = ["get_render_string", "Config"]
 
 # Registry to determine the category of an object during rendering.
 RENDER_TYPE_REGISTRY = TypeRegistry[Any, str]("render_category")
-RENDER_TYPE_REGISTRY.register("nodes", key=BaseNode)
-RENDER_TYPE_REGISTRY.register("wrappers", key=BaseWrapper)
+RENDER_TYPE_REGISTRY.register("nodes", key=Node)
+RENDER_TYPE_REGISTRY.register("nodes", key=AsyncNode)
+RENDER_TYPE_REGISTRY.register("wrappers", key=Wrapper)
+RENDER_TYPE_REGISTRY.register("wrappers", key=AsyncWrapper)
 RENDER_TYPE_REGISTRY.register("refs", key=Ref)
 
 

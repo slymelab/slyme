@@ -80,8 +80,8 @@ def custom_pipeline(new_path: str):
     pipeline = base_pipeline()
 
     # 2. 动态修改特定节点的构建期参数
-    pipeline["nodes"][0]["path"] = new_path
-    pipeline["nodes"].append(
+    pipeline.nodes[0].path = new_path
+    pipeline.nodes.append(
         save_data(output=R.output_path)
     )
     return pipeline

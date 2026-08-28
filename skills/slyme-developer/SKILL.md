@@ -9,6 +9,8 @@ description: API guidance, architectural best practices, and code-style conventi
 
 Slyme uses one mutable `Node` graph throughout assembly and execution. Every Node call takes a local snapshot of its current parameters and wrappers: ordinary Python `list`/`dict` containers are frozen for that call, while Node-like objects remain leaves. Graph changes therefore affect later calls without changing the snapshot already being executed.
 
+Build parameters are real Node and Wrapper attributes. Read and modify them with normal attribute syntax such as `node.child` and `node.timeout = 30`; mapping-style access is not supported. Parameter names that collide with framework attributes are rejected when the decorated function is defined.
+
 Use the root Node's `.run(...)` method as the application boundary. It creates or extends a `Context`, resolves and validates external inputs declared by `Arg` metadata, executes the Node, and extracts an optional output Ref PyTree into ordinary Python values. Every Context value that must exist before the Node graph starts should be declared as an `Arg`; pass concrete values through `inputs`, or enable argparse when values should come from the command line. Call a Node directly with a `Context` for lower-level execution.
 
 Expose this application-boundary contract only on synchronous and asynchronous `@node`s. Wrappers modify a mounted Node's execution and are not independently runnable workflow boundaries.

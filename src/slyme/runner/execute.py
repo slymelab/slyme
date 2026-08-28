@@ -48,9 +48,7 @@ def seed_inputs(input_data: Any) -> Dict[Ref, Any]:
     ``{Ref("input.root"): "/x"}`` for ``Node.run(inputs=...)``.
     """
     flat = (
-        _flatten(input_data)
-        if isinstance(input_data, dict)
-        else {"input": input_data}
+        _flatten(input_data) if isinstance(input_data, dict) else {"input": input_data}
     )
     return {Ref(k): v for k, v in flat.items()}
 

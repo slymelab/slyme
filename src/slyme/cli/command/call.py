@@ -149,7 +149,10 @@ def register(subparsers) -> None:
     )
     p.add_argument("--source", help="Inline pipeline source (source mode).")
     p.add_argument(
-        "--sys-path", action="append", default=None, help="Extra import dir; repeatable."
+        "--sys-path",
+        action="append",
+        default=None,
+        help="Extra import dir; repeatable.",
     )
     p.add_argument(
         "--input",

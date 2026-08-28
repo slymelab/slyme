@@ -19,7 +19,12 @@ import sys
 from typing import Any, Dict
 
 from slyme.runner.io import emit_envelope
-from slyme.runner.protocol import KIND_INFO, SCHEMA_VERSION, error_payload, make_envelope
+from slyme.runner.protocol import (
+    KIND_INFO,
+    SCHEMA_VERSION,
+    error_payload,
+    make_envelope,
+)
 
 
 def _info() -> Dict[str, Any]:

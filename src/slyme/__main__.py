@@ -40,7 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="slyme",
         description="Slyme runner CLI: execute, discover, and introspect workflows.",
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
     for mod in _SUBCOMMANDS:
         mod.register(sub)

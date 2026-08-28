@@ -85,7 +85,7 @@ def project_outputs(ctx: Any, output_paths: List[str]) -> Any:
     for path in output_paths:
         parts = path.split(".")
         if prefix:
-            parts = parts[len(prefix):]
+            parts = parts[len(prefix) :]
         if not parts:
             continue  # contradictory declaration (a leaf and its child); skip parent
         node = out

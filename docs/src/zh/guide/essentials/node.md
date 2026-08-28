@@ -62,12 +62,14 @@ assert root(Context()) == 5
 
 ## 动态修改
 
-Node 和 Wrapper 参数在两次调用之间始终可变：
+Node 和 Wrapper 参数是真实的实例属性，并在两次调用之间始终可变：
 
 ```python
-root["child"]["value"] = 10
+root.child.value = 10
 assert root(Context()) == 11
 ```
+
+参数名不能与 `run`、`func`、`specs` 或 `wrappers` 等框架属性冲突。参数不能删除；应赋予其他值或 `UNDEFINED`。
 
 调用时，普通参数容器会递归冻结（`list` 转为 `tuple`，`dict` 转为只读映射）；Node 与 Wrapper 对象保持为叶子，因此快照操作不会遍历组合环。
 

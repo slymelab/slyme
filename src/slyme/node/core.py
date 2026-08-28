@@ -16,7 +16,6 @@
 Core node module, consolidating base definitions and functional APIs.
 """
 
-import types
 import inspect
 from enum import Enum
 from functools import partial, update_wrapper
@@ -32,7 +31,9 @@ from typing import (
     Iterable,
     Sequence,
     Awaitable,
+    ClassVar,
     Literal,
+    cast,
 )
 from typing_extensions import ParamSpec, Concatenate, Protocol, Self
 from slyme.utils.exception import enrich_exception
@@ -64,6 +65,7 @@ __all__ = [
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_E = TypeVar("_E", bound="NodeElement")
 ExecutionMode = Literal["sync", "async"]
 
 NodeFunc = Callable[Concatenate[Context, _P], _R]
@@ -84,9 +86,14 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
-def _snapshot_kwargs(kwargs: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Freeze built-in containers without traversing Node-related objects."""
-    return NODE_SNAPSHOT_ENGINE.map(lambda x: x, dict(kwargs))
+def _collect_params(element: "NodeElement") -> dict[str, Any]:
+    """Collect build parameters from their real instance attributes."""
+    return {name: getattr(element, name) for name in element._specs}
+
+
+def _snapshot_params(element: "NodeElement") -> Mapping[str, Any]:
+    """Freeze parameter containers without traversing Node-related objects."""
+    return NODE_SNAPSHOT_ENGINE.map(lambda x: x, _collect_params(element))
 
 
 def _prepare_eval(
@@ -130,45 +137,24 @@ def _validate_kwargs(specs: Mapping[str, Spec], kwargs: Mapping[str, Any]) -> No
         raise ValueError(f"Missing required parameter(s): {undefined_args}.")
 
 
-class _MutableMixin:
-    """Controlled mutation for Node and Wrapper build parameters."""
-
-    _specs: Mapping[str, Spec]
-    _kwargs: dict[str, Any]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        if key not in self._specs:
-            raise KeyError(
-                f"Invalid key '{key}'. Parameters must be defined in the specs."
-            )
-        spec_obj = self._specs[key]
-        with enrich_exception(f"for parameter '{key}'"):
-            value = spec_obj._build(value)
-        self._kwargs[key] = value
-
-    def update(self, **kwargs: Any) -> None:
-        for k, v in kwargs.items():
-            self[k] = v
-
-    def __delattr__(self, name: str) -> None:
-        raise AttributeError(
-            f"Cannot delete attribute '{name}' on {type(self).__name__}"
-        )
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError(
-            f"Cannot set attribute '{name}' on {type(self).__name__}. "
-            "Internal structure is protected."
-        )
-
-
 # Node Family
 class NodeElement:
     """Base class for node-related graph elements."""
 
-    _func: Callable
-    _specs: Mapping[str, Spec]
-    _kwargs: Mapping[str, Any]
+    _internal_attrs: ClassVar[frozenset[str]] = frozenset({"_func", "_specs"})
+
+    def __init__(
+        self,
+        *,
+        func: Callable,
+        specs: Mapping[str, Spec],
+        params: Mapping[str, Any],
+    ) -> None:
+        _validate_kwargs(specs, params)
+        self._func = func
+        self._specs = specs
+        for name, value in params.items():
+            setattr(self, name, value)
 
     @property
     def func(self) -> Callable:
@@ -178,14 +164,22 @@ class NodeElement:
     def specs(self) -> Mapping[str, Spec]:
         return self._specs
 
-    @property
-    def kwargs(self) -> Mapping[str, Any]:
-        if isinstance(self._kwargs, types.MappingProxyType):
-            return self._kwargs
-        return types.MappingProxyType(self._kwargs)
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in self._internal_attrs:
+            super().__setattr__(name, value)
+            return
+        if name not in self._specs:
+            raise AttributeError(
+                f"Cannot set unknown attribute '{name}' on {type(self).__name__}."
+            )
+        with enrich_exception(f"for parameter '{name}'"):
+            value = self._specs[name]._build(value)
+        super().__setattr__(name, value)
 
-    def __getitem__(self, key: str) -> Any:
-        return self._kwargs[key]
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(
+            f"Cannot delete attribute '{name}' on {type(self).__name__}."
+        )
 
     def __repr__(self) -> str:
         return get_render_string(self)
@@ -197,15 +191,10 @@ class NodeElement:
         return f"{self._func.__name__}<{self.__class__.__name__}>"
 
 
-class BaseNode(NodeElement):
-    pass
-
-
-class Node(_MutableMixin, BaseNode, Generic[_R]):
+class Node(NodeElement, Generic[_R]):
     """Mutable synchronous Node executed from a call-local snapshot."""
 
-    _kwargs: dict[str, Any]
-    wrappers: list["Wrapper"]
+    _internal_attrs = NodeElement._internal_attrs | {"wrappers"}
 
     def __init__(
         self,
@@ -214,12 +203,10 @@ class Node(_MutableMixin, BaseNode, Generic[_R]):
         func: NodeFunc,
         specs: Mapping[str, Spec],
         wrappers: Optional[Iterable["Wrapper"]] = None,
-        kwargs: dict[str, Any],
+        params: Mapping[str, Any],
     ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "wrappers", list(wrappers) if wrappers else [])
-        object.__setattr__(self, "_kwargs", kwargs)
+        super().__init__(func=func, specs=specs, params=params)
+        self.wrappers = list(wrappers) if wrappers else []
 
     def add_wrappers(self, *wrappers: "Wrapper") -> Self:
         self.wrappers.extend(wrappers)
@@ -227,15 +214,13 @@ class Node(_MutableMixin, BaseNode, Generic[_R]):
 
     def __call__(self, ctx: Context) -> _R:
         try:
-            kwargs = _snapshot_kwargs(self._kwargs)
+            kwargs = _snapshot_params(self)
             wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_kwargs(self._specs, kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
             if not eval_kwargs:
-                chain: Callable[[Context], _R] = partial(
-                    self._func, **raw_kwargs
-                )
+                chain: Callable[[Context], _R] = partial(self._func, **raw_kwargs)
             else:
                 eval_plan = prepare_eval_plan(eval_kwargs)
 
@@ -282,18 +267,11 @@ class Node(_MutableMixin, BaseNode, Generic[_R]):
             cli_args=cli_args,
         )
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "wrappers":
-            object.__setattr__(self, name, value)
-        else:
-            super().__setattr__(name, value)
 
-
-class AsyncNode(_MutableMixin, BaseNode, Generic[_R]):
+class AsyncNode(NodeElement, Generic[_R]):
     """Mutable asynchronous Node executed from a call-local snapshot."""
 
-    _kwargs: dict[str, Any]
-    wrappers: list["AsyncWrapper"]
+    _internal_attrs = NodeElement._internal_attrs | {"wrappers"}
 
     def __init__(
         self,
@@ -302,12 +280,10 @@ class AsyncNode(_MutableMixin, BaseNode, Generic[_R]):
         func: AsyncNodeFunc,
         specs: Mapping[str, Spec],
         wrappers: Optional[Iterable["AsyncWrapper"]] = None,
-        kwargs: dict[str, Any],
+        params: Mapping[str, Any],
     ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "wrappers", list(wrappers) if wrappers else [])
-        object.__setattr__(self, "_kwargs", kwargs)
+        super().__init__(func=func, specs=specs, params=params)
+        self.wrappers = list(wrappers) if wrappers else []
 
     def add_wrappers(self, *wrappers: "AsyncWrapper") -> Self:
         self.wrappers.extend(wrappers)
@@ -315,7 +291,7 @@ class AsyncNode(_MutableMixin, BaseNode, Generic[_R]):
 
     async def __call__(self, ctx: Context) -> _R:
         try:
-            kwargs = _snapshot_kwargs(self._kwargs)
+            kwargs = _snapshot_params(self)
             wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_kwargs(self._specs, kwargs)
@@ -370,21 +346,9 @@ class AsyncNode(_MutableMixin, BaseNode, Generic[_R]):
             cli_args=cli_args,
         )
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "wrappers":
-            object.__setattr__(self, name, value)
-        else:
-            super().__setattr__(name, value)
 
-
-class BaseWrapper(NodeElement):
-    pass
-
-
-class Wrapper(_MutableMixin, BaseWrapper):
+class Wrapper(NodeElement):
     """Mutable synchronous Wrapper executed from a call-local snapshot."""
-
-    _kwargs: dict[str, Any]  # Override: Mapping -> dict
 
     def __init__(
         self,
@@ -392,11 +356,9 @@ class Wrapper(_MutableMixin, BaseWrapper):
         *,
         func: WrapperFunc,
         specs: Mapping[str, Spec],
-        kwargs: dict[str, Any],
+        params: Mapping[str, Any],
     ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
+        super().__init__(func=func, specs=specs, params=params)
 
     def __call__(
         self,
@@ -405,7 +367,7 @@ class Wrapper(_MutableMixin, BaseWrapper):
         call_next: Callable[[Context], Any],
     ) -> Any:
         try:
-            kwargs = _snapshot_kwargs(self._kwargs)
+            kwargs = _snapshot_params(self)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_kwargs(self._specs, kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
@@ -422,10 +384,8 @@ class Wrapper(_MutableMixin, BaseWrapper):
             ) from e
 
 
-class AsyncWrapper(_MutableMixin, BaseWrapper):
+class AsyncWrapper(NodeElement):
     """Mutable asynchronous Wrapper executed from a call-local snapshot."""
-
-    _kwargs: dict[str, Any]
 
     def __init__(
         self,
@@ -433,11 +393,9 @@ class AsyncWrapper(_MutableMixin, BaseWrapper):
         *,
         func: AsyncWrapperFunc,
         specs: Mapping[str, Spec],
-        kwargs: dict[str, Any],
+        params: Mapping[str, Any],
     ):
-        object.__setattr__(self, "_func", func)
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_kwargs", kwargs)
+        super().__init__(func=func, specs=specs, params=params)
 
     async def __call__(
         self,
@@ -446,15 +404,13 @@ class AsyncWrapper(_MutableMixin, BaseWrapper):
         call_next: Callable[[Context], Awaitable[Any]],
     ) -> Any:
         try:
-            kwargs = _snapshot_kwargs(self._kwargs)
+            kwargs = _snapshot_params(self)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_kwargs(self._specs, kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
             if eval_kwargs:
                 raw_kwargs.update(
-                    await async_execute_eval_plan(
-                        ctx, prepare_eval_plan(eval_kwargs)
-                    )
+                    await async_execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs))
                 )
             return await self._func(ctx, wrapped, call_next, **raw_kwargs)
         except NodeException:
@@ -466,159 +422,130 @@ class AsyncWrapper(_MutableMixin, BaseWrapper):
 
 
 # Functional Factory & Decorators
-class BaseFactory:
-    _func: Callable
+def _validate_parameter_names(
+    element_type: type[NodeElement],
+    specs: Mapping[str, Spec],
+    func: Callable,
+) -> None:
+    """Reject build parameters that would shadow the element's own API."""
+    conflicts = [
+        name
+        for name in specs
+        if name in element_type._internal_attrs
+        or any(name in base.__dict__ for base in element_type.__mro__)
+    ]
+    if conflicts:
+        raise TypeError(
+            f"Build parameter name(s) {conflicts} in '{func.__name__}' conflict "
+            f"with reserved {element_type.__name__} attributes."
+        )
+
+
+class _FactoryBase(Generic[_P, _E]):
+    """Shared implementation for mode-aware graph element factories."""
+
+    _element_types: Mapping[ExecutionMode, type[NodeElement]]
+
+    def __init__(
+        self,
+        func: Callable,
+        specs: Mapping[str, Spec],
+        signature: inspect.Signature,
+        *,
+        mode: ExecutionMode,
+    ):
+        update_wrapper(self, func)
+        self._func = func
+        self._specs = specs
+        self.__signature__ = signature
+        self.mode = mode
+
+    @property
+    def element_type(self) -> type[_E]:
+        return cast(type[_E], self._element_types[self.mode])
 
     @property
     def func(self) -> Callable:
         return self._func
 
     def __repr__(self) -> str:
-        return f"<{type(self).__name__} of {self._func.__name__}>"
+        return f"<{type(self).__name__}[{self.mode}] of {self._func.__name__}>"
 
-
-class NodeFactory(BaseFactory, Generic[_P, _R]):
-    def __init__(
-        self,
-        func: Callable,
-        specs: Mapping[str, Spec],
-        signature: inspect.Signature,
-    ):
-        update_wrapper(self, func)
-        self._func = func
-        self._specs = specs
-        self.__signature__ = signature
-
-    def __call__(self, **kwargs: _P.kwargs) -> Node[_R]:
+    def __call__(self, **kwargs: _P.kwargs) -> _E:
         with enrich_exception(f"for '{self._func.__name__}'"):
             final_kwargs = process_kwargs(self._specs, kwargs)
-        # Note: wrappers are intentionally omitted to avoid parameter conflict.
-        # Users should use .add_wrappers() explicitly.
-        return Node(func=self._func, specs=self._specs, kwargs=final_kwargs)
+        return self.element_type(
+            func=self._func, specs=self._specs, params=final_kwargs
+        )
 
 
-class WrapperFactory(BaseFactory, Generic[_P]):
-    def __init__(
-        self,
-        func: Callable,
-        specs: Mapping[str, Spec],
-        signature: inspect.Signature,
-    ):
-        update_wrapper(self, func)
-        self._func = func
-        self._specs = specs
-        self.__signature__ = signature
+class NodeFactory(_FactoryBase[_P, _E]):
+    """Build a Node or AsyncNode according to ``mode``."""
 
-    def __call__(self, **kwargs: _P.kwargs) -> Wrapper:
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return Wrapper(func=self._func, specs=self._specs, kwargs=final_kwargs)
+    _element_types: Mapping[ExecutionMode, type[NodeElement]] = {
+        "sync": Node,
+        "async": AsyncNode,
+    }
 
 
-class AsyncNodeFactory(BaseFactory, Generic[_P, _R]):
-    def __init__(
-        self,
-        func: Callable,
-        specs: Mapping[str, Spec],
-        signature: inspect.Signature,
-    ):
-        update_wrapper(self, func)
-        self._func = func
-        self._specs = specs
-        self.__signature__ = signature
+class WrapperFactory(_FactoryBase[_P, _E]):
+    """Build a Wrapper or AsyncWrapper according to ``mode``."""
 
-    def __call__(self, **kwargs: _P.kwargs) -> AsyncNode[_R]:
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        # Note: wrappers are intentionally omitted to avoid parameter conflict.
-        # Users should use .add_wrappers() explicitly.
-        return AsyncNode(func=self._func, specs=self._specs, kwargs=final_kwargs)
+    _element_types: Mapping[ExecutionMode, type[NodeElement]] = {
+        "sync": Wrapper,
+        "async": AsyncWrapper,
+    }
 
 
-class AsyncWrapperFactory(BaseFactory, Generic[_P]):
-    def __init__(
-        self,
-        func: Callable,
-        specs: Mapping[str, Spec],
-        signature: inspect.Signature,
-    ):
-        update_wrapper(self, func)
-        self._func = func
-        self._specs = specs
-        self.__signature__ = signature
-
-    def __call__(self, **kwargs: _P.kwargs) -> AsyncWrapper:
-        with enrich_exception(f"for '{self._func.__name__}'"):
-            final_kwargs = process_kwargs(self._specs, kwargs)
-        return AsyncWrapper(func=self._func, specs=self._specs, kwargs=final_kwargs)
-
-
-def _node(
-    func: NodeFunc[_P, _R], /, *, resolve_type_hints: bool
-) -> NodeFactory[_P, _R]:
+def _decorate(
+    func: Callable[..., Any],
+    /,
+    *,
+    mode: Optional[ExecutionMode],
+    resolve_type_hints: bool,
+    kind: Literal["node", "wrapper"],
+) -> Union[NodeFactory[Any, Any], WrapperFactory[Any, Any]]:
+    resolved_mode = _resolve_execution_mode(func, mode, kind)
+    if kind == "node":
+        factory_type = NodeFactory
+        runtime_count = 1
+    else:
+        factory_type = WrapperFactory
+        runtime_count = 3
+    element_type = factory_type._element_types[resolved_mode]
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.runtime_params) != 1:
+    if len(analysis.runtime_params) != runtime_count:
         raise TypeError(
-            f"@node '{func.__name__}' requires exactly 1 runtime argument, "
+            f"@{kind} '{func.__name__}' requires exactly {runtime_count} runtime "
+            f"argument{'s' if runtime_count != 1 else ''}, "
             f"but found {len(analysis.runtime_params)}. "
             "All build arguments must be keyword-only."
         )
-    return NodeFactory(func, analysis.specs, analysis.public_signature)
-
-
-def _async_node(
-    func: AsyncNodeFunc[_P, _R], /, *, resolve_type_hints: bool
-) -> AsyncNodeFactory[_P, _R]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.runtime_params) != 1:
-        raise TypeError(
-            f"@node '{func.__name__}' requires exactly 1 runtime argument, "
-            f"but found {len(analysis.runtime_params)}. "
-            "All build arguments must be keyword-only."
-        )
-    return AsyncNodeFactory(func, analysis.specs, analysis.public_signature)
-
-
-def _wrapper(
-    func: WrapperFunc[_P], /, *, resolve_type_hints: bool
-) -> WrapperFactory[_P]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.runtime_params) != 3:
-        raise TypeError(
-            f"@wrapper '{func.__name__}' requires exactly 3 runtime arguments, "
-            f"but found {len(analysis.runtime_params)}. "
-            "All build arguments must be keyword-only."
-        )
-    return WrapperFactory(func, analysis.specs, analysis.public_signature)
-
-
-def _async_wrapper(
-    func: AsyncWrapperFunc[_P], /, *, resolve_type_hints: bool
-) -> AsyncWrapperFactory[_P]:
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.runtime_params) != 3:
-        raise TypeError(
-            f"@wrapper '{func.__name__}' requires exactly 3 runtime arguments, "
-            f"but found {len(analysis.runtime_params)}. "
-            "All build arguments must be keyword-only."
-        )
-    return AsyncWrapperFactory(func, analysis.specs, analysis.public_signature)
+    _validate_parameter_names(element_type, analysis.specs, func)
+    return factory_type(
+        func,
+        analysis.specs,
+        analysis.public_signature,
+        mode=resolved_mode,
+    )
 
 
 class _AutoNodeDecorator(Protocol):
     @overload
-    def __call__(self, func: NodeFunc[_P, _R], /) -> NodeFactory[_P, _R]: ...
+    def __call__(self, func: NodeFunc[_P, _R], /) -> NodeFactory[_P, Node[_R]]: ...
     @overload
     def __call__(
         self, func: AsyncNodeFunc[_P, _R], /
-    ) -> AsyncNodeFactory[_P, _R]: ...
+    ) -> NodeFactory[_P, AsyncNode[_R]]: ...
 
 
 class _AutoWrapperDecorator(Protocol):
     @overload
-    def __call__(self, func: WrapperFunc[_P], /) -> WrapperFactory[_P]: ...
+    def __call__(self, func: WrapperFunc[_P], /) -> WrapperFactory[_P, Wrapper]: ...
     @overload
-    def __call__(self, func: AsyncWrapperFunc[_P], /) -> AsyncWrapperFactory[_P]: ...
+    def __call__(
+        self, func: AsyncWrapperFunc[_P], /
+    ) -> WrapperFactory[_P, AsyncWrapper]: ...
 
 
 def _is_async_callable(func: Callable[..., Any]) -> bool:
@@ -653,32 +580,6 @@ def _resolve_execution_mode(
     return mode
 
 
-def _dispatch_node(
-    func: Callable[..., Any],
-    /,
-    *,
-    mode: Optional[ExecutionMode],
-    resolve_type_hints: bool,
-) -> Union[NodeFactory[Any, Any], AsyncNodeFactory[Any, Any]]:
-    resolved_mode = _resolve_execution_mode(func, mode, "node")
-    if resolved_mode == "async":
-        return _async_node(func, resolve_type_hints=resolve_type_hints)
-    return _node(func, resolve_type_hints=resolve_type_hints)
-
-
-def _dispatch_wrapper(
-    func: Callable[..., Any],
-    /,
-    *,
-    mode: Optional[ExecutionMode],
-    resolve_type_hints: bool,
-) -> Union[WrapperFactory[Any], AsyncWrapperFactory[Any]]:
-    resolved_mode = _resolve_execution_mode(func, mode, "wrapper")
-    if resolved_mode == "async":
-        return _async_wrapper(func, resolve_type_hints=resolve_type_hints)
-    return _wrapper(func, resolve_type_hints=resolve_type_hints)
-
-
 @overload
 def node(
     func: NodeFunc[_P, _R],
@@ -686,7 +587,7 @@ def node(
     *,
     mode: Optional[Literal["sync"]] = None,
     resolve_type_hints: bool = True,
-) -> NodeFactory[_P, _R]: ...
+) -> NodeFactory[_P, Node[_R]]: ...
 @overload
 def node(
     func: AsyncNodeFunc[_P, _R],
@@ -694,7 +595,7 @@ def node(
     *,
     mode: Optional[Literal["async"]] = None,
     resolve_type_hints: bool = True,
-) -> AsyncNodeFactory[_P, _R]: ...
+) -> NodeFactory[_P, AsyncNode[_R]]: ...
 @overload
 def node(
     func: _Missing = _MISSING,
@@ -702,7 +603,7 @@ def node(
     *,
     mode: Literal["sync"],
     resolve_type_hints: bool = True,
-) -> Callable[[NodeFunc[_P, _R]], NodeFactory[_P, _R]]: ...
+) -> Callable[[NodeFunc[_P, _R]], NodeFactory[_P, Node[_R]]]: ...
 @overload
 def node(
     func: _Missing = _MISSING,
@@ -710,7 +611,7 @@ def node(
     *,
     mode: Literal["async"],
     resolve_type_hints: bool = True,
-) -> Callable[[AsyncNodeFunc[_P, _R]], AsyncNodeFactory[_P, _R]]: ...
+) -> Callable[[AsyncNodeFunc[_P, _R]], NodeFactory[_P, AsyncNode[_R]]]: ...
 @overload
 def node(
     func: _Missing = _MISSING,
@@ -733,8 +634,15 @@ def node(
     function that returns an Awaitable.
     """
     if func is _MISSING:
-        return partial(_dispatch_node, mode=mode, resolve_type_hints=resolve_type_hints)
-    return _dispatch_node(func, mode=mode, resolve_type_hints=resolve_type_hints)
+        return partial(
+            _decorate,
+            mode=mode,
+            resolve_type_hints=resolve_type_hints,
+            kind="node",
+        )
+    return _decorate(
+        func, mode=mode, resolve_type_hints=resolve_type_hints, kind="node"
+    )
 
 
 @overload
@@ -744,7 +652,7 @@ def wrapper(
     *,
     mode: Optional[Literal["sync"]] = None,
     resolve_type_hints: bool = True,
-) -> WrapperFactory[_P]: ...
+) -> WrapperFactory[_P, Wrapper]: ...
 @overload
 def wrapper(
     func: AsyncWrapperFunc[_P],
@@ -752,7 +660,7 @@ def wrapper(
     *,
     mode: Optional[Literal["async"]] = None,
     resolve_type_hints: bool = True,
-) -> AsyncWrapperFactory[_P]: ...
+) -> WrapperFactory[_P, AsyncWrapper]: ...
 @overload
 def wrapper(
     func: _Missing = _MISSING,
@@ -760,7 +668,7 @@ def wrapper(
     *,
     mode: Literal["sync"],
     resolve_type_hints: bool = True,
-) -> Callable[[WrapperFunc[_P]], WrapperFactory[_P]]: ...
+) -> Callable[[WrapperFunc[_P]], WrapperFactory[_P, Wrapper]]: ...
 @overload
 def wrapper(
     func: _Missing = _MISSING,
@@ -768,7 +676,7 @@ def wrapper(
     *,
     mode: Literal["async"],
     resolve_type_hints: bool = True,
-) -> Callable[[AsyncWrapperFunc[_P]], AsyncWrapperFactory[_P]]: ...
+) -> Callable[[AsyncWrapperFunc[_P]], WrapperFactory[_P, AsyncWrapper]]: ...
 @overload
 def wrapper(
     func: _Missing = _MISSING,
@@ -787,9 +695,14 @@ def wrapper(
     """Create a synchronous or asynchronous Wrapper factory."""
     if func is _MISSING:
         return partial(
-            _dispatch_wrapper, mode=mode, resolve_type_hints=resolve_type_hints
+            _decorate,
+            mode=mode,
+            resolve_type_hints=resolve_type_hints,
+            kind="wrapper",
         )
-    return _dispatch_wrapper(func, mode=mode, resolve_type_hints=resolve_type_hints)
+    return _decorate(
+        func, mode=mode, resolve_type_hints=resolve_type_hints, kind="wrapper"
+    )
 
 
 from .tree import NODE_ENGINE, NODE_SNAPSHOT_ENGINE

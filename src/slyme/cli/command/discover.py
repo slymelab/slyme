@@ -106,7 +106,9 @@ def _discover_dir(workflow_dir: str):
                 continue
             module_doc = ast.get_docstring(tree) or ""
             for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_builder(node):
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and _is_builder(node):
                     workflows.append(
                         {
                             "name": f"{module}.{node.name}",
@@ -161,7 +163,9 @@ def register(subparsers) -> None:
         "--path", action="append", default=None, help="Directory to scan; repeatable."
     )
     p.add_argument(
-        "paths", nargs="*", help="Directories to scan (positional alternative to --path)."
+        "paths",
+        nargs="*",
+        help="Directories to scan (positional alternative to --path).",
     )
     p.add_argument(
         "--result-file",

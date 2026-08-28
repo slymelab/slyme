@@ -80,8 +80,8 @@ def custom_pipeline(new_path: str):
     pipeline = base_pipeline()
 
     # 2. Dynamically modify specific Node's build-time parameters
-    pipeline["nodes"][0]["path"] = new_path
-    pipeline["nodes"].append(
+    pipeline.nodes[0].path = new_path
+    pipeline.nodes.append(
         save_data(output=R.output_path)
     )
     return pipeline

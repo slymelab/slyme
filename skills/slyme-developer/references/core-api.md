@@ -68,6 +68,6 @@ result = root.run(
 )
 ```
 
-The Node graph stays mutable. Each invocation freezes only ordinary containers in the current Node or Wrapper parameter mapping; Node-like values remain leaves. A change affects subsequent calls without an explicit prepare phase.
+The Node graph stays mutable. Build parameters are real attributes (`root.derived`, `root.children`, and so on), and assignment runs the parameter's `Spec` build logic. Each invocation freezes only ordinary containers in the current Node or Wrapper parameters; Node-like values remain leaves. A change affects subsequent calls without an explicit prepare phase.
 
 Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

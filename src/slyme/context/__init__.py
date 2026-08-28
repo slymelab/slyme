@@ -12,7 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .core import Context, Ref, RefFactory, R, RefLike, to_ref, Config as ContextConfig, DIFF_MISSING
+from .core import (
+    Context,
+    Ref,
+    RefFactory,
+    R,
+    RefLike,
+    to_ref,
+    Config as ContextConfig,
+    DIFF_MISSING,
+)
 from .metadata import ARG, HELP, OUTPUT, TYPE, Arg
 
 __all__ = [

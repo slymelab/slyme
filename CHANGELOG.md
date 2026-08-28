@@ -21,6 +21,12 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Node and Wrapper build parameters are now real instance attributes. Parameter
+  names are checked against reserved framework attributes when decorated;
+  `_kwargs` and mapping-style parameter access have been removed.
+- Node and Wrapper construction now uses separate mode-aware factories while
+  synchronous and asynchronous decorators share the same signature-analysis
+  path.
 - Each Node and Wrapper call now freezes only its local ordinary Python
   containers and builds its evaluation and wrapper plan from that snapshot.
   Node-like objects remain leaves, allowing future logical Slot graphs to
