@@ -107,7 +107,7 @@ Auto = Annotated[T, Spec(auto_eval=True)]
 # Inspection & Signature Analysis
 @dataclass(frozen=True)
 class SignatureAnalysis:
-    pos_only_params: tuple[inspect.Parameter, ...]
+    runtime_params: tuple[inspect.Parameter, ...]
     public_signature: inspect.Signature
     specs: Mapping[str, Spec]
 
@@ -183,7 +183,7 @@ def analyze_signature(
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
 
-    pos_only_params = []
+    runtime_params = []
     public_params = []  # Used for factory signature
     specs: dict[str, Spec] = {}
 
@@ -194,24 +194,16 @@ def analyze_signature(
 
     for p in params:
         with enrich_exception(f"in definition of '{func.__name__}'"):
-            if p.kind == inspect.Parameter.POSITIONAL_ONLY:
-                pos_only_params.append(p)
-            elif p.kind == inspect.Parameter.KEYWORD_ONLY:
+            if p.kind == inspect.Parameter.KEYWORD_ONLY:
                 public_params.append(p)
                 # Spec Resolution Logic: Always returns a Spec object now
                 specs[p.name] = _resolve_spec(p, type_hints.get(p.name))
             else:
-                kind_name = str(p.kind)
-                raise TypeError(
-                    f"Invalid parameter '{p.name}' of kind {kind_name}. "
-                    f"Functional nodes strict rules:\n"
-                    f"  1. Runtime args (e.g. ctx) must be POSITIONAL_ONLY (before '/').\n"
-                    f"  2. Config args must be KEYWORD_ONLY (after '*')."
-                )
+                runtime_params.append(p)
 
     public_signature = sig.replace(parameters=public_params)
     return SignatureAnalysis(
-        pos_only_params=tuple(pos_only_params),
+        runtime_params=tuple(runtime_params),
         public_signature=public_signature,
         specs=types.MappingProxyType(specs),
     )

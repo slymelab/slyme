@@ -1030,10 +1030,11 @@ def _node(
     func: NodeFunc[_P, _R], /, *, resolve_type_hints: bool
 ) -> NodeFactory[_P, _R]:
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 1:
+    if len(analysis.runtime_params) != 1:
         raise TypeError(
-            f"@node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
-            f"but found {len(analysis.pos_only_params)}."
+            f"@node '{func.__name__}' requires exactly 1 runtime argument, "
+            f"but found {len(analysis.runtime_params)}. "
+            "All build arguments must be keyword-only."
         )
     return NodeFactory(func, analysis.specs, analysis.public_signature)
 
@@ -1042,10 +1043,11 @@ def _async_node(
     func: AsyncNodeFunc[_P, _R], /, *, resolve_type_hints: bool
 ) -> AsyncNodeFactory[_P, _R]:
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 1:
+    if len(analysis.runtime_params) != 1:
         raise TypeError(
-            f"@node '{func.__name__}' requires exactly 1 positional-only argument (ctx), "
-            f"but found {len(analysis.pos_only_params)}."
+            f"@node '{func.__name__}' requires exactly 1 runtime argument, "
+            f"but found {len(analysis.runtime_params)}. "
+            "All build arguments must be keyword-only."
         )
     return AsyncNodeFactory(func, analysis.specs, analysis.public_signature)
 
@@ -1054,10 +1056,11 @@ def _wrapper(
     func: WrapperFunc[_P], /, *, resolve_type_hints: bool
 ) -> WrapperFactory[_P]:
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 3:
+    if len(analysis.runtime_params) != 3:
         raise TypeError(
-            f"@wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
-            f"but found {len(analysis.pos_only_params)}."
+            f"@wrapper '{func.__name__}' requires exactly 3 runtime arguments, "
+            f"but found {len(analysis.runtime_params)}. "
+            "All build arguments must be keyword-only."
         )
     return WrapperFactory(func, analysis.specs, analysis.public_signature)
 
@@ -1066,10 +1069,11 @@ def _async_wrapper(
     func: AsyncWrapperFunc[_P], /, *, resolve_type_hints: bool
 ) -> AsyncWrapperFactory[_P]:
     analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.pos_only_params) != 3:
+    if len(analysis.runtime_params) != 3:
         raise TypeError(
-            f"@wrapper '{func.__name__}' requires exactly 3 positional-only arguments (ctx, wrapped, call_next), "
-            f"but found {len(analysis.pos_only_params)}."
+            f"@wrapper '{func.__name__}' requires exactly 3 runtime arguments, "
+            f"but found {len(analysis.runtime_params)}. "
+            "All build arguments must be keyword-only."
         )
     return AsyncWrapperFactory(func, analysis.specs, analysis.public_signature)
 
