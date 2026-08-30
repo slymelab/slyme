@@ -49,4 +49,10 @@ Context 接受 Ref PyTree 进行批量读写。`extract` 会保持请求的 Pyth
 
 由于 Context 数据可变，当并发分支需要独立状态时，不能隐式共享同一个 Context，调用方应在分支前显式创建复制的 Context。这使隔离边界清晰可见，同时允许顺序执行高效共享同一个 Context。
 
-Node 参数快照与 Context 数据用途不同：Node 调用只在局部冻结参数容器，而从 Context 取得的值保持其原始 Python 类型。
+`Context.clone()` 会创建独立的内部 `ContextData` 层次，同时保留每个已存储叶子的对象身份。修改克隆中的路径不会改变源 Context，但修改共享叶子会被两者同时观察到。`ContextView` 也可以克隆为只包含该子树的独立 Context。
+
+```python
+branch = ctx.clone()
+branch.set(R.user.age, 37)
+assert ctx.get(R.user.age) == 36
+```

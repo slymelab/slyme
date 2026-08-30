@@ -1,6 +1,6 @@
 # Lifecycle
 
-Slyme uses one live `Node` graph rather than separate definition and execution trees. Creating a decorated function builds a mutable Node; calling it executes that same Node from a local snapshot.
+Slyme uses one live `Node` graph rather than separate definition and execution trees. Creating a decorated function builds a mutable Node; calling it executes that same Node with its current parameters.
 
 ## Build and modify
 
@@ -20,27 +20,28 @@ task.timeout = 60
 
 Node parameters and wrappers may be changed between calls. A change never requires recompiling the whole graph and becomes visible on the next call.
 
-## Call-local snapshot
+## Live calls and explicit clones
 
 At the start of each Node or Wrapper call, Slyme:
 
-1. copies that object's current parameter mapping;
-2. recursively freezes ordinary Python containers (`list` to `tuple`, `dict` to a read-only mapping);
-3. treats Node-like objects as leaves, so it does not recursively prepare the composition graph;
-4. validates parameters, builds the temporary Auto evaluation plan and wrapper chain;
-5. executes the user function.
+1. reads and validates the object's current parameters;
+2. separates static values from values that require Auto evaluation;
+3. builds a temporary evaluation plan and wrapper chain;
+4. passes static parameter containers directly to the user function.
 
-The snapshot remains stable for that call. Mutations made concurrently or later are observed only by later calls. This model also allows future Slot relationships and Node graphs to contain cycles without a recursive preparation pass following them.
+There is no implicit frozen snapshot. Mutating a static `list`, `dict`, or other leaf from inside a Node or Wrapper mutates the live parameter and is visible to later calls. An Auto structure containing `Ref` or child Node leaves is reconstructed with the evaluated values, because evaluation produces a new result tree.
+
+Use `node.clone()` when a branch needs an independent Node/Wrapper and parameter-PyTree structure. Use `context.clone()` when it needs an independent ContextData structure. Both operations preserve unregistered leaf identities; they are structural clones, not arbitrary deep copies.
 
 ## Auto values
 
-Container freezing applies to structures supplied as Node parameters, not to values retrieved from `Context`:
+Static parameter values and values retrieved from `Context` keep their normal Python mutability:
 
 ```python
 ctx = Context()
 ctx.update({R.a: 1, R.b: 2, R.items: [1, 2]})
 
-process(data=[R.a, R.b])(ctx)  # data is (1, 2)
+process(data=[R.a, R.b])(ctx)  # Auto produces the evaluated list [1, 2]
 process(data=R.items)(ctx)  # data is the list stored in Context
 ```
 

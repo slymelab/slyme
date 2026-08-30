@@ -94,11 +94,6 @@ def _collect_params(element: "NodeElement") -> dict[str, Any]:
     return {name: getattr(element, name) for name in element._specs}
 
 
-def _snapshot_params(element: "NodeElement") -> Mapping[str, Any]:
-    """Freeze parameter containers without traversing Node-related objects."""
-    return NODE_SNAPSHOT_ENGINE.map(lambda x: x, _collect_params(element))
-
-
 def _prepare_eval(
     specs: Mapping[str, Spec], kwargs: Mapping[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -186,9 +181,13 @@ class NodeElement:
     def type_repr(self) -> str:
         return f"{self._func.__name__}<{self.__class__.__name__}>"
 
+    def clone(self) -> Self:
+        """Structurally clone this element and its parameter PyTree."""
+        return cast(Self, NODE_ENGINE.map(lambda leaf: leaf, self))
+
 
 class Node(NodeElement, Generic[_R]):
-    """Mutable synchronous Node executed from a call-local snapshot."""
+    """Mutable synchronous Node."""
 
     _internal_attrs = NodeElement._internal_attrs | {"wrappers"}
 
@@ -210,7 +209,7 @@ class Node(NodeElement, Generic[_R]):
 
     def __call__(self, ctx: Context) -> _R:
         try:
-            kwargs = _snapshot_params(self)
+            kwargs = _collect_params(self)
             wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_ready(kwargs)
@@ -265,7 +264,7 @@ class Node(NodeElement, Generic[_R]):
 
 
 class AsyncNode(NodeElement, Generic[_R]):
-    """Mutable asynchronous Node executed from a call-local snapshot."""
+    """Mutable asynchronous Node."""
 
     _internal_attrs = NodeElement._internal_attrs | {"wrappers"}
 
@@ -287,7 +286,7 @@ class AsyncNode(NodeElement, Generic[_R]):
 
     async def __call__(self, ctx: Context) -> _R:
         try:
-            kwargs = _snapshot_params(self)
+            kwargs = _collect_params(self)
             wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_ready(kwargs)
@@ -344,7 +343,7 @@ class AsyncNode(NodeElement, Generic[_R]):
 
 
 class Wrapper(NodeElement):
-    """Mutable synchronous Wrapper executed from a call-local snapshot."""
+    """Mutable synchronous Wrapper."""
 
     def __init__(
         self,
@@ -363,7 +362,7 @@ class Wrapper(NodeElement):
         call_next: Callable[[Context], Any],
     ) -> Any:
         try:
-            kwargs = _snapshot_params(self)
+            kwargs = _collect_params(self)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
@@ -381,7 +380,7 @@ class Wrapper(NodeElement):
 
 
 class AsyncWrapper(NodeElement):
-    """Mutable asynchronous Wrapper executed from a call-local snapshot."""
+    """Mutable asynchronous Wrapper."""
 
     def __init__(
         self,
@@ -400,7 +399,7 @@ class AsyncWrapper(NodeElement):
         call_next: Callable[[Context], Awaitable[Any]],
     ) -> Any:
         try:
-            kwargs = _snapshot_params(self)
+            kwargs = _collect_params(self)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
@@ -702,4 +701,4 @@ def wrapper(
 
 from .eval import async_execute_eval_plan, execute_eval_plan, prepare_eval_plan
 from .render import get_render_string
-from .tree import NODE_ENGINE, NODE_SNAPSHOT_ENGINE
+from .tree import NODE_ENGINE

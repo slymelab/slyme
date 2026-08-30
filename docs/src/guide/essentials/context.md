@@ -49,4 +49,10 @@ Context accepts Ref PyTrees for batch reads and writes. `extract` preserves the 
 
 Because Context data is mutable, concurrent branches must not silently share it when independent state is required. The caller must create an explicitly copied Context before branching. This makes the isolation boundary visible and leaves sequential execution free to share one Context efficiently.
 
-Node parameter snapshots and Context data serve different purposes: Node calls freeze their parameter containers locally, while values retrieved from Context retain their original Python types.
+`Context.clone()` creates an independent hierarchy of internal `ContextData` containers while preserving every stored leaf object. Mutating paths on the clone does not change the source Context, but mutating a shared leaf is visible through both. A `ContextView` can also be cloned into a standalone Context containing that subtree.
+
+```python
+branch = ctx.clone()
+branch.set(R.user.age, 37)
+assert ctx.get(R.user.age) == 36
+```

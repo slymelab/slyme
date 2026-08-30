@@ -7,7 +7,7 @@ description: API guidance, architectural best practices, and code-style conventi
 
 ## Mental model
 
-Slyme uses one mutable `Node` graph throughout assembly and execution. Every Node call takes a local snapshot of its current parameters and wrappers: ordinary Python `list`/`dict` containers are frozen for that call, while Node-like objects remain leaves. Graph changes therefore affect later calls without changing the snapshot already being executed.
+Slyme uses one mutable `Node` graph throughout assembly and execution. Node and Wrapper calls pass their current static parameter containers directly to user functions; mutations to those containers remain on the live element and are visible to later calls. Use `.clone()` when an independent structure is required. A Node clone rebuilds the Node/Wrapper graph and registered parameter PyTrees while sharing unregistered leaves. A Context clone rebuilds only its `ContextData` containers while sharing stored leaf values.
 
 Build parameters are real Node and Wrapper attributes. Read and modify them with normal attribute syntax such as `node.child` and `node.timeout = 30`; mapping-style access is not supported. Parameter names that collide with framework attributes are rejected when the decorated function is defined.
 

@@ -225,3 +225,41 @@ def test_context_pytree_engines_preserve_context_identity_contract() -> None:
     rebuilt = CONTEXT_ENGINE.unflatten(definition, leaves)
     assert isinstance(rebuilt, Context)
     assert rebuilt.to_dict() == ctx.to_dict()
+
+
+def test_context_clone_copies_only_context_data_structure() -> None:
+    shared_mapping = {"items": [1, 2]}
+    shared_marker = object()
+    ctx = Context()
+    ctx.update(
+        {
+            R.branch.value: shared_mapping,
+            R.branch.marker: shared_marker,
+            R.other: [3, 4],
+        }
+    )
+
+    cloned = ctx.clone()
+
+    assert cloned is not ctx
+    assert cloned.to_context_data() is not ctx.to_context_data()
+    assert cloned.to_context_data(R.branch) is not ctx.to_context_data(R.branch)
+    assert cloned.get(R.branch.value) is shared_mapping
+    assert cloned.get(R.branch.marker) is shared_marker
+    assert cloned.get(R.other) is ctx.get(R.other)
+
+    cloned.set(R.branch.added, "clone-only")
+    cloned.delete(R.branch.marker)
+    assert not ctx.exists(R.branch.added)
+    assert ctx.exists(R.branch.marker)
+
+    shared_mapping["items"].append(3)
+    assert cloned.get(R.branch.value)["items"] == [1, 2, 3]
+    assert ctx.get(R.branch.value)["items"] == [1, 2, 3]
+
+    branch_clone = ctx.get(R.branch).clone()
+    assert branch_clone.to_dict() == {
+        "value": shared_mapping,
+        "marker": shared_marker,
+    }
+    assert branch_clone.to_context_data() is not ctx.to_context_data(R.branch)

@@ -1,6 +1,6 @@
 # 生命周期（Lifecycle）
 
-Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行树。调用装饰后的函数会创建可变 Node；调用这个 Node 时，则基于它的局部快照执行。
+Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行树。调用装饰后的函数会创建可变 Node；调用这个 Node 时，会使用它的当前参数直接执行。
 
 ## 构建与修改
 
@@ -20,27 +20,28 @@ task.timeout = 60
 
 Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新编译整张图，并会从下一次调用开始生效。
 
-## 调用局部快照
+## 实时调用与显式克隆
 
 每次 Node 或 Wrapper 调用开始时，Slyme 会：
 
-1. 复制当前对象的参数映射；
-2. 递归冻结普通 Python 容器（`list` 转为 `tuple`，`dict` 转为只读映射）；
-3. 将 Node 类对象视为叶子，不递归 prepare 组合图；
-4. 校验参数，临时生成 Auto 求值计划与 wrapper chain；
-5. 执行用户函数。
+1. 读取并校验对象的当前参数；
+2. 分离静态值与需要 Auto 求值的值；
+3. 临时生成求值计划与 wrapper chain；
+4. 将静态参数容器直接传给用户函数。
 
-该快照在本次调用期间保持稳定；并发或后续修改只会被后续调用观察到。未来的 Slot 关系与 Node 图即使形成环，也不会被递归准备过程追踪。
+调用过程不再创建隐式冻结快照。在 Node 或 Wrapper 内修改静态 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。包含 `Ref` 或子 Node 的 Auto 结构仍会用求值结果重建，因为求值本身会生成结果树。
+
+需要独立的 Node/Wrapper 与参数 PyTree 结构时调用 `node.clone()`；需要独立 ContextData 结构时调用 `context.clone()`。两者都会保留未注册叶子的对象身份，因此属于结构克隆，而不是任意对象的深拷贝。
 
 ## Auto 值
 
-容器冻结只作用于作为 Node 参数传入的结构，不会冻结从 `Context` 取出的值：
+静态参数值和从 `Context` 取得的值都保持普通 Python 可变语义：
 
 ```python
 ctx = Context()
 ctx.update({R.a: 1, R.b: 2, R.items: [1, 2]})
 
-process(data=[R.a, R.b])(ctx)  # data 为 (1, 2)
+process(data=[R.a, R.b])(ctx)  # Auto 生成求值后的 list [1, 2]
 process(data=R.items)(ctx)  # data 是 Context 中保存的 list
 ```
 

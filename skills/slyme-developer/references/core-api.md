@@ -66,6 +66,6 @@ result = root.run(
 )
 ```
 
-The Node graph stays mutable. Build parameters are real attributes (`root.derived`, `root.children`, and so on), and assignment runs the parameter's `Spec` build logic. Each invocation freezes only ordinary containers in the current Node or Wrapper parameters; Node-like values remain leaves. A change affects subsequent calls without an explicit prepare phase.
+The Node graph stays mutable. Build parameters are real attributes (`root.derived`, `root.children`, and so on), and assignment runs the parameter's `Spec` build logic. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. A change affects subsequent calls without an explicit prepare phase. Call `root.clone()` before making changes that need an independent Node/Wrapper and parameter-PyTree structure; unregistered leaf values remain shared.
 
 Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

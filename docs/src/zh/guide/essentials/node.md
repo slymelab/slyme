@@ -39,7 +39,7 @@ result = task(ctx)  # 5
 result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
 ```
 
-现在没有 Def/Exec 转换和 `prepare()` 阶段。每次调用都会校验并解析当前参数与 wrapper 的局部不可变快照。
+现在没有 Def/Exec 转换和 `prepare()` 阶段。每次调用都会校验并解析当前参数与 wrapper。
 
 ## 参数与 Auto
 
@@ -75,7 +75,17 @@ assert root(Context()) == 11
 
 参数名不能与 `run`、`func`、`specs` 或 `wrappers` 等框架属性冲突。参数不能删除；应赋予其他值或 `UNDEFINED`。
 
-调用时，普通参数容器会递归冻结（`list` 转为 `tuple`，`dict` 转为只读映射）；Node 与 Wrapper 对象保持为叶子，因此快照操作不会遍历组合环。
+调用时，静态参数容器会直接传给用户函数，因此对容器的修改会更新 Node 或 Wrapper 上的实时参数。包含 evaluator 叶子的 Auto 参数则会用解析结果重建。
+
+需要显式结构隔离时使用 `clone()`：
+
+```python
+branch = root.clone()
+branch.child.value = 20
+assert root.child.value == 10
+```
+
+克隆会创建新的 Node、Wrapper 和已注册参数 PyTree 容器。未注册叶子仍然共享；如果业务对象也需要隔离，应由应用单独复制。
 
 ## Wrapper
 
@@ -97,7 +107,7 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrapper 按洋葱模型组合，并在每次调用时解析自身的局部参数快照。
+Wrapper 按洋葱模型组合，并在调用时读取实时参数。它们同样从 `NodeElement` 继承 `clone()`。
 
 ## Node 结构校验 {#node-struct}
 

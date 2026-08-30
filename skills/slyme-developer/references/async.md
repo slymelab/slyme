@@ -1,6 +1,6 @@
 # Async API
 
-The unified `@node` and `@wrapper` decorators detect `async def`. Build parameters and call-local snapshot semantics are identical to synchronous Nodes.
+The unified `@node` and `@wrapper` decorators detect `async def`. Live parameter and explicit `.clone()` semantics are identical to synchronous Nodes.
 
 ```python
 from slyme.context import Context, Ref

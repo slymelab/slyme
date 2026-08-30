@@ -12,16 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PyTree engines used for Node inspection and call-local snapshots."""
+"""PyTree engine used for Node inspection and structural cloning."""
 
-import types
 from types import MappingProxyType
 from typing import Any, Iterable, cast
 
 from slyme.utils.pytree import (
     PYTREE_ENGINE_REGISTRY,
     AttributeKey,
-    MappingKey,
     PyTreeAux,
     PyTreeEngine,
 )
@@ -31,10 +29,6 @@ from .core import AsyncNode, AsyncWrapper, Node, Wrapper
 
 NODE_ENGINE = PyTreeEngine("node_engine")
 PYTREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
-
-# Node/Wrapper and future Slot objects are deliberately unregistered leaves.
-NODE_SNAPSHOT_ENGINE = PyTreeEngine("node_snapshot", register_defaults=False)
-PYTREE_ENGINE_REGISTRY.register(NODE_SNAPSHOT_ENGINE, key="node_snapshot")
 
 
 def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
@@ -133,34 +127,6 @@ def _unflatten_async_wrapper(children: Iterable[Any], aux: PyTreeAux) -> AsyncWr
     )
 
 
-def _flatten_list(value: list[Any]) -> tuple[Iterable[Any], PyTreeAux]:
-    return iter(value), PyTreeAux()
-
-
-def _unflatten_tuple(children: Iterable[Any], _: PyTreeAux) -> tuple[Any, ...]:
-    return tuple(children)
-
-
-def _flatten_tuple(value: tuple[Any, ...]) -> tuple[Iterable[Any], PyTreeAux]:
-    return iter(value), PyTreeAux()
-
-
-def _flatten_dict(value: dict[Any, Any]) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(value)
-    return (value[key] for key in keys), PyTreeAux(
-        children_keys=tuple(MappingKey(key) for key in keys)
-    )
-
-
-def _unflatten_to_mapping_proxy(
-    children: Iterable[Any], aux: PyTreeAux
-) -> types.MappingProxyType:
-    if aux.children_keys is None:
-        raise ValueError("Missing keys for mapping proxy unflattening.")
-    keys = [cast("MappingKey", key).key for key in aux.children_keys]
-    return types.MappingProxyType(dict(zip(keys, children)))
-
-
 NODE_ENGINE.register(Node, _flatten_node, _unflatten_node, strict=True)
 NODE_ENGINE.register(Wrapper, _flatten_wrapper, _unflatten_wrapper, strict=True)
 NODE_ENGINE.register(AsyncNode, _flatten_async_node, _unflatten_async_node, strict=True)
@@ -168,10 +134,3 @@ NODE_ENGINE.register(
     AsyncWrapper, _flatten_async_wrapper, _unflatten_async_wrapper, strict=True
 )
 NODE_ENGINE.register(MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy)
-
-NODE_SNAPSHOT_ENGINE.register(list, _flatten_list, _unflatten_tuple)
-NODE_SNAPSHOT_ENGINE.register(tuple, _flatten_tuple, _unflatten_tuple)
-NODE_SNAPSHOT_ENGINE.register(dict, _flatten_dict, _unflatten_to_mapping_proxy)
-NODE_SNAPSHOT_ENGINE.register(
-    MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy
-)

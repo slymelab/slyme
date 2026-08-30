@@ -111,7 +111,7 @@ if __name__ == "__main__":
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to PyTree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Explicit Runtime Isolation:** Context data is mutable, while call-local Node parameter snapshots keep each invocation structurally stable. Explicitly copy Context when execution branches need isolation.
+**Explicit Copy Boundaries:** Node parameters and Context data stay live and mutable during execution. Use `.clone()` to create an independent Node/PyTree or ContextData structure when a branch needs structural isolation; unregistered leaf objects remain shared.
 
 **Seamless Collaboration:** Highly decoupled Nodes communicate exclusively through Context. This allows teams to independently develop features and write unit tests, reducing "glue code" and deep system coupling.
 

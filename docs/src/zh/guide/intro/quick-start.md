@@ -65,4 +65,4 @@ print(responses)
 - `@builder` 组装并校验物理 Node 结构。
 - `run()` 准备应用输入并提取输出，也可以直接调用 `node(ctx)`。
 
-Node 始终可变。每次调用只将当前普通参数容器冻结为局部快照，不再存在 Def/Exec 或显式 prepare 阶段。
+Node 始终可变，调用期间静态参数容器也保持实时状态；不再存在 Def/Exec 或显式 prepare 阶段。分支需要独立的 Node/Wrapper 与参数 PyTree 结构时，调用 `.clone()`。

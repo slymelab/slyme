@@ -492,6 +492,14 @@ class ContextElement(ABC):
     def type_repr(self) -> str:
         return type(self).__name__
 
+    def clone(self) -> "Context":
+        """Clone ContextData containers while preserving leaf identities."""
+        root = cast(
+            ContextData,
+            CONTEXT_ENGINE.map(lambda leaf: leaf, self.to_context_data()),
+        )
+        return Context._from_context_data(root)
+
     def __repr__(self) -> str:
         name = self.type_repr()
         try:

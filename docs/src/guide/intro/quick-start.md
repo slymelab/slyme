@@ -65,4 +65,4 @@ The important pieces are:
 - `@builder` assembles and validates the physical Node structure.
 - `run()` prepares application inputs and extracts outputs. Direct `node(ctx)` calls are also supported.
 
-Nodes remain mutable. Each invocation freezes only its current ordinary parameter containers into a call-local snapshot; there is no Def/Exec or explicit prepare phase.
+Nodes remain mutable and static parameter containers stay live during calls; there is no Def/Exec or explicit prepare phase. Call `.clone()` when a branch needs an independent Node/Wrapper and parameter-PyTree structure.

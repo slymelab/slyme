@@ -16,6 +16,8 @@ breaking changes when they are documented here.
   pre-commit/pre-push hooks, CodeQL, dependency review, and Dependabot updates.
 - Added verified package builds, trusted PyPI publishing with provenance
   attestations, contribution guidance, issue templates, and a security policy.
+- Added `NodeElement.clone()` for structural Node/Wrapper and parameter PyTree
+  copies, and `ContextElement.clone()` for ContextData-only structural copies.
 
 ### Fixed
 
@@ -41,10 +43,10 @@ breaking changes when they are documented here.
 - Node and Wrapper construction now uses separate mode-aware factories while
   synchronous and asynchronous decorators share the same signature-analysis
   path.
-- Each Node and Wrapper call now freezes only its local ordinary Python
-  containers and builds its evaluation and wrapper plan from that snapshot.
-  Node-like objects remain leaves, allowing future logical Slot graphs to
-  contain cycles without recursive preparation.
+- Node and Wrapper calls now pass their current static parameter containers
+  directly to user functions instead of creating an implicit frozen snapshot.
+  Use `.clone()` when an independent Node graph or ContextData structure is
+  required.
 - Node and Wrapper construction now binds every declared parameter through one
   `Spec` build path. Missing required parameters remain `UNDEFINED` until the
   call boundary instead of being rejected or processed by a second kwargs path.

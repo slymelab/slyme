@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -42,7 +42,7 @@ from slyme.node.exception import (
     WrapperExceptionRecord,
 )
 from slyme.node.signature import Spec
-from slyme.node.tree import NODE_ENGINE, NODE_SNAPSHOT_ENGINE
+from slyme.node.tree import NODE_ENGINE
 
 
 def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None:
@@ -175,25 +175,138 @@ def test_auto_evaluation_for_refs_nodes_and_nested_containers() -> None:
         }
     )
     assert contains_eval_type(graph.payload)
-    assert graph(ctx) == {"raw": 4, "computed": 5, "constant": (1, 2)}
+    assert graph(ctx) == {"raw": 4, "computed": 5, "constant": [1, 2]}
     assert calls == ["child"]
     assert not contains_eval_type({"plain": [1, 2]})
     assert eval_tree(ctx, [R.input.base, 9]) == [4, 9]
 
 
-def test_node_call_uses_immutable_local_container_snapshot() -> None:
+def test_node_call_uses_live_mutable_parameter_containers() -> None:
     @node
-    def mutate_argument(ctx: Context, /, *, values: list[int]) -> tuple[int, ...]:
-        values.append(4)  # type: ignore[attr-defined]
+    def mutate_argument(
+        ctx: Context,
+        /,
+        *,
+        values: list[int],
+        state: dict[str, int],
+    ) -> tuple[tuple[int, ...], int]:
+        values.append(4)
+        state["calls"] += 1
+        return tuple(values), state["calls"]
+
+    instance = mutate_argument(values=[1, 2, 3], state={"calls": 0})
+    values = instance.values
+    state = instance.state
+
+    assert instance(Context()) == ((1, 2, 3, 4), 1)
+    assert instance.values is values
+    assert instance.state is state
+    assert instance(Context()) == ((1, 2, 3, 4, 4), 2)
+
+
+async def test_async_node_and_wrapper_calls_use_live_parameters() -> None:
+    @wrapper
+    async def record(
+        ctx: Context,
+        wrapped: AsyncNode[Any],
+        call_next: Callable[[Context], Awaitable[Any]],
+        /,
+        *,
+        events: list[str],
+    ) -> Any:
+        events.append("wrapper")
+        return await call_next(ctx)
+
+    @node
+    async def mutate(
+        ctx: Context,
+        /,
+        *,
+        values: list[int],
+    ) -> tuple[int, ...]:
+        values.append(3)
         return tuple(values)
 
-    values = [1, 2, 3]
-    instance = mutate_argument(values=values)
-    with pytest.raises(NodeExceptionRecord) as exc_info:
-        instance(Context())
-    assert isinstance(exc_info.value.exception, AttributeError)
-    assert values == [1, 2, 3]
-    assert isinstance(NODE_SNAPSHOT_ENGINE.map(lambda x: x, {"x": values}), Mapping)
+    wrapper_instance = record(events=[])
+    instance = mutate(values=[1, 2]).add_wrappers(wrapper_instance)
+    cloned = instance.clone()
+
+    assert await instance(Context()) == (1, 2, 3)
+    assert await instance(Context()) == (1, 2, 3, 3)
+    assert wrapper_instance.events == ["wrapper", "wrapper"]
+    assert isinstance(cloned, AsyncNode)
+    assert cloned is not instance
+    assert cloned.values is not instance.values
+    assert cloned.wrappers[0] is not wrapper_instance
+
+
+def test_node_clone_copies_structure_and_parameter_pytrees() -> None:
+    shared_leaf = object()
+
+    @wrapper
+    def trace(
+        ctx: Context,
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any],
+        /,
+        *,
+        labels: list[str],
+        marker: object,
+    ) -> Any:
+        return call_next(ctx)
+
+    @node
+    def child(
+        ctx: Context,
+        /,
+        *,
+        config: dict[str, list[int]],
+    ) -> int:
+        return sum(config["values"])
+
+    @node
+    def parent(
+        ctx: Context,
+        /,
+        *,
+        dependency: Auto[int],
+        payload: tuple[dict[str, list[int]], ...],
+        marker: object,
+    ) -> int:
+        return dependency + payload[0]["offsets"][0]
+
+    graph = parent(
+        dependency=child(config={"values": [1, 2]}),
+        payload=({"offsets": [4]},),
+        marker=shared_leaf,
+    ).add_wrappers(trace(labels=["original"], marker=shared_leaf))
+
+    cloned = graph.clone()
+
+    assert isinstance(cloned, Node)
+    assert cloned is not graph
+    assert cloned.func is graph.func
+    assert cloned.specs is graph.specs
+    assert cloned.dependency is not graph.dependency
+    assert cloned.dependency.config is not graph.dependency.config
+    assert cloned.dependency.config["values"] is not graph.dependency.config["values"]
+    assert cloned.payload is not graph.payload
+    assert cloned.payload[0] is not graph.payload[0]
+    assert cloned.payload[0]["offsets"] is not graph.payload[0]["offsets"]
+    assert cloned.wrappers is not graph.wrappers
+    assert cloned.wrappers[0] is not graph.wrappers[0]
+    assert cloned.wrappers[0].labels is not graph.wrappers[0].labels
+    assert cloned.marker is shared_leaf
+    assert cloned.wrappers[0].marker is shared_leaf
+
+    cloned.dependency.config["values"].append(10)
+    cloned.payload[0]["offsets"].append(5)
+    cloned.wrappers[0].labels.append("clone")
+    assert graph.dependency.config == {"values": [1, 2]}
+    assert graph.payload == ({"offsets": [4]},)
+    assert graph.wrappers[0].labels == ["original"]
+    assert graph(Context()) == 7
+    assert cloned(Context()) == 17
 
 
 def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:

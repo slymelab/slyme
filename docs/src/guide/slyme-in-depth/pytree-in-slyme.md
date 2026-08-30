@@ -6,19 +6,14 @@ A PyTree is a nested structure whose containers define topology and whose unregi
 
 `NODE_ENGINE` registers `Node`, `Wrapper`, their asynchronous variants, and ordinary containers. It is used for physical graph inspection, rendering, validation, and Ref discovery. Because it can traverse Node relationships, callers performing whole-graph analysis must define their own cycle policy when logical Slot graphs are introduced.
 
-## `NODE_SNAPSHOT_ENGINE`
+## Structural cloning
 
-Every Node and Wrapper call uses a small snapshot engine that registers only ordinary Python containers:
+`NodeElement.clone()` maps the identity function over `NODE_ENGINE`. Unflattening reconstructs every registered Node, Wrapper, and ordinary parameter container while preserving unregistered leaf objects. The result is an independent physical Node/PyTree structure without an arbitrary deep copy of application values.
 
-- `list` becomes `tuple`;
-- `tuple` remains `tuple`;
-- `dict` becomes `MappingProxyType`;
-- an existing `MappingProxyType` remains read-only.
+`ContextElement.clone()` uses `CONTEXT_ENGINE`, whose only containers are `Context` and `ContextData`. It therefore reconstructs the ContextData hierarchy but preserves stored lists, dictionaries, model objects, and all other leaf identities. Cloning a `ContextView` produces a standalone Context rooted at that subtree.
 
-Node, Wrapper, and future Slot objects are not registered, so they are leaves. The engine therefore freezes parameter data recursively without walking composition edges or getting trapped by a Node graph cycle.
-
-The resulting snapshot exists only for one call. The live Node graph remains mutable and later calls create new snapshots.
+Both operations follow registered tree edges and expect an acyclic PyTree. They do not preserve alias identity when the same registered container appears at multiple paths.
 
 ## Auto evaluation
 
-Auto evaluation uses the Context evaluation engine after the local snapshot has been created. Registered leaves such as `Ref` and `Node` are resolved with the current `Context`, while ordinary leaves pass through unchanged. Evaluation results retrieved from Context are not frozen again.
+Auto evaluation uses the Context evaluation engine to resolve registered leaves such as `Ref` and `Node` with the current `Context`, while ordinary leaves pass through unchanged. Static parameter containers are passed directly; a dynamic Auto tree is reconstructed with its evaluated leaves.

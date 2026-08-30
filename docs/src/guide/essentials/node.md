@@ -39,7 +39,7 @@ Use `run()` as the application boundary when inputs, `Arg` validation, CLI parsi
 result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
 ```
 
-There is no Def/Exec conversion or `prepare()` step. Each call validates and resolves a local immutable snapshot of the current parameters and wrappers.
+There is no Def/Exec conversion or `prepare()` step. Each call validates and resolves the current parameters and wrappers.
 
 ## Parameters and Auto
 
@@ -75,7 +75,17 @@ assert root(Context()) == 11
 
 Parameter names may not conflict with framework attributes such as `run`, `func`, `specs`, or `wrappers`. Parameters cannot be deleted; assign another value or `UNDEFINED` instead.
 
-At call time, ordinary parameter containers are recursively frozen (`list` to `tuple`, `dict` to a read-only mapping). Node and Wrapper objects remain leaves, preventing the snapshot operation from traversing composition cycles.
+At call time, static parameter containers are passed directly to the user function. Mutating one therefore updates the live Node or Wrapper parameter. Auto parameters containing evaluator leaves are reconstructed with their resolved values.
+
+Use `clone()` for explicit structural isolation:
+
+```python
+branch = root.clone()
+branch.child.value = 20
+assert root.child.value == 10
+```
+
+The clone contains new Node, Wrapper, and registered parameter-PyTree containers. Unregistered leaves remain shared, so clone those application objects separately when they also require isolation.
 
 ## Wrappers
 
@@ -97,7 +107,7 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrappers use onion ordering and also resolve their own call-local parameter snapshots.
+Wrappers use onion ordering and read their live parameters when invoked. They also inherit `clone()` from `NodeElement`.
 
 ## Node structure validation {#node-struct}
 
