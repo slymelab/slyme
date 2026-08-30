@@ -17,9 +17,7 @@ assert R.user.name == Ref("user.name")
 ```python
 from slyme.context import ARG, Arg, R
 
-name = R.user.name(
-    metadata={ARG: Arg(type=str, required=True, help="User name")}
-)
+name = R.user.name(metadata={ARG: Arg(type=str, required=True, help="User name")})
 ```
 
 The path remains a stable semantic name independent of the physical Node graph.

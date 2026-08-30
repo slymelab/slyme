@@ -17,15 +17,15 @@ A convenient registry util that dynamically retrieves items based on keys.
 """
 
 import inspect
-from enum import Enum
 from collections.abc import Callable, Iterable, Iterator
+from enum import Enum
 from typing import (
-    Union,
-    TypeVar,
-    overload,
-    cast,
-    Generic,
     Any,
+    Generic,
+    TypeVar,
+    Union,
+    cast,
+    overload,
 )
 
 _T = TypeVar("_T")
@@ -143,7 +143,7 @@ class GeneralRegistry(Generic[_KT, _VT]):
     ) -> Union[_VT, _T]:
         if default is _MISSING:
             return self._data[key]
-        return self._data.get(key, cast("Union[_VT, _T]", default))
+        return self._data.get(key, default)
 
     def keys(self) -> Iterable[_KT]:
         return self._data.keys()
@@ -209,7 +209,10 @@ class TypeRegistry(GeneralRegistry[type[_KT], _VT]):
         self.orthogonal = orthogonal
 
     def _register(
-        self, obj: _VT, key: type[_KT], strict: Union[bool, _Missing]
+        self,
+        obj: _VT,
+        key: Union[type[_KT], _Missing],
+        strict: Union[bool, _Missing],
     ) -> None:
         if not isinstance(key, type):
             raise TypeError(f"TypeRegistry key must be a class, got {type(key)}.")

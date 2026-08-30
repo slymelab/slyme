@@ -19,15 +19,17 @@ Node rendering module.
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Optional, Union
+
+from slyme.context import Ref
 from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
 from slyme.utils.registry import TypeRegistry
-from slyme.context import Ref
+
 from .core import (
-    NodeElement,
-    Node,
     AsyncNode,
-    Wrapper,
     AsyncWrapper,
+    Node,
+    NodeElement,
+    Wrapper,
 )
 from .tree import NODE_ENGINE
 

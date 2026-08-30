@@ -10,11 +10,13 @@ Node 函数必须恰好有一个非 keyword-only 运行时参数，所有构建�
 from slyme.context import Context, R, Ref
 from slyme.node import Auto, node
 
+
 @node
 def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
     result = x + y
     ctx.set(output, result)
     return result
+
 
 task = add(x=R.input.x, y=2, output=R.output.total)
 ```
@@ -48,9 +50,11 @@ result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
 def parent(ctx, *, child: Auto[int]):
     return child + 1
 
+
 @node
 def child(ctx, *, value: int):
     return value
+
 
 root = parent(child=child(value=4))
 assert root(Context()) == 5
@@ -81,12 +85,14 @@ assert root(Context()) == 11
 from collections.abc import Callable
 from slyme.node import Node, wrapper
 
+
 @wrapper
 def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
     print(name, "start")
     result = call_next(ctx)
     print(name, "end")
     return result
+
 
 task.add_wrappers(trace(name="add"))
 ```

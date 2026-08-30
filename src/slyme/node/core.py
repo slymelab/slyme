@@ -20,35 +20,38 @@ import inspect
 from enum import Enum
 from functools import partial, update_wrapper
 from typing import (
-    TypeVar,
-    Callable,
     Any,
-    Union,
-    overload,
-    Mapping,
-    Optional,
+    Awaitable,
+    Callable,
+    ClassVar,
     Generic,
     Iterable,
-    Sequence,
-    Awaitable,
-    ClassVar,
     Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    TypeVar,
+    Union,
     cast,
+    overload,
 )
-from typing_extensions import ParamSpec, Concatenate, Protocol, Self
-from slyme.utils.exception import enrich_exception
+
+from typing_extensions import Concatenate, ParamSpec, Protocol, Self
+
 from slyme.context import Context, RefLike
+from slyme.utils.exception import enrich_exception
+
 from .exception import (
-    NodeTerminate,
-    NodeExceptionRecord,
     NodeException,
+    NodeExceptionRecord,
+    NodeTerminate,
     WrapperExceptionRecord,
 )
 from .signature import (
+    UNDEFINED,
+    UNSET,
     Spec,
     analyze_signature,
-    UNSET,
-    UNDEFINED,
 )
 
 __all__ = [
@@ -464,11 +467,11 @@ class _FactoryBase(Generic[_P, _E]):
     def __repr__(self) -> str:
         return f"<{type(self).__name__}[{self.mode}] of {self._func.__name__}>"
 
-    def __call__(self, **kwargs: _P.kwargs) -> _E:
+    def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _E:
+        if args:
+            raise TypeError("Node and Wrapper factories accept keyword arguments only.")
         with enrich_exception(f"for '{self._func.__name__}'"):
-            return self.element_type(
-                func=self._func, specs=self._specs, params=kwargs
-            )
+            return self.element_type(func=self._func, specs=self._specs, params=kwargs)
 
 
 class NodeFactory(_FactoryBase[_P, _E]):
@@ -498,6 +501,7 @@ def _decorate(
     kind: Literal["node", "wrapper"],
 ) -> Union[NodeFactory[Any, Any], WrapperFactory[Any, Any]]:
     resolved_mode = _resolve_execution_mode(func, mode, kind)
+    factory_type: Any
     if kind == "node":
         factory_type = NodeFactory
         runtime_count = 1
@@ -549,8 +553,7 @@ def _is_async_callable(func: Callable[..., Any]) -> bool:
     unwrapped = inspect.unwrap(func)
     if inspect.iscoroutinefunction(unwrapped):
         return True
-    call = getattr(unwrapped, "__call__", None)
-    return call is not None and inspect.iscoroutinefunction(call)
+    return callable(unwrapped) and inspect.iscoroutinefunction(unwrapped.__call__)
 
 
 def _resolve_execution_mode(
@@ -697,6 +700,6 @@ def wrapper(
     )
 
 
-from .tree import NODE_ENGINE, NODE_SNAPSHOT_ENGINE
+from .eval import async_execute_eval_plan, execute_eval_plan, prepare_eval_plan
 from .render import get_render_string
-from .eval import prepare_eval_plan, execute_eval_plan, async_execute_eval_plan
+from .tree import NODE_ENGINE, NODE_SNAPSHOT_ENGINE

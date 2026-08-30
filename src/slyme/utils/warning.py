@@ -16,28 +16,27 @@
 
 import warnings
 from functools import lru_cache
-from typing import Any, Optional, Type, overload
-
+from typing import Any, Optional, Union
 
 __all__ = ["warning_once"]
 
 
-@overload
 def warning_once(
-    message: str,
-    category: Optional[Type[Warning]] = None,
-    stacklevel: int = 1,
-    source: Optional[Any] = None,
-) -> None: ...
-@overload
-def warning_once(
-    message: Warning,
+    message: Union[str, Warning],
     category: Any = None,
     stacklevel: int = 1,
     source: Optional[Any] = None,
-) -> None: ...
+) -> None:
+    _warning_once(message, category, stacklevel, source)
+
+
 @lru_cache(maxsize=None)
-def warning_once(message, category=None, stacklevel=1, source=None):
+def _warning_once(
+    message: Union[str, Warning],
+    category: Any = None,
+    stacklevel: int = 1,
+    source: Optional[Any] = None,
+) -> None:
     """Issue a warning at most once per ``(message, category, stacklevel, source)`` per session.
 
     Signature mirrors :func:`warnings.warn`.  One extra frame is added internally
@@ -46,3 +45,6 @@ def warning_once(message, category=None, stacklevel=1, source=None):
     if category is None and not isinstance(message, Warning):
         category = UserWarning
     warnings.warn(message, category=category, stacklevel=stacklevel + 1, source=source)
+
+
+warning_once.cache_clear = _warning_once.cache_clear  # type: ignore[attr-defined]

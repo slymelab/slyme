@@ -22,6 +22,7 @@ from ._experimental import warn_experimental_runner as _warn_experimental_runner
 
 _warn_experimental_runner(stacklevel=2)
 
+from .io import Captured, capture_stdio, emit_envelope
 from .protocol import (
     KIND_CALL,
     KIND_DISCOVER,
@@ -33,7 +34,6 @@ from .protocol import (
     make_envelope,
     protocol_id,
 )
-from .io import Captured, capture_stdio, emit_envelope
 
 __all__ = [
     "Captured",

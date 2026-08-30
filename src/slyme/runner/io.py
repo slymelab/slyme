@@ -32,7 +32,8 @@ import json
 import os
 import sys
 import tempfile
-from typing import Any, Dict, Optional
+from types import TracebackType
+from typing import Any, Dict, Literal, Optional
 
 
 class Captured:
@@ -82,10 +83,19 @@ class capture_stdio:
         self._stack.enter_context(contextlib.redirect_stderr(self._py_err))
         return self._cap
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> Literal[False]:
         self._stack.close()  # restore sys.stdout/sys.stderr
 
         if self._is_posix:
+            assert self._real_out is not None
+            assert self._real_err is not None
+            assert self._cap_out is not None
+            assert self._cap_err is not None
             os.dup2(self._real_out, 1)
             os.dup2(self._real_err, 2)
             self._cap_out.seek(0)

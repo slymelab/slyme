@@ -13,14 +13,16 @@
 # limitations under the License.
 
 from .core import (
+    DIFF_MISSING,
     Context,
+    R,
     Ref,
     RefFactory,
-    R,
     RefLike,
     to_ref,
+)
+from .core import (
     Config as ContextConfig,
-    DIFF_MISSING,
 )
 from .metadata import ARG, HELP, OUTPUT, TYPE, Arg
 

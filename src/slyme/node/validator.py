@@ -16,17 +16,19 @@
 Node validation module, including structure consistency checking.
 """
 
-from typing import Any
 from collections.abc import Callable
-from slyme.utils.registry import TypeRegistry
-from slyme.utils.pytree import AttributeKey, PyTreeKey
+from typing import Any
+
 from slyme.utils.exception import enrich_exception
+from slyme.utils.pytree import AttributeKey, PyTreeKey
+from slyme.utils.registry import TypeRegistry
+
 from .core import (
-    NodeElement,
-    Node,
-    Wrapper,
     AsyncNode,
     AsyncWrapper,
+    Node,
+    NodeElement,
+    Wrapper,
 )
 from .tree import NODE_ENGINE
 

@@ -6,8 +6,25 @@
 
 我们非常期待收到你的 Pull Request (PR)。在准备提交代码时，请留意以下几个简单的开发规范：
 
-* **代码格式化**：我们统一使用 `ruff` 作为代码格式化和 linting 工具。在提交代码前，请确保你的代码已经通过 `ruff` 进行了格式化检查。
-* **流程完善中**：我们目前正在积极配置和完善项目的 CI/CD 流水线。因此，当前的贡献流程可能还在不断迭代和优化中。如果你在提交代码时遇到任何流程上的疑问，请随时留言，我们会非常乐意为你提供协助！
+* **测试**：每项行为变更都需要有针对性的测试。测试套件使用 pytest、
+  pytest-asyncio、Hypothesis 和分支覆盖率，最低覆盖率门禁为 90%。
+* **质量门禁**：Ruff 格式与 lint、mypy、Python 3.9–3.14 兼容性矩阵、
+  构建产物检查和文档构建必须全部通过。
+* **本地 hooks**：运行 `uv run pre-commit install --install-hooks`
+  安装提交时检查和推送前测试。
+
+创建锁定的开发环境，并运行与 CI 相同的门禁：
+
+```bash
+uv sync --locked --all-groups
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv run pytest
+```
+
+发布、文档和安全流程请参阅仓库根目录的
+[CONTRIBUTING.md](https://github.com/slymelab/slyme/blob/main/CONTRIBUTING.md)。
 
 ## 关于功能扩展与接口设计
 

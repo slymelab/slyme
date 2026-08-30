@@ -5,20 +5,21 @@
 
   <p>
     <a href="https://pypi.org/project/slyme/"><img src="https://img.shields.io/pypi/v/slyme.svg?label=PyPI" alt="PyPI version"></a>
+    <a href="https://github.com/slymelab/slyme/actions/workflows/ci.yml"><img src="https://github.com/slymelab/slyme/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
     <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python version">
     <a href="https://slymelab.github.io/slyme/"><img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="Documentation"></a>
     <a href="https://github.com/slymelab/slyme/blob/main/LICENSE"><img src="https://img.shields.io/github/license/slymelab/slyme" alt="License"></a>
   </p>
 
   <p>
-    <b>English</b> | 
+    <b>English</b> |
     <a href="https://github.com/slymelab/slyme/blob/main/i18n/README_zh.md">简体中文</a>
   </p>
 </div>
 
 ## About Slyme
 
-Slyme (pronounced /slaɪm/) is a highly composable functional execution framework. It enables developers to seamlessly build arbitrarily complex execution flows based on simple, reusable functions, without needing to master cumbersome APIs or syntax. 
+Slyme (pronounced /slaɪm/) is a highly composable functional execution framework. It enables developers to seamlessly build arbitrarily complex execution flows based on simple, reusable functions, without needing to master cumbersome APIs or syntax.
 
 Whether you are building complex LLM pipelines, executing DAGs, or creating generic data-processing flows, Slyme provides a structural, functional, and deeply Pythonic foundation.
 
@@ -55,14 +56,21 @@ def llm_api(ctx: Context, /, *, prompts: Auto[list[str]], responses: Ref[list[st
 @node
 def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
     return [
-        f"Summarize: {article['title']}. Content: {article['content']}" 
+        f"Summarize: {article['title']}. Content: {article['content']}"
         for article in articles
     ]
 
 
 # 3. Define a wrapper for middleware (e.g., performance timing)
 @wrapper
-def timing(ctx: Context, wrapped: Node, call_next: Callable[[Context], object], /, *, prefix: str):
+def timing(
+    ctx: Context,
+    wrapped: Node,
+    call_next: Callable[[Context], object],
+    /,
+    *,
+    prefix: str,
+):
     start_time = time()
     result = call_next(ctx)
     end_time = time()
@@ -86,10 +94,12 @@ def build_pipeline():
 # 5. Execute at Run-Time
 if __name__ == "__main__":
     responses = build_pipeline().run(
-        inputs={R.input.articles: [
-            {"title": "Article 1", "content": "Content 1"},
-            {"title": "Article 2", "content": "Content 2"},
-        ]},
+        inputs={
+            R.input.articles: [
+                {"title": "Article 1", "content": "Content 1"},
+                {"title": "Article 2", "content": "Content 2"},
+            ]
+        },
         outputs=R.output.responses,
     )
     print(responses)
@@ -114,3 +124,9 @@ To dive deeper into Slyme's architecture, including Context management, dependen
 ## License
 
 This project is licensed under the Apache-2.0 License.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the locked development environment,
+tests, quality gates, and pull request workflow. Please report suspected
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).

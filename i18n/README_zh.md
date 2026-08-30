@@ -11,7 +11,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/slymelab/slyme/blob/main/README.md">English</a> | 
+    <a href="https://github.com/slymelab/slyme/blob/main/README.md">English</a> |
     <b>简体中文</b>
   </p>
 </div>
@@ -62,7 +62,14 @@ def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
 
 # 3. 定义中间件包装器（例如性能计时）
 @wrapper
-def timing(ctx: Context, wrapped: Node, call_next: Callable[[Context], Context], /, *, prefix: str) -> Context:
+def timing(
+    ctx: Context,
+    wrapped: Node,
+    call_next: Callable[[Context], Context],
+    /,
+    *,
+    prefix: str,
+) -> Context:
     start_time = time()
     ctx = call_next(ctx)
     end_time = time()
@@ -86,10 +93,12 @@ def build_pipeline():
 # 5. 在运行时执行
 if __name__ == "__main__":
     responses = build_pipeline().run(
-        inputs={R.input.articles: [
-            {"title": "Article 1", "content": "Content 1"},
-            {"title": "Article 2", "content": "Content 2"},
-        ]},
+        inputs={
+            R.input.articles: [
+                {"title": "Article 1", "content": "Content 1"},
+                {"title": "Article 2", "content": "Content 2"},
+            ]
+        },
         outputs=R.output.responses,
     )
     print(responses)

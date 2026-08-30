@@ -13,9 +13,9 @@
 # limitations under the License.
 
 import sys
-from typing import Union
-from contextlib import contextmanager
 from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Union
 
 
 @contextmanager

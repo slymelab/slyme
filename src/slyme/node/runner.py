@@ -15,7 +15,7 @@
 """High-level Node execution helpers used by :meth:`Node.run`."""
 
 from dataclasses import replace
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, cast
 
 from slyme.cli import parse_and_inject, prepare_args
 from slyme.context import Context, Ref, RefLike
@@ -46,23 +46,26 @@ def _prepare_context(
         # become parser defaults. Explicit CLI values still take precedence.
         effective_args = {}
         for path, arg in args.items():
-            ref = Ref(path)
+            ref: Ref[Any] = Ref(path)
             if context.exists(ref):
                 arg = replace(arg, default=context.get(ref), required=False)
             effective_args[path] = arg
 
-        context = parse_and_inject(
-            context=context,
-            cli_args=list(cli_args) if cli_args is not None else None,
-            extra_args=effective_args,
+        context = cast(
+            Context,
+            parse_and_inject(
+                context=context,
+                cli_args=list(cli_args) if cli_args is not None else None,
+                extra_args=effective_args,
+            ),
         )
     else:
         if cli_args is not None:
             raise ValueError("cli_args requires use_argparse=True")
 
-        defaults = {}
+        defaults: dict[RefLike, Any] = {}
         for path, arg in args.items():
-            ref = Ref(path)
+            ref = Ref[Any](path)
             if context.exists(ref):
                 continue
             default = arg.resolve_default()

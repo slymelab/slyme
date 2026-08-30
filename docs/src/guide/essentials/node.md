@@ -10,11 +10,13 @@ A Node function has exactly one non-keyword-only runtime parameter. Every build 
 from slyme.context import Context, R, Ref
 from slyme.node import Auto, node
 
+
 @node
 def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
     result = x + y
     ctx.set(output, result)
     return result
+
 
 task = add(x=R.input.x, y=2, output=R.output.total)
 ```
@@ -48,9 +50,11 @@ Every build parameter has a `Spec`. `Auto[T]` is shorthand for enabling automati
 def parent(ctx, *, child: Auto[int]):
     return child + 1
 
+
 @node
 def child(ctx, *, value: int):
     return value
+
 
 root = parent(child=child(value=4))
 assert root(Context()) == 5
@@ -81,12 +85,14 @@ At call time, ordinary parameter containers are recursively frozen (`list` to `t
 from collections.abc import Callable
 from slyme.node import Node, wrapper
 
+
 @wrapper
 def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
     print(name, "start")
     result = call_next(ctx)
     print(name, "end")
     return result
+
 
 task.add_wrappers(trace(name="add"))
 ```

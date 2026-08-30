@@ -17,9 +17,7 @@ assert R.user.name == Ref("user.name")
 ```python
 from slyme.context import ARG, Arg, R
 
-name = R.user.name(
-    metadata={ARG: Arg(type=str, required=True, help="User name")}
-)
+name = R.user.name(metadata={ARG: Arg(type=str, required=True, help="User name")})
 ```
 
 该路径是稳定的语义名称，不依赖物理 Node 图的位置。

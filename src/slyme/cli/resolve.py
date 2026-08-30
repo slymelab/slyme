@@ -93,7 +93,7 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> Dict[str, Arg]:
 
         # 2. Merge with HELP/TYPE (if needed)
         # Handle immutable Arg by collecting changes first
-        changes = {}
+        changes: Dict[str, Any] = {}
         if base_arg.help is None and path in path_to_help:
             # Use the first available help string
             changes["help"] = path_to_help[path][0]
@@ -132,7 +132,7 @@ def prepare_args(
         ValueError: If there are conflicting argument definitions.
     """
     # 1. Collect Refs
-    refs = []
+    refs: List[RefLike] = []
     if node is not None:
         refs.extend(collect_refs(node))
     if extra_refs:

@@ -12,25 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
 import inspect
+import sys
 import types
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 from typing import (
-    Callable,
-    Any,
-    Union,
     Annotated,
-    get_type_hints,
-    get_origin,
-    get_args,
+    Any,
+    Callable,
     Mapping,
     TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
 )
-from slyme.utils.exception import enrich_exception
+
 from slyme.context import Context, RefFactory
 from slyme.context.tree import CTX_EVAL_ENGINE
+from slyme.utils.exception import enrich_exception
 
 __all__ = [
     "spec",

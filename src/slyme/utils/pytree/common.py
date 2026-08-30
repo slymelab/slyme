@@ -16,9 +16,10 @@
 Common utilities and shared logic for PyTree operations.
 """
 
-from typing import Any, Iterable, cast
 from types import MappingProxyType
-from .core import PyTreeAux, MappingKey
+from typing import Any, Iterable, cast
+
+from .core import MappingKey, PyTreeAux
 
 
 def flatten_mapping_proxy(data: MappingProxyType) -> tuple[Iterable[Any], PyTreeAux]:

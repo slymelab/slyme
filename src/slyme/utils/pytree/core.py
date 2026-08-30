@@ -19,19 +19,20 @@ Designed to be lightweight, explicit, and instance-isolated.
 """
 
 import types
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
-from collections.abc import Iterable, Callable, Iterator, Hashable, Mapping
 from itertools import count
 from typing import (
     Any,
-    Union,
-    Protocol,
-    Optional,
     Literal,
+    Optional,
+    Protocol,
+    Union,
 )
+
 from slyme.utils.registry import Registry, TypeRegistry
 
-_EMPTY_MAPPING = types.MappingProxyType({})
+_EMPTY_MAPPING: Mapping[str, Any] = types.MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -212,7 +213,9 @@ class LeafDef(PyTreeDef):
         try:
             return next(leaves_iter)
         except StopIteration:
-            raise ValueError("Too few leaves provided for this tree structure.")
+            raise ValueError(
+                "Too few leaves provided for this tree structure."
+            ) from None
 
 
 @dataclass(frozen=True)
@@ -427,6 +430,7 @@ class PyTreeEngine:
             # Return defaults for non-flattenable
             return False, None, [], iter([]), PyTreeAux()
 
+        assert handler is not None
         children_iter, tree_aux = handler.flatten(element)
 
         # Auto fill tree_aux info
@@ -457,6 +461,7 @@ class PyTreeEngine:
         )
 
         if should_flatten:
+            assert handler is not None
             # Recursively map children.
             child_defs = []
             for child in children_iter:
@@ -466,7 +471,7 @@ class PyTreeEngine:
                     # Should not happen if aux.key_path matches children length.
                     raise ValueError(
                         f"Not enough keys provided in TreeAux for container {type(element)}"
-                    )
+                    ) from None
 
                 child_traverse_aux = TraverseAux(
                     parent=element, key_path=traverse_aux.key_path + (key,)
@@ -507,7 +512,7 @@ class PyTreeEngine:
                     # Should not happen if aux.key_path matches children length.
                     raise ValueError(
                         f"Not enough keys provided in TreeAux for container {type(element)}"
-                    )
+                    ) from None
 
                 child_traverse_aux = TraverseAux(
                     parent=element, key_path=traverse_aux.key_path + (key,)

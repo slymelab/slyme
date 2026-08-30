@@ -8,6 +8,20 @@ breaking changes when they are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added a pytest-based unit and integration suite with asynchronous tests,
+  property-based checks, branch coverage enforcement, and Python 3.9–3.14 CI.
+- Added locked development dependency groups, Ruff and mypy quality gates,
+  pre-commit/pre-push hooks, CodeQL, dependency review, and Dependabot updates.
+- Added verified package builds, trusted PyPI publishing with provenance
+  attestations, contribution guidance, issue templates, and a security policy.
+
+### Fixed
+
+- Fixed static workflow discovery reporting partial attribute chains such as
+  `input` in addition to the actual `R.input.value` reference.
+
 ### Removed
 
 - Removed the Def/Exec split and recursive `Node.prepare()` compilation model;

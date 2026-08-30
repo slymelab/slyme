@@ -14,7 +14,6 @@
 
 """``slyme discover`` — AST-scan directories for @builder entries (no execution)."""
 
-import argparse
 import ast
 import os
 from typing import Any, Dict, List, Optional
@@ -39,10 +38,21 @@ def _is_builder(fn) -> bool:
 
 def _collect_refs(node) -> List[str]:
     refs = set()
+    parents = {
+        child: parent
+        for parent in ast.walk(node)
+        for child in ast.iter_child_nodes(parent)
+    }
     for sub in ast.walk(node):
         if isinstance(sub, ast.Attribute):
+            # Only inspect the outermost attribute in a chain. ``ast.walk`` also
+            # yields the intermediate ``R.input`` node for ``R.input.value``;
+            # reporting both creates a boundary that the source never declared.
+            parent = parents.get(sub)
+            if isinstance(parent, ast.Attribute) and parent.value is sub:
+                continue
             chain = []
-            cur = sub
+            cur: ast.expr = sub
             while isinstance(cur, ast.Attribute):
                 chain.append(cur.attr)
                 cur = cur.value

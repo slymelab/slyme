@@ -13,13 +13,15 @@
 # limitations under the License.
 
 import asyncio
-from typing import Any, Sequence, Callable, Awaitable
 from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Sequence
+
 from slyme.context import Context, Ref, RefFactory
 from slyme.context.tree import CTX_EVAL_ENGINE
-from slyme.utils.registry import TypeRegistry
 from slyme.utils.pytree import PyTreeDef
-from .core import Node, AsyncNode
+from slyme.utils.registry import TypeRegistry
+
+from .core import AsyncNode, Node
 
 __all__ = [
     "eval_tree",
@@ -64,7 +66,7 @@ def prepare_eval_plan(tree: Any) -> EvaluationPlan:
 
     # Group by evaluator
     # evaluator -> (indices, values)
-    eval_groups = {}
+    eval_groups: dict[EvaluatorDef, tuple[list[int], list[Any]]] = {}
     pass_through_list = []
 
     for i, leaf in enumerate(leaves):

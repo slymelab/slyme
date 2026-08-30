@@ -14,8 +14,7 @@ from slyme.node import Auto, Node, node, wrapper
 @node
 def format_prompts(ctx, *, articles: Auto[list[dict]]) -> list[str]:
     return [
-        f"Summarize {article['title']}: {article['content']}"
-        for article in articles
+        f"Summarize {article['title']}: {article['content']}" for article in articles
     ]
 
 
@@ -41,9 +40,7 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 @builder
 def build() -> Node:
     formatter = format_prompts(
-        articles=R.input.articles(
-            metadata={ARG: Arg(type=list[dict], required=True)}
-        )
+        articles=R.input.articles(metadata={ARG: Arg(type=list[dict], required=True)})
     )
     return call_llm(
         prompts=formatter,
@@ -53,9 +50,7 @@ def build() -> Node:
 
 responses = build().run(
     inputs={
-        R.input.articles: [
-            {"title": "Slyme", "content": "Composable Python Nodes"}
-        ]
+        R.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
     },
     outputs=R.output.responses,
 )

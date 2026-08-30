@@ -18,6 +18,7 @@ import sys
 from enum import Enum
 from typing import (
     Any,
+    Callable,
     Dict,
     Iterable,
     List,
@@ -40,7 +41,7 @@ __all__ = [
     "parse_and_inject",
 ]
 
-ARG_HANDLERS = TypeRegistry("ArgHandlers")
+ARG_HANDLERS: TypeRegistry[Any, Callable[..., Any]] = TypeRegistry("ArgHandlers")
 
 
 def _string_to_bool(v: Union[str, bool]) -> bool:
@@ -82,7 +83,7 @@ def _json_loader(v: str) -> Any:
     try:
         return json.loads(v)
     except json.JSONDecodeError as e:
-        raise argparse.ArgumentTypeError(f"Invalid JSON: {e}")
+        raise argparse.ArgumentTypeError(f"Invalid JSON: {e}") from e
 
 
 @ARG_HANDLERS.register(key=bool)
@@ -397,7 +398,7 @@ def parse_and_inject(
     # Prepare updates for Context.mutate
     # parsed_values is { "path": value, ... }
     # Context.mutate expects { Ref: value }
-    updates = {}
+    updates: Dict[RefLike, Any] = {}
     for key, value in parsed_values.items():
         # Only inject if it looks like a path (non-empty string)
         if key:

@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import wraps, partial
 from enum import Enum
+from functools import partial, wraps
 from typing import (
-    TypeVar,
     Callable,
+    TypeVar,
     Union,
     overload,
 )
+
 from typing_extensions import ParamSpec
+
 from slyme.node import Node, check_node_structure
 
 _NodeT = TypeVar("_NodeT", bound=Node)

@@ -14,7 +14,6 @@
 
 """``slyme nodes`` — introspect one @builder's node tree (import, no execution)."""
 
-import argparse
 from typing import Any, Dict, List
 
 from slyme.cli.resolve import prepare_args
@@ -117,6 +116,7 @@ def run(args) -> int:
             captured = cap
             node_def, name = _load(args)
             result = _introspect(node_def, name)
+        assert captured is not None
         envelope = make_envelope(
             KIND_NODES,
             True,

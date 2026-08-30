@@ -23,10 +23,9 @@ envelope on stdin::
 The response envelope is emitted to ``--result-file`` (atomic) or stdout.
 """
 
-import argparse
 import json
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from slyme.runner.boundary import project
 from slyme.runner.execute import get_builder, load_module, seed_inputs, source_module
@@ -114,6 +113,7 @@ def run(args) -> int:
         with capture_stdio() as cap:
             captured = cap
             result = _run(request)
+        assert captured is not None
         envelope = make_envelope(
             KIND_CALL,
             True,

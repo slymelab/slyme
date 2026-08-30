@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import asyncio
-from typing import Union
 from collections.abc import Iterable, Sequence
+from typing import Union
+
 from slyme.context import Context
-from .core import Node, node, AsyncNode
+
+from .core import AsyncNode, Node, node
 
 __all__ = [
     "sequential_exec",

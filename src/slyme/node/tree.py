@@ -19,16 +19,15 @@ from types import MappingProxyType
 from typing import Any, Iterable, cast
 
 from slyme.utils.pytree import (
+    PYTREE_ENGINE_REGISTRY,
     AttributeKey,
     MappingKey,
-    PYTREE_ENGINE_REGISTRY,
     PyTreeAux,
     PyTreeEngine,
 )
 from slyme.utils.pytree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 
 from .core import AsyncNode, AsyncWrapper, Node, Wrapper
-
 
 NODE_ENGINE = PyTreeEngine("node_engine")
 PYTREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
@@ -52,6 +51,8 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
 
 
 def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Node:
+    if aux.children_keys is None:
+        raise ValueError("Missing keys for Node unflattening.")
     iterator = zip(aux.children_keys, children)
     _, wrappers = next(iterator)
     params = {cast("AttributeKey", key).name: value for key, value in iterator}
@@ -73,6 +74,8 @@ def _flatten_wrapper(obj: Wrapper) -> tuple[Iterable[Any], PyTreeAux]:
 
 
 def _unflatten_wrapper(children: Iterable[Any], aux: PyTreeAux) -> Wrapper:
+    if aux.children_keys is None:
+        raise ValueError("Missing keys for Wrapper unflattening.")
     params = {
         cast("AttributeKey", key).name: value
         for key, value in zip(aux.children_keys, children)
@@ -96,6 +99,8 @@ def _flatten_async_node(obj: AsyncNode) -> tuple[Iterable[Any], PyTreeAux]:
 
 
 def _unflatten_async_node(children: Iterable[Any], aux: PyTreeAux) -> AsyncNode:
+    if aux.children_keys is None:
+        raise ValueError("Missing keys for AsyncNode unflattening.")
     iterator = zip(aux.children_keys, children)
     _, wrappers = next(iterator)
     params = {cast("AttributeKey", key).name: value for key, value in iterator}
@@ -117,6 +122,8 @@ def _flatten_async_wrapper(obj: AsyncWrapper) -> tuple[Iterable[Any], PyTreeAux]
 
 
 def _unflatten_async_wrapper(children: Iterable[Any], aux: PyTreeAux) -> AsyncWrapper:
+    if aux.children_keys is None:
+        raise ValueError("Missing keys for AsyncWrapper unflattening.")
     params = {
         cast("AttributeKey", key).name: value
         for key, value in zip(aux.children_keys, children)
@@ -148,6 +155,8 @@ def _flatten_dict(value: dict[Any, Any]) -> tuple[Iterable[Any], PyTreeAux]:
 def _unflatten_to_mapping_proxy(
     children: Iterable[Any], aux: PyTreeAux
 ) -> types.MappingProxyType:
+    if aux.children_keys is None:
+        raise ValueError("Missing keys for mapping proxy unflattening.")
     keys = [cast("MappingKey", key).key for key in aux.children_keys]
     return types.MappingProxyType(dict(zip(keys, children)))
 

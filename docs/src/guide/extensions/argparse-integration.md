@@ -64,16 +64,29 @@ from typing import Literal
 from slyme.context import ARG, Arg, Context, R
 from slyme.node import node, Auto
 
+
 class ModelSize(Enum):
     SMALL = "small"
     BASE = "base"
 
+
 # 1. Define Refs with Arg metadata (demonstrating various data types)
-use_cache_ref = R.model.use_cache(metadata={ARG: Arg(default=True, help="Whether to use cache")})
-ports_ref = R.server.ports(metadata={ARG: Arg(type=list[int], default=[8080], help="List of ports")})
-config_ref = R.model.config(metadata={ARG: Arg(type=dict, required=True, help="Model configuration (JSON string)")})
+use_cache_ref = R.model.use_cache(
+    metadata={ARG: Arg(default=True, help="Whether to use cache")}
+)
+ports_ref = R.server.ports(
+    metadata={ARG: Arg(type=list[int], default=[8080], help="List of ports")}
+)
+config_ref = R.model.config(
+    metadata={
+        ARG: Arg(type=dict, required=True, help="Model configuration (JSON string)")
+    }
+)
 size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
-mode_ref = R.run.mode(metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
+mode_ref = R.run.mode(
+    metadata={ARG: Arg(type=Literal["train", "test"], default="train")}
+)
+
 
 # 2. Define Node
 @node
@@ -81,23 +94,26 @@ def start_server(
     ctx: Context,
     /,
     *,
-    use_cache: Auto[bool], 
-    ports: Auto[list[int]], 
-    config: Auto[dict], 
-    size: Auto[str], 
-    mode: Auto[str]
+    use_cache: Auto[bool],
+    ports: Auto[list[int]],
+    config: Auto[dict],
+    size: Auto[str],
+    mode: Auto[str],
 ):
-    print(f"Cache: {use_cache}, Ports: {ports}, Config: {config}, Size: {size}, Mode: {mode}")
+    print(
+        f"Cache: {use_cache}, Ports: {ports}, Config: {config}, Size: {size}, Mode: {mode}"
+    )
     return ctx
+
 
 if __name__ == "__main__":
     # 3. Instantiate the Node
     server_node = start_server(
-        use_cache=use_cache_ref, 
-        ports=ports_ref, 
-        config=config_ref, 
-        size=size_ref, 
-        mode=mode_ref
+        use_cache=use_cache_ref,
+        ports=ports_ref,
+        config=config_ref,
+        size=size_ref,
+        mode=mode_ref,
     )
 
     # Simulating command line execution:

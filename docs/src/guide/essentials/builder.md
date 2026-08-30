@@ -19,6 +19,7 @@ from slyme.context import R
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
 
+
 @builder
 def create_data_pipeline(source_path: str):
     # 1. Instantiate each Node — pass Refs directly via keyword arguments
@@ -50,6 +51,7 @@ If in some special scenarios (like an extremely frequently called internal sub-B
 ```python
 from slyme.builder import builder
 
+
 @builder(check_structure=False)
 def fast_internal_builder():
     # The Node returned here will skip structure validation
@@ -67,12 +69,16 @@ from slyme.builder import builder
 from slyme.node import sequential
 from slyme.context import R
 
+
 @builder
 def base_pipeline():
-    return sequential(nodes=[
-        load_data(path="default_path"),
-        process_data(config=R.default_config),
-    ])
+    return sequential(
+        nodes=[
+            load_data(path="default_path"),
+            process_data(config=R.default_config),
+        ]
+    )
+
 
 @builder
 def custom_pipeline(new_path: str):
@@ -81,9 +87,7 @@ def custom_pipeline(new_path: str):
 
     # 2. Dynamically modify specific Node's build-time parameters
     pipeline.nodes[0].path = new_path
-    pipeline.nodes.append(
-        save_data(output=R.output_path)
-    )
+    pipeline.nodes.append(save_data(output=R.output_path))
     return pipeline
 ```
 

@@ -64,16 +64,27 @@ from typing import Literal
 from slyme.context import ARG, Arg, Context, R
 from slyme.node import node, Auto
 
+
 class ModelSize(Enum):
     SMALL = "small"
     BASE = "base"
 
+
 # 1. 定义带有 Arg 元数据的 Ref (演示不同数据类型)
-use_cache_ref = R.model.use_cache(metadata={ARG: Arg(default=True, help="是否使用缓存")})
-ports_ref = R.server.ports(metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")})
-config_ref = R.model.config(metadata={ARG: Arg(type=dict, required=True, help="模型配置(JSON字符串)")})
+use_cache_ref = R.model.use_cache(
+    metadata={ARG: Arg(default=True, help="是否使用缓存")}
+)
+ports_ref = R.server.ports(
+    metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")}
+)
+config_ref = R.model.config(
+    metadata={ARG: Arg(type=dict, required=True, help="模型配置(JSON字符串)")}
+)
 size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
-mode_ref = R.run.mode(metadata={ARG: Arg(type=Literal["train", "test"], default="train")})
+mode_ref = R.run.mode(
+    metadata={ARG: Arg(type=Literal["train", "test"], default="train")}
+)
+
 
 # 2. 定义 Node
 @node
@@ -81,23 +92,26 @@ def start_server(
     ctx: Context,
     /,
     *,
-    use_cache: Auto[bool], 
-    ports: Auto[list[int]], 
-    config: Auto[dict], 
-    size: Auto[str], 
-    mode: Auto[str]
+    use_cache: Auto[bool],
+    ports: Auto[list[int]],
+    config: Auto[dict],
+    size: Auto[str],
+    mode: Auto[str],
 ):
-    print(f"Cache: {use_cache}, Ports: {ports}, Config: {config}, Size: {size}, Mode: {mode}")
+    print(
+        f"Cache: {use_cache}, Ports: {ports}, Config: {config}, Size: {size}, Mode: {mode}"
+    )
     return ctx
+
 
 if __name__ == "__main__":
     # 3. 实例化 Node
     server_node = start_server(
-        use_cache=use_cache_ref, 
-        ports=ports_ref, 
-        config=config_ref, 
-        size=size_ref, 
-        mode=mode_ref
+        use_cache=use_cache_ref,
+        ports=ports_ref,
+        config=config_ref,
+        size=size_ref,
+        mode=mode_ref,
     )
 
     # 模拟在命令行执行：

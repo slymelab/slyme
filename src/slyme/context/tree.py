@@ -12,18 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, cast
 from collections.abc import Iterable
 from types import MappingProxyType
+from typing import Any, cast
+
 from slyme.utils.pytree import (
-    AttributeKey,
-    PyTreeEngine,
-    PyTreeAux,
-    MappingKey,
     PYTREE_ENGINE_REGISTRY,
+    AttributeKey,
+    MappingKey,
+    PyTreeAux,
+    PyTreeEngine,
 )
 from slyme.utils.pytree.common import flatten_mapping_proxy, unflatten_mapping_proxy
-from .core import ContextData, Context
+
+from .core import Context, ContextData
 
 # Context engine
 CONTEXT_ENGINE = PyTreeEngine("context_engine", register_defaults=False)
@@ -42,7 +44,9 @@ def _unflatten_context_data(children: Iterable[Any], aux: PyTreeAux) -> ContextD
     """Unflatten to ContextData."""
     if aux.children_keys is None:
         raise ValueError("Missing keys for ContextData unflattening.")
-    raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.children_keys)]
+    raw_keys = [
+        cast(str, k.key) for k in cast("Iterable[MappingKey]", aux.children_keys)
+    ]
     return ContextData(zip(raw_keys, children))
 
 

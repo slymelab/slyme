@@ -8,9 +8,11 @@ Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行
 from slyme.context import Context, R
 from slyme.node import Auto, node
 
+
 @node
 def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
     return timeout, data
+
 
 task = process(data=[R.user.age, R.user.name])
 task.timeout = 60
@@ -39,7 +41,7 @@ ctx = Context()
 ctx.update({R.a: 1, R.b: 2, R.items: [1, 2]})
 
 process(data=[R.a, R.b])(ctx)  # data 为 (1, 2)
-process(data=R.items)(ctx)     # data 是 Context 中保存的 list
+process(data=R.items)(ctx)  # data 是 Context 中保存的 list
 ```
 
 自行管理 Context 时直接调用 `node(ctx)`；需要 Slyme 准备外部输入、校验 `Arg` 元数据并提取输出时，以 `node.run(...)` 作为应用边界。

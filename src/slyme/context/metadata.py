@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Union
-from dataclasses import dataclass, field
-from collections.abc import Iterable, Callable
 
 __all__ = [
     "ARG",

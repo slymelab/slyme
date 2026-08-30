@@ -69,6 +69,8 @@ def source_module(source: str) -> Iterator[Any]:
         with open(mod_path, "w", encoding="utf-8") as fh:
             fh.write(source)
         spec = importlib.util.spec_from_file_location("pipeline", mod_path)
+        if spec is None or spec.loader is None:
+            raise ImportError("could not create a module spec for inline source")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         yield mod

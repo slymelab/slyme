@@ -19,6 +19,7 @@ from slyme.context import R
 # 假设有定义好的 nodes
 # from my_nodes import load_data, process_data, save_data
 
+
 @builder
 def create_data_pipeline(source_path: str):
     # 1. 实例化各个 Node — 通过关键字参数直接传入 Ref
@@ -50,6 +51,7 @@ pipeline = create_data_pipeline("/path/to/data")
 ```python
 from slyme.builder import builder
 
+
 @builder(check_structure=False)
 def fast_internal_builder():
     # 这里返回的 Node 将跳过结构校验
@@ -67,12 +69,16 @@ from slyme.builder import builder
 from slyme.node import sequential
 from slyme.context import R
 
+
 @builder
 def base_pipeline():
-    return sequential(nodes=[
-        load_data(path="default_path"),
-        process_data(config=R.default_config),
-    ])
+    return sequential(
+        nodes=[
+            load_data(path="default_path"),
+            process_data(config=R.default_config),
+        ]
+    )
+
 
 @builder
 def custom_pipeline(new_path: str):
@@ -81,9 +87,7 @@ def custom_pipeline(new_path: str):
 
     # 2. 动态修改特定节点的构建期参数
     pipeline.nodes[0].path = new_path
-    pipeline.nodes.append(
-        save_data(output=R.output_path)
-    )
+    pipeline.nodes.append(save_data(output=R.output_path))
     return pipeline
 ```
 

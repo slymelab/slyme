@@ -53,9 +53,7 @@ A Wrapper has exactly three non-keyword-only runtime parameters. Attach it only 
 ```python
 root = execute(
     derived=calculate(
-        value=R.input.value(
-            metadata={ARG: Arg(type=float, required=True)}
-        ),
+        value=R.input.value(metadata={ARG: Arg(type=float, required=True)}),
         scale=2.0,
     ),
     children=(increment(counter=R.state.counter),),

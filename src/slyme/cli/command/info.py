@@ -14,7 +14,6 @@
 
 """``slyme info`` — version + environment self-check."""
 
-import argparse
 import sys
 from typing import Any, Dict
 

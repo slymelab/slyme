@@ -14,27 +14,28 @@
 
 import types
 from abc import ABC, abstractmethod
-from enum import Enum
-from dataclasses import dataclass, field, InitVar
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Callable
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import InitVar, dataclass, field
+from enum import Enum
 from typing import (
     Any,
     Generic,
+    Literal,
+    Optional,
     TypeVar,
     Union,
-    Literal,
     cast,
-    Optional,
-    overload,
 )
+
 from typing_extensions import Self
-from slyme.utils.pytree import MappingKey
+
 from slyme.utils.exception import enrich_exception
+from slyme.utils.pytree import MappingKey
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
-_EMPTY_MAPPING = types.MappingProxyType({})
+_EMPTY_MAPPING: Mapping[str, Any] = types.MappingProxyType({})
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 DiffMissing = Enum("DiffMissing", ["MARK"])
@@ -111,10 +112,9 @@ class Ref(Generic[_T]):
     ) -> "Ref":
         """Create a new Ref at a subpath relative to this Ref."""
         new_path = f"{self.path}.{subpath}" if self.path else subpath
-        kwargs = {}
-        if metadata is not _MISSING:
-            kwargs["metadata"] = metadata
-        return Ref(new_path, **kwargs)
+        if metadata is _MISSING or metadata is None:
+            return Ref(new_path)
+        return Ref(new_path, metadata=metadata)
 
     def __hash__(self) -> int:
         return self.hash
@@ -248,7 +248,10 @@ class ContextData(dict[str, Any]):
             new_data = dict(self)
 
         # 2. Group Operations
-        grouped_ops = defaultdict(lambda: ({}, set()))
+        grouped_ops: defaultdict[
+            str,
+            tuple[dict[tuple[str, ...], Any], set[tuple[str, ...]]],
+        ] = defaultdict(lambda: ({}, set()))
 
         for path, val in updates.items():
             if not path:
@@ -466,7 +469,7 @@ class ContextElement(ABC):
         self,
         ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
-    ) -> Union[_T, _T2]:
+    ) -> Any:
         pass
 
     @abstractmethod
@@ -503,9 +506,9 @@ class ContextElement(ABC):
         indent = Config.repr_indent
         formatter = Config.leaf_formatter
 
-        item_blocks = []
+        item_blocks: list[list[str]] = []
         for key in keys:
-            val = self.get(Ref(key))
+            val: Any = self.get(Ref[Any](key))
             v_str = repr(val) if isinstance(val, ContextElement) else formatter(val)
 
             if newline:
@@ -604,7 +607,7 @@ class Context(ContextElement):
         base_path = ref.path if ref else ""
 
         def build_tree(current_data: ContextData, current_path: str) -> dict[str, Any]:
-            tree = {}
+            tree: dict[str, Any] = {}
             for k, v in current_data.items():
                 path = f"{current_path}.{k}" if current_path else k
                 if isinstance(v, ContextData):
@@ -616,15 +619,11 @@ class Context(ContextElement):
         return build_tree(data, base_path)
 
     # --- Read Operations ---
-    @overload
-    def get(self, ref: RefLike) -> _T: ...
-    @overload
-    def get(self, ref: RefLike, default: _T2) -> Union[_T, _T2]: ...
     def get(
         self,
         ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
-    ) -> Union[_T, _T2]:
+    ) -> Any:
         ref = to_ref(ref)
         try:
             return self.extract(ref)
@@ -693,10 +692,14 @@ class Context(ContextElement):
         if not updates and not drops:
             return None
 
-        updates = {to_ref(k): v for k, v in updates.items()} if updates else {}
-        drops = {to_ref(r) for r in drops} if drops else set()
-        raw_updates = {r.parts: v for r, v in updates.items()}
-        raw_drops = {r.parts for r in drops}
+        normalized_updates: dict[Ref[Any], Any] = (
+            {to_ref(k): v for k, v in updates.items()} if updates else {}
+        )
+        normalized_drops: set[Ref[Any]] = {to_ref(r) for r in drops} if drops else set()
+        raw_updates: dict[tuple[str, ...], Any] = {
+            r.parts: v for r, v in normalized_updates.items()
+        }
+        raw_drops: set[tuple[str, ...]] = {r.parts for r in normalized_drops}
 
         self._root.mutate(raw_updates, raw_drops)
 
@@ -727,7 +730,7 @@ class Context(ContextElement):
 
         The context is updated in place and the method returns ``None``.
         """
-        updates = {
+        updates: dict[RefLike, Any] = {
             to_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
@@ -787,7 +790,7 @@ class ContextView(ContextElement):
         self,
         ref: RefLike,
         default: Union[_T2, _Missing] = _MISSING,
-    ) -> Union[_T, _T2]:
+    ) -> Any:
         return self._context.get(self._adjust_ref(ref), default)
 
     def exists(self, ref: RefLike) -> bool:

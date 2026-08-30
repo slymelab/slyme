@@ -17,21 +17,21 @@ slyme pytree utility module.
 """
 
 from .core import (
+    # Instances
+    PYTREE_ENGINE_REGISTRY,
+    AttributeKey,
+    ContainerDef,
     # Types & Keys
     KeyPath,
-    PyTreeKey,
-    SequenceKey,
+    LeafDef,
     MappingKey,
-    AttributeKey,
     PyTreeAux,
     # Structure & Engine
     PyTreeDef,
-    LeafDef,
-    ContainerDef,
-    TraverseAux,
     PyTreeEngine,
-    # Instances
-    PYTREE_ENGINE_REGISTRY,
+    PyTreeKey,
+    SequenceKey,
+    TraverseAux,
 )
 
 __all__ = [

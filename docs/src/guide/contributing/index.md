@@ -6,8 +6,25 @@ Welcome to Slyme! 🎉 We are thrilled that you are considering contributing to 
 
 We greatly look forward to receiving your Pull Requests (PRs). When preparing to submit code, please keep the following simple development guidelines in mind:
 
-* **Code Formatting**: We uniformly use `ruff` as our code formatting and linting tool. Before submitting code, please ensure your code has been checked with `ruff` for formatting.
-* **Pipeline Under Development**: We are actively configuring and improving the project's CI/CD pipeline. Therefore, the current contribution process may still be iteratively optimizing. If you encounter any workflow questions when submitting code, please feel free to leave a comment, and we will be happy to assist!
+* **Tests**: Add focused tests for every behavior change. The suite uses pytest,
+  pytest-asyncio, Hypothesis, and branch coverage with a 90% minimum.
+* **Quality gates**: Ruff formatting and linting, mypy, the Python 3.9–3.14
+  compatibility matrix, package checks, and documentation builds must pass.
+* **Local hooks**: Install the repository's commit and pre-push hooks with
+  `uv run pre-commit install --install-hooks`.
+
+Create the locked development environment and run the same gates as CI:
+
+```bash
+uv sync --locked --all-groups
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv run pytest
+```
+
+See the root [CONTRIBUTING.md](https://github.com/slymelab/slyme/blob/main/CONTRIBUTING.md)
+for release, documentation, and security guidance.
 
 ## Regarding Feature Extensions and API Design
 
