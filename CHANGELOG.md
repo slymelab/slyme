@@ -21,6 +21,8 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
+  they cannot bypass fixed runtime-arity and named build-parameter validation.
 - Fixed static workflow discovery reporting partial attribute chains such as
   `input` in addition to the actual `R.input.value` reference.
 

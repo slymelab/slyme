@@ -22,6 +22,7 @@ task = add(x=R.input.x, y=2, output=R.output.total)
 ```
 
 运行时参数的名称与类型标注都不是必需的；Slyme 仅根据参数数量及 keyword-only 位置区分运行时参数和构建参数。
+不支持变长参数 `*args` 和 `**kwargs`：运行时参数数量与构建参数名称都必须显式声明。
 
 ## 执行
 

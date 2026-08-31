@@ -22,6 +22,8 @@ task = add(x=R.input.x, y=2, output=R.output.total)
 ```
 
 Runtime parameter names and annotations are optional; Slyme identifies runtime and build parameters by parameter count and keyword-only placement.
+Variadic `*args` and `**kwargs` parameters are not supported: runtime arity and
+build parameter names must remain explicit.
 
 ## Execute
 

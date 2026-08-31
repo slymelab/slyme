@@ -175,6 +175,21 @@ def _resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
     return Spec(**merged_values)
 
 
+def _validate_parameter_kind(param: inspect.Parameter) -> None:
+    if param.kind not in (
+        inspect.Parameter.VAR_POSITIONAL,
+        inspect.Parameter.VAR_KEYWORD,
+    ):
+        return
+
+    prefix = "*" if param.kind == inspect.Parameter.VAR_POSITIONAL else "**"
+    raise TypeError(
+        f"Variadic parameter '{prefix}{param.name}' is not supported. "
+        "Node and Wrapper runtime parameters must be declared explicitly, "
+        "and build parameters must be keyword-only."
+    )
+
+
 def analyze_signature(
     func: Callable, *, resolve_type_hints: bool = True
 ) -> SignatureAnalysis:
@@ -187,6 +202,10 @@ def analyze_signature(
     runtime_params = []
     public_params = []  # Used for factory signature
     specs: dict[str, Spec] = {}
+
+    for p in params:
+        with enrich_exception(f"in definition of '{func.__name__}'"):
+            _validate_parameter_kind(p)
 
     if resolve_type_hints:
         type_hints = get_type_hints(func, include_extras=True)

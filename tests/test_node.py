@@ -130,6 +130,37 @@ def test_decorator_validation_and_factory_behavior() -> None:
     assert detected.func.__name__ == "detected"
 
 
+def test_variadic_node_and_wrapper_parameters_are_rejected() -> None:
+    with pytest.raises(TypeError, match=r"Variadic parameter '\*args'"):
+
+        @node
+        def variadic_node_args(*args: Any) -> None:
+            return None
+
+    with pytest.raises(TypeError, match=r"Variadic parameter '\*\*kwargs'"):
+
+        @node
+        def variadic_node_kwargs(**kwargs: Any) -> None:
+            return None
+
+    with pytest.raises(TypeError, match=r"Variadic parameter '\*args'"):
+
+        @wrapper
+        def variadic_wrapper_args(ctx: Context, wrapped: Node[Any], *args: Any) -> Any:
+            return None
+
+    with pytest.raises(TypeError, match=r"Variadic parameter '\*\*kwargs'"):
+
+        @wrapper
+        def variadic_wrapper_kwargs(
+            ctx: Context,
+            wrapped: Node[Any],
+            /,
+            **kwargs: Any,
+        ) -> Any:
+            return None
+
+
 def test_node_attributes_are_declared_and_mutable() -> None:
     @node
     def identity(ctx: Context, /, *, value: int = 1) -> int:
