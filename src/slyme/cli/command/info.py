@@ -15,7 +15,7 @@
 """``slyme info`` — version + environment self-check."""
 
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from slyme.runner.io import emit_envelope
 from slyme.runner.protocol import (
@@ -26,7 +26,7 @@ from slyme.runner.protocol import (
 )
 
 
-def _info() -> Dict[str, Any]:
+def _info() -> dict[str, Any]:
     try:
         import slyme
 

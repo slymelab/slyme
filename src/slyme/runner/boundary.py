@@ -20,14 +20,14 @@ paths (via Ref metadata), with a prefix convention as a fallback for
 undeclared workflows.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 from slyme.cli.resolve import collect_refs
 from slyme.context import Ref
 from slyme.context.metadata import ARG, OUTPUT
 
 
-def resolve_boundary(node_def: Any) -> Dict[str, List[str]]:
+def resolve_boundary(node_def: Any) -> dict[str, list[str]]:
     """Resolve the effective input/output boundary of a node tree.
 
     - Declared inputs are refs carrying ``ARG`` metadata.
@@ -55,7 +55,7 @@ def resolve_boundary(node_def: Any) -> Dict[str, List[str]]:
     }
 
 
-def _common_prefix(paths: List[str]) -> List[str]:
+def _common_prefix(paths: list[str]) -> list[str]:
     if not paths:
         return []
     split = [p.split(".") for p in paths]
@@ -68,7 +68,7 @@ def _common_prefix(paths: List[str]) -> List[str]:
     return prefix
 
 
-def project_outputs(ctx: Any, output_paths: List[str]) -> Any:
+def project_outputs(ctx: Any, output_paths: list[str]) -> Any:
     """Project a final Context onto the given output paths.
 
     A single output is returned as its raw value; multiple outputs are
@@ -81,7 +81,7 @@ def project_outputs(ctx: Any, output_paths: List[str]) -> Any:
     if len(output_paths) == 1:
         return ctx.get(Ref(output_paths[0]), None)
     prefix = _common_prefix(output_paths)
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for path in output_paths:
         parts = path.split(".")
         if prefix:

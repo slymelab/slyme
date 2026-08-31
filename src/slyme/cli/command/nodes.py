@@ -14,7 +14,7 @@
 
 """``slyme nodes`` — introspect one @builder's node tree (import, no execution)."""
 
-from typing import Any, Dict, List
+from typing import Any
 
 from slyme.cli.resolve import prepare_args
 from slyme.context.metadata import Arg
@@ -35,8 +35,8 @@ def _jsonable(value: Any) -> Any:
     return repr(value)
 
 
-def _serialize_arg(arg: Arg) -> Dict[str, Any]:
-    d: Dict[str, Any] = {}
+def _serialize_arg(arg: Arg) -> dict[str, Any]:
+    d: dict[str, Any] = {}
     if not Arg.is_missing(arg.default):
         d["default"] = _jsonable(arg.default)
     if arg.help:
@@ -55,8 +55,8 @@ def _serialize_arg(arg: Arg) -> Dict[str, Any]:
     return d
 
 
-def _walk_nodes(node_def: Any) -> List[Dict[str, Any]]:
-    nodes: List[Dict[str, Any]] = []
+def _walk_nodes(node_def: Any) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
 
     def walk(x: Any, path: str) -> None:
         if isinstance(x, NodeElement):
@@ -82,7 +82,7 @@ def _walk_nodes(node_def: Any) -> List[Dict[str, Any]]:
     return nodes
 
 
-def _introspect(node_def: Any, name: str) -> Dict[str, Any]:
+def _introspect(node_def: Any, name: str) -> dict[str, Any]:
     boundary = resolve_boundary(node_def)
     args_map = prepare_args(node=node_def)
     return {

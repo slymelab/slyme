@@ -51,8 +51,8 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 - **类型映射**：参数的类型会被设定为 `Literal` 内第一个元素的数据类型。
 - **示例**：`type=Literal["small", "base"]` 会限制用户的输入只能是这两个字符串之一。
 
-### 6. 可选类型 (`Optional[T]` / `Union[T, None]`)
-- **泛型解包**：当检测到包含 `NoneType` 的 `Union` 时，框架会自动过滤掉 `None`，并提取实际的类型 `T` 进行解析逻辑分发。这使得开发者可以安全地使用 `Optional` 注解，而不破坏 CLI 正常解析。
+### 6. 可选类型 (`T | None`)
+- **泛型解包**：当检测到包含 `NoneType` 的联合类型时，框架会自动过滤掉 `None`，并提取实际类型 `T` 进行解析逻辑分发。推荐使用 Python 3.10 原生的 `T | None` 语法；等价的 `typing.Optional[T]` 仍然可用。
 
 ## 综合使用示例
 
@@ -145,18 +145,18 @@ result = node_def.run(
 
 ```python
 def parse_and_inject(
-    context: Optional[Context] = None,
-    parser: Optional[argparse.ArgumentParser] = None,
-    cli_args: Optional[List[str]] = None,
-    node: Optional[Union[Any, Iterable[RefLike]]] = None,
-    extra_refs: Optional[Iterable[RefLike]] = None,
-    extra_args: Optional[Dict[str, Arg]] = None,
-) -> Union[Dict[str, Any], Context]:
+    context: Context | None = None,
+    parser: argparse.ArgumentParser | None = None,
+    cli_args: list[str] | None = None,
+    node: Any | Iterable[RefLike] | None = None,
+    extra_refs: Iterable[RefLike] | None = None,
+    extra_args: dict[str, Arg] | None = None,
+) -> dict[str, Any] | Context:
 ```
 
 - **返回值**：
-  - 若提供 `context`：返回合并了命令行参数的全新 `Context`。
-  - 若 `context` 为 `None`：返回解析得到的字典 `Dict[str, Any]`。
+  - 若提供 `context`：原地更新并返回同一个 `Context`。
+  - 若 `context` 为 `None`：返回解析得到的 `dict[str, Any]`。
 - **参数来源**：你可以传入 `node` 自动扫描依赖树中所需的全部 `Ref`，或者手动提供 `extra_refs` 和 `extra_args` 来追加。
 
 ### `populate_parser` 与 `prepare_args`

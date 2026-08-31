@@ -18,7 +18,7 @@ Node rendering module.
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any
 
 from slyme.context import Ref
 from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
@@ -52,7 +52,7 @@ class Config:
     tree_spacer: str = "    "
     group_connector: str = "│ => "
     # Optional filter for displayed categories. If None, all categories are shown.
-    visible_categories: Optional[tuple[str, ...]] = ("wrappers", "nodes")
+    visible_categories: tuple[str, ...] | None = ("wrappers", "nodes")
     # Types that should use the "Grouped" rendering strategy.
     _grouped_render_types: tuple[type, ...] = (NodeElement,)
     # Configuration for grouped rendering: (Category Name, Display Title)
@@ -68,7 +68,7 @@ class _RenderResult:
     """Internal result holder for recursive rendering."""
 
     lines: list[str]
-    category: Optional[str]
+    category: str | None
 
 
 @dataclass
@@ -92,7 +92,7 @@ def get_render_string(obj: Any) -> str:
     return "\n".join([header] + result.lines)
 
 
-def _get_node_header(obj: Union[Any, HasExtraRepr, HasTypeRepr]) -> str:
+def _get_node_header(obj: Any | HasExtraRepr | HasTypeRepr) -> str:
     """Resolve the display header for a single object."""
     if isinstance(obj, HasTypeRepr):
         type_name = obj.type_repr()

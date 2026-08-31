@@ -20,7 +20,6 @@ stabilization.
 
 import argparse
 import sys
-from typing import List, Optional
 
 import slyme
 from slyme.cli.command import call, discover, info, nodes
@@ -49,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run the experimental Slyme runner CLI."""
     _warn_experimental_runner(stacklevel=2)
     parser = build_parser()

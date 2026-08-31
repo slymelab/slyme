@@ -11,7 +11,7 @@ breaking changes when they are documented here.
 ### Added
 
 - Added a pytest-based unit and integration suite with asynchronous tests,
-  property-based checks, branch coverage enforcement, and Python 3.9–3.14 CI.
+  property-based checks, branch coverage enforcement, and Python 3.10–3.14 CI.
 - Added locked development dependency groups, Ruff and mypy quality gates,
   pre-commit/pre-push hooks, CodeQL, dependency review, and Dependabot updates.
 - Added verified package builds, trusted PyPI publishing with provenance
@@ -37,6 +37,8 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Raised the minimum supported Python version from 3.9 to 3.10, following the
+  upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
 - Node and Wrapper build parameters are now real instance attributes. Parameter
   names are checked against reserved framework attributes when decorated;
   `_kwargs` and mapping-style parameter access have been removed.

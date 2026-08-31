@@ -14,8 +14,9 @@
 
 """PyTree engine used for Node inspection and structural cloning."""
 
+from collections.abc import Iterable
 from types import MappingProxyType
-from typing import Any, Iterable, cast
+from typing import Any, cast
 
 from slyme.utils.pytree import (
     PYTREE_ENGINE_REGISTRY,
@@ -47,7 +48,7 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
 def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Node:
     if aux.children_keys is None:
         raise ValueError("Missing keys for Node unflattening.")
-    iterator = zip(aux.children_keys, children)
+    iterator = zip(aux.children_keys, children, strict=True)
     _, wrappers = next(iterator)
     params = {cast("AttributeKey", key).name: value for key, value in iterator}
     return Node(
@@ -72,7 +73,7 @@ def _unflatten_wrapper(children: Iterable[Any], aux: PyTreeAux) -> Wrapper:
         raise ValueError("Missing keys for Wrapper unflattening.")
     params = {
         cast("AttributeKey", key).name: value
-        for key, value in zip(aux.children_keys, children)
+        for key, value in zip(aux.children_keys, children, strict=True)
     }
     return Wrapper(
         func=aux.metadata["func"], specs=aux.metadata["specs"], params=params
@@ -95,7 +96,7 @@ def _flatten_async_node(obj: AsyncNode) -> tuple[Iterable[Any], PyTreeAux]:
 def _unflatten_async_node(children: Iterable[Any], aux: PyTreeAux) -> AsyncNode:
     if aux.children_keys is None:
         raise ValueError("Missing keys for AsyncNode unflattening.")
-    iterator = zip(aux.children_keys, children)
+    iterator = zip(aux.children_keys, children, strict=True)
     _, wrappers = next(iterator)
     params = {cast("AttributeKey", key).name: value for key, value in iterator}
     return AsyncNode(
@@ -120,7 +121,7 @@ def _unflatten_async_wrapper(children: Iterable[Any], aux: PyTreeAux) -> AsyncWr
         raise ValueError("Missing keys for AsyncWrapper unflattening.")
     params = {
         cast("AttributeKey", key).name: value
-        for key, value in zip(aux.children_keys, children)
+        for key, value in zip(aux.children_keys, children, strict=True)
     }
     return AsyncWrapper(
         func=aux.metadata["func"], specs=aux.metadata["specs"], params=params

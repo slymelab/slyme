@@ -25,7 +25,7 @@ The response envelope is emitted to ``--result-file`` (atomic) or stdout.
 
 import json
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from slyme.runner.boundary import project
 from slyme.runner.execute import get_builder, load_module, seed_inputs, source_module
@@ -33,7 +33,7 @@ from slyme.runner.io import capture_stdio, emit_envelope
 from slyme.runner.protocol import KIND_CALL, error_payload, make_envelope
 
 
-def _request_from_args(args) -> Dict[str, Any]:
+def _request_from_args(args) -> dict[str, Any]:
     """Read the request: stdin envelope (machine) or flags (human TTY)."""
     try:
         tty = sys.stdin.isatty()
@@ -44,7 +44,7 @@ def _request_from_args(args) -> Dict[str, Any]:
         raw = sys.stdin.read()
         return json.loads(raw) if raw.strip() else {}
 
-    req: Dict[str, Any] = {}
+    req: dict[str, Any] = {}
     if args.source:
         req["mode"] = "source"
         req["source"] = args.source
@@ -61,7 +61,7 @@ def _request_from_args(args) -> Dict[str, Any]:
     if args.sys_path:
         req["sysPath"] = args.sys_path
     if args.input_file:
-        with open(args.input_file, "r", encoding="utf-8") as fh:
+        with open(args.input_file, encoding="utf-8") as fh:
             req["input"] = json.load(fh)
     elif args.input:
         req["input"] = json.loads(args.input)
@@ -72,7 +72,7 @@ def _request_from_args(args) -> Dict[str, Any]:
     return req
 
 
-def _run(request: Dict[str, Any]) -> Any:
+def _run(request: dict[str, Any]) -> Any:
     mode = request.get("mode", "module")
     entry = request.get("entry", "build")
     input_data = request.get("input", {})

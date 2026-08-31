@@ -12,16 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 from enum import Enum
 from functools import partial, wraps
 from typing import (
-    Callable,
+    ParamSpec,
     TypeVar,
-    Union,
     overload,
 )
-
-from typing_extensions import ParamSpec
 
 from slyme.node import Node, check_node_structure
 
@@ -69,14 +67,11 @@ def builder(
     check_structure: bool = True,
 ) -> Callable[_P, _NodeT]: ...
 def builder(
-    func: Union[Callable[_P, _NodeT], _Missing] = _MISSING,
+    func: Callable[_P, _NodeT] | _Missing = _MISSING,
     /,
     *,
     check_structure: bool = True,
-) -> Union[
-    Callable[_P, _NodeT],
-    Callable[[Callable[_P, _NodeT]], Callable[_P, _NodeT]],
-]:
+) -> Callable[_P, _NodeT] | Callable[[Callable[_P, _NodeT]], Callable[_P, _NodeT]]:
     """
     Decorator to create a builder function.
     It wraps the function to ensure it returns a valid Node and optionally checks the structure.

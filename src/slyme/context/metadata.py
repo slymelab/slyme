@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any
 
 __all__ = [
     "ARG",
@@ -46,14 +48,14 @@ class Arg:
     """
 
     default: Any = _MISSING
-    default_factory: Union[Callable[[], Any], _Missing] = _MISSING
-    help: Optional[str] = None
-    type: Optional[type] = None
-    choices: Optional[Iterable[Any]] = None
+    default_factory: Callable[[], Any] | _Missing = _MISSING
+    help: str | None = None
+    type: type | None = None
+    choices: Iterable[Any] | None = None
     required: bool = False
-    nargs: Union[str, int, None] = None
+    nargs: str | int | None = None
     aliases: list[str] = field(default_factory=list)
-    metavar: Optional[str] = None
+    metavar: str | None = None
 
     @staticmethod
     def is_missing(value: Any) -> bool:
@@ -62,6 +64,6 @@ class Arg:
     def resolve_default(self) -> Any:
         if self.default is not _MISSING:
             return self.default
-        if self.default_factory is not _MISSING:
+        if callable(self.default_factory):
             return self.default_factory()
         return _MISSING

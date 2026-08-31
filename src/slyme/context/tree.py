@@ -47,7 +47,7 @@ def _unflatten_context_data(children: Iterable[Any], aux: PyTreeAux) -> ContextD
     raw_keys = [
         cast(str, k.key) for k in cast("Iterable[MappingKey]", aux.children_keys)
     ]
-    return ContextData(zip(raw_keys, children))
+    return ContextData(zip(raw_keys, children, strict=True))
 
 
 def _flatten_context(context: Context) -> tuple[Iterable[Any], PyTreeAux]:

@@ -8,7 +8,7 @@
 
 * **测试**：每项行为变更都需要有针对性的测试。测试套件使用 pytest、
   pytest-asyncio、Hypothesis 和分支覆盖率，最低覆盖率门禁为 90%。
-* **质量门禁**：Ruff 格式与 lint、mypy、Python 3.9–3.14 兼容性矩阵、
+* **质量门禁**：Ruff 格式与 lint、mypy、Python 3.10–3.14 兼容性矩阵、
   构建产物检查和文档构建必须全部通过。
 * **本地 hooks**：运行 `uv run pre-commit install --install-hooks`
   安装提交时检查和推送前测试。

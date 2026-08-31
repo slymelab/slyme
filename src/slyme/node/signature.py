@@ -15,15 +15,14 @@
 import inspect
 import sys
 import types
+import typing
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
     Annotated,
     Any,
-    Callable,
-    Mapping,
     TypeVar,
-    Union,
     get_args,
     get_origin,
     get_type_hints,
@@ -56,9 +55,9 @@ class Spec:
     Dependency injection metadata for functional node parameters.
     """
 
-    default: Union[Any, _Missing] = _MISSING
-    default_factory: Union[Callable[[], Any], _Missing] = _MISSING
-    auto_eval: Union[bool, _Missing] = _MISSING
+    default: Any | _Missing = _MISSING
+    default_factory: Callable[[], Any] | _Missing = _MISSING
+    auto_eval: bool | _Missing = _MISSING
 
     def __post_init__(self):
         if self.default is not _MISSING and self.default_factory is not _MISSING:
@@ -92,9 +91,9 @@ class Spec:
 
 
 def spec(
-    default: Union[Any, _Missing] = _MISSING,
-    default_factory: Union[Callable[[], Any], _Missing] = _MISSING,
-    auto_eval: Union[bool, _Missing] = _MISSING,
+    default: Any | _Missing = _MISSING,
+    default_factory: Callable[[], Any] | _Missing = _MISSING,
+    auto_eval: bool | _Missing = _MISSING,
 ) -> Any:
     return Spec(default=default, default_factory=default_factory, auto_eval=auto_eval)
 
@@ -118,10 +117,13 @@ class SignatureAnalysis:
 def _collect_specs_from_hint(hint: Any, default_is_none: bool) -> list[Spec]:
     """Recursively collect Spec annotations from a type hint."""
     # NOTE: Compatibility for Python < 3.11: get_type_hints auto-wraps parameters
-    # with None defaults in Optional. Safely unwrap this outer Optional/Union
-    # to expose the underlying Annotated type.
+    # with None defaults in Optional. Safely unwrap this outer union to expose
+    # the underlying Annotated type.
     if sys.version_info < (3, 11):
-        if default_is_none and get_origin(hint) is Union:
+        if default_is_none and get_origin(hint) in (
+            types.UnionType,
+            typing.Union,
+        ):
             args = get_args(hint)
             if len(args) == 2 and type(None) in args:
                 hint = args[0] if args[1] is type(None) else args[1]

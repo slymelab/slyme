@@ -21,13 +21,14 @@ import os
 import shutil
 import sys
 import tempfile
-from typing import Any, Dict, Iterator, List, Optional
+from collections.abc import Iterator
+from typing import Any
 
 from slyme.context import Ref
 
 
-def _flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _flatten(obj: Any, prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
     if isinstance(obj, dict):
         for k, v in obj.items():
             path = f"{prefix}.{k}" if prefix else str(k)
@@ -40,7 +41,7 @@ def _flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
     return out
 
 
-def seed_inputs(input_data: Any) -> Dict[Ref, Any]:
+def seed_inputs(input_data: Any) -> dict[Ref, Any]:
     """Flatten nested envelope data into a ``{Ref(path): value}`` input mapping.
 
     The JSON envelope nests values (e.g. ``{"input": {"root": "/x"}}``) while the
@@ -53,7 +54,7 @@ def seed_inputs(input_data: Any) -> Dict[Ref, Any]:
     return {Ref(k): v for k, v in flat.items()}
 
 
-def load_module(module: str, sys_path: Optional[List[str]]) -> Any:
+def load_module(module: str, sys_path: list[str] | None) -> Any:
     for p in reversed(sys_path or []):
         if p and p not in sys.path:
             sys.path.insert(0, p)

@@ -8,7 +8,7 @@ We greatly look forward to receiving your Pull Requests (PRs). When preparing to
 
 * **Tests**: Add focused tests for every behavior change. The suite uses pytest,
   pytest-asyncio, Hypothesis, and branch coverage with a 90% minimum.
-* **Quality gates**: Ruff formatting and linting, mypy, the Python 3.9–3.14
+* **Quality gates**: Ruff formatting and linting, mypy, the Python 3.10–3.14
   compatibility matrix, package checks, and documentation builds must pass.
 * **Local hooks**: Install the repository's commit and pre-push hooks with
   `uv run pre-commit install --install-hooks`.

@@ -15,27 +15,27 @@
 """Warning utilities with deduplication."""
 
 import warnings
-from functools import lru_cache
-from typing import Any, Optional, Union
+from functools import cache
+from typing import Any
 
 __all__ = ["warning_once"]
 
 
 def warning_once(
-    message: Union[str, Warning],
+    message: str | Warning,
     category: Any = None,
     stacklevel: int = 1,
-    source: Optional[Any] = None,
+    source: Any | None = None,
 ) -> None:
     _warning_once(message, category, stacklevel, source)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _warning_once(
-    message: Union[str, Warning],
+    message: str | Warning,
     category: Any = None,
     stacklevel: int = 1,
-    source: Optional[Any] = None,
+    source: Any | None = None,
 ) -> None:
     """Issue a warning at most once per ``(message, category, stacklevel, source)`` per session.
 

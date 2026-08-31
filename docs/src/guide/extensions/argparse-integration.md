@@ -51,8 +51,8 @@ A core advantage of `slyme.cli` is its intelligent type inference and conversion
 - **Type Mapping**: The type of the argument is mapped to the type of the first element in the `Literal`.
 - **Example**: `type=Literal["small", "base"]` restricts user input to these two exact strings.
 
-### 6. Optional (`Optional[T]` / `Union[T, None]`)
-- **Generic Unpacking**: When a `Union` containing `NoneType` is detected, the framework filters out `None` and extracts the actual type `T` to dispatch the parsing logic. This allows developers to safely use `Optional` annotations without breaking CLI behavior.
+### 6. Optional (`T | None`)
+- **Generic Unpacking**: When a union containing `NoneType` is detected, the framework filters out `None` and extracts the actual type `T` to dispatch the parsing logic. Native Python 3.10 `T | None` syntax is recommended; the equivalent `typing.Optional[T]` remains accepted.
 
 ## Comprehensive Example
 
@@ -147,18 +147,18 @@ This is the lower-level API for parsing arguments independently of Node executio
 
 ```python
 def parse_and_inject(
-    context: Optional[Context] = None,
-    parser: Optional[argparse.ArgumentParser] = None,
-    cli_args: Optional[List[str]] = None,
-    node: Optional[Union[Any, Iterable[RefLike]]] = None,
-    extra_refs: Optional[Iterable[RefLike]] = None,
-    extra_args: Optional[Dict[str, Arg]] = None,
-) -> Union[Dict[str, Any], Context]:
+    context: Context | None = None,
+    parser: argparse.ArgumentParser | None = None,
+    cli_args: list[str] | None = None,
+    node: Any | Iterable[RefLike] | None = None,
+    extra_refs: Iterable[RefLike] | None = None,
+    extra_args: dict[str, Arg] | None = None,
+) -> dict[str, Any] | Context:
 ```
 
 - **Returns**:
-  - If `context` is provided: Returns a new `Context` merged with the parsed command-line arguments.
-  - If `context` is `None`: Returns the parsed arguments as a dictionary (`Dict[str, Any]`).
+  - If `context` is provided: Updates and returns that same `Context`.
+  - If `context` is `None`: Returns the parsed arguments as a `dict[str, Any]`.
 - **Argument Sources**: Pass a `node` to automatically scan all required `Refs` across the dependency tree, or manually append `extra_refs` and `extra_args`.
 
 ### `populate_parser` and `prepare_args`

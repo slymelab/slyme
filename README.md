@@ -6,7 +6,7 @@
   <p>
     <a href="https://pypi.org/project/slyme/"><img src="https://img.shields.io/pypi/v/slyme.svg?label=PyPI" alt="PyPI version"></a>
     <a href="https://github.com/slymelab/slyme/actions/workflows/ci.yml"><img src="https://github.com/slymelab/slyme/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-    <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python version">
+    <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python version">
     <a href="https://slymelab.github.io/slyme/"><img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="Documentation"></a>
     <a href="https://github.com/slymelab/slyme/blob/main/LICENSE"><img src="https://img.shields.io/github/license/slymelab/slyme" alt="License"></a>
   </p>
@@ -25,7 +25,7 @@ Whether you are building complex LLM pipelines, executing DAGs, or creating gene
 
 ## Installation
 
-Slyme requires **Python 3.9+**. You can install it directly via pip:
+Slyme requires **Python 3.10+**. You can install it directly via pip:
 
 ```bash
 pip install slyme

@@ -13,8 +13,9 @@
 # limitations under the License.
 
 import asyncio
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any
 
 from slyme.context import Context, Ref, RefFactory
 from slyme.context.tree import CTX_EVAL_ENGINE
@@ -110,7 +111,7 @@ def execute_eval_plan(ctx: Context, plan: EvaluationPlan) -> Any:
                 f"Evaluator {evaluator} returned {len(batch_results)} results, "
                 f"expected {len(indices)}."
             )
-        for i, res in zip(indices, batch_results):
+        for i, res in zip(indices, batch_results, strict=True):
             results[i] = res
 
     return CTX_EVAL_ENGINE.unflatten(plan.tree_def, results)
@@ -132,7 +133,7 @@ async def async_execute_eval_plan(ctx: Context, plan: EvaluationPlan) -> Any:
                 f"Evaluator {evaluator} returned {len(batch_results)} results, "
                 f"expected {len(indices)}."
             )
-        for i, res in zip(indices, batch_results):
+        for i, res in zip(indices, batch_results, strict=True):
             results[i] = res
 
     return CTX_EVAL_ENGINE.unflatten(plan.tree_def, results)

@@ -16,13 +16,13 @@
 
 import ast
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from slyme.runner.io import emit_envelope
 from slyme.runner.protocol import KIND_DISCOVER, error_payload, make_envelope
 
 
-def _dec_name(dec) -> Optional[str]:
+def _dec_name(dec) -> str | None:
     if isinstance(dec, ast.Name):
         return dec.id
     if isinstance(dec, ast.Call):
@@ -36,7 +36,7 @@ def _is_builder(fn) -> bool:
     return any(_dec_name(dec) == "builder" for dec in fn.decorator_list)
 
 
-def _collect_refs(node) -> List[str]:
+def _collect_refs(node) -> list[str]:
     refs = set()
     parents = {
         child: parent
@@ -73,7 +73,7 @@ def _collect_refs(node) -> List[str]:
 
 def _read_doc(path: str) -> str:
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return ast.get_docstring(ast.parse(fh.read(), filename=path)) or ""
     except Exception:
         return ""
@@ -88,8 +88,8 @@ def _discover_dir(workflow_dir: str):
     ``@builder`` functions are the executable workflows. Nothing is imported
     or executed.
     """
-    folders: List[Dict[str, Any]] = []
-    workflows: List[Dict[str, Any]] = []
+    folders: list[dict[str, Any]] = []
+    workflows: list[dict[str, Any]] = []
     if not os.path.isdir(workflow_dir):
         return folders, workflows
     for dirpath, dirnames, filenames in os.walk(workflow_dir):
@@ -110,7 +110,7 @@ def _discover_dir(workflow_dir: str):
             module = f"{pkg}.{stem}" if pkg else stem
             path = os.path.join(dirpath, fname)
             try:
-                with open(path, "r", encoding="utf-8") as fh:
+                with open(path, encoding="utf-8") as fh:
                     tree = ast.parse(fh.read(), filename=path)
             except Exception:
                 continue
@@ -132,9 +132,9 @@ def _discover_dir(workflow_dir: str):
     return folders, workflows
 
 
-def _discover(paths: List[str]) -> Dict[str, List[Dict[str, Any]]]:
-    folders: List[Dict[str, Any]] = []
-    workflows: List[Dict[str, Any]] = []
+def _discover(paths: list[str]) -> dict[str, list[dict[str, Any]]]:
+    folders: list[dict[str, Any]] = []
+    workflows: list[dict[str, Any]] = []
     seen_folders = set()
     seen_workflows = set()
     for p in paths:

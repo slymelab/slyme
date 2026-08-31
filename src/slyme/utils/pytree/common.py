@@ -16,8 +16,9 @@
 Common utilities and shared logic for PyTree operations.
 """
 
+from collections.abc import Iterable
 from types import MappingProxyType
-from typing import Any, Iterable, cast
+from typing import Any, cast
 
 from .core import MappingKey, PyTreeAux
 
@@ -37,7 +38,7 @@ def unflatten_mapping_proxy(
     if aux.children_keys is None:
         raise ValueError("Missing keys for MappingProxyType unflattening.")
     raw_keys = [k.key for k in cast("Iterable[MappingKey]", aux.children_keys)]
-    return MappingProxyType(dict(zip(raw_keys, children)))
+    return MappingProxyType(dict(zip(raw_keys, children, strict=True)))
 
 
 def flatten_dict(data: dict) -> tuple[Iterable[Any], PyTreeAux]:
@@ -56,4 +57,4 @@ def unflatten_dict(children: Iterable[Any], tree_aux: PyTreeAux) -> dict:
         raise ValueError("Missing keys in TreeAux for dict unflattening.")
     # Unwrap DictKey to get raw keys.
     raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.children_keys)]
-    return dict(zip(raw_keys, children))
+    return dict(zip(raw_keys, children, strict=True))

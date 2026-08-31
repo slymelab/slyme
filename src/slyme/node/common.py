@@ -14,7 +14,6 @@
 
 import asyncio
 from collections.abc import Iterable, Sequence
-from typing import Union
 
 from slyme.context import Context
 
@@ -59,14 +58,14 @@ def sequential(ctx: Context, /, *, nodes: Sequence[Node]) -> None:
 
 
 async def async_sequential_exec(
-    ctx: Context, nodes: Iterable[Union[Node, AsyncNode]]
+    ctx: Context, nodes: Iterable[Node | AsyncNode]
 ) -> None:
     """
     Sequentially execute nodes against the same mutable context.
 
     Args:
         ctx (Context): The initial context to pass through the nodes.
-        nodes (Iterable[Union[Node, AsyncNode]]): An iterable of nodes to execute.
+        nodes (Iterable[Node | AsyncNode]): An iterable of nodes to execute.
 
     Returns:
         None.
@@ -80,14 +79,14 @@ async def async_sequential_exec(
 
 @node
 async def async_sequential(
-    ctx: Context, /, *, nodes: Sequence[Union[Node, AsyncNode]]
+    ctx: Context, /, *, nodes: Sequence[Node | AsyncNode]
 ) -> None:
     """
     Sequentially execute nodes against the same mutable context.
 
     Args:
         ctx (Context): The initial context to pass through the nodes.
-        nodes (Sequence[Union[Node, AsyncNode]]): A sequence of nodes to execute.
+        nodes (Sequence[Node | AsyncNode]): A sequence of nodes to execute.
 
     Returns:
         None.

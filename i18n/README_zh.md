@@ -5,7 +5,7 @@
 
   <p>
     <a href="https://pypi.org/project/slyme/"><img src="https://img.shields.io/pypi/v/slyme.svg?label=PyPI" alt="PyPI version"></a>
-    <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python version" />
+    <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python version" />
     <a href="https://slymelab.github.io/slyme/"><img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="Documentation"></a>
     <a href="https://github.com/slymelab/slyme/blob/main/LICENSE"><img src="https://img.shields.io/github/license/slymelab/slyme" alt="License"></a>
   </p>
@@ -24,7 +24,7 @@ Slyme（发音为 /slaɪm/）是一个高度可组合的函数式执行框架。
 
 ## 安装
 
-Slyme 需要 **Python 3.9+**。您可以通过 pip 直接安装：
+Slyme 需要 **Python 3.10+**。您可以通过 pip 直接安装：
 
 ```bash
 pip install slyme

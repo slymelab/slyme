@@ -15,13 +15,12 @@
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Union
 
 
 @contextmanager
 def enrich_exception(
     info: str,
-    exc_types: Union[type[Exception], tuple[type[Exception], ...]] = Exception,
+    exc_types: type[Exception] | tuple[type[Exception], ...] = Exception,
 ) -> Generator[None, None, None]:
     """
     Context manager to enrich exceptions with context info.

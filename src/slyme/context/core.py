@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import types
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -22,9 +24,7 @@ from typing import (
     Any,
     Generic,
     Literal,
-    Optional,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -99,7 +99,7 @@ class Ref(Generic[_T]):
         if not isinstance(self.metadata, types.MappingProxyType):
             object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
 
-    def update_metadata(self, metadata: Mapping[str, Any]) -> "Ref[_T]":
+    def update_metadata(self, metadata: Mapping[str, Any]) -> Ref[_T]:
         """Returns a new Ref with updated metadata (merging with existing)."""
         new_metadata = dict(self.metadata)
         new_metadata.update(metadata)
@@ -108,8 +108,8 @@ class Ref(Generic[_T]):
     def at(
         self,
         subpath: str,
-        metadata: Union[Optional[Mapping[str, Any]], _Missing] = _MISSING,
-    ) -> "Ref":
+        metadata: Mapping[str, Any] | None | _Missing = _MISSING,
+    ) -> Ref:
         """Create a new Ref at a subpath relative to this Ref."""
         new_path = f"{self.path}.{subpath}" if self.path else subpath
         if metadata is _MISSING or metadata is None:
@@ -150,7 +150,7 @@ class RefFactory:
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"{type(self).__name__} is immutable")
 
-    def __getattr__(self, name: str) -> "RefFactory":
+    def __getattr__(self, name: str) -> RefFactory:
         path = object.__getattribute__(self, "_RefFactory__path")
         new_path = f"{path}.{name}" if path else name
         return RefFactory(new_path)
@@ -158,7 +158,7 @@ class RefFactory:
     def __call__(
         self,
         *,
-        metadata: Optional[Mapping[str, Any]] = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Ref:
         path = object.__getattribute__(self, "_RefFactory__path")
         kwargs: dict[str, Any] = {}
@@ -173,7 +173,7 @@ class RefFactory:
 
 R = RefFactory()
 
-RefLike = Union[Ref, RefFactory]
+RefLike = Ref | RefFactory
 
 
 def to_ref(ref_like: RefLike) -> Ref:
@@ -204,7 +204,7 @@ class ContextData(dict[str, Any]):
         self,
         updates: dict[tuple[str, ...], Any],
         drops: set[tuple[str, ...]],
-    ) -> Union["ContextData", _Missing]:
+    ) -> ContextData | _Missing:
         """
         Build the result of simultaneous updates and drops without modifying self.
 
@@ -344,7 +344,7 @@ class ContextDiff:
     modified: Mapping[str, tuple[Any, Any]] = field(
         default_factory=lambda: _EMPTY_MAPPING
     )
-    nested: Mapping[str, "ContextDiff"] = field(default_factory=lambda: _EMPTY_MAPPING)
+    nested: Mapping[str, ContextDiff] = field(default_factory=lambda: _EMPTY_MAPPING)
 
     def __post_init__(self):
         for name in ("added", "removed", "modified", "nested"):
@@ -468,7 +468,7 @@ class ContextElement(ABC):
     def get(
         self,
         ref: RefLike,
-        default: Union[_T2, _Missing] = _MISSING,
+        default: _T2 | _Missing = _MISSING,
     ) -> Any:
         pass
 
@@ -477,22 +477,22 @@ class ContextElement(ABC):
         pass
 
     @abstractmethod
-    def keys(self, ref: Optional[RefLike] = None) -> Iterable[str]:
+    def keys(self, ref: RefLike | None = None) -> Iterable[str]:
         pass
 
     @abstractmethod
-    def to_context_data(self, ref: Optional[RefLike] = None) -> ContextData:
+    def to_context_data(self, ref: RefLike | None = None) -> ContextData:
         pass
 
     @abstractmethod
-    def to_dict(self, ref: Optional[RefLike] = None) -> dict[str, Any]:
+    def to_dict(self, ref: RefLike | None = None) -> dict[str, Any]:
         """Convert to standard python dictionary recursively."""
         pass
 
     def type_repr(self) -> str:
         return type(self).__name__
 
-    def clone(self) -> "Context":
+    def clone(self) -> Context:
         """Clone ContextData containers while preserving leaf identities."""
         root = cast(
             ContextData,
@@ -540,7 +540,7 @@ class ContextElement(ABC):
         return f"{name}({{{newline}{newline.join(body_lines)}{newline}}})"
 
     def diff(
-        self, other: "ContextElement", strategy: Literal["is", "eq"] = "is"
+        self, other: ContextElement, strategy: Literal["is", "eq"] = "is"
     ) -> ContextDiff:
         """
         Compute the difference between this element and another.
@@ -579,9 +579,9 @@ class Context(ContextElement):
     """
 
     _root: ContextData = field(init=False)
-    data: InitVar[Optional[Mapping[str, Any]]] = None
+    data: InitVar[Mapping[str, Any] | None] = None
 
-    def __post_init__(self, data: Optional[Mapping[str, Any]] = None) -> None:
+    def __post_init__(self, data: Mapping[str, Any] | None = None) -> None:
         if data is None:
             root = ContextData()
         elif isinstance(data, ContextData):
@@ -593,7 +593,7 @@ class Context(ContextElement):
         object.__setattr__(self, "_root", root)
 
     @classmethod
-    def _from_context_data(cls, root: ContextData) -> "Context":
+    def _from_context_data(cls, root: ContextData) -> Context:
         obj = object.__new__(cls)
         object.__setattr__(obj, "_root", root)
         return obj
@@ -605,11 +605,11 @@ class Context(ContextElement):
 
         values = tuple(
             ContextView(self, ref.parts) if isinstance(val, ContextData) else val
-            for ref, val in zip(refs, values)
+            for ref, val in zip(refs, values, strict=True)
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
 
-    def _build_dict_ref_tree(self, ref: Optional[RefLike] = None) -> Any:
+    def _build_dict_ref_tree(self, ref: RefLike | None = None) -> Any:
         ref = to_ref(ref) if ref is not None else None
         data = self.to_context_data(ref)
         base_path = ref.path if ref else ""
@@ -630,7 +630,7 @@ class Context(ContextElement):
     def get(
         self,
         ref: RefLike,
-        default: Union[_T2, _Missing] = _MISSING,
+        default: _T2 | _Missing = _MISSING,
     ) -> Any:
         ref = to_ref(ref)
         try:
@@ -648,7 +648,7 @@ class Context(ContextElement):
         except ContextPathError:
             return False
 
-    def keys(self, ref: Optional[RefLike] = None) -> Iterable[str]:
+    def keys(self, ref: RefLike | None = None) -> Iterable[str]:
         if ref is None:
             return self._root.keys()
         ref = to_ref(ref)
@@ -657,7 +657,7 @@ class Context(ContextElement):
             return element.keys()
         raise ContextPathError("Cannot list keys of a leaf value.")
 
-    def to_context_data(self, ref: Optional[RefLike] = None) -> ContextData:
+    def to_context_data(self, ref: RefLike | None = None) -> ContextData:
         if ref is None:
             return self._root
         ref = to_ref(ref)
@@ -666,7 +666,7 @@ class Context(ContextElement):
             return val
         raise ContextPathError("Target is not a ContextData (container).")
 
-    def to_dict(self, ref: Optional[RefLike] = None) -> dict[str, Any]:
+    def to_dict(self, ref: RefLike | None = None) -> dict[str, Any]:
         ref_tree = self._build_dict_ref_tree(ref)
         return self.extract(ref_tree)
 
@@ -685,8 +685,8 @@ class Context(ContextElement):
     def mutate(
         self,
         *,
-        updates: Optional[Mapping[RefLike, Any]] = None,
-        drops: Optional[Iterable[RefLike]] = None,
+        updates: Mapping[RefLike, Any] | None = None,
+        drops: Iterable[RefLike] | None = None,
     ) -> None:
         """
         Apply a transaction-like set of modifications (updates and drops) atomically.
@@ -775,7 +775,7 @@ class ContextView(ContextElement):
     _context: Context
     _parts: tuple[str, ...]
 
-    def _adjust_ref(self, ref: Optional[RefLike]) -> Ref:
+    def _adjust_ref(self, ref: RefLike | None) -> Ref:
         if ref is None:
             return Ref(".".join(self._parts))
         ref = to_ref(ref)
@@ -797,20 +797,20 @@ class ContextView(ContextElement):
     def get(
         self,
         ref: RefLike,
-        default: Union[_T2, _Missing] = _MISSING,
+        default: _T2 | _Missing = _MISSING,
     ) -> Any:
         return self._context.get(self._adjust_ref(ref), default)
 
     def exists(self, ref: RefLike) -> bool:
         return self._context.exists(self._adjust_ref(ref))
 
-    def keys(self, ref: Optional[RefLike] = None) -> Iterable[str]:
+    def keys(self, ref: RefLike | None = None) -> Iterable[str]:
         return self._context.keys(self._adjust_ref(ref))
 
-    def to_context_data(self, ref: Optional[RefLike] = None) -> ContextData:
+    def to_context_data(self, ref: RefLike | None = None) -> ContextData:
         return self._context.to_context_data(self._adjust_ref(ref))
 
-    def to_dict(self, ref: Optional[RefLike] = None) -> dict[str, Any]:
+    def to_dict(self, ref: RefLike | None = None) -> dict[str, Any]:
         return self._context.to_dict(self._adjust_ref(ref))
 
 

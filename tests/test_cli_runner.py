@@ -9,7 +9,7 @@ import sys
 from enum import Enum
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import pytest
 
@@ -55,7 +55,7 @@ def test_populate_parser_supports_all_argument_shapes() -> None:
             help="level",
             metavar="N",
         ),
-        "optional": Arg(type=Optional[int]),
+        "optional": Arg(type=int | None),
         "fallback": Arg(),
     }
     parser = argparse.ArgumentParser()

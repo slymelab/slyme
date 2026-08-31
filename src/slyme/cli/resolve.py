@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterable
 from dataclasses import replace
 from typing import (
     Any,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Union,
 )
 
 from slyme.context import Ref, RefFactory, RefLike, to_ref
@@ -29,11 +25,11 @@ from slyme.node.core import NODE_ENGINE
 __all__ = ["collect_refs", "resolve_args_from_refs", "prepare_args"]
 
 
-def collect_refs(element: Any) -> List[Ref]:
+def collect_refs(element: Any) -> list[Ref]:
     """
     Collect all Ref objects from a Node structure using NODE_ENGINE.
     """
-    refs: List[Ref] = []
+    refs: list[Ref] = []
 
     def is_leaf(node: Any, _) -> bool:
         return isinstance(node, (Ref, RefFactory))
@@ -46,7 +42,7 @@ def collect_refs(element: Any) -> List[Ref]:
     return refs
 
 
-def resolve_args_from_refs(refs: Iterable[RefLike]) -> Dict[str, Arg]:
+def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
     """
     Resolve a list of Refs into a mapping of {path: Arg}.
 
@@ -57,9 +53,9 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> Dict[str, Arg]:
     Handles merging:
     - If Arg is missing help/type, tries to fill it from metadata[HELP] / metadata[TYPE].
     """
-    path_to_args: Dict[str, List[Arg]] = {}
-    path_to_help: Dict[str, List[str]] = {}
-    path_to_type: Dict[str, List[Any]] = {}
+    path_to_args: dict[str, list[Arg]] = {}
+    path_to_help: dict[str, list[str]] = {}
+    path_to_type: dict[str, list[Any]] = {}
 
     for ref_like in refs:
         ref = to_ref(ref_like)
@@ -77,7 +73,7 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> Dict[str, Arg]:
         if TYPE in ref.metadata:
             path_to_type.setdefault(ref.path, []).append(ref.metadata[TYPE])
 
-    resolved: Dict[str, Arg] = {}
+    resolved: dict[str, Arg] = {}
 
     for path, args in path_to_args.items():
         # 1. Resolve Arg Conflict (Strict Equality)
@@ -93,7 +89,7 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> Dict[str, Arg]:
 
         # 2. Merge with HELP/TYPE (if needed)
         # Handle immutable Arg by collecting changes first
-        changes: Dict[str, Any] = {}
+        changes: dict[str, Any] = {}
         if base_arg.help is None and path in path_to_help:
             # Use the first available help string
             changes["help"] = path_to_help[path][0]
@@ -113,10 +109,10 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> Dict[str, Arg]:
 
 
 def prepare_args(
-    node: Optional[Union[Any, Iterable[RefLike]]] = None,
-    extra_refs: Optional[Iterable[RefLike]] = None,
-    extra_args: Optional[Dict[str, Arg]] = None,
-) -> Dict[str, Arg]:
+    node: Any | Iterable[RefLike] | None = None,
+    extra_refs: Iterable[RefLike] | None = None,
+    extra_args: dict[str, Arg] | None = None,
+) -> dict[str, Arg]:
     """
     Prepare arguments by collecting refs from node/extra_refs and merging with extra_args.
 
@@ -132,7 +128,7 @@ def prepare_args(
         ValueError: If there are conflicting argument definitions.
     """
     # 1. Collect Refs
-    refs: List[RefLike] = []
+    refs: list[RefLike] = []
     if node is not None:
         refs.extend(collect_refs(node))
     if extra_refs:

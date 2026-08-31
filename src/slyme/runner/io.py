@@ -33,7 +33,7 @@ import os
 import sys
 import tempfile
 from types import TracebackType
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 
 class Captured:
@@ -61,8 +61,8 @@ class capture_stdio:
         sys.stderr.flush()
 
         self._is_posix = os.name == "posix"
-        self._real_out: Optional[int] = None
-        self._real_err: Optional[int] = None
+        self._real_out: int | None = None
+        self._real_err: int | None = None
         self._cap_out = None
         self._cap_err = None
 
@@ -85,9 +85,9 @@ class capture_stdio:
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc: Optional[BaseException],
-        tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
     ) -> Literal[False]:
         self._stack.close()  # restore sys.stdout/sys.stderr
 
@@ -116,8 +116,8 @@ class capture_stdio:
 
 
 def emit_envelope(
-    envelope: Dict[str, Any],
-    result_file: Optional[str] = None,
+    envelope: dict[str, Any],
+    result_file: str | None = None,
 ) -> None:
     """Emit ``envelope`` to a result file (atomic) or to stdout.
 

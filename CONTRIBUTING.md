@@ -14,7 +14,7 @@ uv run pre-commit install --install-hooks
 ~~~
 
 The second command installs both commit-time checks and the pre-push test hook.
-The repository supports Python 3.9 through 3.14; CI exercises the complete
+The repository supports Python 3.10 through 3.14; CI exercises the complete
 matrix.
 
 ## Quality gates

@@ -14,8 +14,9 @@
 
 """High-level Node execution helpers used by :meth:`Node.run`."""
 
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Mapping, Optional, Sequence, cast
+from typing import Any, cast
 
 from slyme.cli import parse_and_inject, prepare_args
 from slyme.context import Context, Ref, RefLike
@@ -23,11 +24,11 @@ from slyme.context import Context, Ref, RefLike
 
 def _prepare_context(
     node: Any,
-    context: Optional[Context],
+    context: Context | None,
     *,
-    inputs: Optional[Mapping[RefLike, Any]],
+    inputs: Mapping[RefLike, Any] | None,
     use_argparse: bool,
-    cli_args: Optional[Sequence[str]],
+    cli_args: Sequence[str] | None,
 ) -> Context:
     if context is None:
         context = Context()
@@ -103,14 +104,14 @@ def _format_result(
 
 def run_node(
     node: Any,
-    context: Optional[Context] = None,
+    context: Context | None = None,
     /,
     *,
-    inputs: Optional[Mapping[RefLike, Any]] = None,
+    inputs: Mapping[RefLike, Any] | None = None,
     outputs: Any = None,
     return_context: bool = False,
     use_argparse: bool = False,
-    cli_args: Optional[Sequence[str]] = None,
+    cli_args: Sequence[str] | None = None,
 ) -> Any:
     """Run a synchronous Node executable."""
     context = _prepare_context(
@@ -130,14 +131,14 @@ def run_node(
 
 async def run_async_node(
     node: Any,
-    context: Optional[Context] = None,
+    context: Context | None = None,
     /,
     *,
-    inputs: Optional[Mapping[RefLike, Any]] = None,
+    inputs: Mapping[RefLike, Any] | None = None,
     outputs: Any = None,
     return_context: bool = False,
     use_argparse: bool = False,
-    cli_args: Optional[Sequence[str]] = None,
+    cli_args: Sequence[str] | None = None,
 ) -> Any:
     """Run an asynchronous Node executable."""
     context = _prepare_context(

@@ -20,7 +20,7 @@ is delivered — stdout-inline or a result file (see ``slyme.runner.io``).
 """
 
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any
 
 PROTOCOL = "slyme.runner"
 SCHEMA_VERSION = 1
@@ -35,7 +35,7 @@ def protocol_id() -> str:
     return f"{PROTOCOL}/{SCHEMA_VERSION}"
 
 
-def error_payload(exc: BaseException) -> Dict[str, str]:
+def error_payload(exc: BaseException) -> dict[str, str]:
     """Serialize an exception into the ``error`` object of an envelope."""
     return {
         "type": type(exc).__name__,
@@ -48,17 +48,17 @@ def make_envelope(
     kind: str,
     ok: bool,
     result: Any = None,
-    error: Optional[Dict[str, str]] = None,
-    stdout: Optional[str] = None,
-    stderr: Optional[str] = None,
-) -> Dict[str, Any]:
+    error: dict[str, str] | None = None,
+    stdout: str | None = None,
+    stderr: str | None = None,
+) -> dict[str, Any]:
     """Build a response envelope.
 
     ``stdout``/``stderr`` are the *pipeline's* captured output (``call`` and
     ``nodes`` only); they are folded into the envelope so the transport channel
     itself never mixes machine data with workflow noise.
     """
-    env: Dict[str, Any] = {
+    env: dict[str, Any] = {
         "protocol": protocol_id(),
         "kind": kind,
         "ok": bool(ok),

@@ -15,17 +15,13 @@
 import argparse
 import json
 import sys
+import types
+import typing
+from collections.abc import Callable, Iterable
 from enum import Enum
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
     Literal,
-    Optional,
-    Type,
-    Union,
     get_args,
     get_origin,
 )
@@ -44,7 +40,7 @@ __all__ = [
 ARG_HANDLERS: TypeRegistry[Any, Callable[..., Any]] = TypeRegistry("ArgHandlers")
 
 
-def _string_to_bool(v: Union[str, bool]) -> bool:
+def _string_to_bool(v: str | bool) -> bool:
     """
     Helper to convert string to boolean for argparse.
     """
@@ -61,7 +57,7 @@ def _string_to_bool(v: Union[str, bool]) -> bool:
         )
 
 
-def _infer_type(arg: Arg) -> Type:
+def _infer_type(arg: Arg) -> type:
     """
     Infer the type of the argument based on explicit definition or default value.
     """
@@ -91,10 +87,10 @@ def _handle_bool(
     parser: argparse.ArgumentParser,
     path: str,
     arg: Arg,
-    flags: List[str],
-    kwargs: Dict[str, Any],
+    flags: list[str],
+    kwargs: dict[str, Any],
     default_val: Any,
-    arg_type: Type,
+    arg_type: type,
     origin: Any,
     type_args: tuple,
 ):
@@ -129,10 +125,10 @@ def _handle_list(
     parser: argparse.ArgumentParser,
     path: str,
     arg: Arg,
-    flags: List[str],
-    kwargs: Dict[str, Any],
+    flags: list[str],
+    kwargs: dict[str, Any],
     default_val: Any,
-    arg_type: Type,
+    arg_type: type,
     origin: Any,
     type_args: tuple,
 ):
@@ -155,10 +151,10 @@ def _handle_tuple(
     parser: argparse.ArgumentParser,
     path: str,
     arg: Arg,
-    flags: List[str],
-    kwargs: Dict[str, Any],
+    flags: list[str],
+    kwargs: dict[str, Any],
     default_val: Any,
-    arg_type: Type,
+    arg_type: type,
     origin: Any,
     type_args: tuple,
 ):
@@ -173,10 +169,10 @@ def _handle_dict(
     parser: argparse.ArgumentParser,
     path: str,
     arg: Arg,
-    flags: List[str],
-    kwargs: Dict[str, Any],
+    flags: list[str],
+    kwargs: dict[str, Any],
     default_val: Any,
-    arg_type: Type,
+    arg_type: type,
     origin: Any,
     type_args: tuple,
 ):
@@ -198,10 +194,10 @@ def _handle_literal(
     parser: argparse.ArgumentParser,
     path: str,
     arg: Arg,
-    flags: List[str],
-    kwargs: Dict[str, Any],
+    flags: list[str],
+    kwargs: dict[str, Any],
     default_val: Any,
-    arg_type: Type,
+    arg_type: type,
     origin: Any,
     type_args: tuple,
 ):
@@ -218,10 +214,10 @@ def _handle_enum(
     parser: argparse.ArgumentParser,
     path: str,
     arg: Arg,
-    flags: List[str],
-    kwargs: Dict[str, Any],
+    flags: list[str],
+    kwargs: dict[str, Any],
     default_val: Any,
-    arg_type: Type,
+    arg_type: type[Enum],
     origin: Any,
     type_args: tuple,
 ):
@@ -240,10 +236,10 @@ def _handle_generic(
     parser: argparse.ArgumentParser,
     path: str,
     arg: Arg,
-    flags: List[str],
-    kwargs: Dict[str, Any],
+    flags: list[str],
+    kwargs: dict[str, Any],
     default_val: Any,
-    arg_type: Type,
+    arg_type: type,
     origin: Any,
     type_args: tuple,
 ):
@@ -291,10 +287,10 @@ def _add_argument(parser: argparse.ArgumentParser, path: str, arg: Arg):
     arg_type = _infer_type(arg)
     default_val = arg.resolve_default()
 
-    # Handle Optional[T] or Union[T, None] (Primitive unpacking)
+    # Handle ``T | None`` and the equivalent ``typing.Optional[T]``.
     origin = get_origin(arg_type)
     type_args = get_args(arg_type)
-    if origin is Union and type(None) in type_args:
+    if origin in (types.UnionType, typing.Union) and type(None) in type_args:
         # Extract the non-None type
         non_none_args = [t for t in type_args if t is not type(None)]
         if len(non_none_args) == 1:
@@ -312,7 +308,7 @@ def _add_argument(parser: argparse.ArgumentParser, path: str, arg: Arg):
         )
         return
 
-    # Try origin match (for List[int] etc where arg_type is generic alias)
+    # Try origin match (for list[int] etc. where arg_type is a generic alias).
     if origin:
         handler = ARG_HANDLERS.get(origin, default=None)
         if handler:
@@ -344,7 +340,7 @@ def _add_argument(parser: argparse.ArgumentParser, path: str, arg: Arg):
         )
 
 
-def populate_parser(parser: argparse.ArgumentParser, args_map: Dict[str, Arg]) -> None:
+def populate_parser(parser: argparse.ArgumentParser, args_map: dict[str, Arg]) -> None:
     """
     Populate an existing ArgumentParser with resolved arguments.
     """
@@ -353,13 +349,13 @@ def populate_parser(parser: argparse.ArgumentParser, args_map: Dict[str, Arg]) -
 
 
 def parse_and_inject(
-    context: Optional[Context] = None,
-    parser: Optional[argparse.ArgumentParser] = None,
-    cli_args: Optional[List[str]] = None,
-    node: Optional[Union[Any, Iterable[RefLike]]] = None,
-    extra_refs: Optional[Iterable[RefLike]] = None,
-    extra_args: Optional[Dict[str, Arg]] = None,
-) -> Union[Dict[str, Any], Context]:
+    context: Context | None = None,
+    parser: argparse.ArgumentParser | None = None,
+    cli_args: list[str] | None = None,
+    node: Any | Iterable[RefLike] | None = None,
+    extra_refs: Iterable[RefLike] | None = None,
+    extra_args: dict[str, Arg] | None = None,
+) -> dict[str, Any] | Context:
     """
     High-level entry point to parse arguments and optionally inject them into a Context.
 
@@ -398,7 +394,7 @@ def parse_and_inject(
     # Prepare updates for Context.mutate
     # parsed_values is { "path": value, ... }
     # Context.mutate expects { Ref: value }
-    updates: Dict[RefLike, Any] = {}
+    updates: dict[RefLike, Any] = {}
     for key, value in parsed_values.items():
         # Only inject if it looks like a path (non-empty string)
         if key:

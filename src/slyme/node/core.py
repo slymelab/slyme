@@ -17,26 +17,23 @@ Core node module, consolidating base definitions and functional APIs.
 """
 
 import inspect
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from enum import Enum
 from functools import partial, update_wrapper
 from typing import (
     Any,
-    Awaitable,
-    Callable,
     ClassVar,
+    Concatenate,
     Generic,
-    Iterable,
     Literal,
-    Mapping,
-    Optional,
-    Sequence,
+    ParamSpec,
+    Protocol,
     TypeVar,
-    Union,
     cast,
     overload,
 )
 
-from typing_extensions import Concatenate, ParamSpec, Protocol, Self
+from typing_extensions import Self
 
 from slyme.context import Context, RefLike
 from slyme.utils.exception import enrich_exception
@@ -197,7 +194,7 @@ class Node(NodeElement, Generic[_R]):
         *,
         func: NodeFunc,
         specs: Mapping[str, Spec],
-        wrappers: Optional[Iterable["Wrapper"]] = None,
+        wrappers: Iterable["Wrapper"] | None = None,
         params: Mapping[str, Any],
     ):
         super().__init__(func=func, specs=specs, params=params)
@@ -240,14 +237,14 @@ class Node(NodeElement, Generic[_R]):
 
     def run(
         self,
-        context: Optional[Context] = None,
+        context: Context | None = None,
         /,
         *,
-        inputs: Optional[Mapping[RefLike, Any]] = None,
+        inputs: Mapping[RefLike, Any] | None = None,
         outputs: Any = None,
         return_context: bool = False,
         use_argparse: bool = False,
-        cli_args: Optional[Sequence[str]] = None,
+        cli_args: Sequence[str] | None = None,
     ) -> Any:
         """Execute this Node and optionally extract outputs."""
         from .runner import run_node
@@ -274,7 +271,7 @@ class AsyncNode(NodeElement, Generic[_R]):
         *,
         func: AsyncNodeFunc,
         specs: Mapping[str, Spec],
-        wrappers: Optional[Iterable["AsyncWrapper"]] = None,
+        wrappers: Iterable["AsyncWrapper"] | None = None,
         params: Mapping[str, Any],
     ):
         super().__init__(func=func, specs=specs, params=params)
@@ -319,14 +316,14 @@ class AsyncNode(NodeElement, Generic[_R]):
 
     async def run(
         self,
-        context: Optional[Context] = None,
+        context: Context | None = None,
         /,
         *,
-        inputs: Optional[Mapping[RefLike, Any]] = None,
+        inputs: Mapping[RefLike, Any] | None = None,
         outputs: Any = None,
         return_context: bool = False,
         use_argparse: bool = False,
-        cli_args: Optional[Sequence[str]] = None,
+        cli_args: Sequence[str] | None = None,
     ) -> Any:
         """Execute this async Node and optionally extract outputs."""
         from .runner import run_async_node
@@ -495,10 +492,10 @@ def _decorate(
     func: Callable[..., Any],
     /,
     *,
-    mode: Optional[ExecutionMode],
+    mode: ExecutionMode | None,
     resolve_type_hints: bool,
     kind: Literal["node", "wrapper"],
-) -> Union[NodeFactory[Any, Any], WrapperFactory[Any, Any]]:
+) -> NodeFactory[Any, Any] | WrapperFactory[Any, Any]:
     resolved_mode = _resolve_execution_mode(func, mode, kind)
     factory_type: Any
     if kind == "node":
@@ -557,7 +554,7 @@ def _is_async_callable(func: Callable[..., Any]) -> bool:
 
 def _resolve_execution_mode(
     func: Callable[..., Any],
-    mode: Optional[ExecutionMode],
+    mode: ExecutionMode | None,
     decorator_name: str,
 ) -> ExecutionMode:
     if mode not in (None, "sync", "async"):
@@ -579,7 +576,7 @@ def node(
     func: NodeFunc[_P, _R],
     /,
     *,
-    mode: Optional[Literal["sync"]] = None,
+    mode: Literal["sync"] | None = None,
     resolve_type_hints: bool = True,
 ) -> NodeFactory[_P, Node[_R]]: ...
 @overload
@@ -587,7 +584,7 @@ def node(
     func: AsyncNodeFunc[_P, _R],
     /,
     *,
-    mode: Optional[Literal["async"]] = None,
+    mode: Literal["async"] | None = None,
     resolve_type_hints: bool = True,
 ) -> NodeFactory[_P, AsyncNode[_R]]: ...
 @overload
@@ -615,10 +612,10 @@ def node(
     resolve_type_hints: bool = True,
 ) -> _AutoNodeDecorator: ...
 def node(
-    func: Union[Callable[..., Any], _Missing] = _MISSING,
+    func: Callable[..., Any] | _Missing = _MISSING,
     /,
     *,
-    mode: Optional[ExecutionMode] = None,
+    mode: ExecutionMode | None = None,
     resolve_type_hints: bool = True,
 ) -> Any:
     """Create a synchronous or asynchronous Node factory.
@@ -644,7 +641,7 @@ def wrapper(
     func: WrapperFunc[_P],
     /,
     *,
-    mode: Optional[Literal["sync"]] = None,
+    mode: Literal["sync"] | None = None,
     resolve_type_hints: bool = True,
 ) -> WrapperFactory[_P, Wrapper]: ...
 @overload
@@ -652,7 +649,7 @@ def wrapper(
     func: AsyncWrapperFunc[_P],
     /,
     *,
-    mode: Optional[Literal["async"]] = None,
+    mode: Literal["async"] | None = None,
     resolve_type_hints: bool = True,
 ) -> WrapperFactory[_P, AsyncWrapper]: ...
 @overload
@@ -680,10 +677,10 @@ def wrapper(
     resolve_type_hints: bool = True,
 ) -> _AutoWrapperDecorator: ...
 def wrapper(
-    func: Union[Callable[..., Any], _Missing] = _MISSING,
+    func: Callable[..., Any] | _Missing = _MISSING,
     /,
     *,
-    mode: Optional[ExecutionMode] = None,
+    mode: ExecutionMode | None = None,
     resolve_type_hints: bool = True,
 ) -> Any:
     """Create a synchronous or asynchronous Wrapper factory."""

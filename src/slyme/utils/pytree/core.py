@@ -25,9 +25,7 @@ from itertools import count
 from typing import (
     Any,
     Literal,
-    Optional,
     Protocol,
-    Union,
 )
 
 from slyme.utils.registry import Registry, TypeRegistry
@@ -113,8 +111,8 @@ class PyTreeAux:
     """
 
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
-    children_keys: Optional[tuple[PyTreeKey, ...]] = None
-    cls: Optional[type] = None
+    children_keys: tuple[PyTreeKey, ...] | None = None
+    cls: type | None = None
 
     def __post_init__(self):
         if not isinstance(self.metadata, types.MappingProxyType):
@@ -174,7 +172,7 @@ class _ResolverFunc(Protocol):
 
     def __call__(
         self, element: Any, traverse_aux: TraverseAux, /
-    ) -> Union[_PyTreeHandler, None]: ...
+    ) -> _PyTreeHandler | None: ...
 
 
 class _LeafSinkFunc(Protocol):
@@ -237,7 +235,7 @@ class PyTreeEngine:
 
     def __init__(
         self,
-        name: Optional[str] = None,
+        name: str | None = None,
         strict_registration: bool = True,
         allow_inheritance: bool = True,
         register_defaults: bool = True,
@@ -313,7 +311,7 @@ class PyTreeEngine:
 
     def _lookup_handler(
         self, element: Any, traverse_aux: TraverseAux
-    ) -> Union[_PyTreeHandler, None]:
+    ) -> _PyTreeHandler | None:
         """
         Resolve handler via:
         1. Pre-resolvers (High Priority)
@@ -349,7 +347,7 @@ class PyTreeEngine:
         self,
         tree: Any,
         *,
-        is_leaf: Optional[_IsLeafFunc] = None,
+        is_leaf: _IsLeafFunc | None = None,
     ) -> tuple[list[Any], "PyTreeDef"]:
         """
         Flatten a tree into a list of leaves and a structure definition.
@@ -367,7 +365,7 @@ class PyTreeEngine:
         self,
         tree: Any,
         *,
-        is_leaf: Optional[_IsLeafFunc] = None,
+        is_leaf: _IsLeafFunc | None = None,
     ) -> tuple[list[tuple[KeyPath, Any]], "PyTreeDef"]:
         """
         Flatten a tree into a list of (key_path, leaf) tuples and a structure definition.
@@ -385,7 +383,7 @@ class PyTreeEngine:
         self,
         tree: Any,
         *,
-        is_leaf: Optional[_IsLeafFunc] = None,
+        is_leaf: _IsLeafFunc | None = None,
     ) -> Iterator[Any]:
         """
         Iterate over leaves of a tree without creating a PyTreeDef.
@@ -399,7 +397,7 @@ class PyTreeEngine:
         self,
         tree: Any,
         *,
-        is_leaf: Optional[_IsLeafFunc] = None,
+        is_leaf: _IsLeafFunc | None = None,
     ) -> Iterator[tuple[KeyPath, Any]]:
         """
         Iterate over (key_path, leaf) tuples of a tree without creating a PyTreeDef.
@@ -413,8 +411,8 @@ class PyTreeEngine:
         self,
         element: Any,
         traverse_aux: TraverseAux,
-        is_leaf: Optional[_IsLeafFunc],
-    ) -> tuple[bool, Optional[_PyTreeHandler], Iterable[Any], Iterator[Any], PyTreeAux]:
+        is_leaf: _IsLeafFunc | None,
+    ) -> tuple[bool, _PyTreeHandler | None, Iterable[Any], Iterator[Any], PyTreeAux]:
         """
         Helper to check if an element should be flattened and prepare iterators.
         Returns: (should_flatten, handler, children_iter, keys_iter, tree_aux)
@@ -453,7 +451,7 @@ class PyTreeEngine:
         element: Any,
         traverse_aux: TraverseAux,
         leaf_sink: _LeafSinkFunc,
-        is_leaf: Optional[_IsLeafFunc],
+        is_leaf: _IsLeafFunc | None,
     ) -> PyTreeDef:
         """Recursive core for traversal."""
         should_flatten, handler, children_iter, keys_iter, tree_aux = (
@@ -496,7 +494,7 @@ class PyTreeEngine:
         self,
         element: Any,
         traverse_aux: TraverseAux,
-        is_leaf: Optional[_IsLeafFunc],
+        is_leaf: _IsLeafFunc | None,
         with_key_path: bool,
     ) -> Iterator[Any]:
         """Recursive core for iterator traversal."""
@@ -542,7 +540,7 @@ class PyTreeEngine:
         func: Callable[..., Any],
         tree: Any,
         *,
-        is_leaf: Optional[_IsLeafFunc] = None,
+        is_leaf: _IsLeafFunc | None = None,
     ) -> Any:
         """Apply func to every leaf in the tree."""
         leaves, treedef = self.flatten(tree, is_leaf=is_leaf)
