@@ -15,17 +15,19 @@ You can define a Builder like a normal function, just add the `@builder` decorat
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import R
+from slyme.context import RefFactory
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
+
+refs = RefFactory({"process_config": ..., "output_path": ...})
 
 
 @builder
 def create_data_pipeline(source_path: str):
     # 1. Instantiate each Node — pass Refs directly via keyword arguments
     load_node = load_data(path=source_path)
-    process_node = process_data(config=R.process_config)
-    save_node = save_data(output=R.output_path)
+    process_node = process_data(config=refs.process_config)
+    save_node = save_data(output=refs.output_path)
 
     # 2. Assemble and return a complete Node tree
     return sequential(nodes=[load_node, process_node, save_node])
@@ -67,7 +69,9 @@ This is very useful when building different variants of pipelines, avoiding a lo
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import R
+from slyme.context import RefFactory
+
+refs = RefFactory({"default_config": ..., "output_path": ...})
 
 
 @builder
@@ -75,7 +79,7 @@ def base_pipeline():
     return sequential(
         nodes=[
             load_data(path="default_path"),
-            process_data(config=R.default_config),
+            process_data(config=refs.default_config),
         ]
     )
 
@@ -87,7 +91,7 @@ def custom_pipeline(new_path: str):
 
     # 2. Dynamically modify specific Node's build-time parameters
     pipeline.nodes[0].path = new_path
-    pipeline.nodes.append(save_data(output=R.output_path))
+    pipeline.nodes.append(save_data(output=refs.output_path))
     return pipeline
 ```
 

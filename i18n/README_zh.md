@@ -40,8 +40,18 @@ pip install slyme
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, R, Ref
+from slyme.context import ARG, Arg, Context, Ref, RefFactory
 from slyme.node import node, expression, wrapper, Auto, Node
+
+
+refs = RefFactory(
+    {
+        "input": {
+            "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
+        },
+        "output": {"responses": ...},
+    }
+)
 
 
 # 1. 定义执行节点
@@ -81,11 +91,9 @@ def timing(
 @builder
 def build_pipeline():
     return llm_api(
-        responses=R.output.responses,
+        responses=refs.output.responses,
         prompts=format_prompts(
-            articles=R.input.articles(
-                metadata={ARG: Arg(type=list[dict], required=True)}
-            )
+            articles=refs.input.articles,
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
@@ -94,12 +102,12 @@ def build_pipeline():
 if __name__ == "__main__":
     responses = build_pipeline().run(
         inputs={
-            R.input.articles: [
+            refs.input.articles: [
                 {"title": "Article 1", "content": "Content 1"},
                 {"title": "Article 2", "content": "Content 2"},
             ]
         },
-        outputs=R.output.responses,
+        outputs=refs.output.responses,
     )
     print(responses)
 ```

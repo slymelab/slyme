@@ -7,8 +7,10 @@
 Node 函数必须恰好有一个非 keyword-only 运行时参数，所有构建参数必须是 keyword-only：
 
 ```python
-from slyme.context import Context, R, Ref
+from slyme.context import Context, Ref, RefFactory
 from slyme.node import Auto, node
+
+refs = RefFactory({"input": {"x": ...}, "output": {"total": ...}})
 
 
 @node
@@ -18,7 +20,7 @@ def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
     return result
 
 
-task = add(x=R.input.x, y=2, output=R.output.total)
+task = add(x=refs.input.x, y=2, output=refs.output.total)
 ```
 
 运行时参数的名称与类型标注都不是必需的；Slyme 仅根据参数数量及 keyword-only 位置区分运行时参数和构建参数。
@@ -30,14 +32,14 @@ task = add(x=R.input.x, y=2, output=R.output.total)
 
 ```python
 ctx = Context()
-ctx.set(R.input.x, 3)
+ctx.set(refs.input.x, 3)
 result = task(ctx)  # 5
 ```
 
 需要输入处理、`Arg` 校验、CLI 解析或输出提取时，以 `run()` 作为应用边界：
 
 ```python
-result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
+result = task.run(inputs={refs.input.x: 3}, outputs=refs.output.total)
 ```
 
 现在没有 Def/Exec 转换和 `prepare()` 阶段。每次调用都会校验并解析当前参数与 wrapper。

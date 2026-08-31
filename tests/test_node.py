@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, R, Ref
+from slyme.context import ARG, Arg, Context, Ref, RefFactory
 from slyme.node import (
     UNDEFINED,
     AsyncNode,
@@ -44,6 +44,17 @@ from slyme.node.exception import (
 from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
 
+R = RefFactory(
+    {
+        "async_value": ...,
+        "input": {"base": ..., "label": ..., "value": ...},
+        "names": {"outer": ...},
+        "output": {"value": ...},
+        "sync": ...,
+        "value": ...,
+    }
+)
+
 
 def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None:
     @node
@@ -72,6 +83,25 @@ def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None
     ctx = Context()
     ctx.set(R.input.value, 4)
     assert instance(ctx) == (1, 2, 3, 4)
+
+
+def test_schema_ref_factory_integrates_with_auto_and_builder() -> None:
+    refs = RefFactory({"input": {"value": ...}})
+
+    @node
+    def increment(ctx: Context, /, *, value: Auto[int]) -> int:
+        return value + 1
+
+    ctx = Context()
+    ctx.set(refs.input.value, 4)
+    assert increment(value=refs.input.value)(ctx) == 5
+
+    @builder
+    def misspelled() -> Node[int]:
+        return increment(value=refs.input.vlaue)
+
+    with pytest.raises(AttributeError, match="Did you mean 'value'"):
+        misspelled()
 
 
 def test_spec_validation_and_missing_parameters() -> None:
@@ -668,8 +698,21 @@ def test_node_tree_round_trip_and_render_configuration() -> None:
 
 
 def test_node_run_boundary_defaults_outputs_and_context() -> None:
-    source = R.input.value(
-        metadata={ARG: Arg(type=int, default_factory=lambda: 5, required=True)}
+    refs = RefFactory(
+        {
+            "input": {
+                "value": Ref(
+                    metadata={
+                        ARG: Arg(
+                            type=int,
+                            default_factory=lambda: 5,
+                            required=True,
+                        )
+                    }
+                )
+            },
+            "output": {"value": ...},
+        }
     )
 
     @node
@@ -682,11 +725,11 @@ def test_node_run_boundary_defaults_outputs_and_context() -> None:
     ) -> None:
         ctx.set(output, value * 2)
 
-    graph = application(value=source, output=R.output.value)
-    output, ctx = graph.run(outputs=R.output.value, return_context=True)
+    graph = application(value=refs.input.value, output=refs.output.value)
+    output, ctx = graph.run(outputs=refs.output.value, return_context=True)
     assert output == 10
-    assert ctx.get(R.input.value) == 5
-    assert graph.run(inputs={R.input.value: 4}, outputs=R.output.value) == 8
+    assert ctx.get(refs.input.value) == 5
+    assert graph.run(inputs={refs.input.value: 4}, outputs=refs.output.value) == 8
     assert isinstance(graph.run(), Context)
     with pytest.raises(TypeError, match="context must be"):
         graph.run({})  # type: ignore[arg-type]

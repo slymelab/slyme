@@ -15,7 +15,7 @@ import pytest
 
 from slyme.cli import parse_and_inject, prepare_args, resolve_args_from_refs
 from slyme.cli.parser import _json_loader, _string_to_bool, populate_parser
-from slyme.context import ARG, HELP, OUTPUT, TYPE, Arg, Context, R, Ref
+from slyme.context import ARG, HELP, OUTPUT, TYPE, Arg, Context, Ref, RefFactory
 from slyme.node import Auto, Node, node
 from slyme.runner._experimental import (
     EXPERIMENTAL_RUNNER_WARNING,
@@ -32,6 +32,27 @@ from slyme.runner.execute import (
 from slyme.runner.io import capture_stdio, emit_envelope
 from slyme.runner.protocol import error_payload, make_envelope, protocol_id
 from slyme.utils.warning import warning_once
+
+R = RefFactory(
+    {
+        "custom": {"result": ..., "source": ...},
+        "input": {"count": ..., "value": ...},
+        "other": ...,
+        "output": {"group": {"first": ..., "second": ...}, "value": ...},
+        "state": {"internal": ...},
+        "verbose": ...,
+    }
+)
+
+BOUNDARY_REFS = RefFactory(
+    {
+        "custom": {
+            "source": Ref(metadata={ARG: Arg(type=int)}),
+            "result": Ref(metadata={OUTPUT: True}),
+        },
+        "state": {"internal": ...},
+    }
+)
 
 
 class Color(Enum):
@@ -164,21 +185,24 @@ def test_resolve_args_merges_metadata_and_rejects_conflicts() -> None:
 
 
 def test_prepare_args_collects_refs_from_node_tree() -> None:
-    external = R.input.value(metadata={ARG: Arg(type=int, required=True)})
+    refs = RefFactory(
+        {
+            "input": {
+                "value": Ref(metadata={ARG: Arg(type=int, required=True)}),
+            }
+        }
+    )
 
     @node
     def application(ctx: Context, /, *, value: Auto[int]) -> int:
         return value
 
-    graph = application(value=external)
+    graph = application(value=refs.input.value)
     args = prepare_args(node=graph)
     assert args == {"input.value": Arg(type=int, required=True)}
 
 
 def _boundary_graph() -> Node[None]:
-    declared_input = R.custom.source(metadata={ARG: Arg(type=int)})
-    declared_output = R.custom.result(metadata={OUTPUT: True})
-
     @node
     def application(
         ctx: Context,
@@ -192,9 +216,9 @@ def _boundary_graph() -> Node[None]:
         ctx.set(internal, 99)
 
     return application(
-        source=declared_input,
-        result=declared_output,
-        internal=R.state.internal,
+        source=BOUNDARY_REFS.custom.source,
+        result=BOUNDARY_REFS.custom.result,
+        internal=BOUNDARY_REFS.state.internal,
     )
 
 
@@ -205,7 +229,7 @@ def test_boundary_resolution_and_projection() -> None:
     assert boundary["declaredOutputs"] == ["custom.result"]
     assert boundary["internal"] == ["state.internal"]
 
-    ctx = graph.run(inputs={R.custom.source: 2})
+    ctx = graph.run(inputs={BOUNDARY_REFS.custom.source: 2})
     assert project(ctx, graph) == 3
     assert project(ctx, graph, "state.internal") == 99
     assert project(ctx, graph, "*")["state"]["internal"] == 99
@@ -322,8 +346,17 @@ def test_envelope_protocol_errors_and_output(
 
 PIPELINE_SOURCE = """
 from slyme.builder import builder
-from slyme.context import ARG, OUTPUT, Arg, Context, R, Ref
+from slyme.context import ARG, OUTPUT, Arg, Context, Ref, RefFactory
 from slyme.node import Auto, node
+
+refs = RefFactory({
+    "input": {
+        "value": Ref(metadata={ARG: Arg(type=int, required=True)}),
+    },
+    "output": {
+        "value": Ref(metadata={OUTPUT: True}),
+    },
+})
 
 @node
 def application(ctx: Context, /, *, value: Auto[int], output: Ref[int]):
@@ -333,8 +366,8 @@ def application(ctx: Context, /, *, value: Auto[int], output: Ref[int]):
 @builder
 def build():
     return application(
-        value=R.input.value(metadata={ARG: Arg(type=int, required=True)}),
-        output=R.output.value(metadata={OUTPUT: True}),
+        value=refs.input.value,
+        output=refs.output.value,
     )
 """
 
@@ -429,15 +462,18 @@ def test_discover_command_scans_without_importing(
     (package / "pipeline.py").write_text(
         '''"""Pipeline docs."""
 from elsewhere import builder
+from slyme.context import Ref, RefFactory
+
+refs = RefFactory({"input": {"value": ...}, "other": ...})
 
 @builder()
 def build():
     """Build docs."""
-    return (R.input.value, Ref("output.value"))
+    return (refs.input.value, Ref("output.value"))
 
 @decorators.builder
 async def async_build():
-    return R.other
+    return refs.other
 ''',
         encoding="utf-8",
     )

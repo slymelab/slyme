@@ -59,19 +59,20 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
 
     for ref_like in refs:
         ref = to_ref(ref_like)
+        path = ref.bound_path
         if ARG in ref.metadata:
             arg_def = ref.metadata[ARG]
             if not isinstance(arg_def, Arg):
                 raise TypeError(
-                    f"Invalid metadata for {ARG} in Ref '{ref.path}'. Expected Arg, got {type(arg_def)}."
+                    f"Invalid metadata for {ARG} in Ref '{path}'. Expected Arg, got {type(arg_def)}."
                 )
-            path_to_args.setdefault(ref.path, []).append(arg_def)
+            path_to_args.setdefault(path, []).append(arg_def)
 
         if HELP in ref.metadata:
-            path_to_help.setdefault(ref.path, []).append(ref.metadata[HELP])
+            path_to_help.setdefault(path, []).append(ref.metadata[HELP])
 
         if TYPE in ref.metadata:
-            path_to_type.setdefault(ref.path, []).append(ref.metadata[TYPE])
+            path_to_type.setdefault(path, []).append(ref.metadata[TYPE])
 
     resolved: dict[str, Arg] = {}
 

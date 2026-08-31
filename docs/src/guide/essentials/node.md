@@ -7,8 +7,10 @@
 A Node function has exactly one non-keyword-only runtime parameter. Every build parameter must be keyword-only:
 
 ```python
-from slyme.context import Context, R, Ref
+from slyme.context import Context, Ref, RefFactory
 from slyme.node import Auto, node
+
+refs = RefFactory({"input": {"x": ...}, "output": {"total": ...}})
 
 
 @node
@@ -18,7 +20,7 @@ def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
     return result
 
 
-task = add(x=R.input.x, y=2, output=R.output.total)
+task = add(x=refs.input.x, y=2, output=refs.output.total)
 ```
 
 Runtime parameter names and annotations are optional; Slyme identifies runtime and build parameters by parameter count and keyword-only placement.
@@ -31,14 +33,14 @@ Call a Node directly when managing Context yourself:
 
 ```python
 ctx = Context()
-ctx.set(R.input.x, 3)
+ctx.set(refs.input.x, 3)
 result = task(ctx)  # 5
 ```
 
 Use `run()` as the application boundary when inputs, `Arg` validation, CLI parsing, or output extraction are needed:
 
 ```python
-result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
+result = task.run(inputs={refs.input.x: 3}, outputs=refs.output.total)
 ```
 
 There is no Def/Exec conversion or `prepare()` step. Each call validates and resolves the current parameters and wrappers.

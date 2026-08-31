@@ -37,9 +37,9 @@ def resolve_boundary(node_def: Any) -> dict[str, list[str]]:
     - Every other ref is internal and never crosses the boundary.
     """
     refs = collect_refs(node_def)
-    all_paths = sorted({r.path for r in refs})
-    declared_inputs = sorted({r.path for r in refs if ARG in r.metadata})
-    declared_outputs = sorted({r.path for r in refs if OUTPUT in r.metadata})
+    all_paths = sorted({r.bound_path for r in refs})
+    declared_inputs = sorted({r.bound_path for r in refs if ARG in r.metadata})
+    declared_outputs = sorted({r.bound_path for r in refs if OUTPUT in r.metadata})
 
     inputs = declared_inputs or [p for p in all_paths if p.startswith("input.")]
     outputs = declared_outputs or [p for p in all_paths if p.startswith("output.")]

@@ -3,8 +3,19 @@
 ## Value-producing and effectful Nodes
 
 ```python
-from slyme.context import ARG, Arg, Context, R, Ref
+from slyme.context import ARG, Arg, Context, Ref, RefFactory
 from slyme.node import Auto, Node, node, sequential_exec, wrapper
+
+
+refs = RefFactory(
+    {
+        "input": {
+            "value": Ref(metadata={ARG: Arg(type=float, required=True)}),
+        },
+        "state": {"counter": ...},
+        "output": {"result": ...},
+    }
+)
 
 
 @node
@@ -53,16 +64,16 @@ A Wrapper has exactly three non-keyword-only runtime parameters. Attach it only 
 ```python
 root = execute(
     derived=calculate(
-        value=R.input.value(metadata={ARG: Arg(type=float, required=True)}),
+        value=refs.input.value,
         scale=2.0,
     ),
-    children=(increment(counter=R.state.counter),),
-    output=R.output.result,
+    children=(increment(counter=refs.state.counter),),
+    output=refs.output.result,
 ).add_wrappers(trace(name="execute"))
 
 result = root.run(
-    inputs={R.input.value: 3.0, R.state.counter: 0},
-    outputs=R.output.result,
+    inputs={refs.input.value: 3.0, refs.state.counter: 0},
+    outputs=refs.output.result,
 )
 ```
 

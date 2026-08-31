@@ -61,7 +61,7 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 ```python
 from enum import Enum
 from typing import Literal
-from slyme.context import ARG, Arg, Context, R
+from slyme.context import ARG, Arg, Context, Ref, RefFactory
 from slyme.node import node, Auto
 
 
@@ -70,19 +70,29 @@ class ModelSize(Enum):
     BASE = "base"
 
 
-# 1. 定义带有 Arg 元数据的 Ref (演示不同数据类型)
-use_cache_ref = R.model.use_cache(
-    metadata={ARG: Arg(default=True, help="是否使用缓存")}
-)
-ports_ref = R.server.ports(
-    metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")}
-)
-config_ref = R.model.config(
-    metadata={ARG: Arg(type=dict, required=True, help="模型配置(JSON字符串)")}
-)
-size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
-mode_ref = R.run.mode(
-    metadata={ARG: Arg(type=Literal["train", "test"], default="train")}
+# 1. 声明应用的 Ref 与 Arg 元数据
+refs = RefFactory(
+    {
+        "model": {
+            "use_cache": Ref(metadata={ARG: Arg(default=True, help="是否使用缓存")}),
+            "config": Ref(
+                metadata={
+                    ARG: Arg(type=dict, required=True, help="模型配置(JSON字符串)")
+                }
+            ),
+            "size": Ref(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)}),
+        },
+        "server": {
+            "ports": Ref(
+                metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")}
+            )
+        },
+        "run": {
+            "mode": Ref(
+                metadata={ARG: Arg(type=Literal["train", "test"], default="train")}
+            )
+        },
+    }
 )
 
 
@@ -107,11 +117,11 @@ def start_server(
 if __name__ == "__main__":
     # 3. 实例化 Node
     server_node = start_server(
-        use_cache=use_cache_ref,
-        ports=ports_ref,
-        config=config_ref,
-        size=size_ref,
-        mode=mode_ref,
+        use_cache=refs.model.use_cache,
+        ports=refs.server.ports,
+        config=refs.model.config,
+        size=refs.model.size,
+        mode=refs.run.mode,
     )
 
     # 模拟在命令行执行：

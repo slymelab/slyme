@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
+import difflib
+import keyword
 import types
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from enum import Enum
 from typing import (
     Any,
@@ -80,30 +82,64 @@ Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 @dataclass(frozen=True, repr=False, eq=False)
 class Ref(Generic[_T]):
-    """Immutable dotted ref with cached hash and split parts."""
+    """Immutable dotted ref, or an unbound declaration for RefFactory."""
 
-    path: str
+    path: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
     parts: tuple[str, ...] = field(init=False)
-    hash: int = field(init=False)
+    hash: int | None = field(init=False)
 
     def __post_init__(self) -> None:
-        if not self.path:
+        if self.path == "":
             raise ValueError("Empty ref path")
-        parts = tuple(self.path.split("."))
-        if any(not p for p in parts):
-            raise ValueError(f"Invalid ref path: {self.path!r}")
+        if self.path is None:
+            parts: tuple[str, ...] = ()
+            ref_hash = None
+        else:
+            parts = tuple(self.path.split("."))
+            if any(not p for p in parts):
+                raise ValueError(f"Invalid ref path: {self.path!r}")
+            ref_hash = hash(parts)
         # Bypass frozen=True to set fields
         object.__setattr__(self, "parts", parts)
-        object.__setattr__(self, "hash", hash(parts))
-        if not isinstance(self.metadata, types.MappingProxyType):
-            object.__setattr__(self, "metadata", types.MappingProxyType(self.metadata))
+        object.__setattr__(self, "hash", ref_hash)
+        object.__setattr__(
+            self,
+            "metadata",
+            types.MappingProxyType(dict(self.metadata)),
+        )
+
+    @property
+    def is_bound(self) -> bool:
+        return self.path is not None
+
+    @property
+    def bound_path(self) -> str:
+        """Return the concrete path or reject an unbound declaration."""
+        return self._require_bound()
+
+    def _require_bound(self) -> str:
+        if self.path is None:
+            raise ValueError(
+                "Ref has no path; bind it through RefFactory or Ref.bind()."
+            )
+        return self.path
+
+    def bind(self, path: str) -> Ref[_T]:
+        """Return this Ref bound to *path* without mutating the declaration."""
+        if self.path is None:
+            return replace(self, path=path)
+        if self.path != path:
+            raise ValueError(
+                f"Ref is already bound to {self.path!r}, cannot bind it to {path!r}."
+            )
+        return self
 
     def update_metadata(self, metadata: Mapping[str, Any]) -> Ref[_T]:
         """Returns a new Ref with updated metadata (merging with existing)."""
         new_metadata = dict(self.metadata)
         new_metadata.update(metadata)
-        return Ref(self.path, metadata=new_metadata)
+        return replace(self, metadata=new_metadata)
 
     def at(
         self,
@@ -111,38 +147,231 @@ class Ref(Generic[_T]):
         metadata: Mapping[str, Any] | None | _Missing = _MISSING,
     ) -> Ref:
         """Create a new Ref at a subpath relative to this Ref."""
-        new_path = f"{self.path}.{subpath}" if self.path else subpath
+        path = self._require_bound()
+        new_path = f"{path}.{subpath}"
         if metadata is _MISSING or metadata is None:
             return Ref(new_path)
         return Ref(new_path, metadata=metadata)
 
     def __hash__(self) -> int:
+        if self.hash is None:
+            raise TypeError("Unbound Ref objects are not hashable.")
         return self.hash
 
     def __eq__(self, other: Any) -> bool:
-        return isinstance(other, Ref) and self.parts == other.parts
+        if self is other:
+            return True
+        return (
+            isinstance(other, Ref)
+            and self.path is not None
+            and other.path is not None
+            and self.parts == other.parts
+        )
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.extra_repr()})"
 
     def extra_repr(self) -> str:
-        repr_items = [f"path={self.path!r}"]
+        path_repr = "<unbound>" if self.path is None else repr(self.path)
+        repr_items = [f"path={path_repr}"]
         if self.metadata:
             repr_items.append(f"metadata={self.metadata!r}")
         return ", ".join(repr_items)
 
 
+_REF_ENTRY_KEY = ""
+_REF_FACTORY_RESERVED_NAMES = frozenset({"merge"})
+
+
+def _freeze_mapping(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Snapshot a mapping behind the current immutable mapping implementation."""
+    return types.MappingProxyType(dict(data))
+
+
+@dataclass(frozen=True)
+class _RefDeclaration:
+    ref: Ref[Any]
+    explicit: bool
+
+
+_SchemaEntry = Ref[Any] | Mapping[str, Any]
+
+
+def _validate_schema_name(name: Any, path: str) -> str:
+    if not isinstance(name, str):
+        raise TypeError(
+            f"Invalid schema key at {path or '<root>'}: expected str, "
+            f"got {type(name).__name__}."
+        )
+    if not name or "." in name or not name.isidentifier() or keyword.iskeyword(name):
+        raise ValueError(
+            f"Invalid schema key {name!r} at {path or '<root>'}; "
+            "keys must be non-keyword Python identifiers without dots."
+        )
+    if name.startswith("_") or name in _REF_FACTORY_RESERVED_NAMES:
+        raise ValueError(
+            f"Schema key {name!r} at {path or '<root>'} is reserved by RefFactory."
+        )
+    return name
+
+
+def _freeze_entry(
+    value: Any,
+    path: str,
+    active_mappings: set[int],
+) -> _SchemaEntry:
+    if value is Ellipsis:
+        return Ref().bind(path)
+
+    if isinstance(value, Ref):
+        return value.bind(path)
+
+    if not isinstance(value, Mapping):
+        raise TypeError(
+            f"Invalid schema value at {path!r}: expected a mapping, Ref, or "
+            "Ellipsis; use ... or Ref() to declare a default reference."
+        )
+
+    mapping_id = id(value)
+    if mapping_id in active_mappings:
+        raise ValueError(f"Cyclic RefFactory schema detected at {path!r}.")
+    active_mappings.add(mapping_id)
+    try:
+        explicit = _REF_ENTRY_KEY in value
+        current = value.get(_REF_ENTRY_KEY, Ref())
+        if current is Ellipsis:
+            current = Ref()
+        if not isinstance(current, Ref):
+            raise TypeError(
+                f"Invalid current-entry definition at {path!r}: "
+                "the empty key must contain Ref() or Ellipsis."
+            )
+
+        frozen: dict[str, Any] = {
+            _REF_ENTRY_KEY: _RefDeclaration(
+                ref=current.bind(path),
+                explicit=explicit,
+            ),
+        }
+        for raw_name, child in value.items():
+            if raw_name == _REF_ENTRY_KEY:
+                continue
+            name = _validate_schema_name(raw_name, path)
+            child_path = f"{path}.{name}"
+            frozen[name] = _freeze_entry(child, child_path, active_mappings)
+        return _freeze_mapping(frozen)
+    finally:
+        active_mappings.remove(mapping_id)
+
+
+def _freeze_schema(schema: Mapping[str, Any]) -> Mapping[str, Any]:
+    if _REF_ENTRY_KEY in schema:
+        raise ValueError("The root RefFactory schema cannot define an empty-key Ref.")
+
+    active_mappings = {id(schema)}
+    frozen: dict[str, Any] = {}
+    for raw_name, value in schema.items():
+        name = _validate_schema_name(raw_name, "")
+        frozen[name] = _freeze_entry(value, name, active_mappings)
+    return _freeze_mapping(frozen)
+
+
+def _merge_entries(
+    left: _SchemaEntry,
+    right: _SchemaEntry,
+    path: str,
+    conflict: Literal["error", "replace"],
+) -> _SchemaEntry:
+    left_is_leaf = isinstance(left, Ref)
+    right_is_leaf = isinstance(right, Ref)
+    if left_is_leaf and right_is_leaf:
+        if conflict == "replace":
+            return cast(Ref[Any], right)
+        raise ValueError(f"Conflicting Ref leaves at schema path {path!r}.")
+    if left_is_leaf != right_is_leaf:
+        left_kind = "leaf" if left_is_leaf else "container"
+        right_kind = "leaf" if right_is_leaf else "container"
+        raise ValueError(
+            f"Conflicting schema structure at path {path!r}: "
+            f"left is {left_kind}, right is {right_kind}."
+        )
+
+    left_container = cast(Mapping[str, Any], left)
+    right_container = cast(Mapping[str, Any], right)
+    left_declaration = cast(_RefDeclaration, left_container[_REF_ENTRY_KEY])
+    right_declaration = cast(_RefDeclaration, right_container[_REF_ENTRY_KEY])
+    if left_declaration.explicit and right_declaration.explicit:
+        if conflict == "replace":
+            current = right_declaration
+        else:
+            raise ValueError(
+                f"Conflicting container Ref declarations at schema path {path!r}."
+            )
+    elif right_declaration.explicit:
+        current = right_declaration
+    else:
+        current = left_declaration
+
+    merged: dict[str, Any] = {_REF_ENTRY_KEY: current}
+    for name, child in left_container.items():
+        if name != _REF_ENTRY_KEY:
+            merged[name] = child
+    for name, child in right_container.items():
+        if name == _REF_ENTRY_KEY:
+            continue
+        if name in merged:
+            merged[name] = _merge_entries(
+                merged[name], child, f"{path}.{name}", conflict
+            )
+        else:
+            merged[name] = child
+    return _freeze_mapping(merged)
+
+
+def _merge_schemas(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+    conflict: Literal["error", "replace"],
+) -> Mapping[str, Any]:
+    merged = dict(left)
+    for name, entry in right.items():
+        if name in merged:
+            merged[name] = _merge_entries(merged[name], entry, name, conflict)
+        else:
+            merged[name] = entry
+    return _freeze_mapping(merged)
+
+
 class RefFactory:
-    """Immutable factory that records attribute access as a dotted path.
+    """Immutable attribute interface for references declared by a frozen schema."""
 
-    R.x.y.z records ``"x.y.z"``. Calling ``R.x.y.z()`` creates ``Ref("x.y.z")``.
-    ``R.x.y.z(metadata=...)`` passes metadata to ``Ref``.
-    """
+    __slots__ = ("__entry", "__path")
+    __entry: _SchemaEntry
+    __path: str
 
-    __slots__ = ("__path",)
+    def __init__(
+        self,
+        schema: Mapping[str, Any],
+    ) -> None:
+        if not isinstance(schema, Mapping):
+            raise TypeError(
+                f"RefFactory schema must be a mapping, got {type(schema).__name__}."
+            )
+        root = _freeze_schema(schema)
+        object.__setattr__(self, "_RefFactory__entry", root)
+        object.__setattr__(self, "_RefFactory__path", "")
 
-    def __init__(self, path: str = "") -> None:
-        object.__setattr__(self, "_RefFactory__path", path)
+    @classmethod
+    def _from_entry(
+        cls,
+        *,
+        entry: _SchemaEntry,
+        path: str,
+    ) -> RefFactory:
+        factory = object.__new__(cls)
+        object.__setattr__(factory, "_RefFactory__entry", entry)
+        object.__setattr__(factory, "_RefFactory__path", path)
+        return factory
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError(f"{type(self).__name__} is immutable")
@@ -151,42 +380,91 @@ class RefFactory:
         raise AttributeError(f"{type(self).__name__} is immutable")
 
     def __getattr__(self, name: str) -> RefFactory:
-        path = object.__getattribute__(self, "_RefFactory__path")
+        path = self.__path
         new_path = f"{path}.{name}" if path else name
-        return RefFactory(new_path)
+        entry = self.__entry
 
-    def __call__(
+        if isinstance(entry, Mapping) and name in entry and name != _REF_ENTRY_KEY:
+            child = cast(_SchemaEntry, entry[name])
+            return type(self)._from_entry(
+                entry=child,
+                path=new_path,
+            )
+
+        candidates = [key for key in entry if key] if isinstance(entry, Mapping) else []
+        suggestion = difflib.get_close_matches(name, candidates, n=1)
+        detail = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+        location = path or "<root>"
+        raise AttributeError(f"Schema path {location!r} has no entry {name!r}.{detail}")
+
+    def __call__(self) -> Ref:
+        path = self.__path
+        entry = self.__entry
+        if not path:
+            raise ValueError("Empty ref path")
+        if isinstance(entry, Ref):
+            return entry
+        declaration = cast(_RefDeclaration, entry[_REF_ENTRY_KEY])
+        return declaration.ref
+
+    def merge(
         self,
+        other: RefFactory | Mapping[str, Any],
         *,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> Ref:
-        path = object.__getattribute__(self, "_RefFactory__path")
-        kwargs: dict[str, Any] = {}
-        if metadata is not None:
-            kwargs["metadata"] = metadata
-        return Ref(path, **kwargs)
+        conflict: Literal["error", "replace"] = "error",
+    ) -> RefFactory:
+        """Recursively merge schemas and return a new root RefFactory."""
+        if conflict not in ("error", "replace"):
+            raise ValueError(f"Unknown schema conflict strategy: {conflict!r}.")
+        path = self.__path
+        if path:
+            raise ValueError("RefFactory schema operations require the root factory.")
+
+        left_root = cast(Mapping[str, Any], self.__entry)
+        if isinstance(other, RefFactory):
+            if other.__path:
+                raise ValueError("The right operand must be a root RefFactory.")
+            right_root = cast(Mapping[str, Any], other.__entry)
+        elif isinstance(other, Mapping):
+            right_root = _freeze_schema(other)
+        else:
+            raise TypeError(
+                "RefFactory schemas can only be merged with a mapping or RefFactory."
+            )
+
+        merged = _merge_schemas(left_root, right_root, conflict)
+        return type(self)._from_entry(
+            entry=merged,
+            path="",
+        )
+
+    def __or__(self, other: RefFactory | Mapping[str, Any]) -> RefFactory:
+        return self.merge(other)
 
     def __repr__(self) -> str:
-        path = object.__getattribute__(self, "_RefFactory__path")
-        return f"R.{path}" if path else "R"
+        return f"RefFactory(path={self.__path!r})"
 
-
-R = RefFactory()
 
 RefLike = Ref | RefFactory
 
 
 def to_ref(ref_like: RefLike) -> Ref:
     """Normalize a :class:`Ref` or :class:`RefFactory` into a :class:`Ref` object."""
-    if isinstance(ref_like, RefFactory):
-        return ref_like()
-    return ref_like
+    ref = ref_like() if isinstance(ref_like, RefFactory) else ref_like
+    ref._require_bound()
+    return ref
 
 
 class ContextPathError(KeyError):
     """Internal exception raised when a path cannot be resolved in the context."""
 
     pass
+
+
+@dataclass
+class _ContextOperations:
+    updates: dict[tuple[str, ...], Any] = field(default_factory=dict)
+    drops: set[tuple[str, ...]] = field(default_factory=set)
 
 
 class ContextData(dict[str, Any]):
@@ -200,136 +478,118 @@ class ContextData(dict[str, Any]):
 
     __slots__ = ()
 
-    def _mutated(
-        self,
-        updates: dict[tuple[str, ...], Any],
-        drops: set[tuple[str, ...]],
-    ) -> ContextData | _Missing:
-        """
-        Build the result of simultaneous updates and drops without modifying self.
-
-        Semantics:
-        - Logically, drops are executed first, then updates.
-          However, for efficiency, they are processed in a single pass.
-        - Updates have higher priority than drops if they target the same path or its children.
-          (i.e., updating 'a' overrides dropping 'a' or dropping 'a.b').
-        - Drop Conflicts:
-          - Overlapping drops (e.g., drop 'a' and drop 'a.b') are handled implicitly.
-            Dropping the parent 'a' removes the entire subtree, so dropping 'a.b' is redundant but valid.
-        - Update Conflicts:
-          - Overlapping updates (e.g., update 'a' and update 'a.b') raise a ValueError.
-            We cannot determine whether 'a' should be a leaf (value) or a container (for 'b').
-
-        Algorithm:
-        1. Base Cases:
-           - If root is updated, return new value immediately.
-           - If root is dropped (and not updated), return _MISSING.
-        2. Group Operations:
-           - Group updates and drops by their head key (first path component).
-        3. Recursive Application:
-           - For each head, recursively call mutate on the child.
-           - Handle leaf conflicts (path blocked by existing value).
-           - Enhance exceptions with path context.
-        """
-        # 1. Base Cases
-        if () in updates:
-            return updates[()]
-
-        # Determine Base State (Reset vs Copy)
-        if () in drops:
-            # Reset: Start from empty. Existing data is discarded.
-            if not updates:
-                return _MISSING
-            new_data = {}
-        else:
-            # Copy: Start from existing.
-            if not updates and not drops:
-                return self
-            new_data = dict(self)
-
-        # 2. Group Operations
-        grouped_ops: defaultdict[
-            str,
-            tuple[dict[tuple[str, ...], Any], set[tuple[str, ...]]],
-        ] = defaultdict(lambda: ({}, set()))
-
-        for path, val in updates.items():
-            if not path:
-                continue  # Handled above
-            head, *tail = path
-            grouped_ops[head][0][tuple(tail)] = val
-
-        for path in drops:
-            if not path:
-                continue  # Handled above
-            head, *tail = path
-            grouped_ops[head][1].add(tuple(tail))
-
-        # 3. Recursive Application
-        for head, (sub_updates, sub_drops) in grouped_ops.items():
-            # Optimization: Exact overwrite
-            if () in sub_updates:
-                # Conflict: Cannot update both parent and child simultaneously
-                if len(sub_updates) > 1:
-                    raise ValueError(
-                        f"Update conflict at '{head}': Cannot update both parent and child simultaneously."
-                    )
-
-                # Apply update
-                new_data[head] = sub_updates[()]
-
-                # If we are overwriting the head, any drops for this head or its children
-                # are implicitly handled (superseded by the overwrite).
-                # This satisfies "batch drops then batch updates" semantics.
-                continue
-
-            # Get existing child or MISSING (if Reset, it's always MISSING)
-            child = new_data.get(head, _MISSING)
-
-            # Structure Validation / Auto-Vivification
-            if isinstance(child, ContextData):
-                pass
-            elif child is _MISSING:
-                # Create new container for updates
-                if not sub_updates:
-                    continue
-                child = ContextData()
-            elif () in sub_drops:
-                # Child is a leaf.
-                # If we are dropping the leaf itself, allow it.
-                if not sub_updates:
-                    new_data.pop(head, None)
-                    continue
-                # If we also have updates, we start from a fresh container (Reset)
-                child = ContextData()
-            else:
-                # Conflict: Path blocked by leaf value
-                raise ContextPathError(
-                    f"Path '{head}' blocked by leaf value during mutation."
-                )
-
-            # Enrich both ContextPathError (structural issues) and ValueError (update conflicts)
-            with enrich_exception(head, exc_types=(ContextPathError, ValueError)):
-                new_child = child._mutated(sub_updates, sub_drops)
-                if new_child is _MISSING:
-                    new_data.pop(head, None)
-                else:
-                    new_data[head] = new_child
-
-        return ContextData(new_data)
-
     def mutate(
         self,
         updates: dict[tuple[str, ...], Any],
         drops: set[tuple[str, ...]],
     ) -> None:
-        """Atomically apply structural updates and drops in place."""
-        new_data = self._mutated(updates, drops)
-        if new_data is self:
-            return
-        self.clear()
-        if new_data is not _MISSING:
-            self.update(new_data)
+        """Validate a structural transaction, then apply it in place."""
+        if () in updates or () in drops:
+            raise ValueError("ContextData root mutation is not supported.")
+
+        def group(
+            current_updates: dict[tuple[str, ...], Any],
+            current_drops: set[tuple[str, ...]],
+        ) -> dict[str, _ContextOperations]:
+            grouped: dict[str, _ContextOperations] = defaultdict(_ContextOperations)
+            for path, value in current_updates.items():
+                head, *tail = path
+                grouped[head].updates[tuple(tail)] = value
+            for path in current_drops:
+                head, *tail = path
+                grouped[head].drops.add(tuple(tail))
+            return grouped
+
+        def process(
+            data: ContextData | None,
+            current_updates: dict[tuple[str, ...], Any],
+            current_drops: set[tuple[str, ...]],
+            *,
+            apply_changes: bool,
+        ) -> None:
+            for head, operations in group(current_updates, current_drops).items():
+                sub_updates = operations.updates
+                sub_drops = operations.drops
+                if () in sub_updates:
+                    if not apply_changes and len(sub_updates) > 1:
+                        raise ValueError(
+                            f"Update conflict at '{head}': Cannot update both parent and child simultaneously."
+                        )
+                    replacement = sub_updates[()]
+                    if apply_changes:
+                        cast(ContextData, data)[head] = replacement
+                    else:
+                        current = _MISSING if data is None else data.get(head, _MISSING)
+                        if (
+                            current is not _MISSING
+                            and () not in sub_drops
+                            and isinstance(current, ContextData)
+                            != isinstance(replacement, ContextData)
+                        ):
+                            current_kind = (
+                                "container"
+                                if isinstance(current, ContextData)
+                                else "leaf"
+                            )
+                            replacement_kind = (
+                                "container"
+                                if isinstance(replacement, ContextData)
+                                else "leaf"
+                            )
+                            raise ContextPathError(
+                                f"Cannot replace {current_kind} path '{head}' with "
+                                f"a {replacement_kind} without dropping the path first."
+                            )
+                    continue
+
+                child = _MISSING if data is None else data.get(head, _MISSING)
+                descendant_drops = sub_drops - {()}
+                if () in sub_drops:
+                    if not sub_updates:
+                        if apply_changes:
+                            cast(ContextData, data).pop(head, None)
+                        continue
+                    if apply_changes:
+                        child = ContextData()
+                        cast(ContextData, data)[head] = child
+                    else:
+                        child = None
+
+                elif child is _MISSING:
+                    if not sub_updates:
+                        continue
+                    if apply_changes:
+                        child = ContextData()
+                        cast(ContextData, data)[head] = child
+                    else:
+                        child = None
+
+                elif not isinstance(child, ContextData):
+                    raise ContextPathError(
+                        f"Path '{head}' blocked by leaf value during mutation."
+                    )
+
+                if apply_changes:
+                    process(
+                        cast(ContextData, child),
+                        sub_updates,
+                        descendant_drops,
+                        apply_changes=True,
+                    )
+                else:
+                    with enrich_exception(
+                        head,
+                        exc_types=(ContextPathError, ValueError),
+                    ):
+                        process(
+                            child,
+                            sub_updates,
+                            descendant_drops,
+                            apply_changes=False,
+                        )
+
+        process(self, updates, drops, apply_changes=False)
+        process(self, updates, drops, apply_changes=True)
 
 
 @dataclass(frozen=True)
@@ -612,7 +872,7 @@ class Context(ContextElement):
     def _build_dict_ref_tree(self, ref: RefLike | None = None) -> Any:
         ref = to_ref(ref) if ref is not None else None
         data = self.to_context_data(ref)
-        base_path = ref.path if ref else ""
+        base_path = ref.bound_path if ref else ""
 
         def build_tree(current_data: ContextData, current_path: str) -> dict[str, Any]:
             tree: dict[str, Any] = {}

@@ -15,7 +15,6 @@
 from .core import (
     DIFF_MISSING,
     Context,
-    R,
     Ref,
     RefFactory,
     RefLike,
@@ -30,7 +29,6 @@ __all__ = [
     "Context",
     "Ref",
     "RefFactory",
-    "R",
     "RefLike",
     "to_ref",
     "ContextConfig",

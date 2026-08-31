@@ -18,13 +18,22 @@ breaking changes when they are documented here.
   attestations, contribution guidance, issue templates, and a security policy.
 - Added `NodeElement.clone()` for structural Node/Wrapper and parameter PyTree
   copies, and `ContextElement.clone()` for ContextData-only structural copies.
+- Added immutable schema-backed `RefFactory` construction with undeclared
+  attribute validation, branch metadata, leaf/container-aware recursive
+  merging, and explicit branch-Ref declaration tracking.
 
 ### Fixed
 
 - Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
   they cannot bypass fixed runtime-arity and named build-parameter validation.
 - Fixed static workflow discovery reporting partial attribute chains such as
-  `input` in addition to the actual `R.input.value` reference.
+  `input` in addition to the actual `refs.input.value` reference.
+- Prevented Context updates from implicitly changing existing leaf/container
+  roles; an exact-path `delete` or `drop` now makes structural replacement
+  explicit, while `clear` retains an empty container.
+- Context mutations now validate the complete transaction before applying it
+  directly to existing ContextData containers, avoiding full-tree replacement
+  while retaining no-partial-write behavior.
 
 ### Removed
 
@@ -36,11 +45,16 @@ breaking changes when they are documented here.
 - Removed Context hooks and the asynchronous mirrors of locally synchronous
   Context operations.
 - Removed `Ref.key_path` and its `CallKey`, `KeyPathExpr`, and `P` helpers.
+- Removed the global open-path `R`, schema-less `RefFactory` construction, and
+  schema deletion; applications now declare their complete Ref schema.
 
 ### Changed
 
 - Raised the minimum supported Python version from 3.9 to 3.10, following the
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
+- `Ref()` can now represent an unbound schema declaration; `RefFactory` binds
+  declarations to concrete paths during schema parsing, while Context and
+  evaluation APIs continue to require bound references.
 - Node and Wrapper build parameters are now real instance attributes. Parameter
   names are checked against reserved framework attributes when decorated;
   `_kwargs` and mapping-style parameter access have been removed.

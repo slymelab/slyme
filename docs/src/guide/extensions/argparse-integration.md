@@ -61,7 +61,7 @@ Combining the type rules above, here is a complete demonstration:
 ```python
 from enum import Enum
 from typing import Literal
-from slyme.context import ARG, Arg, Context, R
+from slyme.context import ARG, Arg, Context, Ref, RefFactory
 from slyme.node import node, Auto
 
 
@@ -70,21 +70,37 @@ class ModelSize(Enum):
     BASE = "base"
 
 
-# 1. Define Refs with Arg metadata (demonstrating various data types)
-use_cache_ref = R.model.use_cache(
-    metadata={ARG: Arg(default=True, help="Whether to use cache")}
-)
-ports_ref = R.server.ports(
-    metadata={ARG: Arg(type=list[int], default=[8080], help="List of ports")}
-)
-config_ref = R.model.config(
-    metadata={
-        ARG: Arg(type=dict, required=True, help="Model configuration (JSON string)")
+# 1. Declare the application's Refs and Arg metadata
+refs = RefFactory(
+    {
+        "model": {
+            "use_cache": Ref(
+                metadata={ARG: Arg(default=True, help="Whether to use cache")}
+            ),
+            "config": Ref(
+                metadata={
+                    ARG: Arg(
+                        type=dict,
+                        required=True,
+                        help="Model configuration (JSON string)",
+                    )
+                }
+            ),
+            "size": Ref(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)}),
+        },
+        "server": {
+            "ports": Ref(
+                metadata={
+                    ARG: Arg(type=list[int], default=[8080], help="List of ports")
+                }
+            )
+        },
+        "run": {
+            "mode": Ref(
+                metadata={ARG: Arg(type=Literal["train", "test"], default="train")}
+            )
+        },
     }
-)
-size_ref = R.model.size(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)})
-mode_ref = R.run.mode(
-    metadata={ARG: Arg(type=Literal["train", "test"], default="train")}
 )
 
 
@@ -109,11 +125,11 @@ def start_server(
 if __name__ == "__main__":
     # 3. Instantiate the Node
     server_node = start_server(
-        use_cache=use_cache_ref,
-        ports=ports_ref,
-        config=config_ref,
-        size=size_ref,
-        mode=mode_ref,
+        use_cache=refs.model.use_cache,
+        ports=refs.server.ports,
+        config=refs.model.config,
+        size=refs.model.size,
+        mode=refs.run.mode,
     )
 
     # Simulating command line execution:

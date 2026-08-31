@@ -36,7 +36,39 @@ def _is_builder(fn) -> bool:
     return any(_dec_name(dec) == "builder" for dec in fn.decorator_list)
 
 
-def _collect_refs(node) -> list[str]:
+def _ref_factory_names(node: ast.AST) -> set[str]:
+    names: set[str] = set()
+    candidates = node.body if isinstance(node, ast.Module) else ast.walk(node)
+    for sub in candidates:
+        value: ast.expr | None = None
+        annotation: ast.expr | None = None
+        targets: list[ast.expr] = []
+        if isinstance(sub, ast.Assign):
+            value = sub.value
+            targets = sub.targets
+        elif isinstance(sub, ast.AnnAssign):
+            value = sub.value
+            annotation = sub.annotation
+            targets = [sub.target]
+        called_ref_factory = isinstance(value, ast.Call) and (
+            isinstance(value.func, ast.Name)
+            and value.func.id == "RefFactory"
+            or isinstance(value.func, ast.Attribute)
+            and value.func.attr == "RefFactory"
+        )
+        annotated_ref_factory = (
+            isinstance(annotation, ast.Name)
+            and annotation.id == "RefFactory"
+            or isinstance(annotation, ast.Attribute)
+            and annotation.attr == "RefFactory"
+        )
+        if not called_ref_factory and not annotated_ref_factory:
+            continue
+        names.update(target.id for target in targets if isinstance(target, ast.Name))
+    return names
+
+
+def _collect_refs(node: ast.AST, factory_names: set[str]) -> list[str]:
     refs = set()
     parents = {
         child: parent
@@ -46,7 +78,7 @@ def _collect_refs(node) -> list[str]:
     for sub in ast.walk(node):
         if isinstance(sub, ast.Attribute):
             # Only inspect the outermost attribute in a chain. ``ast.walk`` also
-            # yields the intermediate ``R.input`` node for ``R.input.value``;
+            # yields the intermediate ``refs.input`` entry for ``refs.input.value``;
             # reporting both creates a boundary that the source never declared.
             parent = parents.get(sub)
             if isinstance(parent, ast.Attribute) and parent.value is sub:
@@ -56,7 +88,7 @@ def _collect_refs(node) -> list[str]:
             while isinstance(cur, ast.Attribute):
                 chain.append(cur.attr)
                 cur = cur.value
-            if isinstance(cur, ast.Name) and cur.id == "R":
+            if isinstance(cur, ast.Name) and cur.id in factory_names:
                 refs.add(".".join(reversed(chain)))
         elif isinstance(sub, ast.Call):
             fn = sub.func
@@ -115,6 +147,7 @@ def _discover_dir(workflow_dir: str):
             except Exception:
                 continue
             module_doc = ast.get_docstring(tree) or ""
+            module_factory_names = _ref_factory_names(tree)
             for node in tree.body:
                 if isinstance(
                     node, (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -126,7 +159,10 @@ def _discover_dir(workflow_dir: str):
                             "entry": node.name,
                             "doc": ast.get_docstring(node) or "",
                             "moduleDoc": module_doc,
-                            "refs": _collect_refs(node),
+                            "refs": _collect_refs(
+                                node,
+                                module_factory_names | _ref_factory_names(node),
+                            ),
                         }
                     )
     return folders, workflows

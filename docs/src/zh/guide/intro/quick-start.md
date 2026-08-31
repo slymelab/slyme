@@ -7,8 +7,18 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, R, Ref
+from slyme.context import ARG, Arg, Context, Ref, RefFactory
 from slyme.node import Auto, Node, node, wrapper
+
+
+refs = RefFactory(
+    {
+        "input": {
+            "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
+        },
+        "output": {"responses": ...},
+    }
+)
 
 
 @node
@@ -39,20 +49,18 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 @builder
 def build() -> Node:
-    formatter = format_prompts(
-        articles=R.input.articles(metadata={ARG: Arg(type=list[dict], required=True)})
-    )
+    formatter = format_prompts(articles=refs.input.articles)
     return call_llm(
         prompts=formatter,
-        output=R.output.responses,
+        output=refs.output.responses,
     ).add_wrappers(timing(name="llm"))
 
 
 responses = build().run(
     inputs={
-        R.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
+        refs.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
     },
-    outputs=R.output.responses,
+    outputs=refs.output.responses,
 )
 print(responses)
 ```

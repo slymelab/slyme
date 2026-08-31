@@ -5,8 +5,10 @@ Slyme uses one live `Node` graph rather than separate definition and execution t
 ## Build and modify
 
 ```python
-from slyme.context import Context, R
+from slyme.context import Context, RefFactory
 from slyme.node import Auto, node
+
+refs = RefFactory({"user": {"age": ..., "name": ...}, "a": ..., "b": ..., "items": ...})
 
 
 @node
@@ -14,7 +16,7 @@ def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
     return timeout, data
 
 
-task = process(data=[R.user.age, R.user.name])
+task = process(data=[refs.user.age, refs.user.name])
 task.timeout = 60
 ```
 
@@ -39,10 +41,10 @@ Static parameter values and values retrieved from `Context` keep their normal Py
 
 ```python
 ctx = Context()
-ctx.update({R.a: 1, R.b: 2, R.items: [1, 2]})
+ctx.update({refs.a: 1, refs.b: 2, refs.items: [1, 2]})
 
-process(data=[R.a, R.b])(ctx)  # Auto produces the evaluated list [1, 2]
-process(data=R.items)(ctx)  # data is the list stored in Context
+process(data=[refs.a, refs.b])(ctx)  # Auto produces the evaluated list [1, 2]
+process(data=refs.items)(ctx)  # data is the list stored in Context
 ```
 
 Call a Node directly with `node(ctx)` when managing Context yourself. Use `node.run(...)` as the application boundary when Slyme should prepare external inputs, validate `Arg` metadata, and extract outputs.
