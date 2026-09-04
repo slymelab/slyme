@@ -33,9 +33,6 @@ dependencies = [
     "typing-extensions>=4.0.0",
 ]
 
-[project.scripts]
-slyme = "slyme.__main__:main"
-
 [project.urls]
 Homepage = "https://github.com/slymelab/slyme"
 Documentation = "https://slymelab.github.io/slyme/"
@@ -91,10 +88,7 @@ addopts = [
 testpaths = ["tests"]
 xfail_strict = true
 asyncio_mode = "auto"
-filterwarnings = [
-    "error",
-    "ignore:^slyme\\.runner, slyme\\.cli\\.command, and the slyme command-line entry point:FutureWarning",
-]
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true

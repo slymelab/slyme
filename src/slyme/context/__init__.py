@@ -23,7 +23,7 @@ from .core import (
 from .core import (
     Config as ContextConfig,
 )
-from .metadata import ARG, HELP, OUTPUT, TYPE, Arg
+from .metadata import ARG, HELP, TYPE, Arg
 
 __all__ = [
     "Context",
@@ -36,6 +36,5 @@ __all__ = [
     "ARG",
     "Arg",
     "HELP",
-    "OUTPUT",
     "TYPE",
 ]

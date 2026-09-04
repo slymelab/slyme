@@ -101,7 +101,6 @@ jobs:
           uv venv --python 3.13 .venv-smoke
           uv pip install --python .venv-smoke/bin/python dist/*.whl
           .venv-smoke/bin/python -c "import slyme; print(slyme.__version__)"
-          .venv-smoke/bin/slyme --version
       - name: Upload distributions
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

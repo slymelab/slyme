@@ -26,8 +26,6 @@ breaking changes when they are documented here.
 
 - Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
   they cannot bypass fixed runtime-arity and named build-parameter validation.
-- Fixed static workflow discovery reporting partial attribute chains such as
-  `input` in addition to the actual `refs.input.value` reference.
 - Prevented Context updates from implicitly changing existing leaf/container
   roles; an exact-path `delete` or `drop` now makes structural replacement
   explicit, while `clear` retains an empty container.
@@ -37,6 +35,8 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed the experimental runner, command package, command-line entry point,
+  and their runner-only output metadata.
 - Removed the Def/Exec split and recursive `Node.prepare()` compilation model;
   Node and Wrapper objects are now directly callable.
 - Removed the legacy asynchronous decorator aliases; use `@node` and
