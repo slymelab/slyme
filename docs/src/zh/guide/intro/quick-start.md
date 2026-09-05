@@ -7,11 +7,11 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, Arg, Context, Ref, Schema
 from slyme.node import Auto, Node, node, wrapper
 
 
-refs = RefFactory(
+R = Schema(
     {
         "input": {
             "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
@@ -49,18 +49,18 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 @builder
 def build() -> Node:
-    formatter = format_prompts(articles=refs.input.articles)
+    formatter = format_prompts(articles=R.input.articles)
     return call_llm(
         prompts=formatter,
-        output=refs.output.responses,
+        output=R.output.responses,
     ).add_wrappers(timing(name="llm"))
 
 
 responses = build().run(
     inputs={
-        refs.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
+        R.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
     },
-    outputs=refs.output.responses,
+    outputs=R.output.responses,
 )
 print(responses)
 ```
@@ -70,7 +70,7 @@ print(responses)
 - `@node` 同时用于有副作用和产生值的 Node。
 - `Auto` 会在调用 `call_llm` 前求值 formatter Node。
 - `@wrapper` 为挂载的 Node 添加中间件行为。
-- `@builder` 组装并校验物理 Node 结构。
+- `@builder` 要求最外层结果是 `Node` 或 `AsyncNode`：`None` 会触发表示遗漏返回值的 `ValueError`，其他错误根对象会触发 `TypeError`，参数图则不会被递归校验。
 - `run()` 准备应用输入并提取输出，也可以直接调用 `node(ctx)`。
 
-Node 始终可变，调用期间静态参数容器也保持实时状态；不再存在 Def/Exec 或显式 prepare 阶段。分支需要独立的 Node/Wrapper 与参数 PyTree 结构时，调用 `.clone()`。
+Node 始终可变，调用期间静态参数容器也保持实时状态；不再存在 Def/Exec 或显式 prepare 阶段。需要另一张可独立配置的图时，应再次调用 Builder。

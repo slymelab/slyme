@@ -7,11 +7,11 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, Arg, Context, Ref, Schema
 from slyme.node import Auto, Node, node, wrapper
 
 
-refs = RefFactory(
+R = Schema(
     {
         "input": {
             "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
@@ -49,18 +49,18 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 @builder
 def build() -> Node:
-    formatter = format_prompts(articles=refs.input.articles)
+    formatter = format_prompts(articles=R.input.articles)
     return call_llm(
         prompts=formatter,
-        output=refs.output.responses,
+        output=R.output.responses,
     ).add_wrappers(timing(name="llm"))
 
 
 responses = build().run(
     inputs={
-        refs.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
+        R.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
     },
-    outputs=refs.output.responses,
+    outputs=R.output.responses,
 )
 print(responses)
 ```
@@ -70,7 +70,7 @@ The important pieces are:
 - `@node` creates both effectful and value-producing Nodes.
 - `Auto` resolves the formatter Node before invoking `call_llm`.
 - `@wrapper` surrounds a mounted Node with middleware behavior.
-- `@builder` assembles and validates the physical Node structure.
+- `@builder` requires the outer result to be a `Node` or `AsyncNode`: `None` raises a missing-return `ValueError`, any other wrong root raises `TypeError`, and the parameter graph is not recursively validated.
 - `run()` prepares application inputs and extracts outputs. Direct `node(ctx)` calls are also supported.
 
-Nodes remain mutable and static parameter containers stay live during calls; there is no Def/Exec or explicit prepare phase. Call `.clone()` when a branch needs an independent Node/Wrapper and parameter-PyTree structure.
+Nodes remain mutable and static parameter containers stay live during calls; there is no Def/Exec or explicit prepare phase. Call the Builder again when another independently configurable graph is required.

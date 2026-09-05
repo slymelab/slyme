@@ -34,17 +34,17 @@ pip install slyme
 
 ## 快速开始
 
-以下示例展示了如何使用 Slyme 的核心原语（`@node`、`@expression`、`@wrapper` 和 `@builder`）构建简单的执行流水线：
+以下示例展示了如何使用 Slyme 的核心原语（`@node`、`@wrapper` 和 `@builder`）构建简单的执行流水线：
 
 ```python
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
-from slyme.node import node, expression, wrapper, Auto, Node
+from slyme.context import ARG, Arg, Context, Ref, Schema
+from slyme.node import node, wrapper, Auto, Node
 
 
-refs = RefFactory(
+R = Schema(
     {
         "input": {
             "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
@@ -58,11 +58,11 @@ refs = RefFactory(
 @node
 def llm_api(ctx: Context, /, *, prompts: Auto[list[str]], responses: Ref[list[str]]):
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
-    return ctx.set(responses, responses_)
+    ctx.set(responses, responses_)
 
 
-# 2. 定义数据转换表达式
-@expression
+# 2. 定义产生值的节点
+@node
 def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
     return [
         f"Summarize: {article['title']}. Content: {article['content']}"
@@ -75,25 +75,25 @@ def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
 def timing(
     ctx: Context,
     wrapped: Node,
-    call_next: Callable[[Context], Context],
+    call_next: Callable[[Context], object],
     /,
     *,
     prefix: str,
-) -> Context:
+):
     start_time = time()
-    ctx = call_next(ctx)
+    result = call_next(ctx)
     end_time = time()
     print(f"[{prefix}] Finished successfully in {end_time - start_time:.4f} seconds.")
-    return ctx
+    return result
 
 
 # 4. 在构建时组装流水线
 @builder
 def build_pipeline():
     return llm_api(
-        responses=refs.output.responses,
+        responses=R.output.responses,
         prompts=format_prompts(
-            articles=refs.input.articles,
+            articles=R.input.articles,
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
@@ -102,14 +102,33 @@ def build_pipeline():
 if __name__ == "__main__":
     responses = build_pipeline().run(
         inputs={
-            refs.input.articles: [
+            R.input.articles: [
                 {"title": "Article 1", "content": "Content 1"},
                 {"title": "Article 2", "content": "Content 2"},
             ]
         },
-        outputs=refs.output.responses,
+        outputs=R.output.responses,
     )
     print(responses)
+```
+
+## Context 分层与 Compose
+
+应用根拥有一棵 `Schema` 声明树。`Context.fork()` 共享这些声明，同时创建局部写入、实时按 C3 查找父级的空子层。`Compose` 将有序值与 Context identity 关联，并为每次新增返回精确的 disposer：
+
+```python
+from slyme.context import Compose, Context
+
+root = Context()
+agent = root.fork()
+hooks = Compose[str, tuple[str, ...]].collect()
+
+remove_root = hooks.add(root, "root")
+remove_agent = hooks.add(agent, "agent")
+assert hooks.resolve(agent) == ("agent", "root")
+
+remove_agent()
+remove_root()
 ```
 
 ## 核心优势
@@ -118,9 +137,9 @@ if __name__ == "__main__":
 
 **无限可组合性：** 通过完全解耦构建任意复杂的执行流程。得益于 PyTree 增强，节点 containment 关系可以直接通过原生 Python 结构表示。
 
-**函数式与并发安全：** 执行单元之间交换的状态（`Context`）在结构上是不变的，利用写时复制机制使并发执行下的状态管理简单且安全。
+**显式状态分层：** 每个 Context 路径都由应用根声明。`Context.fork()` 隔离局部写入并实时继承父级，`flatten()` 暴露可见的 Ref 到 value 映射；`Compose` 管理有序、可撤销的组合值。
 
-**无缝协作：** 高度解耦的节点仅通过 Context 进行通信。这允许团队独立开发功能并编写单元测试，减少"胶水代码"和深层系统耦合。
+**无缝协作：** 高度解耦的节点通过显式 Context 路径与 Compose 对象通信。这允许团队独立开发功能并编写单元测试，减少“胶水代码”和深层系统耦合。
 
 ## 文档
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+import weakref
 from types import MappingProxyType
 from typing import Any
 
@@ -10,25 +12,32 @@ from hypothesis import strategies as st
 import slyme.context as context_module
 from slyme.context import (
     ARG,
-    DIFF_MISSING,
     Arg,
     Context,
     ContextConfig,
     Ref,
-    RefFactory,
+    Schema,
     to_ref,
 )
-from slyme.context.core import (
-    ContextData,
-    ContextDiff,
-    ContextPathError,
-    diff_context_data,
-)
-from slyme.context.tree import CONTEXT_ENGINE, CTX_EVAL_ENGINE
+from slyme.context.core import ContextPathError
+from slyme.context.tree import CTX_EVAL_ENGINE
 
-R = RefFactory(
+R = Schema(
     {
-        "a": {"b": ..., "keep": ..., "new": ..., "old": ...},
+        "a": {
+            "b": {"": ..., "c": ..., "d": ...},
+            "first": ...,
+            "from_nearest": ...,
+            "from_oldest": ...,
+            "keep": ...,
+            "left": ...,
+            "new": ...,
+            "old": ...,
+            "regular": ...,
+            "root": ...,
+            "second": ...,
+            "temporary": ...,
+        },
         "absent": ...,
         "added": ...,
         "age": ...,
@@ -37,19 +46,30 @@ R = RefFactory(
         "branch": {"added": ..., "marker": ..., "value": ...},
         "c": ...,
         "changed": ...,
+        "group": {
+            "child": ...,
+            "initial": ...,
+            "later": ...,
+            "local": ...,
+            "parent": ...,
+        },
         "long": ...,
         "missing": ...,
         "name": ...,
         "nested": {"x": ...},
         "not_present": ...,
         "other": ...,
+        "payload": ...,
         "parent": {"child": ...},
         "point": {"label": ..., "x": ..., "y": ...},
         "removed": ...,
         "same": ...,
-        "settings": ...,
+        "runtime": {"value": ...},
+        "service": ...,
+        "settings": {"": ..., "theme": ...},
         "short": ...,
         "user": {"age": ..., "name": ..., "unknown": ...},
+        "value": ...,
     }
 )
 
@@ -102,52 +122,52 @@ def test_unbound_ref_declarations_bind_immutably() -> None:
         bound.bind("output.value")
 
 
-def test_ref_factory_is_immutable_and_normalizes() -> None:
-    factory = R.application.input
-    assert isinstance(factory, RefFactory)
-    assert repr(factory) == "RefFactory(path='application.input')"
-    assert factory().path == "application.input"
-    assert to_ref(factory) == Ref("application.input")
+def test_schema_views_are_immutable_and_normalize() -> None:
+    view = R.application.input
+    assert isinstance(view, Schema)
+    assert repr(view) == "Schema(path='application.input')"
+    assert view().path == "application.input"
+    assert to_ref(view) == Ref("application.input")
     ref = Ref("already.normal")
     assert to_ref(ref) is ref
 
     with pytest.raises(AttributeError, match="immutable"):
-        factory.value = 1  # type: ignore[attr-defined]
+        view.value = 1  # type: ignore[attr-defined]
     with pytest.raises(AttributeError, match="immutable"):
-        del factory.input
+        del view.input
     with pytest.raises(ValueError, match="Empty ref"):
         R()
 
 
-def test_ref_factory_schema_binds_and_freezes_entries() -> None:
+def test_schema_binds_and_freezes_declarations() -> None:
     branch_metadata = {"description": "inputs"}
-    input_schema: dict[str, Any] = {
+    input_declarations: dict[str, Any] = {
         "": Ref(metadata=branch_metadata),
         "articles": ...,
         "count": Ref(metadata={ARG: Arg(type=int, required=True)}),
     }
-    raw_schema: dict[str, Any] = {
-        "input": input_schema,
+    raw_declarations: dict[str, Any] = {
+        "input": input_declarations,
         "args": ...,
     }
 
-    refs = RefFactory(raw_schema)
-    input_schema["late"] = ...
-    raw_schema["other"] = ...
+    schema = Schema(raw_declarations)
+    input_declarations["late"] = ...
+    raw_declarations["other"] = ...
     branch_metadata["late"] = True
 
-    assert isinstance(refs.input, RefFactory)
-    assert isinstance(refs.input.articles, RefFactory)
-    assert refs.input().path == "input"
-    assert refs.input().metadata == {"description": "inputs"}
-    assert refs.input.articles().path == "input.articles"
-    assert refs.args().path == "args"
-    assert refs.input.articles() is refs.input.articles()
-    assert to_ref(refs.input.count).metadata[ARG].required
+    assert isinstance(schema.input, Schema)
+    assert isinstance(schema.input.articles, Schema)
+    assert schema.input().path == "input"
+    assert schema.input().metadata == {"description": "inputs"}
+    assert schema.input.articles().path == "input.articles"
+    assert schema.args().path == "args"
+    assert schema.input.articles() is schema.input.articles()
+    assert to_ref(schema.input.count).metadata[ARG].required
     with pytest.raises(TypeError, match="unexpected keyword argument"):
-        refs.input(metadata={"extra": True})  # type: ignore[call-arg]
+        schema.input(metadata={"extra": True})  # type: ignore[call-arg]
 
-    updated_refs = refs.merge(
+    updated_schema = schema.merge(
         {
             "input": {
                 "": Ref(metadata={"description": "inputs", "extra": True}),
@@ -155,56 +175,58 @@ def test_ref_factory_schema_binds_and_freezes_entries() -> None:
         },
         conflict="replace",
     )
-    assert updated_refs.input().metadata == {
+    assert updated_schema.input().metadata == {
         "description": "inputs",
         "extra": True,
     }
-    assert refs.input().metadata == {"description": "inputs"}
+    assert schema.input().metadata == {"description": "inputs"}
 
     with pytest.raises(AttributeError, match="Did you mean 'articles'"):
-        refs.input.artcles
+        schema.input.artcles
     with pytest.raises(AttributeError, match="late"):
-        refs.input.late
+        schema.input.late
     with pytest.raises(AttributeError, match="other"):
-        refs.other
+        schema.other
     with pytest.raises(AttributeError, match="has no entry"):
-        refs.args.child
+        schema.args.child
     with pytest.raises(ValueError, match="Empty ref"):
-        refs()
+        schema()
 
 
-def test_ref_factory_schema_validation() -> None:
+def test_schema_declaration_validation() -> None:
     assert not hasattr(context_module, "R")
+    assert not hasattr(context_module, "Refs")
     with pytest.raises(TypeError, match="missing 1 required positional argument"):
-        RefFactory()  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="schema must be a mapping"):
-        RefFactory(None)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="schema must be a mapping"):
-        RefFactory("bad")  # type: ignore[arg-type]
+        Schema()  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="declarations must be a mapping"):
+        Schema(None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="declarations must be a mapping"):
+        Schema("bad")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="root.*empty-key"):
-        RefFactory({"": Ref()})
+        Schema({"": Ref()})
     with pytest.raises(ValueError, match="without dots"):
-        RefFactory({"bad.path": ...})
-    with pytest.raises(ValueError, match="reserved"):
-        RefFactory({"merge": ...})
+        Schema({"bad.path": ...})
+    for reserved in ("from_refs", "merge"):
+        with pytest.raises(ValueError, match="reserved"):
+            Schema({reserved: ...})
     with pytest.raises(TypeError, match="mapping, Ref, or Ellipsis"):
-        RefFactory({"bad": None})
+        Schema({"bad": None})
     with pytest.raises(TypeError, match="empty key"):
-        RefFactory({"bad": {"": None}})
+        Schema({"bad": {"": None}})
     with pytest.raises(ValueError, match="already bound"):
-        RefFactory({"actual": Ref("different")})
+        Schema({"actual": Ref("different")})
 
     cyclic: dict[str, Any] = {}
     cyclic["again"] = cyclic
     with pytest.raises(ValueError, match="Cyclic"):
-        RefFactory({"cycle": cyclic})
+        Schema({"cycle": cyclic})
 
-    refs = RefFactory({"without": ...})
-    assert refs.without().path == "without"
+    schema = Schema({"without": ...})
+    assert schema.without().path == "without"
 
 
-def test_ref_factory_schema_merge_is_immutable() -> None:
-    base = RefFactory(
+def test_schema_merge_is_immutable() -> None:
+    base = Schema(
         {
             "input": {
                 "": Ref(metadata={"description": "inputs"}),
@@ -213,7 +235,7 @@ def test_ref_factory_schema_merge_is_immutable() -> None:
             "keep": ...,
         }
     )
-    extension = RefFactory(
+    extension = Schema(
         {
             "input": {
                 "b": ...,
@@ -234,7 +256,7 @@ def test_ref_factory_schema_merge_is_immutable() -> None:
     with pytest.raises(AttributeError):
         extension.input.a
 
-    with pytest.raises(ValueError, match="Ref leaves.*input.a"):
+    with pytest.raises(ValueError, match="Ref declarations.*input.a"):
         base | {"input": {"a": ...}}
     enriched = base.merge(
         {"input": {"a": Ref(metadata={"source": "extension"})}},
@@ -242,9 +264,9 @@ def test_ref_factory_schema_merge_is_immutable() -> None:
     )
     assert enriched.input.a().metadata == {"source": "extension"}
 
-    leaf = RefFactory({"entry": ...})
-    container = RefFactory({"entry": {"child": ...}})
-    empty_container = RefFactory({"entry": {}})
+    leaf = Schema({"entry": ...})
+    container = Schema({"entry": {"child": ...}})
+    empty_container = Schema({"entry": {}})
     assert empty_container.entry().path == "entry"
     with pytest.raises(ValueError, match="leaf.*container"):
         leaf | container
@@ -257,8 +279,8 @@ def test_ref_factory_schema_merge_is_immutable() -> None:
     extended_container = empty_container | container
     assert extended_container.entry.child().path == "entry.child"
 
-    implicit = RefFactory({"group": {"left": ...}})
-    explicit = RefFactory(
+    implicit = Schema({"group": {"left": ...}})
+    explicit = Schema(
         {
             "group": {
                 "": Ref(metadata={"owner": "right"}),
@@ -271,31 +293,92 @@ def test_ref_factory_schema_merge_is_immutable() -> None:
     assert declared.group.left().path == "group.left"
     assert declared.group.right().path == "group.right"
 
-    other_explicit = RefFactory({"group": {"": Ref(metadata={"owner": "replacement"})}})
+    other_explicit = Schema({"group": {"": Ref(metadata={"owner": "replacement"})}})
     with pytest.raises(ValueError, match="container Ref declarations.*group"):
         explicit | other_explicit
     replaced_declaration = explicit.merge(other_explicit, conflict="replace")
     assert replaced_declaration.group().metadata == {"owner": "replacement"}
     assert replaced_declaration.group.right().path == "group.right"
 
-    explicit_default = RefFactory({"group": {"": Ref(), "child": ...}})
+    explicit_default = Schema({"group": {"": Ref(), "child": ...}})
     with pytest.raises(ValueError, match="container Ref declarations.*group"):
         explicit_default | explicit
 
-    conflicting = RefFactory({"input": {"": Ref(metadata={"description": "other"})}})
+    conflicting = Schema({"input": {"": Ref(metadata={"description": "other"})}})
     with pytest.raises(ValueError, match="input"):
         base | conflicting
     replaced = base.merge(conflicting, conflict="replace")
     assert replaced.input().metadata == {"description": "other"}
     assert replaced.input.a().path == "input.a"
-    with pytest.raises(ValueError, match="Unknown schema conflict"):
+    with pytest.raises(ValueError, match="Unknown Schema conflict"):
         base.merge(extension, conflict="invalid")  # type: ignore[arg-type]
 
 
+def test_schema_can_be_built_from_bound_refs() -> None:
+    schema = Schema.from_refs(
+        [
+            Ref("input", metadata={"kind": "container"}),
+            Ref("input.value", metadata={"kind": "leaf"}),
+            Ref("output.value"),
+        ]
+    )
+
+    assert schema.input().metadata == {"kind": "container"}
+    assert schema.input.value().metadata == {"kind": "leaf"}
+    assert schema.output.value().path == "output.value"
+
+
+def test_context_schema_is_shared_and_declared_monotonically() -> None:
+    core = Schema({"plugin": {"base": ...}})
+    extension = Schema({"plugin": {"extra": ...}})
+    root = Context(schema=core)
+    child = root.fork()
+    plugin_view = child.schema.plugin
+
+    child.declare(extension)
+
+    assert child.schema is root.schema
+    assert plugin_view.extra().path == "plugin.extra"
+    child.set(extension.plugin.extra, 1)
+    assert child.get(root.schema.plugin.extra) == 1
+
+    root.declare(extension)
+    with pytest.raises(ValueError, match="plugin.extra"):
+        root.declare(Schema({"plugin": {"extra": ...}}))
+
+
+def test_context_rejects_undeclared_refs_and_unrelated_parents() -> None:
+    root = Context(schema=R)
+    unknown = Ref("unknown.path")
+
+    with pytest.raises(ContextPathError, match="not declared"):
+        root.get(unknown, None)
+    with pytest.raises(ContextPathError, match="not declared"):
+        root.exists(unknown)
+    with pytest.raises(ContextPathError, match="not declared"):
+        root.set(unknown, 1)
+    with pytest.raises(ContextPathError, match="not declared"):
+        root.delete(unknown)
+
+    unrelated = Context(schema=R)
+    assert unrelated.root is unrelated
+    assert unrelated.schema is not root.schema
+    with pytest.raises(TypeError, match="same application root"):
+        root.fork(unrelated)
+    with pytest.raises(TypeError, match="inherits its schema"):
+        Context(parents=(root,), schema=R)
+
+
 def test_context_crud_views_and_user_dict_leaves() -> None:
-    ctx = Context()
-    ctx.set(R.user.name, "Ada")
-    ctx.update({R.user.age: 37, R.settings: {"theme": "dark"}})
+    settings = {"theme": "dark"}
+    ctx = Context(
+        {
+            R.user.name: "Ada",
+            R.user.age: 37,
+            R.settings: settings,
+        },
+        schema=R,
+    )
 
     assert ctx.get(R.user.name) == "Ada"
     assert ctx.get(R.missing, "fallback") == "fallback"
@@ -313,23 +396,51 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
     assert user.get(R.name) == "Ada"
     assert user.exists(R.age)
     assert set(user.keys()) == {"name", "age"}
-    assert user.to_context_data() is ctx.to_context_data(R.user)
-    assert ctx.collect_leaves() == {
-        "user.name": "Ada",
-        "user.age": 37,
-        "settings": {"theme": "dark"},
+    assert ctx.flatten() == {
+        R.user.name(): "Ada",
+        R.user.age(): 37,
+        R.settings(): settings,
     }
+    assert user.flatten() == {Ref("name"): "Ada", Ref("age"): 37}
 
     ctx.delete(R.user.age)
     assert not ctx.exists(R.user.age)
-    ctx.clear(R.user)
-    assert ctx.to_dict(R.user) == {}
+    ctx.delete(R.user.name)
+    assert not ctx.exists(R.user)
     ctx.drop([R.settings, R.not_present])
-    assert ctx.to_dict() == {"user": {}}
+    assert ctx.to_dict() == {}
+
+
+def test_context_constructor_requires_a_ref_mapping() -> None:
+    with pytest.raises(TypeError, match="must be a mapping"):
+        Context([])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="Ref or Schema"):
+        Context({"path": 1})  # type: ignore[dict-item]
+    with pytest.raises(ContextPathError, match="not declared"):
+        Context({R.value: 1})
+
+
+def test_context_constructor_accepts_data_and_keyword_only_parents() -> None:
+    root = Context({R.a.b: 1}, schema=R)
+    base = root.fork()
+    mixin = root.fork()
+    mixin.set(R.other, 2)
+    child = Context({R.c: 3}, parents=(base, mixin))
+
+    assert child.parents == (base, mixin)
+    assert root.root is root
+    assert root.mro == (root,)
+    assert child.root is root
+    assert child.mro == (child, base, mixin, root)
+    assert child.to_dict() == {"c": 3, "a": {"b": 1}, "other": 2}
+    assert child.to_dict(local=True) == {"c": 3}
+
+    with pytest.raises(TypeError, match="positional"):
+        Context(None, (root,))  # type: ignore[call-arg]
 
 
 def test_context_path_errors_do_not_partially_mutate() -> None:
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.set(R.blocked, 1)
 
     with pytest.raises(ContextPathError, match="blocked"):
@@ -343,15 +454,13 @@ def test_context_path_errors_do_not_partially_mutate() -> None:
     with pytest.raises(ContextPathError, match="leaf"):
         list(ctx.keys(R.blocked))
     with pytest.raises(ContextPathError, match="container"):
-        ctx.to_context_data(R.blocked)
-    with pytest.raises(ContextPathError, match="not a container"):
-        ctx.clear(R.blocked)
+        ctx.to_dict(R.blocked)
     with pytest.raises(ContextPathError):
         ctx.get(R.absent)
 
 
 def test_context_mutation_drop_then_update_semantics() -> None:
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.update({R.a.old: 1, R.a.keep: 2, R.other: 3})
 
     ctx.mutate(updates={R.a.new: 4}, drops=[R.a])
@@ -366,25 +475,15 @@ def test_context_mutation_drop_then_update_semantics() -> None:
 
 
 def test_context_requires_explicit_path_drop_to_change_structure_role() -> None:
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.set(R.a.b, 1)
 
     with pytest.raises(ContextPathError, match="container.*leaf"):
         ctx.set(R.a, 2)
     assert ctx.to_dict() == {"a": {"b": 1}}
 
-    ctx.clear(R.a)
-    assert ctx.to_dict() == {"a": {}}
-    with pytest.raises(ContextPathError, match="container.*leaf"):
-        ctx.set(R.a, 2)
-
-    ctx.set(R.a.b, 3)
     ctx.delete(R.a.b)
-    assert ctx.to_dict() == {"a": {}}
-    with pytest.raises(ContextPathError, match="container.*leaf"):
-        ctx.set(R.a, 4)
-
-    ctx.delete(R.a)
+    assert not ctx.exists(R.a)
     ctx.set(R.a, 5)
     with pytest.raises(ContextPathError, match="blocked"):
         ctx.set(R.a.b, 6)
@@ -400,24 +499,19 @@ def test_context_requires_explicit_path_drop_to_change_structure_role() -> None:
 
 
 def test_context_mutation_validates_before_inplace_apply() -> None:
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.update({R.a.b: 1, R.blocked: 2, R.other: 3})
-    root = ctx.to_context_data()
-    branch = ctx.to_context_data(R.a)
-
     with pytest.raises(ContextPathError, match="blocked"):
         ctx.update({R.a.new: 4, R.blocked.child: 5})
     assert ctx.to_dict() == {"a": {"b": 1}, "blocked": 2, "other": 3}
 
     ctx.set(R.a.b, 6)
     ctx.set(R.a.new, 7)
-    assert ctx.to_context_data() is root
-    assert ctx.to_context_data(R.a) is branch
-    assert branch == {"b": 6, "new": 7}
+    assert ctx.to_dict(R.a) == {"b": 6, "new": 7}
 
 
 def test_update_tree_and_structured_extract() -> None:
-    ctx = Context()
+    ctx = Context(schema=R)
     refs = {"position": (R.point.x, R.point.y), "label": R.point.label}
     values = {"position": (3, 4), "label": "p"}
     ctx.update_tree(refs, values)
@@ -426,42 +520,8 @@ def test_update_tree_and_structured_extract() -> None:
     assert ctx.extract([R.point.x, {"y": R.point.y}]) == [3, {"y": 4}]
 
 
-def test_context_diff_strategies_and_flatten() -> None:
-    left = Context()
-    right = Context()
-    shared: list[int] = []
-    left.update({R.same: shared, R.changed: [1], R.nested.x: 1, R.removed: 2})
-    right.update({R.same: shared, R.changed: [1], R.nested.x: 3, R.added: 4})
-
-    identity_diff = left.diff(right)
-    assert identity_diff.added == {"added": 4}
-    assert identity_diff.removed == {"removed": 2}
-    assert identity_diff.modified["changed"] == ([1], [1])
-    assert identity_diff.nested["nested"].modified == {"x": (1, 3)}
-    assert identity_diff.flatten() == {
-        "added": (DIFF_MISSING, 4),
-        "removed": (2, DIFF_MISSING),
-        "changed": ([1], [1]),
-        "nested.x": (1, 3),
-    }
-    assert "added" in repr(identity_diff)
-
-    equality_diff = left.diff(right, strategy="eq")
-    assert "changed" not in equality_diff.modified
-    assert Context().diff(Context(), strategy="eq") == ContextDiff()
-    assert not ContextDiff()
-    assert repr(ContextDiff()) == "ContextDiff(no changes)"
-    with pytest.raises(ValueError, match="Unknown diff strategy"):
-        left.diff(right, strategy="invalid")  # type: ignore[arg-type]
-
-
-def test_diff_context_data_short_circuits_shared_mapping() -> None:
-    data = ContextData({"value": 1})
-    assert not diff_context_data(data, data)
-
-
 def test_context_repr_modes_and_invalid_view() -> None:
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.update({R.short: 1, R.long: "abcdefghij"})
 
     try:
@@ -470,7 +530,7 @@ def test_context_repr_modes_and_invalid_view() -> None:
         assert "Context({'short': 1, 'long': 'abc...})" == compact
         ContextConfig.set_pretty_repr()
         assert "\n" in repr(ctx)
-        assert repr(Context()) == "Context()"
+        assert repr(Context(schema=R)) == "Context()"
         invalid = ctx.get(R.short)
         assert invalid == 1
     finally:
@@ -493,49 +553,313 @@ def test_context_eval_engine_flatten_round_trip(tree: Any) -> None:
     assert CTX_EVAL_ENGINE.unflatten(definition, leaves) == tree
 
 
-def test_context_pytree_engines_preserve_context_identity_contract() -> None:
-    ctx = Context()
+def test_context_is_an_opaque_pytree_leaf() -> None:
+    ctx = Context(schema=R)
     ctx.update({R.a.b: 1, R.c: 2})
 
-    leaves, definition = CONTEXT_ENGINE.flatten(ctx)
-    rebuilt = CONTEXT_ENGINE.unflatten(definition, leaves)
-    assert isinstance(rebuilt, Context)
-    assert rebuilt.to_dict() == ctx.to_dict()
+    leaves, definition = CTX_EVAL_ENGINE.flatten(ctx)
+    rebuilt = CTX_EVAL_ENGINE.unflatten(definition, leaves)
+    assert rebuilt is ctx
 
 
-def test_context_clone_copies_only_context_data_structure() -> None:
+def test_flatten_reconstructs_context_without_copying_leaf_values() -> None:
     shared_mapping = {"items": [1, 2]}
     shared_marker = object()
-    ctx = Context()
-    ctx.update(
+    ctx = Context(
         {
             R.branch.value: shared_mapping,
             R.branch.marker: shared_marker,
-            R.other: [3, 4],
-        }
+            R.other: shared_mapping,
+        },
+        schema=R,
     )
 
-    cloned = ctx.clone()
+    flattened = ctx.flatten()
+    rebuilt = Context(flattened, schema=ctx.schema)
 
-    assert cloned is not ctx
-    assert cloned.to_context_data() is not ctx.to_context_data()
-    assert cloned.to_context_data(R.branch) is not ctx.to_context_data(R.branch)
-    assert cloned.get(R.branch.value) is shared_mapping
-    assert cloned.get(R.branch.marker) is shared_marker
-    assert cloned.get(R.other) is ctx.get(R.other)
+    assert flattened == {
+        R.branch.value(): shared_mapping,
+        R.branch.marker(): shared_marker,
+        R.other(): shared_mapping,
+    }
+    assert rebuilt.get(R.branch.value) is shared_mapping
+    assert rebuilt.get(R.branch.marker) is shared_marker
+    assert rebuilt.get(R.other) is shared_mapping
 
-    cloned.set(R.branch.added, "clone-only")
-    cloned.delete(R.branch.marker)
+    rebuilt.set(R.branch.added, "rebuilt-only")
+    rebuilt.delete(R.branch.marker)
     assert not ctx.exists(R.branch.added)
     assert ctx.exists(R.branch.marker)
 
     shared_mapping["items"].append(3)
-    assert cloned.get(R.branch.value)["items"] == [1, 2, 3]
+    assert rebuilt.get(R.branch.value)["items"] == [1, 2, 3]
     assert ctx.get(R.branch.value)["items"] == [1, 2, 3]
 
-    branch_clone = ctx.get(R.branch).clone()
-    assert branch_clone.to_dict() == {
-        "value": shared_mapping,
-        "marker": shared_marker,
+    assert ctx.get(R.branch).flatten() == {
+        Ref("value"): shared_mapping,
+        Ref("marker"): shared_marker,
     }
-    assert branch_clone.to_context_data() is not ctx.to_context_data(R.branch)
+
+
+def test_to_dict_is_a_nested_projection_while_flatten_preserves_leaf_paths() -> None:
+    mapping_leaf = Context({R.settings: {"theme": "dark"}}, schema=R)
+    structured = Context({Ref("settings.theme"): "dark"}, schema=R)
+
+    assert mapping_leaf.to_dict() == structured.to_dict()
+    assert mapping_leaf.flatten() == {R.settings(): {"theme": "dark"}}
+    assert structured.flatten() == {Ref("settings.theme"): "dark"}
+
+
+def test_context_fork_has_live_parent_lookup_and_local_writes() -> None:
+    value = Ref("runtime.value")
+    root = Context(schema=R)
+    child = root.fork()
+    sibling = root.fork()
+
+    root.set(value, 1)
+    assert child.get(value) == 1
+    assert not child.exists(value, local=True)
+
+    child.set(value, 2)
+    assert child.get(value) == 2
+    assert child.get(value, local=True) == 2
+    assert root.get(value) == 1
+    assert sibling.get(value) == 1
+
+    root.set(value, 3)
+    assert child.get(value) == 2
+    assert sibling.get(value) == 3
+    child.delete(value)
+    assert child.get(value) == 3
+    assert "data" not in vars(child)
+    assert not hasattr(child, "parent_contexts")
+
+
+def test_context_read_operations_can_select_local_or_effective_data() -> None:
+    root = Context(schema=R)
+    root.set(Ref("group.parent"), 1)
+    child = root.fork()
+    child.set(Ref("group.child"), 2)
+
+    assert tuple(child.keys(Ref("group"))) == ("child", "parent")
+    assert tuple(child.keys(Ref("group"), local=True)) == ("child",)
+    assert child.to_dict() == {"group": {"child": 2, "parent": 1}}
+    assert child.to_dict(local=True) == {"group": {"child": 2}}
+    assert child.flatten() == {
+        Ref("group.child"): 2,
+        Ref("group.parent"): 1,
+    }
+    assert child.flatten(local=True) == {Ref("group.child"): 2}
+    assert child.extract([Ref("group.child")], local=True) == [2]
+
+
+def test_context_views_follow_later_parent_and_child_changes() -> None:
+    root = Context(schema=R)
+    root.set(Ref("group.initial"), 1)
+    child = root.fork()
+    view = child.get(Ref("group"))
+
+    root.set(Ref("group.later"), 2)
+    child.set(Ref("group.local"), 3)
+    assert view.to_dict() == {"local": 3, "initial": 1, "later": 2}
+
+    child.mutate(updates={Ref("group"): 4}, drops=[Ref("group")])
+    with pytest.raises(ContextPathError):
+        view.to_dict()
+
+
+def test_context_uses_c3_for_multiple_parents() -> None:
+    value = Ref("value")
+    root = Context(schema=R)
+    left = root.fork()
+    right = root.fork()
+    child = left.fork(right)
+
+    root.set(value, "root")
+    right.set(value, "right")
+    left.set(value, "left")
+
+    assert child.mro == (child, left, right, root)
+    assert child.get(value) == "left"
+
+    x = root.fork()
+    y = root.fork()
+    xy = x.fork(y)
+    yx = y.fork(x)
+    with pytest.raises(TypeError, match="C3"):
+        xy.fork(yx)
+    with pytest.raises(TypeError, match="duplicate"):
+        root.fork(root)
+
+
+def test_context_structural_lookup_obeys_leaf_barriers() -> None:
+    root = Context(schema=R)
+    root.set(Ref("a.b.c"), 1)
+
+    leaf_child = root.fork()
+    leaf_child.set(Ref("a.b"), 2)
+    assert leaf_child.get(Ref("a.b")) == 2
+    assert not leaf_child.exists(Ref("a.b.c"))
+
+    merged_child = root.fork()
+    merged_child.set(Ref("a.b.d"), 3)
+    assert merged_child.to_dict(Ref("a.b")) == {"d": 3, "c": 1}
+
+    leaf_root = Context(schema=R)
+    leaf_root.set(Ref("a"), 4)
+    reopened = leaf_root.fork()
+    reopened.set(Ref("a.b.c"), 5)
+    assert reopened.to_dict(Ref("a")) == {"b": {"c": 5}}
+
+    oldest = Context(schema=R)
+    oldest.set(Ref("a.from_oldest"), True)
+    blocker = oldest.fork()
+    blocker.set(Ref("a"), "blocked")
+    nearest = blocker.fork()
+    nearest.set(Ref("a.from_nearest"), True)
+    assert nearest.to_dict(Ref("a")) == {"from_nearest": True}
+
+
+def test_c3_branch_merge_stops_at_an_intermediate_leaf() -> None:
+    root = Context(schema=R)
+    root.set(Ref("a.root"), 1)
+    left = root.fork()
+    left.set(Ref("a.left"), 2)
+    right = root.fork()
+    right.set(Ref("a"), "barrier")
+
+    child = left.fork(right)
+
+    assert child.mro == (child, left, right, root)
+    assert child.to_dict(Ref("a")) == {"left": 2}
+
+
+def test_context_add_is_local_immutable_and_exactly_reversible() -> None:
+    value = Ref("service")
+    root = Context(schema=R)
+    remove_root = root.add(value, "root")
+
+    with pytest.raises(ContextPathError, match="existing local"):
+        root.add(value, "other")
+    with pytest.raises(ContextPathError, match="Cannot replace added"):
+        root.set(value, "other")
+
+    child = root.fork()
+    remove_child = child.add(value, "child")
+    assert child.get(value) == "child"
+    remove_child()
+    remove_child()
+    assert child.get(value) == "root"
+
+    remove_root()
+    assert not root.exists(value)
+
+
+def test_context_add_disposer_restores_an_inherited_leaf_barrier() -> None:
+    root = Context(schema=R)
+    root.set(Ref("a"), "root-leaf")
+    child = root.fork()
+
+    remove = child.add(Ref("a.b.c"), "temporary")
+    assert child.get(Ref("a.b.c")) == "temporary"
+    remove()
+
+    assert child.get(Ref("a")) == "root-leaf"
+    assert not child.exists(Ref("a.b"), local=True)
+
+
+def test_context_add_prunes_shared_temporary_branches_in_any_order() -> None:
+    root = Context(schema=R)
+    root.set(Ref("a"), "root-leaf")
+    child = root.fork()
+
+    remove_first = child.add(Ref("a.first"), 1)
+    remove_second = child.add(Ref("a.second"), 2)
+    remove_first()
+    assert child.to_dict(Ref("a")) == {"second": 2}
+    remove_second()
+
+    assert child.get(Ref("a")) == "root-leaf"
+
+
+def test_deleting_an_added_leaf_prunes_its_temporary_branches() -> None:
+    root = Context(schema=R)
+    root.set(Ref("a"), "root-leaf")
+    child = root.fork()
+
+    stale_disposer = child.add(Ref("a.old"), 1)
+    child.delete(Ref("a.old"))
+    assert child.get(Ref("a")) == "root-leaf"
+
+    remove_new = child.add(Ref("a.new"), 2)
+    remove_new()
+    assert child.get(Ref("a")) == "root-leaf"
+    stale_disposer()
+
+
+def test_context_add_disposer_does_not_retain_removed_payload() -> None:
+    class Payload:
+        pass
+
+    ctx = Context(schema=R)
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    dispose = ctx.add(Ref("payload"), payload)
+
+    dispose()
+    del payload
+    gc.collect()
+
+    assert payload_ref() is None
+    dispose()
+
+
+def test_context_removes_a_container_after_its_last_local_leaf() -> None:
+    root = Context(schema=R)
+    root.set(Ref("a"), "root-leaf")
+    child = root.fork()
+
+    remove = child.add(Ref("a.temporary"), 1)
+    child.set(Ref("a.regular"), 2)
+    child.delete(Ref("a.regular"))
+    remove()
+
+    assert child.get(Ref("a")) == "root-leaf"
+    assert not child.exists(Ref("a"), local=True)
+
+
+def test_context_keeps_user_mappings_as_atomic_leaves() -> None:
+    settings = {"theme": "dark"}
+    ctx = Context({Ref("settings"): settings}, schema=R)
+
+    assert ctx.get(Ref("settings")) is settings
+    assert not ctx.exists(Ref("settings.theme"))
+    assert ctx.flatten() == {Ref("settings"): settings}
+
+
+def test_flatten_can_materialize_an_effective_context() -> None:
+    value = Ref("value")
+    root = Context(schema=R)
+    root.set(value, 1)
+    child = root.fork()
+
+    snapshot = Context(child.flatten(), schema=child.schema)
+    assert snapshot.parents == ()
+    assert snapshot.get(value) == 1
+
+    root.set(value, 2)
+    assert child.get(value) == 2
+    assert snapshot.get(value) == 1
+
+
+def test_flatten_does_not_copy_add_lifecycle_guards() -> None:
+    value = Ref("value")
+    ctx = Context(schema=R)
+    dispose = ctx.add(value, 1)
+
+    snapshot = Context(ctx.flatten(), schema=ctx.schema)
+    snapshot.set(value, 2)
+
+    assert snapshot.get(value) == 2
+    assert ctx.get(value) == 1
+    dispose()

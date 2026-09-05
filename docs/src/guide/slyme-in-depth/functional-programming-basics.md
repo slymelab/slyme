@@ -7,8 +7,8 @@ Slyme uses functional ideas selectively rather than requiring the entire runtime
 - Context data is mutable in place; mutation methods return `None`.
 - Node and Wrapper calls pass their current static parameter containers directly.
 - The live composition graph remains mutable, so later calls can observe structural changes.
-- Structural isolation is explicit through `NodeElement.clone()` and `ContextElement.clone()`.
+- Structural isolation is explicit: call a Node factory or Builder again for another graph, and use `Context.fork()` for a live local data layer.
 
 Purity remains an application choice. A value-producing Node can be pure; an I/O Node can perform side effects; a higher-order Node can coordinate children. Slyme models their composition and lifecycle without attempting to model the internal details of those Python operations.
 
-For concurrency, call `.clone()` when branches require independent registered structure. Clones preserve unregistered leaf identities and therefore do not make arbitrary shared Python objects thread-safe; copy those application values separately when needed.
+Every child Node evaluated through `Auto` receives its own Context fork. Explicit concurrent orchestration should likewise create one fork per branch when local writes must be isolated. Forks preserve application leaf identities, so they do not make shared Python objects thread-safe or undo external side effects; isolate those resources separately when needed.

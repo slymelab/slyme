@@ -61,7 +61,7 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 ```python
 from enum import Enum
 from typing import Literal
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, Arg, Context, Ref, Schema
 from slyme.node import node, Auto
 
 
@@ -71,7 +71,7 @@ class ModelSize(Enum):
 
 
 # 1. 声明应用的 Ref 与 Arg 元数据
-refs = RefFactory(
+R = Schema(
     {
         "model": {
             "use_cache": Ref(metadata={ARG: Arg(default=True, help="是否使用缓存")}),
@@ -117,11 +117,11 @@ def start_server(
 if __name__ == "__main__":
     # 3. 实例化 Node
     server_node = start_server(
-        use_cache=refs.model.use_cache,
-        ports=refs.server.ports,
-        config=refs.model.config,
-        size=refs.model.size,
-        mode=refs.run.mode,
+        use_cache=R.model.use_cache,
+        ports=R.server.ports,
+        config=R.model.config,
+        size=R.model.size,
+        mode=R.run.mode,
     )
 
     # 模拟在命令行执行：
@@ -168,6 +168,9 @@ def parse_and_inject(
   - 若提供 `context`：原地更新并返回同一个 `Context`。
   - 若 `context` 为 `None`：返回解析得到的 `dict[str, Any]`。
 - **参数来源**：你可以传入 `node` 自动扫描依赖树中所需的全部 `Ref`，或者手动提供 `extra_refs` 和 `extra_args` 来追加。
+
+与 `Node.run()` 不同，这个底层函数不会创建或扩展 Ref 声明。若传入
+Context，它必须已经声明所有将要写入解析结果的路径。
 
 ### `populate_parser` 与 `prepare_args`
 

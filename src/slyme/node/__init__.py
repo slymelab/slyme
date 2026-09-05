@@ -33,18 +33,12 @@ from .core import (
 from .eval import async_eval_tree, eval_tree
 from .render import Config as RenderConfig
 from .signature import UNDEFINED, UNSET, Auto, spec
-from .validator import (
-    NodeStructureError,
-    check_node_structure,
-)
 
 __all__ = [
     "ExecutionMode",
     "NodeElement",
     "Node",
     "Wrapper",
-    "check_node_structure",
-    "NodeStructureError",
     "node",
     "wrapper",
     "AsyncNode",

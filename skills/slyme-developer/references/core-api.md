@@ -3,17 +3,18 @@
 ## Value-producing and effectful Nodes
 
 ```python
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, Arg, Compose, Context, Ref, Schema
 from slyme.node import Auto, Node, node, sequential_exec, wrapper
 
 
-refs = RefFactory(
+R = Schema(
     {
         "input": {
             "value": Ref(metadata={ARG: Arg(type=float, required=True)}),
         },
         "state": {"counter": ...},
         "output": {"result": ...},
+        "request": {"id": ...},
     }
 )
 
@@ -43,7 +44,32 @@ def execute(
 
 A Node function has exactly one non-keyword-only runtime parameter. All build parameters are keyword-only. `Auto` resolves registered leaves such as `Ref` and value-producing `Node`; omit it when the function needs the object itself.
 
+An Auto Ref reads the supplied Context. Every Auto child Node runs with its own `ctx.fork()`, so its local writes are discarded after it returns. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe those writes. In rendered Node trees, `?` marks a parameter that will be evaluated at call time.
+
 Context mutation methods modify data in place and return `None`. A Node may return any value.
+
+## Context layers and Compose
+
+```python
+root_ctx = Context(schema=R)
+agent_ctx = root_ctx.fork()
+
+remove_request = agent_ctx.add(R.request.id, "request-1")
+
+tools = Compose[str, tuple[str, ...]].collect()
+remove_global = tools.add(root_ctx, "read")
+remove_agent = tools.add(agent_ctx, "shell", metadata={"plugin": "shell"})
+
+assert tools.resolve(agent_ctx) == ("shell", "read")
+
+remove_agent()
+remove_global()
+remove_request()
+```
+
+Context reads follow C3 order by default and accept `local=True` for one local layer. Writes affect only the receiver. `Context.add()` rejects an existing local path and returns an idempotent disposer. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
+
+Create an application root with `Context(data, schema=R)`. Every path must belong to its Schema declaration tree. Forks inherit the same `ctx.schema`; `ctx.declare(plugin_schema)` adds a plugin's immutable declarations for every existing and future fork. Pass direct parents as `Context(data, parents=(base, mixin))`; all parents must share one application root. `ctx.mro` is the immutable C3 order and `ctx.root` is its final entry. `base.fork(mixin)` is the empty-data shorthand. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
 
 ## Wrappers
 
@@ -64,19 +90,19 @@ A Wrapper has exactly three non-keyword-only runtime parameters. Attach it only 
 ```python
 root = execute(
     derived=calculate(
-        value=refs.input.value,
+        value=R.input.value,
         scale=2.0,
     ),
-    children=(increment(counter=refs.state.counter),),
-    output=refs.output.result,
+    children=(increment(counter=R.state.counter),),
+    output=R.output.result,
 ).add_wrappers(trace(name="execute"))
 
 result = root.run(
-    inputs={refs.input.value: 3.0, refs.state.counter: 0},
-    outputs=refs.output.result,
+    inputs={R.input.value: 3.0, R.state.counter: 0},
+    outputs=R.output.result,
 )
 ```
 
-The Node graph stays mutable. Build parameters are real attributes (`root.derived`, `root.children`, and so on), and assignment runs the parameter's `Spec` build logic. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. A change affects subsequent calls without an explicit prepare phase. Call `root.clone()` before making changes that need an independent Node/Wrapper and parameter-PyTree structure; unregistered leaf values remain shared.
+The Node graph stays mutable. Build parameters are real attributes (`root.derived`, `root.children`, and so on), and assignment runs the parameter's `Spec` build logic. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. A change affects subsequent calls without an explicit prepare phase. Call the relevant factory or Builder again when another independently configurable graph is needed, and copy mutable application values explicitly when they must not be shared.
 
 Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

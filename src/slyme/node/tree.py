@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PyTree engine used for Node inspection and structural cloning."""
+"""PyTree engine used for Node inspection and Ref discovery."""
 
 from collections.abc import Iterable
 from types import MappingProxyType

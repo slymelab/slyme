@@ -16,11 +16,16 @@ breaking changes when they are documented here.
   pre-commit/pre-push hooks, CodeQL, dependency review, and Dependabot updates.
 - Added verified package builds, trusted PyPI publishing with provenance
   attestations, contribution guidance, issue templates, and a security policy.
-- Added `NodeElement.clone()` for structural Node/Wrapper and parameter PyTree
-  copies, and `ContextElement.clone()` for ContextData-only structural copies.
-- Added immutable schema-backed `RefFactory` construction with undeclared
-  attribute validation, branch metadata, leaf/container-aware recursive
-  merging, and explicit branch-Ref declaration tracking.
+- Added immutable `Schema` declaration trees with undeclared attribute
+  validation, branch metadata, leaf/container-aware recursive merging, and
+  explicit branch-Ref declaration tracking.
+- Added application-owned Ref declarations to `Context`; forks share later
+  `declare()` additions while Context data continues to follow C3 lookup.
+- Added live `Context.fork()` layers with C3 multiple inheritance, local-only
+  read options, and reversible `Context.add()` bindings.
+- Added `Context.flatten()` for exact visible Ref-to-value leaf mappings.
+- Added `Compose` for ordered, reversible values resolved through a Context's
+  C3 hierarchy, including first-value, collection, mapping, and custom rules.
 
 ### Fixed
 
@@ -28,10 +33,10 @@ breaking changes when they are documented here.
   they cannot bypass fixed runtime-arity and named build-parameter validation.
 - Prevented Context updates from implicitly changing existing leaf/container
   roles; an exact-path `delete` or `drop` now makes structural replacement
-  explicit, while `clear` retains an empty container.
+  explicit.
 - Context mutations now validate the complete transaction before applying it
-  directly to existing ContextData containers, avoiding full-tree replacement
-  while retaining no-partial-write behavior.
+  directly to existing local branches, avoiding full-tree replacement while
+  retaining no-partial-write behavior.
 
 ### Removed
 
@@ -44,16 +49,25 @@ breaking changes when they are documented here.
 - Removed positional Scope injection from Node factories.
 - Removed Context hooks and the asynchronous mirrors of locally synchronous
   Context operations.
+- Removed the public Context data-container type and Context PyTree
+  registration; Context hierarchies are identity-bearing C3 graphs.
+- Removed `Context.clear()` and `collect_leaves()`; empty structural containers
+  are not retained, and `flatten()` returns Ref-keyed leaf mappings.
+- Removed `Context.diff()`, `ContextDiff`, and `DIFF_MISSING`.
+- Removed whole-graph Node structure validation. Node and Wrapper parameters
+  may contain arbitrary nested values; mounted wrappers still match Node mode.
 - Removed `Ref.key_path` and its `CallKey`, `KeyPathExpr`, and `P` helpers.
-- Removed the global open-path `R`, schema-less `RefFactory` construction, and
-  schema deletion; applications now declare their complete Ref schema.
+- Removed the global open-path `R`, declaration-less reference construction,
+  and reference deletion; applications now declare paths through `Schema`.
 
 ### Changed
 
 - Raised the minimum supported Python version from 3.9 to 3.10, following the
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
-- `Ref()` can now represent an unbound schema declaration; `RefFactory` binds
-  declarations to concrete paths during schema parsing, while Context and
+- Renamed `RefFactory` to `Schema` and aligned Context construction and
+  inspection on `Context(..., schema=R)` and `ctx.schema`.
+- `Ref()` can now represent an unbound declaration; `Schema` binds
+  declarations to concrete paths while Context and
   evaluation APIs continue to require bound references.
 - Node and Wrapper build parameters are now real instance attributes. Parameter
   names are checked against reserved framework attributes when decorated;
@@ -63,8 +77,20 @@ breaking changes when they are documented here.
   path.
 - Node and Wrapper calls now pass their current static parameter containers
   directly to user functions instead of creating an implicit frozen snapshot.
-  Use `.clone()` when an independent Node graph or ContextData structure is
-  required.
+- Context construction now accepts a Ref-to-value mapping and keyword-only
+  `schema` or direct parents. All parents share one application root, and every
+  Context access rejects undeclared paths. Context mutations prune empty
+  structural containers; use `to_dict()` for a nested projection and
+  `flatten()` for the exact leaf mapping.
+- `Context.mro` is now an immutable property, `Context.root` exposes its final
+  application ancestor, and descendant `schema` properties resolve the Schema
+  stored by that root.
+- `Node.run()` derives a root Context's declarations from its graph, inputs,
+  and outputs when the caller does not supply a Context.
+- Auto evaluation now gives every child Node an independent Context fork while
+  Ref evaluation reads the supplied Context directly.
+- Builder functions now require their outer result to be a `Node` or
+  `AsyncNode` without recursively validating the returned parameter graph.
 - Node and Wrapper construction now binds every declared parameter through one
   `Spec` build path. Missing required parameters remain `UNDEFINED` until the
   call boundary instead of being rejected or processed by a second kwargs path.

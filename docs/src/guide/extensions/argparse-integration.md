@@ -61,7 +61,7 @@ Combining the type rules above, here is a complete demonstration:
 ```python
 from enum import Enum
 from typing import Literal
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, Arg, Context, Ref, Schema
 from slyme.node import node, Auto
 
 
@@ -70,8 +70,8 @@ class ModelSize(Enum):
     BASE = "base"
 
 
-# 1. Declare the application's Refs and Arg metadata
-refs = RefFactory(
+# 1. Declare the application's Schema and Arg metadata
+R = Schema(
     {
         "model": {
             "use_cache": Ref(
@@ -125,11 +125,11 @@ def start_server(
 if __name__ == "__main__":
     # 3. Instantiate the Node
     server_node = start_server(
-        use_cache=refs.model.use_cache,
-        ports=refs.server.ports,
-        config=refs.model.config,
-        size=refs.model.size,
-        mode=refs.run.mode,
+        use_cache=R.model.use_cache,
+        ports=R.server.ports,
+        config=R.model.config,
+        size=R.model.size,
+        mode=R.run.mode,
     )
 
     # Simulating command line execution:
@@ -175,13 +175,17 @@ def parse_and_inject(
 - **Returns**:
   - If `context` is provided: Updates and returns that same `Context`.
   - If `context` is `None`: Returns the parsed arguments as a `dict[str, Any]`.
-- **Argument Sources**: Pass a `node` to automatically scan all required `Refs` across the dependency tree, or manually append `extra_refs` and `extra_args`.
+- **Argument Sources**: Pass a `node` to scan the dependency tree for Ref metadata, or manually append `extra_refs` and `extra_args`.
+
+Unlike `Node.run()`, this lower-level function does not create or extend Ref
+declarations. A supplied Context must already declare every path that receives a
+parsed value.
 
 ### `populate_parser` and `prepare_args`
 
 Low-level APIs for fine-grained control. When you already have a custom `argparse.ArgumentParser` instance, you can use these to append Slyme's arguments to your own parser.
 
-- **`prepare_args(node, extra_refs, extra_args)`**: Extracts and merges all `Refs` and `Args`, returning a dictionary `{ "path": Arg }` and handling naming conflicts automatically.
+- **`prepare_args(node, extra_refs, extra_args)`**: Extracts and merges all Ref and Arg metadata, returning a dictionary `{ "path": Arg }` and handling naming conflicts automatically.
 - **`populate_parser(parser, args_map)`**: Mounts the extracted `args_map` into the target `ArgumentParser`.
 
 ```python

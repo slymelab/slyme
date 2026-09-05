@@ -14,16 +14,17 @@
 
 from collections.abc import Callable
 from enum import Enum
-from functools import partial, wraps
+from functools import wraps
 from typing import (
+    Any,
     ParamSpec,
     TypeVar,
     overload,
 )
 
-from slyme.node import Node, check_node_structure
+from slyme.node import AsyncNode, Node
 
-_NodeT = TypeVar("_NodeT", bound=Node)
+_NodeT = TypeVar("_NodeT", bound=Node[Any] | AsyncNode[Any])
 _P = ParamSpec("_P")
 # Marker for missing arguments to handle @builder vs @builder()
 _Missing = Enum("_Missing", ["MARK"])
@@ -33,8 +34,6 @@ _MISSING = _Missing.MARK
 def _builder(
     func: Callable[_P, _NodeT],
     /,
-    *,
-    check_structure: bool = True,
 ) -> Callable[_P, _NodeT]:
     @wraps(func)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _NodeT:
@@ -44,9 +43,12 @@ def _builder(
                 f"The builder function '{func.__name__}' returned None. "
                 "Did you forget to return the constructed Node?"
             )
+        if not isinstance(node, (Node, AsyncNode)):
+            raise TypeError(
+                f"The builder function '{func.__name__}' returned "
+                f"{type(node).__name__}, expected a Node or AsyncNode."
+            )
 
-        if check_structure:
-            check_node_structure(node)
         return node
 
     return wrapper
@@ -56,27 +58,18 @@ def _builder(
 def builder(
     func: _Missing = _MISSING,
     /,
-    *,
-    check_structure: bool = True,
 ) -> Callable[[Callable[_P, _NodeT]], Callable[_P, _NodeT]]: ...
 @overload
 def builder(
     func: Callable[_P, _NodeT],
     /,
-    *,
-    check_structure: bool = True,
 ) -> Callable[_P, _NodeT]: ...
 def builder(
     func: Callable[_P, _NodeT] | _Missing = _MISSING,
     /,
-    *,
-    check_structure: bool = True,
 ) -> Callable[_P, _NodeT] | Callable[[Callable[_P, _NodeT]], Callable[_P, _NodeT]]:
-    """
-    Decorator to create a builder function.
-    It wraps the function to ensure it returns a valid Node and optionally checks the structure.
-    """
+    """Decorate a function that constructs and returns a Node or AsyncNode."""
     if func is _MISSING:
-        return partial(_builder, check_structure=check_structure)
+        return _builder
     else:
-        return _builder(func, check_structure=check_structure)
+        return _builder(func)

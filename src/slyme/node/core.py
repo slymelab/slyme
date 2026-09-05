@@ -178,10 +178,6 @@ class NodeElement:
     def type_repr(self) -> str:
         return f"{self._func.__name__}<{self.__class__.__name__}>"
 
-    def clone(self) -> Self:
-        """Structurally clone this element and its parameter PyTree."""
-        return cast(Self, NODE_ENGINE.map(lambda leaf: leaf, self))
-
 
 class Node(NodeElement, Generic[_R]):
     """Mutable synchronous Node."""
@@ -198,16 +194,22 @@ class Node(NodeElement, Generic[_R]):
         params: Mapping[str, Any],
     ):
         super().__init__(func=func, specs=specs, params=params)
-        self.wrappers = list(wrappers) if wrappers else []
+        self.wrappers: list[Wrapper] = []
+        if wrappers:
+            self.add_wrappers(*wrappers)
 
     def add_wrappers(self, *wrappers: "Wrapper") -> Self:
+        if any(not isinstance(item, Wrapper) for item in wrappers):
+            raise TypeError("Synchronous Nodes only accept synchronous Wrappers.")
         self.wrappers.extend(wrappers)
         return self
 
     def __call__(self, ctx: Context) -> _R:
+        wrappers = tuple(self.wrappers)
+        if any(not isinstance(item, Wrapper) for item in wrappers):
+            raise TypeError("Synchronous Nodes only accept synchronous Wrappers.")
         try:
             kwargs = _collect_params(self)
-            wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
@@ -275,16 +277,22 @@ class AsyncNode(NodeElement, Generic[_R]):
         params: Mapping[str, Any],
     ):
         super().__init__(func=func, specs=specs, params=params)
-        self.wrappers = list(wrappers) if wrappers else []
+        self.wrappers: list[AsyncWrapper] = []
+        if wrappers:
+            self.add_wrappers(*wrappers)
 
     def add_wrappers(self, *wrappers: "AsyncWrapper") -> Self:
+        if any(not isinstance(item, AsyncWrapper) for item in wrappers):
+            raise TypeError("Async Nodes only accept AsyncWrappers.")
         self.wrappers.extend(wrappers)
         return self
 
     async def __call__(self, ctx: Context) -> _R:
+        wrappers = tuple(self.wrappers)
+        if any(not isinstance(item, AsyncWrapper) for item in wrappers):
+            raise TypeError("Async Nodes only accept AsyncWrappers.")
         try:
             kwargs = _collect_params(self)
-            wrappers = tuple(self.wrappers)
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
                 _validate_ready(kwargs)
             raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)

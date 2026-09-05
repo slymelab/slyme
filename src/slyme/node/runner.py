@@ -18,8 +18,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any, cast
 
-from slyme.cli import parse_and_inject, prepare_args
-from slyme.context import Context, Ref, RefLike
+from slyme.cli import collect_refs, parse_and_inject, prepare_args
+from slyme.context import Context, Ref, RefLike, Schema, to_ref
 
 
 def _prepare_context(
@@ -27,11 +27,17 @@ def _prepare_context(
     context: Context | None,
     *,
     inputs: Mapping[RefLike, Any] | None,
+    outputs: Any,
     use_argparse: bool,
     cli_args: Sequence[str] | None,
 ) -> Context:
     if context is None:
-        context = Context()
+        refs = collect_refs(node)
+        if inputs:
+            refs.extend(to_ref(ref) for ref in inputs)
+        if outputs is not None:
+            refs.extend(collect_refs(outputs))
+        context = Context(schema=Schema.from_refs(refs))
     elif not isinstance(context, Context):
         raise TypeError(
             f"context must be a Context or None, got {type(context).__name__}"
@@ -118,6 +124,7 @@ def run_node(
         node,
         context,
         inputs=inputs,
+        outputs=outputs,
         use_argparse=use_argparse,
         cli_args=cli_args,
     )
@@ -145,6 +152,7 @@ async def run_async_node(
         node,
         context,
         inputs=inputs,
+        outputs=outputs,
         use_argparse=use_argparse,
         cli_args=cli_args,
     )

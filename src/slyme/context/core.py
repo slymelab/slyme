@@ -17,10 +17,10 @@ from __future__ import annotations
 import difflib
 import keyword
 import types
+import weakref
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import InitVar, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import (
     Any,
@@ -33,15 +33,12 @@ from typing import (
 from typing_extensions import Self
 
 from slyme.utils.exception import enrich_exception
-from slyme.utils.pytree import MappingKey
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
 _EMPTY_MAPPING: Mapping[str, Any] = types.MappingProxyType({})
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
-DiffMissing = Enum("DiffMissing", ["MARK"])
-DIFF_MISSING = DiffMissing.MARK
 
 
 class Config:
@@ -82,7 +79,7 @@ Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 @dataclass(frozen=True, repr=False, eq=False)
 class Ref(Generic[_T]):
-    """Immutable dotted ref, or an unbound declaration for RefFactory."""
+    """Immutable dotted ref, or an unbound declaration for Schema."""
 
     path: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
@@ -120,9 +117,7 @@ class Ref(Generic[_T]):
 
     def _require_bound(self) -> str:
         if self.path is None:
-            raise ValueError(
-                "Ref has no path; bind it through RefFactory or Ref.bind()."
-            )
+            raise ValueError("Ref has no path; bind it through Schema or Ref.bind().")
         return self.path
 
     def bind(self, path: str) -> Ref[_T]:
@@ -180,7 +175,7 @@ class Ref(Generic[_T]):
 
 
 _REF_ENTRY_KEY = ""
-_REF_FACTORY_RESERVED_NAMES = frozenset({"merge"})
+_SCHEMA_RESERVED_NAMES = frozenset({"from_refs", "merge"})
 
 
 def _freeze_mapping(data: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -197,21 +192,19 @@ class _RefDeclaration:
 _SchemaEntry = Ref[Any] | Mapping[str, Any]
 
 
-def _validate_schema_name(name: Any, path: str) -> str:
+def _validate_ref_name(name: Any, path: str) -> str:
     if not isinstance(name, str):
         raise TypeError(
-            f"Invalid schema key at {path or '<root>'}: expected str, "
+            f"Invalid Schema key at {path or '<root>'}: expected str, "
             f"got {type(name).__name__}."
         )
     if not name or "." in name or not name.isidentifier() or keyword.iskeyword(name):
         raise ValueError(
-            f"Invalid schema key {name!r} at {path or '<root>'}; "
+            f"Invalid Schema key {name!r} at {path or '<root>'}; "
             "keys must be non-keyword Python identifiers without dots."
         )
-    if name.startswith("_") or name in _REF_FACTORY_RESERVED_NAMES:
-        raise ValueError(
-            f"Schema key {name!r} at {path or '<root>'} is reserved by RefFactory."
-        )
+    if name.startswith("_") or name in _SCHEMA_RESERVED_NAMES:
+        raise ValueError(f"Schema key {name!r} at {path or '<root>'} is reserved.")
     return name
 
 
@@ -228,13 +221,13 @@ def _freeze_entry(
 
     if not isinstance(value, Mapping):
         raise TypeError(
-            f"Invalid schema value at {path!r}: expected a mapping, Ref, or "
+            f"Invalid Schema declaration at {path!r}: expected a mapping, Ref, or "
             "Ellipsis; use ... or Ref() to declare a default reference."
         )
 
     mapping_id = id(value)
     if mapping_id in active_mappings:
-        raise ValueError(f"Cyclic RefFactory schema detected at {path!r}.")
+        raise ValueError(f"Cyclic Schema declarations detected at {path!r}.")
     active_mappings.add(mapping_id)
     try:
         explicit = _REF_ENTRY_KEY in value
@@ -256,7 +249,7 @@ def _freeze_entry(
         for raw_name, child in value.items():
             if raw_name == _REF_ENTRY_KEY:
                 continue
-            name = _validate_schema_name(raw_name, path)
+            name = _validate_ref_name(raw_name, path)
             child_path = f"{path}.{name}"
             frozen[name] = _freeze_entry(child, child_path, active_mappings)
         return _freeze_mapping(frozen)
@@ -264,14 +257,14 @@ def _freeze_entry(
         active_mappings.remove(mapping_id)
 
 
-def _freeze_schema(schema: Mapping[str, Any]) -> Mapping[str, Any]:
-    if _REF_ENTRY_KEY in schema:
-        raise ValueError("The root RefFactory schema cannot define an empty-key Ref.")
+def _freeze_schema(declarations: Mapping[str, Any]) -> Mapping[str, Any]:
+    if _REF_ENTRY_KEY in declarations:
+        raise ValueError("The root Schema declaration cannot define an empty-key Ref.")
 
-    active_mappings = {id(schema)}
+    active_mappings = {id(declarations)}
     frozen: dict[str, Any] = {}
-    for raw_name, value in schema.items():
-        name = _validate_schema_name(raw_name, "")
+    for raw_name, value in declarations.items():
+        name = _validate_ref_name(raw_name, "")
         frozen[name] = _freeze_entry(value, name, active_mappings)
     return _freeze_mapping(frozen)
 
@@ -287,12 +280,12 @@ def _merge_entries(
     if left_is_leaf and right_is_leaf:
         if conflict == "replace":
             return cast(Ref[Any], right)
-        raise ValueError(f"Conflicting Ref leaves at schema path {path!r}.")
+        raise ValueError(f"Conflicting Ref declarations at path {path!r}.")
     if left_is_leaf != right_is_leaf:
         left_kind = "leaf" if left_is_leaf else "container"
         right_kind = "leaf" if right_is_leaf else "container"
         raise ValueError(
-            f"Conflicting schema structure at path {path!r}: "
+            f"Conflicting Schema structure at path {path!r}: "
             f"left is {left_kind}, right is {right_kind}."
         )
 
@@ -305,7 +298,7 @@ def _merge_entries(
             current = right_declaration
         else:
             raise ValueError(
-                f"Conflicting container Ref declarations at schema path {path!r}."
+                f"Conflicting container Ref declarations at path {path!r}."
             )
     elif right_declaration.explicit:
         current = right_declaration
@@ -328,7 +321,7 @@ def _merge_entries(
     return _freeze_mapping(merged)
 
 
-def _merge_schemas(
+def _merge_schema(
     left: Mapping[str, Any],
     right: Mapping[str, Any],
     conflict: Literal["error", "replace"],
@@ -342,36 +335,104 @@ def _merge_schemas(
     return _freeze_mapping(merged)
 
 
-class RefFactory:
-    """Immutable attribute interface for references declared by a frozen schema."""
+class _SchemaState:
+    """Backing state shared by views of one Schema declaration tree."""
 
-    __slots__ = ("__entry", "__path")
-    __entry: _SchemaEntry
-    __path: str
+    __slots__ = ("entry", "fragments", "mutable")
 
     def __init__(
         self,
-        schema: Mapping[str, Any],
+        entry: Mapping[str, Any],
+        *,
+        mutable: bool = False,
+        fragments: Iterable[Schema] = (),
     ) -> None:
-        if not isinstance(schema, Mapping):
+        self.entry = entry
+        self.fragments = list(fragments)
+        self.mutable = mutable
+
+
+class Schema:
+    """Hierarchical attribute interface for Ref declarations."""
+
+    __slots__ = ("__path", "__state")
+    __path: tuple[str, ...]
+    __state: _SchemaState
+
+    def __init__(self, declarations: Mapping[str, Any]) -> None:
+        if not isinstance(declarations, Mapping):
             raise TypeError(
-                f"RefFactory schema must be a mapping, got {type(schema).__name__}."
+                "Schema declarations must be a mapping, "
+                f"got {type(declarations).__name__}."
             )
-        root = _freeze_schema(schema)
-        object.__setattr__(self, "_RefFactory__entry", root)
-        object.__setattr__(self, "_RefFactory__path", "")
+        state = _SchemaState(_freeze_schema(declarations))
+        object.__setattr__(self, "_Schema__state", state)
+        object.__setattr__(self, "_Schema__path", ())
 
     @classmethod
-    def _from_entry(
+    def from_refs(cls, refs: Iterable[RefLike]) -> Schema:
+        """Build a declaration tree from bound references."""
+        tree: dict[str, Any] = {}
+        for ref_like in refs:
+            ref = to_ref(ref_like)
+            current = tree
+            for part in ref.parts:
+                current = current.setdefault(part, {})
+            current.setdefault(_REF_ENTRY_KEY, ref)
+
+        def collapse(branch: dict[str, Any]) -> dict[str, Any] | Ref[Any]:
+            declaration = branch.get(_REF_ENTRY_KEY)
+            children = {
+                name: collapse(child)
+                for name, child in branch.items()
+                if name != _REF_ENTRY_KEY
+            }
+            if declaration is not None and not children:
+                return cast(Ref[Any], declaration)
+            if declaration is not None:
+                children[_REF_ENTRY_KEY] = declaration
+            return children
+
+        return cls(cast(dict[str, Any], collapse(tree)))
+
+    @classmethod
+    def _from_state(
         cls,
-        *,
-        entry: _SchemaEntry,
-        path: str,
-    ) -> RefFactory:
-        factory = object.__new__(cls)
-        object.__setattr__(factory, "_RefFactory__entry", entry)
-        object.__setattr__(factory, "_RefFactory__path", path)
-        return factory
+        state: _SchemaState,
+        path: tuple[str, ...],
+    ) -> Schema:
+        schema = object.__new__(cls)
+        object.__setattr__(schema, "_Schema__state", state)
+        object.__setattr__(schema, "_Schema__path", path)
+        return schema
+
+    @classmethod
+    def _application(cls, initial: Schema | None) -> Schema:
+        if initial is None:
+            entry: Mapping[str, Any] = _freeze_mapping({})
+            fragments: tuple[Schema, ...] = ()
+        else:
+            if not isinstance(initial, Schema):
+                raise TypeError(
+                    f"Context schema must be Schema, got {type(initial).__name__}."
+                )
+            initial._require_root()
+            entry = initial.__state.entry
+            fragments = (initial,)
+        return cls._from_state(
+            _SchemaState(entry, mutable=True, fragments=fragments),
+            (),
+        )
+
+    def _entry(self) -> _SchemaEntry:
+        entry: _SchemaEntry = self.__state.entry
+        for part in self.__path:
+            entry = cast(Mapping[str, _SchemaEntry], entry)[part]
+        return entry
+
+    def _require_root(self) -> None:
+        if self.__path:
+            raise ValueError("Schema declaration operations require the root object.")
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError(f"{type(self).__name__} is immutable")
@@ -379,27 +440,22 @@ class RefFactory:
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"{type(self).__name__} is immutable")
 
-    def __getattr__(self, name: str) -> RefFactory:
+    def __getattr__(self, name: str) -> Schema:
         path = self.__path
-        new_path = f"{path}.{name}" if path else name
-        entry = self.__entry
+        entry = self._entry()
 
         if isinstance(entry, Mapping) and name in entry and name != _REF_ENTRY_KEY:
-            child = cast(_SchemaEntry, entry[name])
-            return type(self)._from_entry(
-                entry=child,
-                path=new_path,
-            )
+            return type(self)._from_state(self.__state, (*path, name))
 
         candidates = [key for key in entry if key] if isinstance(entry, Mapping) else []
         suggestion = difflib.get_close_matches(name, candidates, n=1)
         detail = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
-        location = path or "<root>"
+        location = ".".join(path) or "<root>"
         raise AttributeError(f"Schema path {location!r} has no entry {name!r}.{detail}")
 
     def __call__(self) -> Ref:
         path = self.__path
-        entry = self.__entry
+        entry = self._entry()
         if not path:
             raise ValueError("Empty ref path")
         if isinstance(entry, Ref):
@@ -409,308 +465,309 @@ class RefFactory:
 
     def merge(
         self,
-        other: RefFactory | Mapping[str, Any],
+        other: Schema | Mapping[str, Any],
         *,
         conflict: Literal["error", "replace"] = "error",
-    ) -> RefFactory:
-        """Recursively merge schemas and return a new root RefFactory."""
+    ) -> Schema:
+        """Merge Ref declarations into a new immutable root Schema object."""
         if conflict not in ("error", "replace"):
-            raise ValueError(f"Unknown schema conflict strategy: {conflict!r}.")
-        path = self.__path
-        if path:
-            raise ValueError("RefFactory schema operations require the root factory.")
+            raise ValueError(f"Unknown Schema conflict strategy: {conflict!r}.")
+        self._require_root()
 
-        left_root = cast(Mapping[str, Any], self.__entry)
-        if isinstance(other, RefFactory):
-            if other.__path:
-                raise ValueError("The right operand must be a root RefFactory.")
-            right_root = cast(Mapping[str, Any], other.__entry)
+        left_root = self.__state.entry
+        if isinstance(other, Schema):
+            other._require_root()
+            right_root = other.__state.entry
         elif isinstance(other, Mapping):
             right_root = _freeze_schema(other)
         else:
             raise TypeError(
-                "RefFactory schemas can only be merged with a mapping or RefFactory."
+                "Schema declarations can only be merged with a mapping or Schema."
             )
 
-        merged = _merge_schemas(left_root, right_root, conflict)
-        return type(self)._from_entry(
-            entry=merged,
-            path="",
+        merged = _merge_schema(left_root, right_root, conflict)
+        return type(self)._from_state(
+            _SchemaState(merged),
+            (),
         )
 
-    def __or__(self, other: RefFactory | Mapping[str, Any]) -> RefFactory:
+    def _declare(self, fragment: Schema) -> None:
+        self._require_root()
+        if not self.__state.mutable:
+            raise TypeError("Only Context-owned Schema can receive declarations.")
+        if not isinstance(fragment, Schema):
+            raise TypeError(
+                f"Context declarations must be Schema, got {type(fragment).__name__}."
+            )
+        fragment._require_root()
+        if fragment is self or any(
+            fragment is declared for declared in self.__state.fragments
+        ):
+            return
+        self.__state.entry = _merge_schema(
+            self.__state.entry,
+            fragment.__state.entry,
+            "error",
+        )
+        self.__state.fragments.append(fragment)
+
+    def _contains_ref(self, ref: Ref[Any]) -> bool:
+        self._require_root()
+        entry: _SchemaEntry = self.__state.entry
+        for part in ref.parts:
+            if not isinstance(entry, Mapping) or part not in entry:
+                return False
+            entry = cast(_SchemaEntry, entry[part])
+        return bool(ref.parts)
+
+    def __or__(self, other: Schema | Mapping[str, Any]) -> Schema:
         return self.merge(other)
 
     def __repr__(self) -> str:
-        return f"RefFactory(path={self.__path!r})"
+        return f"Schema(path={'.'.join(self.__path)!r})"
 
 
-RefLike = Ref | RefFactory
+RefLike = Ref | Schema
 
 
 def to_ref(ref_like: RefLike) -> Ref:
-    """Normalize a :class:`Ref` or :class:`RefFactory` into a :class:`Ref` object."""
-    ref = ref_like() if isinstance(ref_like, RefFactory) else ref_like
+    """Normalize a :class:`Ref` or :class:`Schema` into a :class:`Ref` object."""
+    if not isinstance(ref_like, (Ref, Schema)):
+        raise TypeError(f"Expected Ref or Schema, got {type(ref_like).__name__}.")
+    ref = ref_like() if isinstance(ref_like, Schema) else ref_like
     ref._require_bound()
     return ref
 
 
 class ContextPathError(KeyError):
-    """Internal exception raised when a path cannot be resolved in the context."""
+    """Raised when a Context path cannot be resolved or changed as requested."""
 
     pass
 
 
-@dataclass
-class _ContextOperations:
-    updates: dict[tuple[str, ...], Any] = field(default_factory=dict)
-    drops: set[tuple[str, ...]] = field(default_factory=set)
+@dataclass(frozen=True, eq=False)
+class _Value:
+    """Private wrapper for every user-provided Context leaf."""
+
+    payload: Any
+    replaceable: bool = True
 
 
-class ContextData(dict[str, Any]):
-    """
-    Internal dictionary implementation used to distinguish structural elements
-    from user-provided dictionary values.
+_Tree = dict[str, Any]
 
-    Acts as the mutable data node for Context while preserving the distinction
-    between context structure and user-provided dictionary values.
-    """
 
-    __slots__ = ()
+def _mutate_tree(
+    tree: _Tree,
+    updates: dict[tuple[str, ...], _Value],
+    drops: set[tuple[str, ...]],
+) -> None:
+    """Validate and apply one structural transaction, pruning empty containers."""
+    if () in updates or () in drops:
+        raise ValueError("Context root mutation is not supported.")
 
-    def mutate(
-        self,
-        updates: dict[tuple[str, ...], Any],
-        drops: set[tuple[str, ...]],
+    def group(
+        current_updates: dict[tuple[str, ...], _Value],
+        current_drops: set[tuple[str, ...]],
+    ) -> dict[
+        str,
+        tuple[dict[tuple[str, ...], _Value], set[tuple[str, ...]]],
+    ]:
+        grouped: dict[
+            str,
+            tuple[dict[tuple[str, ...], _Value], set[tuple[str, ...]]],
+        ] = {}
+        for path, value in current_updates.items():
+            head, *tail = path
+            sub_updates, _ = grouped.setdefault(head, ({}, set()))
+            sub_updates[tuple(tail)] = value
+        for path in current_drops:
+            head, *tail = path
+            _, sub_drops = grouped.setdefault(head, ({}, set()))
+            sub_drops.add(tuple(tail))
+        return grouped
+
+    def process(
+        data: _Tree | None,
+        current_updates: dict[tuple[str, ...], _Value],
+        current_drops: set[tuple[str, ...]],
+        *,
+        apply_changes: bool,
     ) -> None:
-        """Validate a structural transaction, then apply it in place."""
-        if () in updates or () in drops:
-            raise ValueError("ContextData root mutation is not supported.")
-
-        def group(
-            current_updates: dict[tuple[str, ...], Any],
-            current_drops: set[tuple[str, ...]],
-        ) -> dict[str, _ContextOperations]:
-            grouped: dict[str, _ContextOperations] = defaultdict(_ContextOperations)
-            for path, value in current_updates.items():
-                head, *tail = path
-                grouped[head].updates[tuple(tail)] = value
-            for path in current_drops:
-                head, *tail = path
-                grouped[head].drops.add(tuple(tail))
-            return grouped
-
-        def process(
-            data: ContextData | None,
-            current_updates: dict[tuple[str, ...], Any],
-            current_drops: set[tuple[str, ...]],
-            *,
-            apply_changes: bool,
-        ) -> None:
-            for head, operations in group(current_updates, current_drops).items():
-                sub_updates = operations.updates
-                sub_drops = operations.drops
-                if () in sub_updates:
-                    if not apply_changes and len(sub_updates) > 1:
-                        raise ValueError(
-                            f"Update conflict at '{head}': Cannot update both parent and child simultaneously."
-                        )
-                    replacement = sub_updates[()]
-                    if apply_changes:
-                        cast(ContextData, data)[head] = replacement
-                    else:
-                        current = _MISSING if data is None else data.get(head, _MISSING)
-                        if (
-                            current is not _MISSING
-                            and () not in sub_drops
-                            and isinstance(current, ContextData)
-                            != isinstance(replacement, ContextData)
-                        ):
-                            current_kind = (
-                                "container"
-                                if isinstance(current, ContextData)
-                                else "leaf"
-                            )
-                            replacement_kind = (
-                                "container"
-                                if isinstance(replacement, ContextData)
-                                else "leaf"
-                            )
-                            raise ContextPathError(
-                                f"Cannot replace {current_kind} path '{head}' with "
-                                f"a {replacement_kind} without dropping the path first."
-                            )
-                    continue
-
-                child = _MISSING if data is None else data.get(head, _MISSING)
-                descendant_drops = sub_drops - {()}
-                if () in sub_drops:
-                    if not sub_updates:
-                        if apply_changes:
-                            cast(ContextData, data).pop(head, None)
-                        continue
-                    if apply_changes:
-                        child = ContextData()
-                        cast(ContextData, data)[head] = child
-                    else:
-                        child = None
-
-                elif child is _MISSING:
-                    if not sub_updates:
-                        continue
-                    if apply_changes:
-                        child = ContextData()
-                        cast(ContextData, data)[head] = child
-                    else:
-                        child = None
-
-                elif not isinstance(child, ContextData):
-                    raise ContextPathError(
-                        f"Path '{head}' blocked by leaf value during mutation."
+        for head, (sub_updates, sub_drops) in group(
+            current_updates, current_drops
+        ).items():
+            if () in sub_updates:
+                if not apply_changes and len(sub_updates) > 1:
+                    raise ValueError(
+                        f"Update conflict at '{head}': Cannot update both parent and child simultaneously."
                     )
-
+                replacement = sub_updates[()]
                 if apply_changes:
+                    cast(_Tree, data)[head] = replacement
+                else:
+                    current = _MISSING if data is None else data.get(head, _MISSING)
+                    if isinstance(current, dict) and () not in sub_drops:
+                        raise ContextPathError(
+                            f"Cannot replace container path '{head}' with a leaf "
+                            "without dropping the path first."
+                        )
+                    if (
+                        isinstance(current, _Value)
+                        and not current.replaceable
+                        and () not in sub_drops
+                    ):
+                        raise ContextPathError(
+                            f"Cannot replace added path '{head}'; delete it or "
+                            "write through a forked Context."
+                        )
+                continue
+
+            child = _MISSING if data is None else data.get(head, _MISSING)
+            descendant_drops = sub_drops - {()}
+            if () in sub_drops:
+                if not sub_updates:
+                    if apply_changes:
+                        cast(_Tree, data).pop(head, None)
+                    continue
+                if apply_changes:
+                    child = {}
+                    cast(_Tree, data)[head] = child
+                else:
+                    child = None
+            elif child is _MISSING:
+                if not sub_updates:
+                    continue
+                if apply_changes:
+                    child = {}
+                    cast(_Tree, data)[head] = child
+                else:
+                    child = None
+            elif not isinstance(child, dict):
+                raise ContextPathError(
+                    f"Path '{head}' blocked by leaf value during mutation."
+                )
+
+            if apply_changes:
+                child_tree = cast(_Tree, child)
+                process(
+                    child_tree,
+                    sub_updates,
+                    descendant_drops,
+                    apply_changes=True,
+                )
+                if not child_tree:
+                    cast(_Tree, data).pop(head, None)
+            else:
+                with enrich_exception(
+                    head,
+                    exc_types=(ContextPathError, ValueError),
+                ):
                     process(
-                        cast(ContextData, child),
+                        child,
                         sub_updates,
                         descendant_drops,
-                        apply_changes=True,
+                        apply_changes=False,
                     )
-                else:
-                    with enrich_exception(
-                        head,
-                        exc_types=(ContextPathError, ValueError),
-                    ):
-                        process(
-                            child,
-                            sub_updates,
-                            descendant_drops,
-                            apply_changes=False,
-                        )
 
-        process(self, updates, drops, apply_changes=False)
-        process(self, updates, drops, apply_changes=True)
+    process(tree, updates, drops, apply_changes=False)
+    process(tree, updates, drops, apply_changes=True)
 
 
-@dataclass(frozen=True)
-class ContextDiff:
-    """
-    Recursive diff structure representing changes between two ContextElements.
-    Supports nested diffs for containers and direct value changes for leaves.
-    """
-
-    added: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
-    removed: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
-    modified: Mapping[str, tuple[Any, Any]] = field(
-        default_factory=lambda: _EMPTY_MAPPING
-    )
-    nested: Mapping[str, ContextDiff] = field(default_factory=lambda: _EMPTY_MAPPING)
-
-    def __post_init__(self):
-        for name in ("added", "removed", "modified", "nested"):
-            val = getattr(self, name)
-            if not isinstance(val, types.MappingProxyType):
-                object.__setattr__(self, name, types.MappingProxyType(val))
-
-    def __bool__(self) -> bool:
-        return bool(self.added or self.removed or self.modified or self.nested)
-
-    def __repr__(self) -> str:
-        parts = []
-        if self.added:
-            parts.append(f"added={list(self.added.keys())}")
-        if self.removed:
-            parts.append(f"removed={list(self.removed.keys())}")
-        if self.modified:
-            parts.append(f"modified={list(self.modified.keys())}")
-        if self.nested:
-            parts.append(f"nested={list(self.nested.keys())}")
-        if not parts:
-            return "ContextDiff(no changes)"
-        return f"ContextDiff({', '.join(parts)})"
-
-    def flatten(self) -> dict[str, tuple[Any, Any]]:
-        """
-        Flatten the recursive diff into a single dictionary of changes.
-        Returns a dict of {path: (old_value, new_value)}.
-        Added values have old_value as DIFF_MISSING.
-        Removed values have new_value as DIFF_MISSING.
-        """
-        changes: dict[str, tuple[Any, Any]] = {}
-
-        for k, v in self.added.items():
-            changes[k] = (DIFF_MISSING, v)
-        for k, v in self.removed.items():
-            changes[k] = (v, DIFF_MISSING)
-        for k, v in self.modified.items():
-            changes[k] = v
-
-        for key, child_diff in self.nested.items():
-            for child_path, (old, new) in child_diff.flatten().items():
-                changes[f"{key}.{child_path}"] = (old, new)
-
-        return changes
+def _contains_context_identity(
+    values: Iterable[Context],
+    target: Context,
+) -> bool:
+    return any(value is target for value in values)
 
 
-def diff_context_data(
-    left: Mapping[str, Any],
-    right: Mapping[str, Any],
-    strategy: Literal["is", "eq"] = "is",
-) -> ContextDiff:
-    """
-    Compute the recursive difference between two ContextData objects.
+def _merge_context_mro(parents: tuple[Context, ...]) -> tuple[Context, ...]:
+    """Merge immutable Context parent chains using C3."""
+    pending = [list(parent.mro) for parent in parents]
+    pending.append(list(parents))
+    result: list[Context] = []
 
-    Both inputs are live mutable mappings. Callers that need a before/after diff
-    must retain an independent copy of the earlier state.
-    """
-    if left is right:
-        return ContextDiff()
+    while True:
+        pending = [sequence for sequence in pending if sequence]
+        if not pending:
+            return tuple(result)
 
-    added = {}
-    removed = {}
-    modified = {}
-    nested = {}
+        candidate = next(
+            (
+                sequence[0]
+                for sequence in pending
+                if not any(
+                    _contains_context_identity(other[1:], sequence[0])
+                    for other in pending
+                )
+            ),
+            None,
+        )
+        if candidate is None:
+            raise TypeError("Cannot create a consistent Context C3 linearization.")
 
-    keys_left = set(left.keys())
-    keys_right = set(right.keys())
+        result.append(candidate)
+        for sequence in pending:
+            if sequence and sequence[0] is candidate:
+                sequence.pop(0)
 
-    # Removed keys
-    for k in keys_left - keys_right:
-        removed[k] = left[k]
 
-    # Added keys
-    for k in keys_right - keys_left:
-        added[k] = right[k]
+_ContextResolved = _Value | tuple[_Tree, ...]
 
-    # Shared keys
-    for k in keys_left & keys_right:
-        val_left = left[k]
-        val_right = right[k]
 
-        # Shared objects necessarily expose the same current mutable state.
-        if val_left is val_right:
+def _context_keys(trees: tuple[_Tree, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for tree in trees:
+        for key in tree:
+            if key not in seen:
+                seen.add(key)
+                result.append(key)
+    return tuple(result)
+
+
+def _select_context_child(
+    trees: tuple[_Tree, ...],
+    key: str,
+    path: tuple[str, ...],
+) -> _ContextResolved:
+    selected: list[_Tree] = []
+    for tree in trees:
+        child = tree.get(key, _MISSING)
+        if child is _MISSING:
             continue
+        if isinstance(child, _Value):
+            if not selected:
+                return child
+            break
+        if not isinstance(child, dict):
+            raise TypeError("Context contains an unwrapped leaf value.")
+        selected.append(child)
 
-        # Check for nested containers (ContextData)
-        is_container_left = isinstance(val_left, ContextData)
-        is_container_right = isinstance(val_right, ContextData)
+    if selected:
+        return tuple(selected)
+    raise ContextPathError(".".join(path))
 
-        if is_container_left and is_container_right:
-            child_diff = diff_context_data(val_left, val_right, strategy)
-            if child_diff:
-                nested[k] = child_diff
+
+def _snapshot_trees(trees: tuple[_Tree, ...]) -> _Tree:
+    snapshot: _Tree = {}
+    for key in _context_keys(trees):
+        child = _select_context_child(trees, key, (key,))
+        if isinstance(child, _Value):
+            snapshot[key] = _Value(child.payload)
         else:
-            # Leaf comparison
-            is_different = False
-            if strategy == "is":
-                is_different = val_left is not val_right
-            elif strategy == "eq":
-                is_different = val_left != val_right
+            snapshot[key] = _snapshot_trees(child)
+    return snapshot
 
-            if is_different:
-                modified[k] = (val_left, val_right)
 
-    return ContextDiff(added, removed, modified, nested)
+def _tree_to_dict(data: _Tree) -> dict[str, Any]:
+    return {
+        key: (
+            value.payload
+            if isinstance(value, _Value)
+            else _tree_to_dict(cast(_Tree, value))
+        )
+        for key, value in data.items()
+    }
 
 
 class ContextElement(ABC):
@@ -721,7 +778,7 @@ class ContextElement(ABC):
     __slots__ = ()
 
     @abstractmethod
-    def extract(self, ref_tree: Any) -> Any:
+    def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
         pass
 
     @abstractmethod
@@ -729,36 +786,45 @@ class ContextElement(ABC):
         self,
         ref: RefLike,
         default: _T2 | _Missing = _MISSING,
+        *,
+        local: bool = False,
     ) -> Any:
         pass
 
     @abstractmethod
-    def exists(self, ref: RefLike) -> bool:
+    def exists(self, ref: RefLike, *, local: bool = False) -> bool:
         pass
 
     @abstractmethod
-    def keys(self, ref: RefLike | None = None) -> Iterable[str]:
+    def keys(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> Iterable[str]:
         pass
 
     @abstractmethod
-    def to_context_data(self, ref: RefLike | None = None) -> ContextData:
+    def _snapshot_tree(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> _Tree:
         pass
 
     @abstractmethod
-    def to_dict(self, ref: RefLike | None = None) -> dict[str, Any]:
+    def to_dict(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> dict[str, Any]:
         """Convert to standard python dictionary recursively."""
         pass
 
     def type_repr(self) -> str:
         return type(self).__name__
-
-    def clone(self) -> Context:
-        """Clone ContextData containers while preserving leaf identities."""
-        root = cast(
-            ContextData,
-            CONTEXT_ENGINE.map(lambda leaf: leaf, self.to_context_data()),
-        )
-        return Context._from_context_data(root)
 
     def __repr__(self) -> str:
         name = self.type_repr()
@@ -799,149 +865,211 @@ class ContextElement(ABC):
 
         return f"{name}({{{newline}{newline.join(body_lines)}{newline}}})"
 
-    def diff(
-        self, other: ContextElement, strategy: Literal["is", "eq"] = "is"
-    ) -> ContextDiff:
-        """
-        Compute the difference between this element and another.
-        Returns a recursive ContextDiff structure.
-        """
-        if strategy not in ("is", "eq"):
-            raise ValueError(f"Unknown diff strategy: {strategy!r}")
+    def flatten(self, *, local: bool = False) -> dict[Ref[Any], Any]:
+        """Return the visible Context leaves as a flat Ref-to-value mapping."""
+        leaves: dict[Ref[Any], Any] = {}
 
-        # Convert both to ContextData for recursive comparison
-        # This handles Context, ContextView, and any other ContextElement
-        data_self = self.to_context_data()
-        data_other = other.to_context_data()
+        def collect(tree: _Tree, prefix: tuple[str, ...]) -> None:
+            for key, value in tree.items():
+                path = (*prefix, key)
+                if isinstance(value, _Value):
+                    leaves[Ref(".".join(path))] = value.payload
+                else:
+                    collect(cast(_Tree, value), path)
 
-        return diff_context_data(data_self, data_other, strategy)
-
-    def collect_leaves(self) -> dict[str, Any]:
-        # CONTEXT_PYTREE_ENGINE is configured to only traverse Context/ContextData structure.
-        # So it treats user dicts as leaves automatically.
-        # Use iter_with_key_path for memory efficiency (generator based)
-        iterator = CONTEXT_ENGINE.iter_with_key_path(self.to_context_data())
-
-        leaves = {}
-        for key_path, leaf in iterator:
-            # We know ContextData keys are MappingKeys wrapping strings
-            parts = [str(cast(MappingKey, k).key) for k in key_path]
-            leaves[".".join(parts)] = leaf
+        collect(self._snapshot_tree(local=local), ())
         return leaves
 
 
-@dataclass(frozen=True, repr=False)
+@dataclass(frozen=True, repr=False, eq=False, init=False)
 class Context(ContextElement):
-    """
-    Context with a frozen outer identity and mutable `ContextData` contents.
+    """Declared runtime data with local writes and live C3 parent lookup."""
 
-    The main **runtime** context container for the node execution.
-    """
+    parents: tuple[Context, ...] = field(init=False)
+    _data: _Tree = field(init=False)
+    _mro: tuple[Context, ...] = field(init=False)
+    _schema: Schema | None = field(init=False)
 
-    _root: ContextData = field(init=False)
-    data: InitVar[Mapping[str, Any] | None] = None
+    def __init__(
+        self,
+        data: Mapping[RefLike, Any] | None = None,
+        *,
+        schema: Schema | None = None,
+        parents: tuple[Context, ...] = (),
+    ) -> None:
+        direct_parents = tuple(parents)
+        if any(not isinstance(parent, Context) for parent in direct_parents):
+            raise TypeError("Context parents must be Context objects.")
+        if any(
+            left is right
+            for index, left in enumerate(direct_parents)
+            for right in direct_parents[index + 1 :]
+        ):
+            raise TypeError("A Context cannot contain duplicate direct parents.")
 
-    def __post_init__(self, data: Mapping[str, Any] | None = None) -> None:
-        if data is None:
-            root = ContextData()
-        elif isinstance(data, ContextData):
-            root = data
+        if direct_parents:
+            if schema is not None:
+                raise TypeError(
+                    "A child Context inherits its schema and cannot provide one "
+                    "during construction."
+                )
+            application_root = direct_parents[0].root
+            if any(
+                parent.root is not application_root for parent in direct_parents[1:]
+            ):
+                raise TypeError(
+                    "Context parents must belong to the same application root."
+                )
+            owned_schema = None
         else:
-            # Shallow conversion strictly for the top level.
-            # Trusts user input for deep structure.
-            root = ContextData(data)
-        object.__setattr__(self, "_root", root)
+            owned_schema = Schema._application(schema)
 
-    @classmethod
-    def _from_context_data(cls, root: ContextData) -> Context:
-        obj = object.__new__(cls)
-        object.__setattr__(obj, "_root", root)
-        return obj
+        object.__setattr__(self, "parents", direct_parents)
+        object.__setattr__(self, "_data", {})
+        object.__setattr__(self, "_schema", owned_schema)
+        object.__setattr__(self, "_mro", (self, *_merge_context_mro(direct_parents)))
+        if data is not None:
+            if not isinstance(data, Mapping):
+                raise TypeError(
+                    f"Context data must be a mapping, got {type(data).__name__}."
+                )
+            self.update(data)
 
-    def extract(self, ref_tree: Any) -> Any:
-        ref_tree = CTX_EVAL_ENGINE.map(to_ref, ref_tree)
+    @property
+    def root(self) -> Context:
+        """Return the application root shared by this Context hierarchy."""
+        return self._mro[-1]
+
+    @property
+    def mro(self) -> tuple[Context, ...]:
+        """Return this Context followed by its C3-linearized ancestors."""
+        return self._mro
+
+    @property
+    def schema(self) -> Schema:
+        """Return the live Schema owned by this Context hierarchy's root."""
+        return cast(Schema, self.root._schema)
+
+    def declare(self, fragment: Schema) -> None:
+        """Add one immutable declaration fragment to this application's schema."""
+        self.schema._declare(fragment)
+
+    def _validate_ref(self, ref_like: RefLike) -> Ref[Any]:
+        ref = to_ref(ref_like)
+        if not self.schema._contains_ref(ref):
+            raise ContextPathError(
+                f"Ref path '{ref.bound_path}' is not declared by this Context."
+            )
+        return ref
+
+    def fork(self, *mixins: Context) -> Context:
+        """Create an empty child inheriting this Context and optional mixins."""
+        return type(self)(parents=(self, *mixins))
+
+    def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
+        ref_tree = CTX_EVAL_ENGINE.map(self._validate_ref, ref_tree)
         refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
-        values = tuple(self._resolve(ref.parts) for ref in refs)
-
         values = tuple(
-            ContextView(self, ref.parts) if isinstance(val, ContextData) else val
-            for ref, val in zip(refs, values, strict=True)
+            (
+                resolved.payload
+                if isinstance(resolved, _Value)
+                else ContextView(self, ref.parts)
+            )
+            for ref in refs
+            for resolved in (self._resolve(ref.parts, local=local),)
         )
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
-
-    def _build_dict_ref_tree(self, ref: RefLike | None = None) -> Any:
-        ref = to_ref(ref) if ref is not None else None
-        data = self.to_context_data(ref)
-        base_path = ref.bound_path if ref else ""
-
-        def build_tree(current_data: ContextData, current_path: str) -> dict[str, Any]:
-            tree: dict[str, Any] = {}
-            for k, v in current_data.items():
-                path = f"{current_path}.{k}" if current_path else k
-                if isinstance(v, ContextData):
-                    tree[k] = build_tree(v, path)
-                else:
-                    tree[k] = Ref(path)
-            return tree
-
-        return build_tree(data, base_path)
 
     # --- Read Operations ---
     def get(
         self,
         ref: RefLike,
         default: _T2 | _Missing = _MISSING,
+        *,
+        local: bool = False,
     ) -> Any:
-        ref = to_ref(ref)
+        ref = self._validate_ref(ref)
         try:
-            return self.extract(ref)
+            return self.extract(ref, local=local)
         except ContextPathError:
             if default is _MISSING:
                 raise
             return default
 
-    def exists(self, ref: RefLike) -> bool:
-        ref = to_ref(ref)
+    def exists(self, ref: RefLike, *, local: bool = False) -> bool:
+        ref = self._validate_ref(ref)
         try:
-            self._resolve(ref.parts)
+            self._resolve(ref.parts, local=local)
             return True
         except ContextPathError:
             return False
 
-    def keys(self, ref: RefLike | None = None) -> Iterable[str]:
-        if ref is None:
-            return self._root.keys()
-        ref = to_ref(ref)
-        element = self._resolve(ref.parts)
-        if isinstance(element, ContextData):
-            return element.keys()
+    def keys(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> Iterable[str]:
+        parts = () if ref is None else self._validate_ref(ref).parts
+        element = self._resolve(parts, local=local)
+        if isinstance(element, tuple):
+            return _context_keys(element)
         raise ContextPathError("Cannot list keys of a leaf value.")
 
-    def to_context_data(self, ref: RefLike | None = None) -> ContextData:
-        if ref is None:
-            return self._root
-        ref = to_ref(ref)
-        val = self._resolve(ref.parts)
-        if isinstance(val, ContextData):
-            return val
-        raise ContextPathError("Target is not a ContextData (container).")
+    def _snapshot_tree(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> _Tree:
+        parts = () if ref is None else self._validate_ref(ref).parts
+        val = self._resolve(parts, local=local)
+        if isinstance(val, tuple):
+            return _snapshot_trees(val)
+        raise ContextPathError("Target is not a Context container.")
 
-    def to_dict(self, ref: RefLike | None = None) -> dict[str, Any]:
-        ref_tree = self._build_dict_ref_tree(ref)
-        return self.extract(ref_tree)
+    def to_dict(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> dict[str, Any]:
+        return _tree_to_dict(self._snapshot_tree(ref, local=local))
 
-    def _resolve(self, parts: Iterable[str]) -> Any:
-        current: Any = self._root
-        for p in parts:
-            if not isinstance(current, ContextData):
-                raise ContextPathError("Path blocked by leaf value.")
-            try:
-                current = current[p]
-            except KeyError:
-                raise ContextPathError(p) from None
-        return current
+    def _resolve(
+        self,
+        parts: Iterable[str],
+        *,
+        local: bool = False,
+    ) -> _ContextResolved:
+        path = tuple(parts)
+        lineage = (self,) if local else self._mro
+        trees = tuple(context._data for context in lineage)
+        if not path:
+            return trees
+
+        for index, part in enumerate(path):
+            resolved = _select_context_child(
+                trees,
+                part,
+                path[: index + 1],
+            )
+            if isinstance(resolved, _Value):
+                if index != len(path) - 1:
+                    prefix = ".".join(path[: index + 1])
+                    raise ContextPathError(f"Path '{prefix}' blocked by leaf value.")
+                return resolved
+            trees = resolved
+        return trees
 
     # --- Unified Modification Interface ---
+    def _mutate_raw(
+        self,
+        updates: Mapping[tuple[str, ...], _Value],
+        drops: Iterable[tuple[str, ...]],
+    ) -> None:
+        _mutate_tree(self._data, dict(updates), set(drops))
+
     def mutate(
         self,
         *,
@@ -949,7 +1077,7 @@ class Context(ContextElement):
         drops: Iterable[RefLike] | None = None,
     ) -> None:
         """
-        Apply a transaction-like set of modifications (updates and drops) atomically.
+        Apply local updates and drops atomically.
 
         Args:
             updates: A mapping of References to new values.
@@ -961,29 +1089,66 @@ class Context(ContextElement):
             return None
 
         normalized_updates: dict[Ref[Any], Any] = (
-            {to_ref(k): v for k, v in updates.items()} if updates else {}
+            {self._validate_ref(k): v for k, v in updates.items()} if updates else {}
         )
-        normalized_drops: set[Ref[Any]] = {to_ref(r) for r in drops} if drops else set()
-        raw_updates: dict[tuple[str, ...], Any] = {
-            r.parts: v for r, v in normalized_updates.items()
+        normalized_drops: set[Ref[Any]] = (
+            {self._validate_ref(r) for r in drops} if drops else set()
+        )
+        raw_updates: dict[tuple[str, ...], _Value] = {
+            r.parts: _Value(v) for r, v in normalized_updates.items()
         }
         raw_drops: set[tuple[str, ...]] = {r.parts for r in normalized_drops}
 
-        self._root.mutate(raw_updates, raw_drops)
+        self._mutate_raw(raw_updates, raw_drops)
 
     # --- Convenience Interfaces ---
     def update(self, updates: Mapping[RefLike, Any]) -> None:
-        """Batch update convenience interface."""
+        """Set several local bindings atomically."""
         self.mutate(updates=updates)
 
     def drop(self, refs: Iterable[RefLike]) -> None:
-        """Batch delete convenience interface."""
+        """Delete several local paths atomically."""
         self.mutate(drops=refs)
 
     def set(self, ref: RefLike, value: _T) -> None:
-        """Single set convenience interface."""
-        ref = to_ref(ref)
+        """Set one local binding."""
+        ref = self._validate_ref(ref)
         self.mutate(updates={ref: value})
+
+    def add(self, ref: RefLike, value: _T) -> Callable[[], None]:
+        """Add an immutable local binding and return its exact disposer."""
+        ref = self._validate_ref(ref)
+        try:
+            self._resolve(ref.parts, local=True)
+        except ContextPathError:
+            pass
+        else:
+            raise ContextPathError(
+                f"Cannot add existing local path '{ref.bound_path}'."
+            )
+
+        entry = _Value(value, replaceable=False)
+        self._mutate_raw({ref.parts: entry}, ())
+
+        context_ref = weakref.ref(self)
+        entry_ref = weakref.ref(entry)
+        dispose_ref: Ref[Any] = Ref(ref.bound_path)
+
+        def dispose() -> None:
+            context = context_ref()
+            expected = entry_ref()
+            if context is None or expected is None:
+                return
+            try:
+                current_entry = context._resolve(dispose_ref.parts, local=True)
+            except ContextPathError:
+                return
+            if current_entry is not expected:
+                return
+
+            context.delete(dispose_ref)
+
+        return dispose
 
     def update_tree(self, ref_tree: Any, value_tree: Any) -> None:
         """
@@ -1005,25 +1170,9 @@ class Context(ContextElement):
         self.mutate(updates=updates)
 
     def delete(self, ref: RefLike) -> None:
-        """Single delete convenience interface."""
-        ref = to_ref(ref)
+        """Delete one local path."""
+        ref = self._validate_ref(ref)
         self.mutate(drops=[ref])
-
-    def clear(self, ref: RefLike) -> None:
-        """
-        Clear all contents under a reference but keep the path.
-        Raises ContextPathError if the target is not a container (ContextData).
-        """
-        ref = to_ref(ref)
-        # 1. Validate target is a container
-        val = self._resolve(ref.parts)
-        if not isinstance(val, ContextData):
-            raise ContextPathError(
-                f"Cannot clear '{ref.path}': not a container (ContextData)."
-            )
-
-        # 2. Update with empty ContextData
-        self.mutate(updates={ref: ContextData()})
 
 
 @dataclass(frozen=True, repr=False)
@@ -1045,33 +1194,53 @@ class ContextView(ContextElement):
 
     def _adjust_ref_tree(self, ref_tree: Any) -> Any:
         def adjust(obj):
-            if isinstance(obj, (Ref, RefFactory)):
+            if isinstance(obj, (Ref, Schema)):
                 return self._adjust_ref(obj)
             return obj
 
         return CTX_EVAL_ENGINE.map(adjust, ref_tree)
 
-    def extract(self, ref_tree: Any) -> Any:
-        return self._context.extract(self._adjust_ref_tree(ref_tree))
+    def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
+        return self._context.extract(
+            self._adjust_ref_tree(ref_tree),
+            local=local,
+        )
 
     def get(
         self,
         ref: RefLike,
         default: _T2 | _Missing = _MISSING,
+        *,
+        local: bool = False,
     ) -> Any:
-        return self._context.get(self._adjust_ref(ref), default)
+        return self._context.get(self._adjust_ref(ref), default, local=local)
 
-    def exists(self, ref: RefLike) -> bool:
-        return self._context.exists(self._adjust_ref(ref))
+    def exists(self, ref: RefLike, *, local: bool = False) -> bool:
+        return self._context.exists(self._adjust_ref(ref), local=local)
 
-    def keys(self, ref: RefLike | None = None) -> Iterable[str]:
-        return self._context.keys(self._adjust_ref(ref))
+    def keys(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> Iterable[str]:
+        return self._context.keys(self._adjust_ref(ref), local=local)
 
-    def to_context_data(self, ref: RefLike | None = None) -> ContextData:
-        return self._context.to_context_data(self._adjust_ref(ref))
+    def _snapshot_tree(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> _Tree:
+        return self._context._snapshot_tree(self._adjust_ref(ref), local=local)
 
-    def to_dict(self, ref: RefLike | None = None) -> dict[str, Any]:
-        return self._context.to_dict(self._adjust_ref(ref))
+    def to_dict(
+        self,
+        ref: RefLike | None = None,
+        *,
+        local: bool = False,
+    ) -> dict[str, Any]:
+        return self._context.to_dict(self._adjust_ref(ref), local=local)
 
 
-from .tree import CONTEXT_ENGINE, CTX_EVAL_ENGINE
+from .tree import CTX_EVAL_ENGINE

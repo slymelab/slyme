@@ -7,7 +7,7 @@ description: API guidance, architectural best practices, and code-style conventi
 
 ## Mental model
 
-Slyme uses one mutable `Node` graph throughout assembly and execution. Node and Wrapper calls pass their current static parameter containers directly to user functions; mutations to those containers remain on the live element and are visible to later calls. Use `.clone()` when an independent structure is required. A Node clone rebuilds the Node/Wrapper graph and registered parameter PyTrees while sharing unregistered leaves. A Context clone rebuilds only its `ContextData` containers while sharing stored leaf values.
+Slyme uses one mutable `Node` graph throughout assembly and execution. Node and Wrapper calls pass their current static parameter containers directly to user functions; mutations to those containers remain on the live element and are visible to later calls. Call the corresponding factory or Builder again when another independently configurable graph is needed. An application Context owns an explicit `Schema`; `Context.fork()` shares those declarations while creating a live local layer with C3 parent lookup. `Context.flatten()` exposes the visible Ref-to-value mapping without copying stored values.
 
 Build parameters are real Node and Wrapper attributes. Read and modify them with normal attribute syntax such as `node.child` and `node.timeout = 30`; mapping-style access is not supported. Parameter names that collide with framework attributes are rejected when the decorated function is defined.
 
@@ -17,16 +17,21 @@ Expose this application-boundary contract only on synchronous and asynchronous `
 
 - `@node` defines an execution unit and may return either a derived value or control information.
 - `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.
-- `@builder` is a build-time factory that assembles and validates reusable Node trees; it does not perform runtime work.
-- `Context` has a stable outer shell and mutable data. Mutation methods update it in place and return `None`.
+- `@builder` is a build-time factory that assembles reusable Node trees. It requires the outer result to be a `Node` or `AsyncNode` (`None` is reported as a missing return), but does not validate the nested object graph or perform runtime work.
+- `Context` has local mutable data and immutable ordered parents. Reads are effective by default, writes are local, and `local=True` restricts read operations to one Context.
+- Context construction accepts a Ref-to-value mapping. Structural containers are derived from leaf paths and disappear when their last leaf is deleted.
+- `Context.add()` installs one non-replaceable local binding and returns its exact idempotent disposer.
+- `Compose` stores ordered values by Context identity and resolves those visible through C3 lookup. Use `one()`, `collect()`, `merge()`, or a synchronous custom resolver.
 
 ## Architecture
 
 Decompose the execution flow from top to bottom into atomic operations and steps, then represent each with Slyme `@node` or `@wrapper`. Model execution patterns that coordinate child Nodes with higher-order `@node`s.
 
-A higher-order Node accepts child Nodes through composition slots: named parameters that receive either an individual child Node or a structured collection of child Nodes. Each slot represents a distinct role or extensible region in the execution topology, while the higher-order Node defines how its children participate in execution. Use a custom higher-order Node when it should provide execution semantics beyond simple linear chaining; use `sequential(...)` for a plain linear pipeline.
+A higher-order Node accepts child Nodes through named parameters containing either one child or a structured collection. Each parameter represents a distinct role or extensible region in the execution topology, while the higher-order Node defines how its children participate in execution. Use a custom higher-order Node when it should provide execution semantics beyond simple linear chaining; use `sequential(...)` for a plain linear pipeline.
 
-Represent a single, stable child role with an individual named `Node` parameter. When a composition slot represents a variable or extensible group of children, use a container that expresses the group's composition semantics, such as `Sequence[Node]` for ordered execution or `Mapping[K, Node]` for keyed dispatch. Adding or removing children within an extensible slot should change assembly code, not the higher-order Node's signature. Keep independently meaningful roles or phases in separate named slots. See [references/core-api.md](references/core-api.md) for examples.
+Represent a single, stable child role with an individual named `Node` parameter. For a statically assembled extensible group, use a container such as `Sequence[Node]` for ordered execution or `Mapping[K, Node]` for keyed dispatch. Use `Compose` when independent owners must add and remove values by Context at runtime. Keep independently meaningful roles or phases in separate named parameters. See [references/core-api.md](references/core-api.md) for examples.
+
+`Auto` Ref parameters read the supplied Context. Every Auto child Node receives its own Context fork, so use a returned value for dataflow. Call children explicitly with a selected Context when their local writes must be shared.
 
 Reuse existing Nodes whenever possible. Extend behavior through composition before introducing new Nodes.
 

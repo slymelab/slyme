@@ -29,7 +29,7 @@ Slyme requires **Python 3.10+**. You can install it directly via pip:
 
 ```bash
 pip install slyme
-````
+```
 
 *(Note: Slyme is extremely lightweight and its only main dependency is `typing_extensions`.)*
 
@@ -41,11 +41,11 @@ Here is a quick example using Slyme's core primitives (`@node`, `@wrapper`, and 
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, Arg, Context, Ref, Schema
 from slyme.node import node, wrapper, Auto, Node
 
 
-refs = RefFactory(
+R = Schema(
     {
         "input": {
             "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
@@ -92,9 +92,9 @@ def timing(
 @builder
 def build_pipeline():
     return llm_api(
-        responses=refs.output.responses,
+        responses=R.output.responses,
         prompts=format_prompts(
-            articles=refs.input.articles,
+            articles=R.input.articles,
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
@@ -103,14 +103,33 @@ def build_pipeline():
 if __name__ == "__main__":
     responses = build_pipeline().run(
         inputs={
-            refs.input.articles: [
+            R.input.articles: [
                 {"title": "Article 1", "content": "Content 1"},
                 {"title": "Article 2", "content": "Content 2"},
             ]
         },
-        outputs=refs.output.responses,
+        outputs=R.output.responses,
     )
     print(responses)
+```
+
+## Context layers and Compose
+
+An application root owns a `Schema` declaration tree. `Context.fork()` shares those declarations while creating an empty child with local writes and live C3 lookup into its parents. `Compose` associates ordered values with Context identities and returns an exact disposer for every addition:
+
+```python
+from slyme.context import Compose, Context
+
+root = Context()
+agent = root.fork()
+hooks = Compose[str, tuple[str, ...]].collect()
+
+remove_root = hooks.add(root, "root")
+remove_agent = hooks.add(agent, "agent")
+assert hooks.resolve(agent) == ("agent", "root")
+
+remove_agent()
+remove_root()
 ```
 
 ## Core Advantages
@@ -119,9 +138,9 @@ if __name__ == "__main__":
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to PyTree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Explicit Copy Boundaries:** Node parameters and Context data stay live and mutable during execution. Use `.clone()` to create an independent Node/PyTree or ContextData structure when a branch needs structural isolation; unregistered leaf objects remain shared.
+**Explicit State Layers:** Every Context path is declared by the application root. `Context.fork()` creates a child with live C3 lookup and local writes, while `flatten()` exposes the visible Ref-to-value mapping. `Compose` provides ordered, reversible values across the same Context hierarchy.
 
-**Seamless Collaboration:** Highly decoupled Nodes communicate exclusively through Context. This allows teams to independently develop features and write unit tests, reducing "glue code" and deep system coupling.
+**Seamless Collaboration:** Highly decoupled Nodes communicate through explicit Context paths and Compose objects. This allows teams to independently develop features and write unit tests, reducing "glue code" and deep system coupling.
 
 ## Documentation
 

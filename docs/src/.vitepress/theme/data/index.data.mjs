@@ -8,7 +8,7 @@ def hello(ctx: Context, /):
     print("Hello World!")
     return ctx
 
-hello().prepare()(Context())  # Hello World!
+hello()(Context())  # Hello World!
 `
 
 export default {

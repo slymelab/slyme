@@ -100,7 +100,7 @@ jobs:
         run: |
           uv venv --python 3.13 .venv-smoke
           uv pip install --python .venv-smoke/bin/python dist/*.whl
-          .venv-smoke/bin/python -c "import slyme; print(slyme.__version__)"
+          .venv-smoke/bin/python -c "import slyme; from slyme.context import Compose, Context, Ref; ref = Ref('value'); ctx = Context({ref: 1}); assert ctx.flatten() == {ref: 1}; assert Compose.collect().resolve(ctx) == (); print(slyme.__version__)"
       - name: Upload distributions
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

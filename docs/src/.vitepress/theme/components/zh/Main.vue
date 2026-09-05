@@ -54,16 +54,16 @@
           <SlymeBadge variant="default">核心架构</SlymeBadge>
         </template>
         <template #title>
-          阶段划分：构建期可变、执行期不可变
+          实时组合，显式隔离 Context
         </template>
-        <span class="text-md">传统的计算图要么过于死板而难以调试，要么容易陷入混乱的状态突变。Slyme 引入了明确的边界：在<b>构建阶段</b>，您可以像操作标准 Python 对象一样，动态地构建 / 修改拓扑结构。而在<b>执行阶段</b>，只需一次 <code>prepare()</code> 调用，即可将所有内容冻结为严格且不可变的执行流。</span>
+        <span class="text-md">Slyme 在组装和执行期间保持同一张实时 Node 图。您可以使用普通 Python 对象构建流程，在调用之间检查或修改图，并直接执行当前结构。<code>Context.fork()</code> 会让每个分支局部写入，同时实时查找父级。</span>
         <template #aside>
           <div
             class="bg-gray-50 dark:bg-white/5 rounded-2xl border border-gray-200 dark:border-white/10 p-6 flex flex-col justify-center gap-2 font-mono text-sm h-full w-full shadow-sm">
 
             <div class="flex flex-col gap-1">
               <div class="flex items-center justify-between text-gray-800 dark:text-gray-200 font-bold">
-                <span class="text-base">构建阶段</span>
+                <span class="text-base">组装</span>
                 <span class="text-blue-600 bg-blue-100 dark:bg-blue-900/40 px-2 py-1 rounded text-xs">可变</span>
               </div>
               <div
@@ -81,15 +81,15 @@
             </div>
             <div class="flex flex-col gap-1">
               <div class="flex items-center justify-between text-gray-800 dark:text-gray-200 font-bold">
-                <span class="text-base">执行阶段</span>
+                <span class="text-base">执行</span>
                 <span
-                  class="text-green-600 bg-green-100 dark:bg-green-900/40 px-2 py-1 rounded text-xs">不可变</span>
+                  class="text-green-600 bg-green-100 dark:bg-green-900/40 px-2 py-1 rounded text-xs">实时</span>
               </div>
               <div
                 class="p-4 border border-green-400/50 rounded-lg bg-green-50 dark:bg-green-900/10 text-green-800 dark:text-green-300 leading-relaxed break-all">
-                <span class="text-green-600/70 dark:text-green-400/70"># 冻结拓扑结构以确保安全执行</span><br />
-                frozen_chain = pipeline.prepare()<br />
-                ctx = frozen_chain(ctx)
+                <span class="text-green-600/70 dark:text-green-400/70"># 隔离本次运行的局部状态</span><br />
+                request_ctx = root_ctx.fork()<br />
+                result = pipeline(request_ctx)
               </div>
             </div>
           </div>

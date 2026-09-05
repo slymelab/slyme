@@ -4,16 +4,14 @@ PyTree 是一种嵌套结构：容器描述拓扑，未注册对象作为叶子�
 
 ## `NODE_ENGINE`
 
-`NODE_ENGINE` 注册 `Node`、`Wrapper`、它们的异步版本以及普通容器，用于物理图检查、渲染、校验和 Ref 收集。由于它能够遍历 Node 关系，引入逻辑 Slot 图后，执行整图分析的调用方需要明确自己的环处理策略。
+`NODE_ENGINE` 注册 `Node`、`Wrapper`、它们的异步版本以及普通容器，用于物理图检查、渲染和 Ref 收集。Node 参数可以包含异质的嵌套值；该引擎只描述遍历方式，不判断组合是否合法。
 
-## 结构克隆
+## 对象 identity
 
-`NodeElement.clone()` 会在 `NODE_ENGINE` 上映射恒等函数。反扁平化过程重建每个已注册的 Node、Wrapper 与普通参数容器，同时保留未注册叶子对象。因此结果拥有独立的物理 Node/PyTree 结构，但不会任意深拷贝应用值。
+Slyme 不提供通用的 Node 图 clone。PyTree 重建无法决定哪些共享引用应继续作为别名、哪些 value 应被复制，以及循环应用图应如何处理。需要另一张图时，应重新调用对应的 Node factory 或 Builder，并由应用显式复制所需 value。
 
-`ContextElement.clone()` 使用只将 `Context` 与 `ContextData` 视为容器的 `CONTEXT_ENGINE`。它会重建 ContextData 层次，但保留已存储 list、dict、模型对象及其他叶子的身份。克隆 `ContextView` 会生成以该子树为根的独立 Context。
-
-两种操作都沿已注册的树边遍历，并要求 PyTree 无环。同一个已注册容器出现在多个路径时，克隆不会保留其别名身份。
+Context 不会被注册为 PyTree container。一个 Context 可以拥有多个父级，因此它是带 identity 的 C3 层次，而不是一棵自包含的值树。需要显式物化时，`Context.flatten()` 会提供其可见的 Ref 到 value 映射。
 
 ## Auto 求值
 
-Auto 使用 Context 求值引擎解析 `Ref`、`Node` 等已注册叶子，普通叶子保持不变。静态参数容器会直接传递；动态 Auto 树则会用求值后的叶子重建。
+Auto 使用 `CTX_EVAL_ENGINE` 查找已注册 leaf，并把 Context 本身视为不透明对象。Ref 读取当前 Context；每个子 Node 在该 Context 的独立 fork 中求值，随后以返回值重建动态 Auto tree。普通 leaf 保持不变。

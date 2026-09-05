@@ -6,7 +6,7 @@ Simply put, Builder is a factory function specifically for instantiating and ass
 
 ## @builder Decorator
 
-The `@builder` decorator's core responsibility is to wrap your assembly logic and perform a series of safety checks when the function returns, ensuring you build a legal and robust Node tree.
+The `@builder` decorator marks reusable Node assembly logic. It checks only that the outer result is a `Node` or `AsyncNode`; it does not inspect the returned object's nested parameter graph.
 
 ### Basic Usage
 
@@ -15,25 +15,25 @@ You can define a Builder like a normal function, just add the `@builder` decorat
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import RefFactory
+from slyme.context import Schema
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
 
-refs = RefFactory({"process_config": ..., "output_path": ...})
+R = Schema({"process_config": ..., "output_path": ...})
 
 
 @builder
 def create_data_pipeline(source_path: str):
-    # 1. Instantiate each Node — pass Refs directly via keyword arguments
+    # 1. Instantiate each Node — pass paths from R via keyword arguments
     load_node = load_data(path=source_path)
-    process_node = process_data(config=refs.process_config)
-    save_node = save_data(output=refs.output_path)
+    process_node = process_data(config=R.process_config)
+    save_node = save_data(output=R.output_path)
 
     # 2. Assemble and return a complete Node tree
     return sequential(nodes=[load_node, process_node, save_node])
 ```
 
-Calling a Builder function does not execute the Node—it runs only the assembly logic and returns the outermost Node instance:
+Calling a Builder function does not execute the result—it runs only the assembly logic and returns the outermost `Node` or `AsyncNode` instance:
 
 ```python
 pipeline = create_data_pipeline("/path/to/data")
@@ -41,24 +41,8 @@ pipeline = create_data_pipeline("/path/to/data")
 ```
 
 ::: tip
-`@builder` automatically checks the function's return value. If you forget the `return` when writing complex branching logic (causing it to return `None`), the framework will raise a clear `ValueError` exception, reminding you to return the built Node instance.
+`@builder` checks the function's direct return value. A missing `return` produces a clear `ValueError`; any other value that is not a `Node` or `AsyncNode` produces a `TypeError`. This is a local root check, not recursive graph validation.
 :::
-
-### Structure Validation
-
-By default, `@builder` automatically calls internal `check_node_structure` for deep structural legality validation of the entire Node tree before returning. As mentioned in the [Node Structure Validation](/guide/essentials/node#node-struct) chapter, Slyme has strict constraints on the mutual holding relationships between different Node types (for example, `@wrapper` can only be mounted as middleware and cannot be passed as a parameter to `@node`, etc.).
-
-If in some special scenarios (like an extremely frequently called internal sub-Builder, for performance reasons) you need to turn off this structural validation, you can explicitly pass `check_structure=False`:
-
-```python
-from slyme.builder import builder
-
-
-@builder(check_structure=False)
-def fast_internal_builder():
-    # The Node returned here will skip structure validation
-    return load_data(path="...")
-```
 
 ## Composition and Dynamic Modification
 
@@ -69,9 +53,9 @@ This is very useful when building different variants of pipelines, avoiding a lo
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import RefFactory
+from slyme.context import Schema
 
-refs = RefFactory({"default_config": ..., "output_path": ...})
+R = Schema({"default_config": ..., "output_path": ...})
 
 
 @builder
@@ -79,7 +63,7 @@ def base_pipeline():
     return sequential(
         nodes=[
             load_data(path="default_path"),
-            process_data(config=refs.default_config),
+            process_data(config=R.default_config),
         ]
     )
 
@@ -91,8 +75,8 @@ def custom_pipeline(new_path: str):
 
     # 2. Dynamically modify specific Node's build-time parameters
     pipeline.nodes[0].path = new_path
-    pipeline.nodes.append(save_data(output=refs.output_path))
+    pipeline.nodes.append(save_data(output=R.output_path))
     return pipeline
 ```
 
-Through this approach, you can combine small Builder blocks into large systems like building with LEGO, while maintaining extreme flexibility.
+Builder functions and ordinary parameter structures may nest freely. Local checks apply only to active execution roles: wrapper modes must match their Node, `sequential` accepts only synchronous Nodes, and `async_sequential` accepts synchronous or asynchronous Nodes.

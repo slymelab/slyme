@@ -18,7 +18,7 @@ from typing import (
     Any,
 )
 
-from slyme.context import Ref, RefFactory, RefLike, to_ref
+from slyme.context import Ref, RefLike, Schema, to_ref
 from slyme.context.metadata import ARG, HELP, TYPE, Arg
 from slyme.node.core import NODE_ENGINE
 
@@ -32,11 +32,11 @@ def collect_refs(element: Any) -> list[Ref]:
     refs: list[Ref] = []
 
     def is_leaf(node: Any, _) -> bool:
-        return isinstance(node, (Ref, RefFactory))
+        return isinstance(node, (Ref, Schema))
 
     # We iterate using NODE_ENGINE which knows how to traverse Node structures
     for _, leaf in NODE_ENGINE.iter_with_key_path(element, is_leaf=is_leaf):
-        if isinstance(leaf, (Ref, RefFactory)):
+        if isinstance(leaf, (Ref, Schema)):
             refs.append(to_ref(leaf))
 
     return refs
@@ -44,10 +44,10 @@ def collect_refs(element: Any) -> list[Ref]:
 
 def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
     """
-    Resolve a list of Refs into a mapping of {path: Arg}.
+    Resolve references into a mapping of {path: Arg}.
 
     Handles conflicts:
-    - If multiple Refs point to the same path, they must have compatible Arg definitions.
+    - If multiple references point to the same path, they must have compatible Arg definitions.
     - Enforces strict equality for Arg definitions if they exist.
 
     Handles merging:
@@ -85,7 +85,7 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
                     f"Conflicting Arg definitions for path '{path}':\n"
                     f"1. {base_arg}\n"
                     f"2. {other}\n"
-                    "Ensure all Refs for the same path use the same Arg definition."
+                    "Ensure all references for the same path use the same Arg definition."
                 )
 
         # 2. Merge with HELP/TYPE (if needed)
@@ -119,7 +119,7 @@ def prepare_args(
 
     Args:
         node: Node element to collect refs from.
-        extra_refs: Additional Refs to include.
+        extra_refs: Additional references to include.
         extra_args: Additional arguments to add/override.
 
     Returns:
@@ -128,13 +128,13 @@ def prepare_args(
     Raises:
         ValueError: If there are conflicting argument definitions.
     """
-    # 1. Collect Refs
+    # 1. Collect references
     refs: list[RefLike] = []
     if node is not None:
         refs.extend(collect_refs(node))
     if extra_refs:
         refs.extend(extra_refs)
-    # 2. Resolve Args from Refs
+    # 2. Resolve Args from references
     args_map = resolve_args_from_refs(refs)
     # 3. Merge Extra Args with Conflict Check
     if extra_args:

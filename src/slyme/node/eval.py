@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from slyme.context import Context, Ref, RefFactory
+from slyme.context import Context, Ref, Schema
 from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.pytree import PyTreeDef
 from slyme.utils.registry import TypeRegistry
@@ -176,7 +176,7 @@ EVALUATOR_REGISTRY.register(
 
 EVALUATOR_REGISTRY.register(
     EvaluatorDef(sync_func=ref_evaluator, async_func=async_ref_evaluator),
-    key=RefFactory,
+    key=Schema,
 )
 
 
@@ -188,19 +188,22 @@ def node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
             raise RuntimeError(
                 f"Cannot evaluate AsyncNode in synchronous context: {node}"
             )
-        results.append(node(ctx))
+        results.append(node(ctx.fork()))
     return results
 
 
 async def async_node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
 
-    async def _evaluate_single(node: Any) -> Any:
+    async def _evaluate_single(node: Any, child_ctx: Context) -> Any:
         if isinstance(node, AsyncNode):
-            return await node(ctx)
+            return await node(child_ctx)
         else:
-            return await asyncio.to_thread(node, ctx)
+            return await asyncio.to_thread(node, child_ctx)
 
-    return await asyncio.gather(*(_evaluate_single(node) for node in nodes))
+    children = tuple((node, ctx.fork()) for node in nodes)
+    return await asyncio.gather(
+        *(_evaluate_single(node, child_ctx) for node, child_ctx in children)
+    )
 
 
 SHARED_NODE_EVALUATOR = EvaluatorDef(

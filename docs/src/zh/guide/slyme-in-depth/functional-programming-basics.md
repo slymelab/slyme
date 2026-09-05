@@ -7,8 +7,8 @@ Slyme 选择性采用函数式思想，而不要求整个运行时都不可变�
 - Context 数据原地可变，修改方法返回 `None`。
 - Node 和 Wrapper 调用会直接传递当前静态参数容器。
 - 动态组合图仍然可变，因此后续调用可以观察结构修改。
-- 结构隔离通过 `NodeElement.clone()` 与 `ContextElement.clone()` 显式完成。
+- 结构隔离是显式的：需要另一张图时重新调用 Node factory 或 Builder，需要实时局部数据层时使用 `Context.fork()`。
 
 纯度仍由应用决定：产生值的 Node 可以是纯函数，I/O Node 可以执行副作用，高阶 Node 可以协调子 Node。Slyme 负责描述它们的组合与生命周期，而不试图建模这些 Python 操作的内部细节。
 
-并发分支需要独立的已注册结构时，应调用 `.clone()`。克隆会保留未注册叶子的对象身份，因此不会让任意共享 Python 对象自动获得线程安全性；需要时应由应用单独复制这些值。
+通过 `Auto` 求值的每个子 Node 都会获得独立的 Context fork。显式并发编排需要隔离局部写入时，也应为每个分支创建 fork。fork 会保留应用 leaf 的 identity，因此不会让共享 Python 对象自动获得线程安全性，也不会撤销外部副作用；需要时应单独隔离这些资源。

@@ -28,7 +28,7 @@ from typing import (
     get_type_hints,
 )
 
-from slyme.context import Context, RefFactory
+from slyme.context import Context, Schema
 from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.exception import enrich_exception
 
@@ -75,7 +75,7 @@ class Spec:
         else:
             return UNDEFINED
         return CTX_EVAL_ENGINE.map(
-            lambda x: x() if isinstance(x, RefFactory) else x, result
+            lambda x: x() if isinstance(x, Schema) else x, result
         )
 
     def should_eval(self, value: Any) -> bool:

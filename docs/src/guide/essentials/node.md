@@ -7,10 +7,10 @@
 A Node function has exactly one non-keyword-only runtime parameter. Every build parameter must be keyword-only:
 
 ```python
-from slyme.context import Context, Ref, RefFactory
+from slyme.context import Context, Ref, Schema
 from slyme.node import Auto, node
 
-refs = RefFactory({"input": {"x": ...}, "output": {"total": ...}})
+R = Schema({"input": {"x": ...}, "output": {"total": ...}})
 
 
 @node
@@ -20,7 +20,7 @@ def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
     return result
 
 
-task = add(x=refs.input.x, y=2, output=refs.output.total)
+task = add(x=R.input.x, y=2, output=R.output.total)
 ```
 
 Runtime parameter names and annotations are optional; Slyme identifies runtime and build parameters by parameter count and keyword-only placement.
@@ -32,18 +32,20 @@ build parameter names must remain explicit.
 Call a Node directly when managing Context yourself:
 
 ```python
-ctx = Context()
-ctx.set(refs.input.x, 3)
+ctx = Context(schema=R)
+ctx.set(R.input.x, 3)
 result = task(ctx)  # 5
 ```
 
 Use `run()` as the application boundary when inputs, `Arg` validation, CLI parsing, or output extraction are needed:
 
 ```python
-result = task.run(inputs={refs.input.x: 3}, outputs=refs.output.total)
+result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
 ```
 
-There is no Def/Exec conversion or `prepare()` step. Each call validates and resolves the current parameters and wrappers.
+When no Context is supplied, `run()` derives a Schema from the Ref paths present in the Node graph, `inputs`, and `outputs`. Supplying a Context keeps its Schema unchanged; the caller must declare every Ref the Node may use.
+
+There is no Def/Exec conversion or `prepare()` step. Each call binds and resolves the current parameters and wrappers.
 
 ## Parameters and Auto
 
@@ -64,7 +66,9 @@ root = parent(child=child(value=4))
 assert root(Context()) == 5
 ```
 
-`Auto` recursively resolves registered evaluator leaves such as `Ref` and `Node`. Without `Auto`, those objects are passed through unchanged.
+`Auto` recursively resolves registered evaluator leaves such as `Ref` and `Node`. A Ref reads the supplied Context directly. Each value-producing child Node receives its own `ctx.fork()`, so its local Context writes do not leak into the parent or a sibling Auto child. Returned values, mutations to shared leaf objects, and external side effects are not isolated. Without `Auto`, Ref and Node objects are passed through unchanged.
+
+Node rendering shows the current parameter values. A `?` prefix on a parameter edge means that the value will be evaluated from the supplied Context when the Node runs.
 
 Missing required build parameters are represented by `UNDEFINED` and rejected when the Node is called. Use `UNSET` to request a declared default explicitly.
 
@@ -81,15 +85,7 @@ Parameter names may not conflict with framework attributes such as `run`, `func`
 
 At call time, static parameter containers are passed directly to the user function. Mutating one therefore updates the live Node or Wrapper parameter. Auto parameters containing evaluator leaves are reconstructed with their resolved values.
 
-Use `clone()` for explicit structural isolation:
-
-```python
-branch = root.clone()
-branch.child.value = 20
-assert root.child.value == 10
-```
-
-The clone contains new Node, Wrapper, and registered parameter-PyTree containers. Unregistered leaves remain shared, so clone those application objects separately when they also require isolation.
+Call the Node factory or a Builder again when another independently configurable graph is required. Copy mutable application values explicitly according to their own semantics; Slyme does not guess which shared references should be duplicated.
 
 ## Wrappers
 
@@ -111,12 +107,12 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrappers use onion ordering and read their live parameters when invoked. They also inherit `clone()` from `NodeElement`.
+Wrappers use onion ordering and read their live parameters when invoked.
 
-## Node structure validation {#node-struct}
+## Composition structure
 
-`check_node_structure(root)` inspects the physical Node graph and validates wrapper placement and synchronous/asynchronous containment. `@builder` invokes it automatically unless structure checking is disabled.
+Node and Wrapper parameters may contain arbitrary values and nested PyTrees, including other Nodes or Wrappers. Slyme does not impose a global legality check on that object graph. Only an object's active execution role is constrained: wrapper modes must match their Node, `sequential` accepts only synchronous Nodes, and `async_sequential` accepts synchronous or asynchronous Nodes.
 
 ## Sequential composition
 
-Use `sequential(nodes=[...])` for a declarative synchronous sequence and `async_sequential(nodes=[...])` for mixed asynchronous execution. Their corresponding `*_exec` helpers execute an existing iterable inside a higher-order Node.
+Use `sequential(nodes=[...])` for a declarative synchronous sequence and `async_sequential(nodes=[...])` for mixed asynchronous execution. Their corresponding `*_exec` helpers execute an existing iterable with the same Context; unlike Auto child evaluation, these helpers intentionally share local writes between steps.

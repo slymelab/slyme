@@ -18,10 +18,12 @@ Node rendering module.
 
 from collections import defaultdict
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from slyme.context import Ref
 from slyme.utils.protocol import HasExtraRepr, HasTypeRepr
+from slyme.utils.pytree import AttributeKey
 from slyme.utils.registry import TypeRegistry
 
 from .core import (
@@ -52,7 +54,7 @@ class Config:
     tree_spacer: str = "    "
     group_connector: str = "│ => "
     # Optional filter for displayed categories. If None, all categories are shown.
-    visible_categories: tuple[str, ...] | None = ("wrappers", "nodes")
+    visible_categories: tuple[str, ...] | None = None
     # Types that should use the "Grouped" rendering strategy.
     _grouped_render_types: tuple[type, ...] = (NodeElement,)
     # Configuration for grouped rendering: (Category Name, Display Title)
@@ -60,6 +62,7 @@ class Config:
         ("wrappers", "@wrappers"),
         ("refs", "#refs"),
         ("nodes", "(nodes)"),
+        ("values", "(values)"),
     )
 
 
@@ -84,7 +87,7 @@ def get_render_string(obj: Any) -> str:
     """
     Generate a formatted tree string representation of a Node object.
 
-    This function traverses the Node structure using ``NODE_PYTREE_ENGINE``
+    This function traverses the Node structure using ``NODE_ENGINE``
     and formats it based on registered categories and render strategies.
     """
     header = _get_node_header(obj)
@@ -102,6 +105,10 @@ def _get_node_header(obj: Any | HasExtraRepr | HasTypeRepr) -> str:
         extra_repr = obj.extra_repr()
     else:
         extra_repr = ""
+    if not isinstance(obj, HasTypeRepr) and not isinstance(
+        obj, (dict, list, tuple, MappingProxyType)
+    ):
+        return repr(obj)
     return f"{type_name}({extra_repr})" if extra_repr else type_name
 
 
@@ -122,6 +129,8 @@ def _build_render_lines(obj: Any) -> _RenderResult:
         )
         if key_path
     ]
+    if my_category is None and not children_with_key_path:
+        my_category = "values"
 
     # 3. Process Children Recursively
     flat_children: list[_RenderItem] = []
@@ -132,14 +141,28 @@ def _build_render_lines(obj: Any) -> _RenderResult:
         # Only display children that have a valid category or content
         if child_result.category is not None:
             key_str = key_path[-1].codify("")  # e.g., ".name" or "[0]"
+            if (
+                isinstance(obj, NodeElement)
+                and len(key_path) == 1
+                and isinstance(key_path[0], AttributeKey)
+            ):
+                name = key_path[0].name
+                if name == "wrappers" and isinstance(obj, (Node, AsyncNode)):
+                    if not child:
+                        continue
+                    child_result.category = "wrappers"
+                elif name in obj.specs:
+                    if obj.specs[name].should_eval(child):
+                        key_str = f"? {key_str}"
+                    elif child_result.category == "wrappers":
+                        child_result.category = "values"
             item = _RenderItem(key=key_str, child=child, result=child_result)
             flat_children.append(item)
 
     # 4. Infer Category for Containers (if not already set)
-    # Since the container is guaranteed to be pure (homogenous categories),
-    # we can simply inherit the category from the first child.
     if my_category is None and flat_children:
-        my_category = flat_children[0].result.category
+        categories = {item.result.category for item in flat_children}
+        my_category = categories.pop() if len(categories) == 1 else "values"
 
     if my_category is None:
         return _RenderResult([], None)

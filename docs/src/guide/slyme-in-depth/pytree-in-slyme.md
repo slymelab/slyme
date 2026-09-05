@@ -4,16 +4,14 @@ A PyTree is a nested structure whose containers define topology and whose unregi
 
 ## `NODE_ENGINE`
 
-`NODE_ENGINE` registers `Node`, `Wrapper`, their asynchronous variants, and ordinary containers. It is used for physical graph inspection, rendering, validation, and Ref discovery. Because it can traverse Node relationships, callers performing whole-graph analysis must define their own cycle policy when logical Slot graphs are introduced.
+`NODE_ENGINE` registers `Node`, `Wrapper`, their asynchronous variants, and ordinary containers. It is used for physical graph inspection, rendering, and Ref discovery. Node parameters may contain heterogeneous nested values; the engine describes traversal, not which combinations are legal.
 
-## Structural cloning
+## Object identity
 
-`NodeElement.clone()` maps the identity function over `NODE_ENGINE`. Unflattening reconstructs every registered Node, Wrapper, and ordinary parameter container while preserving unregistered leaf objects. The result is an independent physical Node/PyTree structure without an arbitrary deep copy of application values.
+Slyme does not expose a generic Node graph clone. PyTree reconstruction cannot decide which shared references should remain aliases, which values should be copied, or how cyclic application graphs should behave. Call the relevant Node factory or Builder again and copy application values explicitly when another graph is required.
 
-`ContextElement.clone()` uses `CONTEXT_ENGINE`, whose only containers are `Context` and `ContextData`. It therefore reconstructs the ContextData hierarchy but preserves stored lists, dictionaries, model objects, and all other leaf identities. Cloning a `ContextView` produces a standalone Context rooted at that subtree.
-
-Both operations follow registered tree edges and expect an acyclic PyTree. They do not preserve alias identity when the same registered container appears at multiple paths.
+Context is not registered as a PyTree container. A Context may have multiple parents and therefore forms an identity-bearing C3 hierarchy rather than a self-contained value tree. `Context.flatten()` provides its visible Ref-to-value mapping when explicit materialization is needed.
 
 ## Auto evaluation
 
-Auto evaluation uses the Context evaluation engine to resolve registered leaves such as `Ref` and `Node` with the current `Context`, while ordinary leaves pass through unchanged. Static parameter containers are passed directly; a dynamic Auto tree is reconstructed with its evaluated leaves.
+Auto evaluation uses `CTX_EVAL_ENGINE` to find registered leaves while treating Context itself as opaque. Ref values read the current Context. Each child Node evaluates in a separate fork of that Context, and the dynamic Auto tree is reconstructed from the returned values. Ordinary leaves pass through unchanged.

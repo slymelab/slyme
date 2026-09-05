@@ -364,7 +364,7 @@ def parse_and_inject(
         parser: Optional existing parser to extend.
         cli_args: Command line arguments to parse (defaults to sys.argv[1:]).
         node: Node element to collect refs from.
-        extra_refs: Additional Refs to include.
+        extra_refs: Additional references to include.
         extra_args: Additional arguments to add/override.
 
     Returns:

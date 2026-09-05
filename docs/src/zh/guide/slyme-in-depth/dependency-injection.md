@@ -18,10 +18,10 @@ Slyme 通过关键字绑定构建参数，并可结合运行时 `Context` 对参
 4. 按 evaluator 类型批处理叶子；
 5. 使用传入的 Context 解析并调用用户函数，同时直接传递静态容器。
 
-`Ref` evaluator 会批量提取 Context；`Node` evaluator 会调用产生值的子 Node。其他 realization 类型可以通过 `EVALUATOR_REGISTRY` 扩展，而不需要让 Slyme 理解其内部执行机制。
+`Ref` evaluator 会批量读取 Context 的有效值；`Node` evaluator 会调用产生值的子 Node，并为每个子 Node 提供传入 Context 的独立 fork。同步 tree 求值会按求值顺序运行子 Node；异步 tree 求值则可能并发运行同步与异步子 Node，其中同步子 Node 通过 `asyncio.to_thread` 调度。两种模式下的局部 Context 写入都保持隔离。其他 realization 类型可以通过 `EVALUATOR_REGISTRY` 扩展，而不需要让 Slyme 理解其内部执行机制。
 
-求值计划刻意只在单次调用中存在，从而避免动态 Node 图或未来 Slot registry 在调用之间变化时所需的缓存失效追踪。
+求值计划刻意只在单次调用中存在，从而避免动态 Node 图在调用之间变化时所需的缓存失效追踪。
 
 ## 求值时机
 
-Auto 值在其所属 Node 或 Wrapper 进入时解析一次。如果高阶 Node 随后调用子 Node 修改了 Context，应在这些调用之后通过 `Ref` 显式读取最新值，而不是依赖较早解析的 Auto 值。
+Auto 值在其所属 Node 或 Wrapper 进入时解析一次。Auto 子 Node 可以返回派生值，但它的局部 Context 写入会随 fork 丢弃。如果高阶 Node 显式地使用自己的 Context 调用子 Node，应在调用结束后通过 Ref 重新读取值，而不是依赖更早的 Auto 结果。

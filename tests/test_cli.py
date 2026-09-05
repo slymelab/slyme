@@ -9,10 +9,10 @@ import pytest
 
 from slyme.cli import parse_and_inject, prepare_args, resolve_args_from_refs
 from slyme.cli.parser import _json_loader, _string_to_bool, populate_parser
-from slyme.context import ARG, HELP, TYPE, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, HELP, TYPE, Arg, Context, Ref, Schema
 from slyme.node import Auto, node
 
-R = RefFactory({"input": {"count": ..., "value": ...}, "verbose": ...})
+R = Schema({"input": {"count": ..., "value": ...}, "verbose": ...})
 
 
 class Color(Enum):
@@ -107,7 +107,7 @@ def test_parse_and_inject_returns_dict_or_updates_context(
         "verbose": False,
     }
 
-    ctx = Context()
+    ctx = Context(schema=R)
     returned = parse_and_inject(
         context=ctx,
         extra_args=args,
@@ -145,7 +145,7 @@ def test_resolve_args_merges_metadata_and_rejects_conflicts() -> None:
 
 
 def test_prepare_args_collects_refs_from_node_tree() -> None:
-    refs = RefFactory(
+    schema = Schema(
         {
             "input": {
                 "value": Ref(metadata={ARG: Arg(type=int, required=True)}),
@@ -157,6 +157,6 @@ def test_prepare_args_collects_refs_from_node_tree() -> None:
     def application(ctx: Context, /, *, value: Auto[int]) -> int:
         return value
 
-    graph = application(value=refs.input.value)
+    graph = application(value=schema.input.value)
     args = prepare_args(node=graph)
     assert args == {"input.value": Arg(type=int, required=True)}

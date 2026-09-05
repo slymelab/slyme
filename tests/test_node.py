@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections import UserDict
 from collections.abc import Awaitable, Callable
+from types import MappingProxyType
 from typing import Any
 
 import pytest
 
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, RefFactory
+from slyme.context import ARG, Arg, Context, Ref, Schema
 from slyme.node import (
     UNDEFINED,
     AsyncNode,
     Auto,
     Node,
-    NodeStructureError,
     RenderConfig,
     Wrapper,
     async_eval_tree,
     async_sequential,
     async_sequential_exec,
-    check_node_structure,
     eval_tree,
     node,
     sequential,
@@ -44,8 +44,14 @@ from slyme.node.exception import (
 from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
 
-R = RefFactory(
+R = Schema(
     {
+        "auto": {
+            "async_temporary": ...,
+            "dynamic": ...,
+            "inherited": ...,
+            "temporary": ...,
+        },
         "async_value": ...,
         "input": {"base": ..., "label": ..., "value": ...},
         "names": {"outer": ...},
@@ -80,28 +86,45 @@ def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None
     assert instance.defaulted == 2
     assert instance.produced == 3
     assert instance.dynamic == Ref("input.value")
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.set(R.input.value, 4)
     assert instance(ctx) == (1, 2, 3, 4)
 
 
-def test_schema_ref_factory_integrates_with_auto_and_builder() -> None:
-    refs = RefFactory({"input": {"value": ...}})
+def test_schema_integrates_with_auto_and_builder() -> None:
+    schema = Schema({"input": {"value": ...}})
 
     @node
     def increment(ctx: Context, /, *, value: Auto[int]) -> int:
         return value + 1
 
-    ctx = Context()
-    ctx.set(refs.input.value, 4)
-    assert increment(value=refs.input.value)(ctx) == 5
+    ctx = Context(schema=R)
+    ctx.set(schema.input.value, 4)
+    assert increment(value=schema.input.value)(ctx) == 5
 
     @builder
     def misspelled() -> Node[int]:
-        return increment(value=refs.input.vlaue)
+        return increment(value=schema.input.vlaue)
 
     with pytest.raises(AttributeError, match="Did you mean 'value'"):
         misspelled()
+
+
+def test_prebuilt_node_uses_schema_declared_after_runtime_fork() -> None:
+    plugin_schema = Schema({"plugin": {"value": ...}})
+
+    @node
+    def read(ctx: Context, /, *, value: Auto[int]) -> int:
+        return value
+
+    graph = read(value=plugin_schema.plugin.value)
+    root = Context()
+    turn = root.fork()
+
+    root.declare(plugin_schema)
+    turn.set(plugin_schema.plugin.value, 4)
+
+    assert graph(turn) == 4
 
 
 def test_spec_validation_and_missing_parameters() -> None:
@@ -117,7 +140,7 @@ def test_spec_validation_and_missing_parameters() -> None:
     item = required()
     assert item.value is UNDEFINED
     with pytest.raises(NodeExceptionRecord) as exc_info:
-        item(Context())
+        item(Context(schema=R))
     assert isinstance(exc_info.value.exception, ValueError)
     assert "Missing required parameter" in str(exc_info.value.exception)
 
@@ -198,7 +221,7 @@ def test_node_attributes_are_declared_and_mutable() -> None:
 
     instance = identity()
     instance.value = 2
-    assert instance(Context()) == 2
+    assert instance(Context(schema=R)) == 2
     assert instance.specs["value"].default == 1
     assert instance.func is identity.func
     with pytest.raises(AttributeError, match="unknown attribute"):
@@ -226,7 +249,7 @@ def test_auto_evaluation_for_refs_nodes_and_nested_containers() -> None:
     ) -> dict[str, Any]:
         return payload
 
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.set(R.input.base, 4)
     graph = parent(
         payload={
@@ -259,10 +282,10 @@ def test_node_call_uses_live_mutable_parameter_containers() -> None:
     values = instance.values
     state = instance.state
 
-    assert instance(Context()) == ((1, 2, 3, 4), 1)
+    assert instance(Context(schema=R)) == ((1, 2, 3, 4), 1)
     assert instance.values is values
     assert instance.state is state
-    assert instance(Context()) == ((1, 2, 3, 4, 4), 2)
+    assert instance(Context(schema=R)) == ((1, 2, 3, 4, 4), 2)
 
 
 async def test_async_node_and_wrapper_calls_use_live_parameters() -> None:
@@ -290,84 +313,10 @@ async def test_async_node_and_wrapper_calls_use_live_parameters() -> None:
 
     wrapper_instance = record(events=[])
     instance = mutate(values=[1, 2]).add_wrappers(wrapper_instance)
-    cloned = instance.clone()
 
-    assert await instance(Context()) == (1, 2, 3)
-    assert await instance(Context()) == (1, 2, 3, 3)
+    assert await instance(Context(schema=R)) == (1, 2, 3)
+    assert await instance(Context(schema=R)) == (1, 2, 3, 3)
     assert wrapper_instance.events == ["wrapper", "wrapper"]
-    assert isinstance(cloned, AsyncNode)
-    assert cloned is not instance
-    assert cloned.values is not instance.values
-    assert cloned.wrappers[0] is not wrapper_instance
-
-
-def test_node_clone_copies_structure_and_parameter_pytrees() -> None:
-    shared_leaf = object()
-
-    @wrapper
-    def trace(
-        ctx: Context,
-        wrapped: Node[Any],
-        call_next: Callable[[Context], Any],
-        /,
-        *,
-        labels: list[str],
-        marker: object,
-    ) -> Any:
-        return call_next(ctx)
-
-    @node
-    def child(
-        ctx: Context,
-        /,
-        *,
-        config: dict[str, list[int]],
-    ) -> int:
-        return sum(config["values"])
-
-    @node
-    def parent(
-        ctx: Context,
-        /,
-        *,
-        dependency: Auto[int],
-        payload: tuple[dict[str, list[int]], ...],
-        marker: object,
-    ) -> int:
-        return dependency + payload[0]["offsets"][0]
-
-    graph = parent(
-        dependency=child(config={"values": [1, 2]}),
-        payload=({"offsets": [4]},),
-        marker=shared_leaf,
-    ).add_wrappers(trace(labels=["original"], marker=shared_leaf))
-
-    cloned = graph.clone()
-
-    assert isinstance(cloned, Node)
-    assert cloned is not graph
-    assert cloned.func is graph.func
-    assert cloned.specs is graph.specs
-    assert cloned.dependency is not graph.dependency
-    assert cloned.dependency.config is not graph.dependency.config
-    assert cloned.dependency.config["values"] is not graph.dependency.config["values"]
-    assert cloned.payload is not graph.payload
-    assert cloned.payload[0] is not graph.payload[0]
-    assert cloned.payload[0]["offsets"] is not graph.payload[0]["offsets"]
-    assert cloned.wrappers is not graph.wrappers
-    assert cloned.wrappers[0] is not graph.wrappers[0]
-    assert cloned.wrappers[0].labels is not graph.wrappers[0].labels
-    assert cloned.marker is shared_leaf
-    assert cloned.wrappers[0].marker is shared_leaf
-
-    cloned.dependency.config["values"].append(10)
-    cloned.payload[0]["offsets"].append(5)
-    cloned.wrappers[0].labels.append("clone")
-    assert graph.dependency.config == {"values": [1, 2]}
-    assert graph.payload == ({"offsets": [4]},)
-    assert graph.wrappers[0].labels == ["original"]
-    assert graph(Context()) == 7
-    assert cloned(Context()) == 17
 
 
 def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:
@@ -392,7 +341,7 @@ def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:
         events.append("work")
         return value
 
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.set(R.names.outer, "outer")
     result = work(value=7).add_wrappers(trace(name=R.names.outer), trace(name="inner"))(
         ctx
@@ -415,7 +364,7 @@ def test_node_and_wrapper_exceptions_preserve_provenance() -> None:
 
     instance = fails()
     with pytest.raises(NodeExceptionRecord) as exc_info:
-        instance(Context())
+        instance(Context(schema=R))
     assert exc_info.value.exception_node is instance
     assert isinstance(exc_info.value.exception, RuntimeError)
     assert "exception_node" in str(exc_info.value)
@@ -432,7 +381,7 @@ def test_node_and_wrapper_exceptions_preserve_provenance() -> None:
 
     wrapped_instance = fails().add_wrappers(broken_wrapper())
     with pytest.raises(WrapperExceptionRecord) as wrapper_exc:
-        wrapped_instance(Context())
+        wrapped_instance(Context(schema=R))
     assert wrapper_exc.value.wrapped_node is wrapped_instance
     assert isinstance(wrapper_exc.value.exception_node, Wrapper)
     assert isinstance(wrapper_exc.value.exception, LookupError)
@@ -446,7 +395,7 @@ def test_node_terminate_sets_source_once() -> None:
 
     instance = stop()
     with pytest.raises(NodeTerminate) as exc_info:
-        instance(Context())
+        instance(Context(schema=R))
     assert exc_info.value.source_node is instance
     assert exc_info.value.msg == "done"
     exc_info.value.msg = "changed"
@@ -490,7 +439,7 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
     ) -> int:
         return sum(values)
 
-    ctx = Context()
+    ctx = Context(schema=R)
     ctx.update({R.input.value: 3, R.input.label: "trace"})
     graph = parent(
         values=[
@@ -513,7 +462,7 @@ async def test_sync_evaluation_rejects_async_node() -> None:
 
     child = async_child()
     with pytest.raises(RuntimeError, match="Cannot evaluate AsyncNode"):
-        eval_tree(Context(), child)
+        eval_tree(Context(schema=R), child)
 
 
 def test_evaluator_result_count_is_validated() -> None:
@@ -533,7 +482,7 @@ def test_evaluator_result_count_is_validated() -> None:
         num_leaves=1,
     )
     with pytest.raises(ValueError, match="expected 1"):
-        execute_eval_plan(Context(), bad_plan)
+        execute_eval_plan(Context(schema=R), bad_plan)
 
 
 async def _empty_async() -> list[Any]:
@@ -557,7 +506,100 @@ async def test_async_evaluator_result_count_is_validated() -> None:
         num_leaves=1,
     )
     with pytest.raises(ValueError, match="expected 1"):
-        await async_execute_eval_plan(Context(), bad_plan)
+        await async_execute_eval_plan(Context(schema=R), bad_plan)
+
+
+def test_auto_nodes_receive_isolated_child_contexts() -> None:
+    inherited = Ref("auto.inherited")
+    temporary = Ref("auto.temporary")
+    seen: list[Context] = []
+
+    @node
+    def child(ctx: Context, /) -> int:
+        assert ctx.get(inherited) == 4
+        ctx.add(temporary, len(seen))
+        seen.append(ctx)
+        return len(seen)
+
+    @node
+    def parent(
+        ctx: Context,
+        /,
+        *,
+        left: Auto[int],
+        right: Auto[int],
+    ) -> tuple[int, int]:
+        return left, right
+
+    ctx = Context(schema=R)
+    ctx.set(inherited, 4)
+    shared_child = child()
+    assert parent(left=shared_child, right=shared_child)(ctx) == (1, 2)
+    assert len(seen) == 2
+    assert seen[0] is not seen[1]
+    assert seen[0].parents == (ctx,)
+    assert seen[1].parents == (ctx,)
+    assert not ctx.exists(temporary)
+
+
+def test_auto_realizes_each_original_leaf_only_once() -> None:
+    dynamic = Ref("auto.dynamic")
+    calls = 0
+
+    @node
+    def child(ctx: Context, /) -> int:
+        nonlocal calls
+        calls += 1
+        return calls
+
+    @node
+    def parent(ctx: Context, /, *, value: Auto[Any]) -> Any:
+        return value
+
+    produced_node = child()
+    produced_mapping = {"child": produced_node}
+    ctx = Context(schema=R)
+
+    ctx.set(dynamic, produced_node)
+    assert parent(value=dynamic)(ctx) is produced_node
+
+    ctx.set(dynamic, produced_mapping)
+    assert parent(value=dynamic)(ctx) is produced_mapping
+    assert calls == 0
+
+
+async def test_async_auto_nodes_receive_isolated_child_contexts() -> None:
+    temporary = Ref("auto.async_temporary")
+    started = 0
+    both_started = asyncio.Event()
+    seen: list[Context] = []
+
+    @node
+    async def child(ctx: Context, /) -> int:
+        nonlocal started
+        ctx.add(temporary, started)
+        seen.append(ctx)
+        started += 1
+        if started == 2:
+            both_started.set()
+        await both_started.wait()
+        return started
+
+    @node
+    async def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+        return sum(values)
+
+    ctx = Context(schema=R)
+    result = await asyncio.wait_for(
+        parent(values=[child(), child()])(ctx),
+        timeout=5,
+    )
+    assert result == 4
+    assert len(seen) == 2
+    assert seen[0] is not seen[1]
+    assert seen[0].parents == (ctx,)
+    assert seen[1].parents == (ctx,)
+    assert not ctx.exists(temporary)
 
 
 def test_sequential_nodes_share_context() -> None:
@@ -567,12 +609,23 @@ def test_sequential_nodes_share_context() -> None:
 
     first = increment(source=R.value, target=R.value)
     second = increment(source=R.value, target=R.value)
-    ctx = Context()
+    ctx = Context(schema=R)
     sequential_exec(ctx, [first, second])
     assert ctx.get(R.value) == 2
 
     sequential(nodes=[first, second])(ctx)
     assert ctx.get(R.value) == 4
+
+
+def test_sync_sequential_rejects_non_sync_execution_entries() -> None:
+    @node
+    async def async_child(ctx: Context, /) -> None:
+        return None
+
+    with pytest.raises(TypeError, match="only accepts synchronous Nodes"):
+        sequential_exec(Context(schema=R), [async_child()])  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="only accepts synchronous Nodes"):
+        sequential_exec(Context(schema=R), [object()])  # type: ignore[list-item]
 
 
 async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
@@ -584,14 +637,17 @@ async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
     async def async_step(ctx: Context, /) -> None:
         ctx.set(R.async_value, True)
 
-    ctx = Context()
+    ctx = Context(schema=R)
     nodes = [sync_step(), async_step()]
     await async_sequential_exec(ctx, nodes)
     assert ctx.get(R.sync) and ctx.get(R.async_value)
     await async_sequential(nodes=nodes)(ctx)
 
+    with pytest.raises(TypeError, match="only accepts Nodes and AsyncNodes"):
+        await async_sequential_exec(ctx, [object()])  # type: ignore[list-item]
 
-def test_builder_and_structure_validation() -> None:
+
+def test_builder_constructs_nodes_and_reports_missing_returns() -> None:
     @node
     def leaf(ctx: Context, /, *, value: int = 1) -> int:
         return value
@@ -603,11 +659,21 @@ def test_builder_and_structure_validation() -> None:
     assert isinstance(build(), Node)
     assert build.__name__ == "build"
 
-    @builder(check_structure=False)
-    def unchecked() -> Any:
-        return "not a node"
+    @node
+    async def async_leaf(ctx: Context, /) -> int:
+        return 1
 
-    assert unchecked() == "not a node"
+    @builder
+    def build_async() -> AsyncNode[int]:
+        return async_leaf()
+
+    assert isinstance(build_async(), AsyncNode)
+
+    @builder()
+    def called_builder() -> Node[int]:
+        return leaf(value=2)
+
+    assert called_builder()(Context(schema=R)) == 2
 
     @builder
     def missing() -> Any:
@@ -615,11 +681,16 @@ def test_builder_and_structure_validation() -> None:
 
     with pytest.raises(ValueError, match="returned None"):
         missing()
-    with pytest.raises(TypeError, match="Root must"):
-        check_node_structure("bad")  # type: ignore[arg-type]
+
+    @builder
+    def invalid() -> Any:
+        return "not a node"
+
+    with pytest.raises(TypeError, match="expected a Node or AsyncNode"):
+        invalid()
 
 
-def test_structure_validation_rejects_cross_mode_and_misplaced_elements() -> None:
+def test_node_elements_can_nest_freely_but_wrapper_slots_match_mode() -> None:
     @wrapper
     def sync_wrapper(
         ctx: Context,
@@ -650,16 +721,41 @@ def test_structure_validation_rejects_cross_mode_and_misplaced_elements() -> Non
     async def async_node(ctx: Context, /, *, dependency: Any = None) -> None:
         return None
 
-    with pytest.raises(NodeStructureError, match="AsyncWrapper"):
-        check_node_structure(sync_node().add_wrappers(async_wrapper()))  # type: ignore[arg-type]
-    with pytest.raises(NodeStructureError, match="synchronous Wrapper"):
-        check_node_structure(async_node().add_wrappers(sync_wrapper()))  # type: ignore[arg-type]
-    with pytest.raises(NodeStructureError, match="wrapper placement"):
-        check_node_structure(sync_node(dependency=sync_wrapper()))
-    with pytest.raises(NodeStructureError, match="cannot hold Node"):
-        check_node_structure(
-            sync_node().add_wrappers(sync_wrapper(dependency=sync_node()))
-        )
+    nested_wrapper = sync_wrapper(dependency=sync_node())
+    nested_node = sync_node(dependency=nested_wrapper)
+    mixed = sync_node(dependency=[nested_node, async_node()])
+    assert isinstance(mixed.dependency[0].dependency, Wrapper)
+    assert isinstance(nested_wrapper.dependency, Node)
+
+    with pytest.raises(TypeError, match="synchronous Wrappers"):
+        sync_node().add_wrappers(async_wrapper())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="AsyncWrappers"):
+        async_node().add_wrappers(sync_wrapper())  # type: ignore[arg-type]
+
+    invalid_sync = sync_node()
+    invalid_sync.wrappers.append(async_wrapper())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="synchronous Wrappers"):
+        invalid_sync(Context(schema=R))
+
+
+async def test_async_wrapper_slot_is_revalidated_at_execution() -> None:
+    @wrapper
+    def sync_wrapper(
+        ctx: Context,
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any],
+        /,
+    ) -> Any:
+        return call_next(ctx)
+
+    @node
+    async def async_node(ctx: Context, /) -> None:
+        return None
+
+    invalid_async = async_node()
+    invalid_async.wrappers.append(sync_wrapper())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="AsyncWrappers"):
+        await invalid_async(Context(schema=R))
 
 
 def test_node_tree_round_trip_and_render_configuration() -> None:
@@ -684,21 +780,81 @@ def test_node_tree_round_trip_and_render_configuration() -> None:
     leaves, definition = NODE_ENGINE.flatten(graph)
     rebuilt = NODE_ENGINE.unflatten(definition, leaves)
     assert isinstance(rebuilt, Node)
-    assert rebuilt(Context()) == 1
+    assert rebuilt(Context(schema=R)) == 1
 
     rendered = repr(graph)
     assert "parent<Node>" in rendered
     assert "@wrappers" in rendered
     assert "(nodes)" in rendered
+    assert "? .nested" in rendered
+    assert "1" in rendered
+    assert "#refs" in repr(parent(nested=R.input.value))
+    assert RenderConfig.visible_categories is None
+
     try:
-        RenderConfig.visible_categories = None
-        assert "#refs" in repr(parent(nested=R.input.value))
+        RenderConfig.visible_categories = ("nodes",)
+        filtered = repr(graph)
+        assert "(nodes)" in filtered
+        assert "@wrappers" not in filtered
+        assert "(values)" not in filtered
     finally:
-        RenderConfig.visible_categories = ("wrappers", "nodes")
+        RenderConfig.visible_categories = None
+
+
+def test_render_distinguishes_executable_edges_from_stored_node_values() -> None:
+    @wrapper
+    def trace(
+        ctx: Context,
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any],
+        /,
+    ) -> Any:
+        return call_next(ctx)
+
+    @node
+    def child(ctx: Context, /) -> int:
+        return 1
+
+    @node
+    def container(ctx: Context, /, *, stored: Any = None) -> Any:
+        return stored
+
+    @wrapper
+    def configured_wrapper(
+        ctx: Context,
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any],
+        /,
+        *,
+        wrappers: list[int],
+    ) -> Any:
+        return call_next(ctx)
+
+    stored_wrapper = trace()
+    stored_node = child()
+    rendered = repr(container(stored=[stored_wrapper, stored_node]))
+
+    assert "@wrappers" not in rendered
+    assert "(nodes)" not in rendered
+    assert "(values)" in rendered
+    assert "(nodes)" in repr(container(stored=stored_node))
+    assert "@wrappers" not in repr(container(stored=stored_wrapper))
+    assert ".wrappers" not in repr(child())
+    assert "(nodes)" in repr(sequential(nodes=[stored_node]))
+
+    user_mapping = UserDict({"secret": 42})
+    assert "{'secret': 42}" in repr(container(stored=user_mapping))
+
+    proxy = MappingProxyType({"secret": 42})
+    assert repr(container(stored=proxy)).count("secret") == 1
+
+    configured = repr(configured_wrapper(wrappers=[]))
+    assert ".wrappers" in configured
+    assert "@wrappers" not in configured
 
 
 def test_node_run_boundary_defaults_outputs_and_context() -> None:
-    refs = RefFactory(
+    schema = Schema(
         {
             "input": {
                 "value": Ref(
@@ -725,12 +881,16 @@ def test_node_run_boundary_defaults_outputs_and_context() -> None:
     ) -> None:
         ctx.set(output, value * 2)
 
-    graph = application(value=refs.input.value, output=refs.output.value)
-    output, ctx = graph.run(outputs=refs.output.value, return_context=True)
+    graph = application(value=schema.input.value, output=schema.output.value)
+    output, ctx = graph.run(outputs=schema.output.value, return_context=True)
     assert output == 10
-    assert ctx.get(refs.input.value) == 5
-    assert graph.run(inputs={refs.input.value: 4}, outputs=refs.output.value) == 8
+    assert ctx.get(schema.input.value) == 5
+    assert ctx.schema.input.value().path == "input.value"
+    assert ctx.schema.output.value().path == "output.value"
+    assert graph.run(inputs={schema.input.value: 4}, outputs=schema.output.value) == 8
     assert isinstance(graph.run(), Context)
+    with pytest.raises(KeyError, match="not declared"):
+        graph.run(Context(schema=Schema({"unrelated": ...})))
     with pytest.raises(TypeError, match="context must be"):
         graph.run({})  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="cli_args requires"):

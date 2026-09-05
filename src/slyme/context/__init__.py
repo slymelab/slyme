@@ -12,27 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .core import (
-    DIFF_MISSING,
-    Context,
-    Ref,
-    RefFactory,
-    RefLike,
-    to_ref,
-)
+from .compose import Compose
 from .core import (
     Config as ContextConfig,
+)
+from .core import (
+    Context,
+    Ref,
+    RefLike,
+    Schema,
+    to_ref,
 )
 from .metadata import ARG, HELP, TYPE, Arg
 
 __all__ = [
+    "Compose",
     "Context",
     "Ref",
-    "RefFactory",
     "RefLike",
+    "Schema",
     "to_ref",
     "ContextConfig",
-    "DIFF_MISSING",
     "ARG",
     "Arg",
     "HELP",

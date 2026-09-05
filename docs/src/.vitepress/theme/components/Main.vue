@@ -56,14 +56,11 @@
           <SlymeBadge variant="default">CORE ARCHITECTURE</SlymeBadge>
         </template>
         <template #title>
-          Phase Separation: Mutable Building, Immutable Execution
+          Live Composition, Explicit Context Isolation
         </template>
-        Traditional graphs are either too rigid to debug or suffer from chaotic state mutations. Slyme introduces a
-        clear
-        boundary: during the <b>build phase</b>, you dynamically weave topologies and attach wrappers just like
-        standard Python objects. During the <b>execution phase</b>, a single <code>prepare()</code> call freezes
-        everything
-        into a strict, immutable execution flow.
+        Slyme keeps one live Node graph across assembly and execution. Build with ordinary Python objects, inspect or
+        change the graph between calls, and execute its current structure directly. A <code>Context.fork()</code>
+        gives each branch local writes while retaining live lookup into its parents.
 
         <template #aside>
           <div
@@ -71,7 +68,7 @@
 
             <div class="flex flex-col gap-3">
               <div class="flex items-center justify-between text-gray-800 dark:text-gray-200 font-bold">
-                <span class="text-base">Definition Phase</span>
+                <span class="text-base">Assembly</span>
                 <span class="text-blue-600 bg-blue-100 dark:bg-blue-900/40 px-2 py-1 rounded text-xs">Mutable</span>
               </div>
               <div
@@ -89,15 +86,15 @@
             </div>
             <div class="flex flex-col gap-3">
               <div class="flex items-center justify-between text-gray-800 dark:text-gray-200 font-bold">
-                <span class="text-base">Execution Phase</span>
+                <span class="text-base">Execution</span>
                 <span
-                  class="text-green-600 bg-green-100 dark:bg-green-900/40 px-2 py-1 rounded text-xs">Immutable</span>
+                  class="text-green-600 bg-green-100 dark:bg-green-900/40 px-2 py-1 rounded text-xs">Live</span>
               </div>
               <div
                 class="p-4 border border-green-400/50 rounded-lg bg-green-50 dark:bg-green-900/10 text-green-800 dark:text-green-300 leading-relaxed break-all">
-                <span class="text-green-600/70 dark:text-green-400/70"># Freeze topology for safe execution</span><br />
-                frozen_chain = pipeline.prepare()<br />
-                ctx = frozen_chain(ctx)
+                <span class="text-green-600/70 dark:text-green-400/70"># Isolate local state for this run</span><br />
+                request_ctx = root_ctx.fork()<br />
+                result = pipeline(request_ctx)
               </div>
             </div>
           </div>
