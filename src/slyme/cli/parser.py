@@ -26,7 +26,7 @@ from typing import (
     get_origin,
 )
 
-from slyme.context import Context, Ref, RefLike
+from slyme.context import Context, ContextKey, Ref
 from slyme.context.metadata import Arg
 from slyme.utils.registry import TypeRegistry
 
@@ -352,8 +352,8 @@ def parse_and_inject(
     context: Context | None = None,
     parser: argparse.ArgumentParser | None = None,
     cli_args: list[str] | None = None,
-    node: Any | Iterable[RefLike] | None = None,
-    extra_refs: Iterable[RefLike] | None = None,
+    node: Any | Iterable[Ref[Any]] | None = None,
+    extra_refs: Iterable[Ref[Any]] | None = None,
     extra_args: dict[str, Arg] | None = None,
 ) -> dict[str, Any] | Context:
     """
@@ -393,12 +393,11 @@ def parse_and_inject(
 
     # Prepare updates for Context.mutate
     # parsed_values is { "path": value, ... }
-    # Context.mutate expects { Ref: value }
-    updates: dict[RefLike, Any] = {}
+    updates: dict[ContextKey, Any] = {}
     for key, value in parsed_values.items():
         # Only inject if it looks like a path (non-empty string)
         if key:
-            updates[Ref(key)] = value
+            updates[context.schema.resolve(key)] = value
 
     context.mutate(updates=updates)
     return context

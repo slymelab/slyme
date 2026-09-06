@@ -15,6 +15,7 @@
 """PyTree engine used for Node inspection and Ref discovery."""
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from slyme.utils.pytree import (
     AttributeKey,
     PyTreeAux,
     PyTreeEngine,
+    PyTreeKey,
 )
 from slyme.utils.pytree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 
@@ -32,12 +34,25 @@ NODE_ENGINE = PyTreeEngine("node_engine")
 PYTREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
 
 
+@dataclass(frozen=True)
+class _NodeParameterKey(PyTreeKey):
+    """Address one NodeElement build parameter without attribute projection."""
+
+    name: str
+
+    def resolve(self, element: Any) -> Any:
+        return element.get(self.name)
+
+    def codify(self, parent_expr: str) -> str:
+        return f"{parent_expr}.get({self.name!r})"
+
+
 def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
     children = [obj.wrappers]
-    keys = [AttributeKey("wrappers")]
+    keys: list[PyTreeKey] = [AttributeKey("wrappers")]
     for name in obj._specs:
-        children.append(getattr(obj, name))
-        keys.append(AttributeKey(name))
+        children.append(obj.get(name))
+        keys.append(_NodeParameterKey(name))
     return tuple(children), PyTreeAux(
         children_keys=tuple(keys),
         metadata={"func": obj._func, "specs": obj._specs},
@@ -50,7 +65,7 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Node:
         raise ValueError("Missing keys for Node unflattening.")
     iterator = zip(aux.children_keys, children, strict=True)
     _, wrappers = next(iterator)
-    params = {cast("AttributeKey", key).name: value for key, value in iterator}
+    params = {cast("_NodeParameterKey", key).name: value for key, value in iterator}
     return Node(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -59,20 +74,20 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Node:
     )
 
 
-def _flatten_wrapper(obj: Wrapper) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(AttributeKey(name) for name in obj._specs)
-    return tuple(getattr(obj, name) for name in obj._specs), PyTreeAux(
+def _flatten_wrapper(obj: Wrapper[Any]) -> tuple[Iterable[Any], PyTreeAux]:
+    keys = tuple(_NodeParameterKey(name) for name in obj._specs)
+    return tuple(obj.get(name) for name in obj._specs), PyTreeAux(
         children_keys=keys,
         metadata={"func": obj._func, "specs": obj._specs},
         cls=Wrapper,
     )
 
 
-def _unflatten_wrapper(children: Iterable[Any], aux: PyTreeAux) -> Wrapper:
+def _unflatten_wrapper(children: Iterable[Any], aux: PyTreeAux) -> Wrapper[Any]:
     if aux.children_keys is None:
         raise ValueError("Missing keys for Wrapper unflattening.")
     params = {
-        cast("AttributeKey", key).name: value
+        cast("_NodeParameterKey", key).name: value
         for key, value in zip(aux.children_keys, children, strict=True)
     }
     return Wrapper(
@@ -82,10 +97,10 @@ def _unflatten_wrapper(children: Iterable[Any], aux: PyTreeAux) -> Wrapper:
 
 def _flatten_async_node(obj: AsyncNode) -> tuple[Iterable[Any], PyTreeAux]:
     children = [obj.wrappers]
-    keys = [AttributeKey("wrappers")]
+    keys: list[PyTreeKey] = [AttributeKey("wrappers")]
     for name in obj._specs:
-        children.append(getattr(obj, name))
-        keys.append(AttributeKey(name))
+        children.append(obj.get(name))
+        keys.append(_NodeParameterKey(name))
     return tuple(children), PyTreeAux(
         children_keys=tuple(keys),
         metadata={"func": obj._func, "specs": obj._specs},
@@ -98,7 +113,7 @@ def _unflatten_async_node(children: Iterable[Any], aux: PyTreeAux) -> AsyncNode:
         raise ValueError("Missing keys for AsyncNode unflattening.")
     iterator = zip(aux.children_keys, children, strict=True)
     _, wrappers = next(iterator)
-    params = {cast("AttributeKey", key).name: value for key, value in iterator}
+    params = {cast("_NodeParameterKey", key).name: value for key, value in iterator}
     return AsyncNode(
         func=aux.metadata["func"],
         specs=aux.metadata["specs"],
@@ -107,20 +122,24 @@ def _unflatten_async_node(children: Iterable[Any], aux: PyTreeAux) -> AsyncNode:
     )
 
 
-def _flatten_async_wrapper(obj: AsyncWrapper) -> tuple[Iterable[Any], PyTreeAux]:
-    keys = tuple(AttributeKey(name) for name in obj._specs)
-    return tuple(getattr(obj, name) for name in obj._specs), PyTreeAux(
+def _flatten_async_wrapper(
+    obj: AsyncWrapper[Any],
+) -> tuple[Iterable[Any], PyTreeAux]:
+    keys = tuple(_NodeParameterKey(name) for name in obj._specs)
+    return tuple(obj.get(name) for name in obj._specs), PyTreeAux(
         children_keys=keys,
         metadata={"func": obj._func, "specs": obj._specs},
         cls=AsyncWrapper,
     )
 
 
-def _unflatten_async_wrapper(children: Iterable[Any], aux: PyTreeAux) -> AsyncWrapper:
+def _unflatten_async_wrapper(
+    children: Iterable[Any], aux: PyTreeAux
+) -> AsyncWrapper[Any]:
     if aux.children_keys is None:
         raise ValueError("Missing keys for AsyncWrapper unflattening.")
     params = {
-        cast("AttributeKey", key).name: value
+        cast("_NodeParameterKey", key).name: value
         for key, value in zip(aux.children_keys, children, strict=True)
     }
     return AsyncWrapper(

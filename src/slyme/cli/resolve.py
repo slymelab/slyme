@@ -18,7 +18,7 @@ from typing import (
     Any,
 )
 
-from slyme.context import Ref, RefLike, Schema, to_ref
+from slyme.context import Ref
 from slyme.context.metadata import ARG, HELP, TYPE, Arg
 from slyme.node.core import NODE_ENGINE
 
@@ -32,17 +32,17 @@ def collect_refs(element: Any) -> list[Ref]:
     refs: list[Ref] = []
 
     def is_leaf(node: Any, _) -> bool:
-        return isinstance(node, (Ref, Schema))
+        return isinstance(node, Ref)
 
     # We iterate using NODE_ENGINE which knows how to traverse Node structures
     for _, leaf in NODE_ENGINE.iter_with_key_path(element, is_leaf=is_leaf):
-        if isinstance(leaf, (Ref, Schema)):
-            refs.append(to_ref(leaf))
+        if isinstance(leaf, Ref):
+            refs.append(leaf)
 
     return refs
 
 
-def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
+def resolve_args_from_refs(refs: Iterable[Ref[Any]]) -> dict[str, Arg]:
     """
     Resolve references into a mapping of {path: Arg}.
 
@@ -57,9 +57,10 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
     path_to_help: dict[str, list[str]] = {}
     path_to_type: dict[str, list[Any]] = {}
 
-    for ref_like in refs:
-        ref = to_ref(ref_like)
-        path = ref.bound_path
+    for ref in refs:
+        if not isinstance(ref, Ref):
+            raise TypeError(f"Expected Ref, got {type(ref).__name__}.")
+        path = ref.path
         if ARG in ref.metadata:
             arg_def = ref.metadata[ARG]
             if not isinstance(arg_def, Arg):
@@ -71,6 +72,8 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
         if HELP in ref.metadata:
             path_to_help.setdefault(path, []).append(ref.metadata[HELP])
 
+        if ref.value_type is not None:
+            path_to_type.setdefault(path, []).append(ref.value_type)
         if TYPE in ref.metadata:
             path_to_type.setdefault(path, []).append(ref.metadata[TYPE])
 
@@ -110,8 +113,8 @@ def resolve_args_from_refs(refs: Iterable[RefLike]) -> dict[str, Arg]:
 
 
 def prepare_args(
-    node: Any | Iterable[RefLike] | None = None,
-    extra_refs: Iterable[RefLike] | None = None,
+    node: Any | Iterable[Ref[Any]] | None = None,
+    extra_refs: Iterable[Ref[Any]] | None = None,
     extra_args: dict[str, Arg] | None = None,
 ) -> dict[str, Arg]:
     """
@@ -129,7 +132,7 @@ def prepare_args(
         ValueError: If there are conflicting argument definitions.
     """
     # 1. Collect references
-    refs: list[RefLike] = []
+    refs: list[Ref[Any]] = []
     if node is not None:
         refs.extend(collect_refs(node))
     if extra_refs:

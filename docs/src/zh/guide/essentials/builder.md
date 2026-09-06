@@ -15,19 +15,19 @@
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema
+from slyme.context import Schema, ref
 # 假设有定义好的 nodes
 # from my_nodes import load_data, process_data, save_data
 
-R = Schema({"process_config": ..., "output_path": ...})
+R = Schema({"process_config": ref(), "output_path": ref()})
 
 
 @builder
 def create_data_pipeline(source_path: str):
     # 1. 实例化各个 Node — 通过关键字参数直接传入 Ref
     load_node = load_data(path=source_path)
-    process_node = process_data(config=R.process_config)
-    save_node = save_data(output=R.output_path)
+    process_node = process_data(config=R.resolve("process_config"))
+    save_node = save_data(output=R.resolve("output_path"))
 
     # 2. 组装并返回一棵完整的 Node 树
     return sequential(nodes=[load_node, process_node, save_node])
@@ -53,9 +53,9 @@ Builder 最大的优势在于**可复用性**。一个 Builder 可以调用另�
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema
+from slyme.context import Schema, ref
 
-R = Schema({"default_config": ..., "output_path": ...})
+R = Schema({"default_config": ref(), "output_path": ref()})
 
 
 @builder
@@ -63,7 +63,7 @@ def base_pipeline():
     return sequential(
         nodes=[
             load_data(path="default_path"),
-            process_data(config=R.default_config),
+            process_data(config=R.resolve("default_config")),
         ]
     )
 
@@ -74,8 +74,8 @@ def custom_pipeline(new_path: str):
     pipeline = base_pipeline()
 
     # 2. 动态修改特定节点的构建期参数
-    pipeline.nodes[0].path = new_path
-    pipeline.nodes.append(save_data(output=R.output_path))
+    pipeline.get("nodes")[0].set("path", new_path)
+    pipeline.get("nodes").append(save_data(output=R.resolve("output_path")))
     return pipeline
 ```
 

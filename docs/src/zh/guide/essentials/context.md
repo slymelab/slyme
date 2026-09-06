@@ -4,121 +4,132 @@
 
 ## Ref 与 Schema {#ref}
 
-`Ref` 标识具有语义的数据路径：
+`Ref` 是标识 Context 依赖的不可变路径值。Schema 记录应用可用的路径，
+`resolve()` 返回这些路径的规范 Ref：
 
 ```python
-from slyme.context import Ref
+from slyme.context import Ref, Schema, ref
 
-name = Ref("user.name")
+schema = Schema({"user": {"name": ref(str)}})
+name = schema.resolve("user.name")
 assert name.path == "user.name"
+assert Ref("user.name") == name
 ```
+
+直接构造 `Ref` 不会修改 Schema。Context 操作会在 `ctx.schema` 中解析它的路径；
+路径角色与 metadata 仍由该 Schema 决定。
 
 应用应使用 `Schema` 描述可用路径：
 
 ```python
-from slyme.context import ARG, Arg, Ref, Schema
+from slyme.context import ARG, Arg, Schema, ref
 
 R = Schema(
     {
         "user": {
-            "name": Ref(metadata={ARG: Arg(type=str, required=True, help="User name")}),
-            "age": ...,
+            "name": ref(
+                str,
+                metadata={ARG: Arg(type=str, required=True, help="User name")},
+            ),
+            "age": ref(),
         },
-        "status": ...,
+        "status": ref(),
     }
 )
 
-name = R.user.name()
+name = R.resolve("user.name")
 ```
 
-`Schema` 始终要求传入声明 mapping。Slyme 不导出全局 `R` 对象。组合代码
-可以把当前应用的 Schema 简写为局部变量 `R`；`ctx.schema` 则提供该应用持有
-的完整实时 Schema。
+`Schema()` 可以从空声明开始，也可以接收初始声明 mapping。Slyme 不导出全局
+`R` 对象。组合代码可以把当前应用的 Schema 简写为局部变量 `R`；`ctx.schema`
+则提供该应用使用的完整实时 Schema。
 
 Schema 校验路径声明及其 metadata，但不校验这些路径中存储值的运行时类型。
 
 该路径是稳定的语义名称，不依赖物理 Node 图的位置。
 
-`...` 是未绑定 `Ref()` 声明的简写；构造过程会将每项声明绑定到完整路径，
-并冻结声明树的私有副本。
+`ref()` 创建不含路径的声明；构造过程会将每项声明绑定到完整路径，并对输入
+mapping 建立快照。声明树内不接受其他值。Schema 对象本身仍可通过单调的
+`declare()` 扩展。
 
 ```python
-from slyme.context import ARG, Arg, Ref, Schema
+from slyme.context import ARG, Arg, Schema, ref
 
 R = Schema(
     {
         "input": {
-            "": Ref(metadata={"description": "应用输入"}),
-            "name": Ref(metadata={ARG: Arg(type=str, required=True)}),
-            "age": ...,
+            "": ref(metadata={"description": "应用输入"}),
+            "name": ref(str, metadata={ARG: Arg(type=str, required=True)}),
+            "age": ref(),
         },
         "output": {
-            "message": ...,
+            "message": ref(),
         },
     }
 )
 
-assert R.input().path == "input"
-assert R.input.name().path == "input.name"
-R.input.naem  # 抛出 AttributeError，并提示 "name"
+assert R.resolve("input").path == "input"
+assert R.resolve("input.name").path == "input.name"
+R.resolve("input.naem")  # 抛出 KeyError，并提示 "name"
 ```
 
-每次属性访问仍返回 `Schema` view，因此可直接传给任何接受 `RefLike` 的接口；
-调用 view 会返回对应的 `Ref`。Mapping branch 未提供空 key 时会自动获得默认
-Ref；空 key 用于配置该 branch 自身的 Ref。
+每个 `ref()` entry 声明 leaf；mapping entry 一定声明 container，空 mapping 也属于
+container。可选的空 key 声明仅用于定制该 container 的 Ref 及其 metadata，不会
+让它成为 leaf；省略时 Schema 会自动生成 container Ref。Schema 只通过
+`resolve()` 暴露已声明路径，因此应用路径不会与未来新增的 Schema 方法冲突。
 
-声明树的组合不会修改原对象。Ref 或 `...` entry 是 leaf；mapping entry 是
-container，空 mapping 也属于 container。leaf 与 container 合并始终属于结构
-冲突。两个 leaf 在默认 `conflict="error"` 下冲突；`conflict="replace"` 选择
-右侧 leaf。两个 container 则递归合并。
-
-对于 container 自身的空 key Ref，省略声明与显式 `Ref()` 会被区别记录。
-一侧显式声明、另一侧省略时采用显式声明；两侧均显式声明时，`"error"`
-报错，`"replace"` 选择右侧。Ref 声明不提供删除操作。
+`declare()` 会原子地递归扩展同一个 Schema 对象。等价声明是幂等的；如果已有
+Ref 的新声明不同，或者 leaf/container 结构冲突，则抛出异常且 Schema 保持
+不变。声明不能被替换或删除。
 
 ```python
-extended = R | {"output": {"score": ...}}
+R.declare({"output": {"score": ref()}})
 ```
 
-Schema key 必须是 Python 标识符。以下划线开头的名称以及 `merge`、`from_refs`
-由 API 保留。`Schema.from_refs(...)` 可以从已有的已绑定 Ref 构造声明树。数量
-不受限的动态名称应保存在 `Compose` 等 value 内部，而不应成为 Context 路径。
+Schema key 必须是非空且不含点号的字符串。`declare`、Python 关键字和以下划线
+开头的名称都是合法路径，因为 Schema 不再把路径投影成属性。数量不受限的动态
+名称应保存在 `Compose` 等 value 内部，而不应成为 Context 路径。
 
 ## 读写
 
 ```python
-from slyme.context import Context, Schema
+from slyme.context import Context, Schema, ref
 
 R = Schema(
     {
-        "user": {"name": ..., "age": ...},
-        "status": ...,
-        "settings": {"": ...},
+        "user": {"name": ref(), "age": ref()},
+        "status": ref(),
+        "settings": ref(),
     }
 )
 
-ctx = Context({R.user.name: "Ada"}, schema=R)
-ctx.update({R.user.age: 36, R.status: "active"})
+ctx = Context({R.resolve("user.name"): "Ada"}, schema=R)
+ctx.update({R.resolve("user.age"): 36, R.resolve("status"): "active"})
 
-assert ctx.get(R.user.name) == "Ada"
-assert ctx.exists(R.user.age)
-assert ctx.extract({"name": R.user.name, "age": R.user.age}) == {
+assert ctx.get(R.resolve("user.name")) == "Ada"
+assert ctx.exists(R.resolve("user.age"))
+assert ctx.get("user.name") == "Ada"
+assert ctx.extract({"name": R.resolve("user.name"), "age": R.resolve("user.age")}) == {
     "name": "Ada",
     "age": 36,
 }
 ```
 
-仅限关键字的 `schema` 参数用于初始化应用根。Context 的所有路径都必须已经声明，包括带 default 的读取和 `exists()` 检查。可选的 data mapping 随后等价于调用 `update()`。子 Context 从父级继承同一个 `ctx.schema` 对象，不能再提供另一个。
+仅限关键字的 `schema` 参数会把这个 Schema 对象本身安装到新的 Context 根。Context 的所有路径都必须已经声明，包括带 default 的读取和 `exists()` 检查。可选的 data mapping 随后等价于调用 `update()`。子 Context 从父级继承同一个 `ctx.schema` 对象，不能再提供另一个。
 
-插件可以通过应用内的任意 Context 加入不可变的声明树。已有 fork 会立即看到新增路径；重复加入同一个 `Schema` 对象是幂等操作，且声明不可删除。插件卸载撤销 value 和 Compose entry，而不删除路径声明：
+因此，应用既可以先构建 Schema 再创建 Context，也可以先创建 Context，再通过它声明路径。两种方式修改的是同一个 Schema 对象，已有 fork 会立即看到新增路径：
 
 ```python
-plugin_schema = Schema({"plugin": {"enabled": ...}})
-child = ctx.fork()
-ctx.declare(plugin_schema)
+schema = Schema()
+schema.declare({"core": {"ready": ref()}})
+ctx = Context(schema=schema)
 
-child.set(plugin_schema.plugin.enabled, True)
-assert child.schema.plugin.enabled().path == "plugin.enabled"
+plugin_schema = Schema({"plugin": {"enabled": ref()}})
+ctx.declare(plugin_schema)
+child = ctx.fork()
+
+child.set(plugin_schema.resolve("plugin.enabled"), True)
+assert child.schema.resolve("plugin.enabled").path == "plugin.enabled"
 ```
 
 声明 fragment 并不是插件私有的查找空间。插件需要使用其他位置声明的路径时，
@@ -129,16 +140,17 @@ R = ctx.schema
 ```
 
 fragment 仍用于声明和导出该插件拥有的路径；`ctx.schema` 是整个应用的并集。
+插件卸载撤销 value 和 Compose entry，而不删除单调增长的路径声明。
 
-`set`、`update`、`mutate`、`drop` 和 `delete` 会更新同一个 Context，并返回 `None`。批量修改会先校验全部已声明的局部路径；发生冲突时不会产生部分写入。
+`set`、`update` 和 `mutate` 的 update 部分只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `mutate` 的 drop 部分接受任一角色。批量修改会先校验全部路径；发生冲突时不会产生部分写入。
 
-在同一个 Context 内，已有路径会保持当前结构角色。leaf 不能隐式变成 container，非空 container 也不能变成 leaf。改变角色前应删除该局部路径；也可以在一次原子 `mutate()` 中删除并重建。container 只是由现存 leaf 推导出的索引，因此每次修改都会移除事务结束后为空的 container。
+Schema 将应用内的每个已声明路径固定为 leaf 或 container 之一，Context 数据不能改变这个角色：删除 value 不会让对应路径变成 container，删除 branch 也不会让对应路径可以写入 leaf value。应用可以向 Schema 扩展新路径，但不能改变已有声明的角色。Context 只在 leaf 路径保存 value，并在修改后裁剪空的数据 branch。
 
 用户提供的 mapping 始终是 leaf。只有写入更深的 Ref 时才会创建 Context branch：
 
 ```python
-ctx.set(R.settings, {"theme": "dark"})  # 一个以 mapping 为值的 leaf
-ctx.set(R.user.name, "Ada")              # 一个结构 branch 和 leaf
+ctx.set(R.resolve("settings"), {"theme": "dark"})  # 一个以 mapping 为值的 leaf
+ctx.set(R.resolve("user.name"), "Ada")              # 一个结构 branch 和 leaf
 ```
 
 所有读取操作都接受 `local=True`，用于只检查当前 Context；默认读取 C3 层次合并后的有效视图。
@@ -148,12 +160,12 @@ ctx.set(R.user.name, "Ada")              # 一个结构 branch 和 leaf
 `fork()` 是创建空子 Context 的简写：当前 Context 是它的第一个父级，额外传入的 mixin 按顺序成为后续父级：
 
 ```python
-R = Schema({"settings": {"timeout": ..., "mode": ...}})
+R = Schema({"settings": {"timeout": ref(), "mode": ref()}})
 root = Context(schema=R)
-root.set(R.settings.timeout, 30)
+root.set(R.resolve("settings.timeout"), 30)
 
 feature = root.fork()
-feature.set(R.settings.mode, "fast")
+feature.set(R.resolve("settings.mode"), "fast")
 
 mixin = root.fork()
 agent = feature.fork(mixin)
@@ -165,10 +177,11 @@ assert agent.to_dict() == {
 ```
 
 `mro` 是构造 Context 时计算出的不可变线性化结果，`root` 是其中最后一项。
-只有该根 Context 存储应用 Schema；所有后代的 `schema` property 都通过
-`root` 返回同一个对象。
+该根 Context 保存 Schema 引用；所有后代的 `schema` property 都通过 `root`
+返回同一个对象。两棵独立的 Context 树也可以有意复用同一个 Schema，而不共享
+Context 数据。
 
-C3 层次中的所有直接父级都必须来自同一个应用根，因而共享同一个 `schema` 对象。父级的后续修改会持续可见，直到子 Context 写入优先级更高的值；兄弟分支互不影响。同一路径上的 branch 按 C3 顺序合并，但第一个可见 leaf 会阻断优先级更低的 branch。例如，子级的 `a.b` 会隐藏父级的 `a.b.c`。反过来，即使父级在 `a.b` 保存了 leaf，子级仍可定义 `a.b.c`，因为子级的局部 branch 优先级更高。
+C3 层次中的所有直接父级都必须来自同一个应用根，因而共享同一个 `schema` 对象。父级的后续修改会持续可见，直到子 Context 写入同一个 leaf；兄弟分支互不影响。声明为 container 的 branch 会按 C3 顺序递归合并，每个 leaf 采用第一个定义它的 Context 中的 value。
 
 删除局部值时会一并移除因此变空的局部路径前缀，并让此前被覆盖的父级值重新可见。
 
@@ -177,9 +190,9 @@ C3 层次中的所有直接父级都必须来自同一个应用根，因而共�
 `add()` 仅在当前 Context 不存在该路径时安装值，并返回一个幂等 disposer，用于撤销这一次安装：
 
 ```python
-request_schema = Schema({"request": {"abort": ...}})
+request_schema = Schema({"request": {"abort": ref()}})
 agent.declare(request_schema)
-remove = agent.add(request_schema.request.abort, abort_controller)
+remove = agent.add(request_schema.resolve("request.abort"), abort_controller)
 try:
     run_request()
 finally:
@@ -193,18 +206,18 @@ finally:
 `Compose` 按 Context identity 保存有序值，并根据目标 Context 的 C3 顺序解析可见 entry。其他 Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context：
 
 ```python
-from slyme.context import Compose, Context, Schema
+from slyme.context import Compose, Context, Schema, ref
 
-R = Schema({"tools": ...})
+R = Schema({"tools": ref()})
 root = Context(schema=R)
 tools = Compose[str, tuple[str, ...]].collect()
-root.add(R.tools, tools)
+root.add(R.resolve("tools"), tools)
 
 remove_base = tools.add(root, "read")
 agent = root.fork()
 remove_agent = tools.add(agent, "shell", metadata={"plugin": "shell"})
 
-assert agent.get(R.tools) is tools
+assert agent.get(R.resolve("tools")) is tools
 assert tools.resolve(agent) == ("shell", "read")
 remove_agent()
 remove_base()
@@ -220,16 +233,28 @@ remove_base()
 
 Context 接受 Ref PyTree 进行批量读写。`extract` 会保持请求的 Python 结构，`update_tree` 则从结构一致的 value tree 写入各个路径。
 
-`to_dict()` 将 Context 路径投影为嵌套的普通字典，适合展示或序列化；该投影无法区分以 mapping 为值的 leaf 与内容相同的嵌套 Context 路径。`flatten()` 则返回准确的 `dict[Ref, Any]` 可见 leaf 映射：
+`to_dict()` 将 Context 路径投影为嵌套的普通字典，适合展示或序列化；在不同 Schema 之间，该投影无法区分以 mapping 为值的 leaf 与内容相同的嵌套 Context 路径。`flatten()` 则返回准确的 `dict[Ref, Any]` 可见 leaf 映射：
 
 ```python
-R = Schema({"settings": {"": ..., "theme": ...}})
-mapping_leaf = Context({R.settings: {"theme": "dark"}}, schema=R)
-nested_path = Context({R.settings.theme: "dark"}, schema=R)
+leaf_schema = Schema({"settings": ref()})
+tree_schema = Schema({"settings": {"theme": ref()}})
+mapping_leaf = Context(
+    {leaf_schema.resolve("settings"): {"theme": "dark"}}, schema=leaf_schema
+)
+nested_path = Context(
+    {tree_schema.resolve("settings.theme"): "dark"}, schema=tree_schema
+)
 
 assert mapping_leaf.to_dict() == nested_path.to_dict()
-assert mapping_leaf.flatten() == {R.settings(): {"theme": "dark"}}
-assert nested_path.flatten() == {R.settings.theme(): "dark"}
+assert mapping_leaf.flatten() == {
+    leaf_schema.resolve("settings"): {"theme": "dark"}
+}
+assert nested_path.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 
-两者默认解析 C3 层次上的有效视图，也都接受 `local=True`。`ContextView` 返回相对于自身的路径。两种方法都不会复制 leaf value。`Context(ctx.flatten(), schema=ctx.schema)` 会显式物化一个共享相同声明和可见 leaf 对象、但没有父级的新应用根；它拥有新的 Context identity，因此不会转移源 Context 名下注册的 Compose entry。
+两者默认解析 C3 层次上的有效视图，也都接受 `local=True`。`ContextView` 使用相对
+字符串访问子树，而已经解析的 Ref 始终是绝对路径，因此它的 `flatten()` 也返回
+Schema 中的绝对 Ref。两种方法都不会复制 leaf value。
+`Context(ctx.flatten(), schema=ctx.schema)` 会显式物化一个共享相同声明和可见 leaf
+对象、但没有父级的新应用根；它拥有新的 Context identity，因此不会转移源 Context
+名下注册的 Compose entry。

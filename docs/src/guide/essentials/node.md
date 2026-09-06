@@ -7,10 +7,10 @@
 A Node function has exactly one non-keyword-only runtime parameter. Every build parameter must be keyword-only:
 
 ```python
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 from slyme.node import Auto, node
 
-R = Schema({"input": {"x": ...}, "output": {"total": ...}})
+R = Schema({"input": {"x": ref()}, "output": {"total": ref()}})
 
 
 @node
@@ -20,7 +20,7 @@ def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
     return result
 
 
-task = add(x=R.input.x, y=2, output=R.output.total)
+task = add(x=R.resolve("input.x"), y=2, output=R.resolve("output.total"))
 ```
 
 Runtime parameter names and annotations are optional; Slyme identifies runtime and build parameters by parameter count and keyword-only placement.
@@ -33,17 +33,11 @@ Call a Node directly when managing Context yourself:
 
 ```python
 ctx = Context(schema=R)
-ctx.set(R.input.x, 3)
+ctx.set(R.resolve("input.x"), 3)
 result = task(ctx)  # 5
 ```
 
-Use `run()` as the application boundary when inputs, `Arg` validation, CLI parsing, or output extraction are needed:
-
-```python
-result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
-```
-
-When no Context is supplied, `run()` derives a Schema from the Ref paths present in the Node graph, `inputs`, and `outputs`. Supplying a Context keeps its Schema unchanged; the caller must declare every Ref the Node may use.
+The caller owns Context construction, external input handling, and output extraction. Core Node execution neither infers a Schema nor creates a Context implicitly.
 
 There is no Def/Exec conversion or `prepare()` step. Each call binds and resolves the current parameters and wrappers.
 
@@ -74,14 +68,14 @@ Missing required build parameters are represented by `UNDEFINED` and rejected wh
 
 ## Dynamic modification
 
-Node and Wrapper parameters are real instance attributes and remain mutable between calls:
+Node and Wrapper parameters remain mutable between calls through an explicit parameter API:
 
 ```python
-root.child.value = 10
+root.get("child").set("value", 10)
 assert root(Context()) == 11
 ```
 
-Parameter names may not conflict with framework attributes such as `run`, `func`, `specs`, or `wrappers`. Parameters cannot be deleted; assign another value or `UNDEFINED` instead.
+Use `get(name)` to read, `set(name, value)` to replace, and `reset(name)` to restore a parameter's declared default or `UNDEFINED`. The read-only `params` mapping exposes all current parameters. Parameter names may overlap framework attributes such as `func`, `get`, or `wrappers` because parameters are not projected as object attributes.
 
 At call time, static parameter containers are passed directly to the user function. Mutating one therefore updates the live Node or Wrapper parameter. Auto parameters containing evaluator leaves are reconstructed with their resolved values.
 

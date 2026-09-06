@@ -9,10 +9,10 @@ import pytest
 
 from slyme.cli import parse_and_inject, prepare_args, resolve_args_from_refs
 from slyme.cli.parser import _json_loader, _string_to_bool, populate_parser
-from slyme.context import ARG, HELP, TYPE, Arg, Context, Ref, Schema
+from slyme.context import ARG, HELP, TYPE, Arg, Context, Schema, ref
 from slyme.node import Auto, node
 
-R = Schema({"input": {"count": ..., "value": ...}, "verbose": ...})
+R = Schema({"input": {"count": ref(), "value": ref()}, "verbose": ref()})
 
 
 class Color(Enum):
@@ -114,8 +114,8 @@ def test_parse_and_inject_returns_dict_or_updates_context(
         cli_args=["--input.count", "4", "--verbose"],
     )
     assert returned is ctx
-    assert ctx.get(R.input.count) == 4
-    assert ctx.get(R.verbose) is True
+    assert ctx.get(R.resolve("input.count")) == 4
+    assert ctx.get(R.resolve("verbose")) is True
 
     monkeypatch.setattr(sys, "argv", ["program", "--input.count", "5"])
     assert parse_and_inject(extra_args=args)["input.count"] == 5
@@ -124,20 +124,26 @@ def test_parse_and_inject_returns_dict_or_updates_context(
 def test_resolve_args_merges_metadata_and_rejects_conflicts() -> None:
     base = Arg(required=True)
     refs = [
-        Ref("input.value", {ARG: base, HELP: "value help"}),
-        Ref("input.value", {ARG: base, TYPE: int}),
+        Schema(
+            {"input": {"value": ref(metadata={ARG: base, HELP: "value help"})}}
+        ).resolve("input.value"),
+        Schema({"input": {"value": ref(metadata={ARG: base, TYPE: int})}}).resolve(
+            "input.value"
+        ),
     ]
     resolved = resolve_args_from_refs(refs)
     assert resolved["input.value"].help == "value help"
     assert resolved["input.value"].type is int
 
     with pytest.raises(TypeError, match="Invalid metadata"):
-        resolve_args_from_refs([Ref("bad", {ARG: "not-an-arg"})])
+        resolve_args_from_refs(
+            [Schema({"bad": ref(metadata={ARG: "not-an-arg"})}).resolve("bad")]
+        )
     with pytest.raises(ValueError, match="Conflicting Arg"):
         resolve_args_from_refs(
             [
-                Ref("same", {ARG: Arg(default=1)}),
-                Ref("same", {ARG: Arg(default=2)}),
+                Schema({"same": ref(metadata={ARG: Arg(default=1)})}).resolve("same"),
+                Schema({"same": ref(metadata={ARG: Arg(default=2)})}).resolve("same"),
             ]
         )
     with pytest.raises(ValueError, match="Argument conflict"):
@@ -148,7 +154,7 @@ def test_prepare_args_collects_refs_from_node_tree() -> None:
     schema = Schema(
         {
             "input": {
-                "value": Ref(metadata={ARG: Arg(type=int, required=True)}),
+                "value": ref(int, metadata={ARG: Arg(required=True)}),
             }
         }
     )
@@ -157,6 +163,6 @@ def test_prepare_args_collects_refs_from_node_tree() -> None:
     def application(ctx: Context, /, *, value: Auto[int]) -> int:
         return value
 
-    graph = application(value=schema.input.value)
+    graph = application(value=schema.resolve("input.value"))
     args = prepare_args(node=graph)
     assert args == {"input.value": Arg(type=int, required=True)}

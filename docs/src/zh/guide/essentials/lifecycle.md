@@ -5,10 +5,10 @@ Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行
 ## 构建与修改
 
 ```python
-from slyme.context import Context, Schema
+from slyme.context import Context, Schema, ref
 from slyme.node import Auto, node
 
-R = Schema({"user": {"age": ..., "name": ...}, "a": ..., "b": ..., "items": ...})
+R = Schema({"user": {"age": ref(), "name": ref()}, "a": ref(), "b": ref(), "items": ref()})
 
 
 @node
@@ -16,8 +16,8 @@ def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
     return timeout, data
 
 
-task = process(data=[R.user.age, R.user.name])
-task.timeout = 60
+task = process(data=[R.resolve("user.age"), R.resolve("user.name")])
+task.set("timeout", 60)
 ```
 
 Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新编译整张图，并会从下一次调用开始生效。
@@ -41,14 +41,14 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 ```python
 ctx = Context(schema=R)
-ctx.update({R.a: 1, R.b: 2, R.items: [1, 2]})
+ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
-process(data=[R.a, R.b])(ctx)  # Auto 生成求值后的 list [1, 2]
-process(data=R.items)(ctx)  # data 是 Context 中保存的 list
+process(data=[R.resolve("a"), R.resolve("b")])(ctx)  # Auto 生成求值后的 list [1, 2]
+process(data=R.resolve("items"))(ctx)  # data 是 Context 中保存的 list
 ```
 
 Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用独立的 `ctx.fork()` 执行。子 Node 返回后，其局部写入会被丢弃，也不会与其他 Auto 子 Node 的局部写入发生竞争。fork 仍会共享可变 leaf 对象，也不会撤销文件、网络请求或其他外部副作用。
 
 显式编排采用不同语义。直接调用 Node 或使用 `sequential_exec(ctx, children)` 时会传入指定的 Context 本身，因此这些步骤会有意观察到彼此的局部写入。
 
-自行管理 Context 时直接调用 `node(ctx)`；需要 Slyme 准备外部输入、校验 `Arg` 元数据并提取输出时，以 `node.run(...)` 作为应用边界。
+Context 创建、外部输入校验和输出提取由应用代码负责。核心执行只有一个入口：直接调用 `node(ctx)`。

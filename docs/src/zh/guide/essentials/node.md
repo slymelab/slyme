@@ -7,10 +7,10 @@
 Node 函数必须恰好有一个非 keyword-only 运行时参数，所有构建参数必须是 keyword-only：
 
 ```python
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 from slyme.node import Auto, node
 
-R = Schema({"input": {"x": ...}, "output": {"total": ...}})
+R = Schema({"input": {"x": ref()}, "output": {"total": ref()}})
 
 
 @node
@@ -20,7 +20,7 @@ def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
     return result
 
 
-task = add(x=R.input.x, y=2, output=R.output.total)
+task = add(x=R.resolve("input.x"), y=2, output=R.resolve("output.total"))
 ```
 
 运行时参数的名称与类型标注都不是必需的；Slyme 仅根据参数数量及 keyword-only 位置区分运行时参数和构建参数。
@@ -32,17 +32,11 @@ task = add(x=R.input.x, y=2, output=R.output.total)
 
 ```python
 ctx = Context(schema=R)
-ctx.set(R.input.x, 3)
+ctx.set(R.resolve("input.x"), 3)
 result = task(ctx)  # 5
 ```
 
-需要输入处理、`Arg` 校验、CLI 解析或输出提取时，以 `run()` 作为应用边界：
-
-```python
-result = task.run(inputs={R.input.x: 3}, outputs=R.output.total)
-```
-
-未传入 Context 时，`run()` 会根据 Node 图、`inputs` 和 `outputs` 中出现的 Ref 创建应用根。显式传入 Context 时不会改变其声明；调用方必须事先声明 Node 可能使用的所有 Ref。
+Context 创建、外部输入处理和输出提取均由调用方负责。Node 核心执行既不会推导 Schema，也不会隐式创建 Context。
 
 现在没有 Def/Exec 转换和 `prepare()` 阶段。每次调用都会绑定并解析当前参数与 wrapper。
 
@@ -73,14 +67,14 @@ Node 渲染会展示当前参数值。参数边前的 `?` 表示该值会在 Nod
 
 ## 动态修改
 
-Node 和 Wrapper 参数是真实的实例属性，并在两次调用之间始终可变：
+Node 和 Wrapper 参数通过显式参数 API 在两次调用之间保持可变：
 
 ```python
-root.child.value = 10
+root.get("child").set("value", 10)
 assert root(Context()) == 11
 ```
 
-参数名不能与 `run`、`func`、`specs` 或 `wrappers` 等框架属性冲突。参数不能删除；应赋予其他值或 `UNDEFINED`。
+使用 `get(name)` 读取参数，使用 `set(name, value)` 替换参数，使用 `reset(name)` 恢复声明的默认值或 `UNDEFINED`。只读 `params` mapping 暴露全部当前参数。参数名可以与 `func`、`get`、`wrappers` 等框架 API 重合，因为参数不会投影为对象属性。
 
 调用时，静态参数容器会直接传给用户函数，因此对容器的修改会更新 Node 或 Wrapper 上的实时参数。包含 evaluator 叶子的 Auto 参数则会用解析结果重建。
 

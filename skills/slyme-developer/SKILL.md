@@ -9,17 +9,15 @@ description: API guidance, architectural best practices, and code-style conventi
 
 Slyme uses one mutable `Node` graph throughout assembly and execution. Node and Wrapper calls pass their current static parameter containers directly to user functions; mutations to those containers remain on the live element and are visible to later calls. Call the corresponding factory or Builder again when another independently configurable graph is needed. An application Context owns an explicit `Schema`; `Context.fork()` shares those declarations while creating a live local layer with C3 parent lookup. `Context.flatten()` exposes the visible Ref-to-value mapping without copying stored values.
 
-Build parameters are real Node and Wrapper attributes. Read and modify them with normal attribute syntax such as `node.child` and `node.timeout = 30`; mapping-style access is not supported. Parameter names that collide with framework attributes are rejected when the decorated function is defined.
+Build parameters use the explicit Node and Wrapper parameter API. Read with `node.get(name)`, replace with `node.set(name, value)`, and restore the declared default with `node.reset(name)`. The read-only `node.params` mapping exposes all current parameters. Parameter names may overlap framework API names because parameters are not projected as attributes.
 
-Use the root Node's `.run(...)` method as the application boundary. It creates or extends a `Context`, resolves and validates external inputs declared by `Arg` metadata, executes the Node, and extracts an optional output Ref PyTree into ordinary Python values. Every Context value that must exist before the Node graph starts should be declared as an `Arg`; pass concrete values through `inputs`, or enable argparse when values should come from the command line. Call a Node directly with a `Context` for lower-level execution.
-
-Expose this application-boundary contract only on synchronous and asynchronous `@node`s. Wrappers modify a mounted Node's execution and are not independently runnable workflow boundaries.
+Application code creates a `Context`, handles external inputs, calls the root Node with that Context, and reads outputs explicitly. `Arg` metadata and `slyme.cli` can prepare command-line inputs without adding a second Node execution interface. Wrappers modify a mounted Node's execution and are not independently runnable workflow boundaries.
 
 - `@node` defines an execution unit and may return either a derived value or control information.
 - `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.
 - `@builder` is a build-time factory that assembles reusable Node trees. It requires the outer result to be a `Node` or `AsyncNode` (`None` is reported as a missing return), but does not validate the nested object graph or perform runtime work.
 - `Context` has local mutable data and immutable ordered parents. Reads are effective by default, writes are local, and `local=True` restricts read operations to one Context.
-- Context construction accepts a Ref-to-value mapping. Structural containers are derived from leaf paths and disappear when their last leaf is deleted.
+- Context construction accepts a declared path-to-value mapping. Structural containers are derived from leaf paths and disappear when their last leaf is deleted.
 - `Context.add()` installs one non-replaceable local binding and returns its exact idempotent disposer.
 - `Compose` stores ordered values by Context identity and resolves those visible through C3 lookup. Use `one()`, `collect()`, `merge()`, or a synchronous custom resolver.
 

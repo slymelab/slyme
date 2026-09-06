@@ -18,20 +18,20 @@ from .core import (
 )
 from .core import (
     Context,
+    ContextKey,
     Ref,
-    RefLike,
     Schema,
-    to_ref,
+    ref,
 )
 from .metadata import ARG, HELP, TYPE, Arg
 
 __all__ = [
     "Compose",
     "Context",
+    "ContextKey",
     "Ref",
-    "RefLike",
     "Schema",
-    "to_ref",
+    "ref",
     "ContextConfig",
     "ARG",
     "Arg",

@@ -15,19 +15,19 @@ You can define a Builder like a normal function, just add the `@builder` decorat
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema
+from slyme.context import Schema, ref
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
 
-R = Schema({"process_config": ..., "output_path": ...})
+R = Schema({"process_config": ref(), "output_path": ref()})
 
 
 @builder
 def create_data_pipeline(source_path: str):
     # 1. Instantiate each Node — pass paths from R via keyword arguments
     load_node = load_data(path=source_path)
-    process_node = process_data(config=R.process_config)
-    save_node = save_data(output=R.output_path)
+    process_node = process_data(config=R.resolve("process_config"))
+    save_node = save_data(output=R.resolve("output_path"))
 
     # 2. Assemble and return a complete Node tree
     return sequential(nodes=[load_node, process_node, save_node])
@@ -53,9 +53,9 @@ This is very useful when building different variants of pipelines, avoiding a lo
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema
+from slyme.context import Schema, ref
 
-R = Schema({"default_config": ..., "output_path": ...})
+R = Schema({"default_config": ref(), "output_path": ref()})
 
 
 @builder
@@ -63,7 +63,7 @@ def base_pipeline():
     return sequential(
         nodes=[
             load_data(path="default_path"),
-            process_data(config=R.default_config),
+            process_data(config=R.resolve("default_config")),
         ]
     )
 
@@ -74,8 +74,8 @@ def custom_pipeline(new_path: str):
     pipeline = base_pipeline()
 
     # 2. Dynamically modify specific Node's build-time parameters
-    pipeline.nodes[0].path = new_path
-    pipeline.nodes.append(save_data(output=R.output_path))
+    pipeline.get("nodes")[0].set("path", new_path)
+    pipeline.get("nodes").append(save_data(output=R.resolve("output_path")))
     return pipeline
 ```
 

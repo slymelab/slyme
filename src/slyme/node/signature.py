@@ -28,8 +28,7 @@ from typing import (
     get_type_hints,
 )
 
-from slyme.context import Context, Schema
-from slyme.context.tree import CTX_EVAL_ENGINE
+from slyme.context import Context
 from slyme.utils.exception import enrich_exception
 
 __all__ = [
@@ -74,9 +73,7 @@ class Spec:
             result = self.default_factory()
         else:
             return UNDEFINED
-        return CTX_EVAL_ENGINE.map(
-            lambda x: x() if isinstance(x, Schema) else x, result
-        )
+        return result
 
     def should_eval(self, value: Any) -> bool:
         if self.auto_eval is _MISSING:

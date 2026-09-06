@@ -7,16 +7,16 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 from slyme.node import Auto, Node, node, wrapper
 
 
 R = Schema(
     {
         "input": {
-            "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
+            "articles": ref(),
         },
-        "output": {"responses": ...},
+        "output": {"responses": ref()},
     }
 )
 
@@ -49,20 +49,23 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 @builder
 def build() -> Node:
-    formatter = format_prompts(articles=R.input.articles)
+    formatter = format_prompts(articles=R.resolve("input.articles"))
     return call_llm(
         prompts=formatter,
-        output=R.output.responses,
+        output=R.resolve("output.responses"),
     ).add_wrappers(timing(name="llm"))
 
 
-responses = build().run(
-    inputs={
-        R.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
+ctx = Context(
+    {
+        R.resolve("input.articles"): [
+            {"title": "Slyme", "content": "Composable Python Nodes"}
+        ]
     },
-    outputs=R.output.responses,
+    schema=R,
 )
-print(responses)
+build()(ctx)
+print(ctx.get(R.resolve("output.responses")))
 ```
 
 The important pieces are:
@@ -71,6 +74,6 @@ The important pieces are:
 - `Auto` resolves the formatter Node before invoking `call_llm`.
 - `@wrapper` surrounds a mounted Node with middleware behavior.
 - `@builder` requires the outer result to be a `Node` or `AsyncNode`: `None` raises a missing-return `ValueError`, any other wrong root raises `TypeError`, and the parameter graph is not recursively validated.
-- `run()` prepares application inputs and extracts outputs. Direct `node(ctx)` calls are also supported.
+- Application code creates a Context, supplies external inputs, calls the Node, and reads outputs explicitly.
 
 Nodes remain mutable and static parameter containers stay live during calls; there is no Def/Exec or explicit prepare phase. Call the Builder again when another independently configurable graph is required.

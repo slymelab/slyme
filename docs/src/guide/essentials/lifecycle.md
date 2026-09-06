@@ -5,10 +5,10 @@ Slyme uses one live `Node` graph rather than separate definition and execution t
 ## Build and modify
 
 ```python
-from slyme.context import Context, Schema
+from slyme.context import Context, Schema, ref
 from slyme.node import Auto, node
 
-R = Schema({"user": {"age": ..., "name": ...}, "a": ..., "b": ..., "items": ...})
+R = Schema({"user": {"age": ref(), "name": ref()}, "a": ref(), "b": ref(), "items": ref()})
 
 
 @node
@@ -16,8 +16,8 @@ def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
     return timeout, data
 
 
-task = process(data=[R.user.age, R.user.name])
-task.timeout = 60
+task = process(data=[R.resolve("user.age"), R.resolve("user.name")])
+task.set("timeout", 60)
 ```
 
 Node parameters and wrappers may be changed between calls. A change never requires recompiling the whole graph and becomes visible on the next call.
@@ -41,14 +41,14 @@ Static parameter values and values retrieved from `Context` keep their normal Py
 
 ```python
 ctx = Context(schema=R)
-ctx.update({R.a: 1, R.b: 2, R.items: [1, 2]})
+ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
-process(data=[R.a, R.b])(ctx)  # Auto produces the evaluated list [1, 2]
-process(data=R.items)(ctx)  # data is the list stored in Context
+process(data=[R.resolve("a"), R.resolve("b")])(ctx)  # Auto produces the evaluated list [1, 2]
+process(data=R.resolve("items"))(ctx)  # data is the list stored in Context
 ```
 
 Auto Ref values are read from `ctx`. Every Auto child Node instead executes with its own `ctx.fork()`: child-local writes are discarded after its return and cannot race with writes from sibling Auto children. The fork still shares mutable leaf objects and does not undo files, network requests, or other external side effects.
 
 Explicit orchestration has different semantics. Calling a Node directly or using `sequential_exec(ctx, children)` passes the selected Context itself, so those steps intentionally observe one another's local writes.
 
-Call a Node directly with `node(ctx)` when managing Context yourself. Use `node.run(...)` as the application boundary when Slyme should prepare external inputs, validate `Arg` metadata, and extract outputs.
+Application code owns Context construction, external input validation, and output extraction. Core execution has one entry point: call the Node directly with `node(ctx)`.

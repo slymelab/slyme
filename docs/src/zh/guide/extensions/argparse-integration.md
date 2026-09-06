@@ -16,7 +16,7 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 - **`help`**：参数的帮助描述信息。
 - **`type`**：参数类型。如果不提供，Slyme 会尝试根据 `default` 的类型进行自动推断。
 - **`choices`**：允许的参数值范围。
-- **`required`**：外部输入是否必需。`Node.run()` 可以从 `inputs`、已有 Context，或者在 `use_argparse=True` 时从命令行获得该输入。
+- **`required`**：该命令行输入是否必需。
 - **`nargs`**：消费的命令行参数个数。
 - **`aliases`**：参数的别名（例如 `["-lr"]`）。
 - **`metavar`**：在帮助信息中显示的名称。
@@ -61,7 +61,8 @@ Slyme 提供了一个内置的 `slyme.cli` 模块，用于将核心系统中的 
 ```python
 from enum import Enum
 from typing import Literal
-from slyme.context import ARG, Arg, Context, Ref, Schema
+from slyme.cli import parse_and_inject
+from slyme.context import ARG, Arg, Context, Ref, Schema, ref
 from slyme.node import node, Auto
 
 
@@ -74,21 +75,21 @@ class ModelSize(Enum):
 R = Schema(
     {
         "model": {
-            "use_cache": Ref(metadata={ARG: Arg(default=True, help="是否使用缓存")}),
-            "config": Ref(
+            "use_cache": ref(metadata={ARG: Arg(default=True, help="是否使用缓存")}),
+            "config": ref(
                 metadata={
                     ARG: Arg(type=dict, required=True, help="模型配置(JSON字符串)")
                 }
             ),
-            "size": Ref(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)}),
+            "size": ref(metadata={ARG: Arg(type=ModelSize, default=ModelSize.SMALL)}),
         },
         "server": {
-            "ports": Ref(
+            "ports": ref(
                 metadata={ARG: Arg(type=list[int], default=[8080], help="端口列表")}
             )
         },
         "run": {
-            "mode": Ref(
+            "mode": ref(
                 metadata={ARG: Arg(type=Literal["train", "test"], default="train")}
             )
         },
@@ -117,49 +118,35 @@ def start_server(
 if __name__ == "__main__":
     # 3. 实例化 Node
     server_node = start_server(
-        use_cache=R.model.use_cache,
-        ports=R.server.ports,
-        config=R.model.config,
-        size=R.model.size,
-        mode=R.run.mode,
+        use_cache=R.resolve("model.use_cache"),
+        ports=R.resolve("server.ports"),
+        config=R.resolve("model.config"),
+        size=R.resolve("model.size"),
+        mode=R.resolve("run.mode"),
     )
 
     # 模拟在命令行执行：
     # python main.py --no-model-use-cache --server.ports 80 443 --model.config '{"debug": true}' --model.size base --run.mode test
 
-    # 通过标准应用边界发现 Arg 元数据、解析命令行、校验必需输入、
-    # prepare 并执行 Node。
-    final_context = server_node.run(use_argparse=True)
+    # 发现 Arg 元数据、解析命令行、注入数据并执行。
+    context = Context(schema=R)
+    parse_and_inject(context=context, node=server_node)
+    server_node(context)
 ```
 
 ## 核心 API 参考
 
-### `Node.run`
-
-对于可执行的 Node 树，`run()` 是推荐的应用边界。设置 `use_argparse=True` 后，它会发现树中的所有 `Arg` 并解析命令行参数。已经通过 `context` 或 `inputs` 提供的值可以满足必需参数，并成为解析器默认值；显式传入的命令行值优先级更高。
-
-```python
-result = node_def.run(
-    use_argparse=True,
-    cli_args=["--model.config", '{"debug": true}'],
-)
-```
-
-省略 `cli_args` 时会解析 `sys.argv[1:]`。与其他 `run()` 调用一样，你也可以把已有 Context 作为第一个位置参数传入，通过 `inputs` 提供程序输入，通过 `outputs` 指定待提取的 Ref PyTree，或者设置 `return_context=True` 返回 `(output, context)`。
-
-如果在 `use_argparse=False` 时提供 `cli_args`，`run()` 会抛出 `ValueError`，而不是静默忽略这些参数。
-
 ### `parse_and_inject`
 
-这是一个底层 API，用于独立于 Node 执行过程解析参数，并可选择将结果注入 `Context`。
+该 API 独立于 Node 执行过程解析参数，并可选择将结果注入 `Context`。
 
 ```python
 def parse_and_inject(
     context: Context | None = None,
     parser: argparse.ArgumentParser | None = None,
     cli_args: list[str] | None = None,
-    node: Any | Iterable[RefLike] | None = None,
-    extra_refs: Iterable[RefLike] | None = None,
+    node: Any | Iterable[Ref[Any]] | None = None,
+    extra_refs: Iterable[Ref[Any]] | None = None,
     extra_args: dict[str, Arg] | None = None,
 ) -> dict[str, Any] | Context:
 ```
@@ -169,8 +156,18 @@ def parse_and_inject(
   - 若 `context` 为 `None`：返回解析得到的 `dict[str, Any]`。
 - **参数来源**：你可以传入 `node` 自动扫描依赖树中所需的全部 `Ref`，或者手动提供 `extra_refs` 和 `extra_args` 来追加。
 
-与 `Node.run()` 不同，这个底层函数不会创建或扩展 Ref 声明。若传入
-Context，它必须已经声明所有将要写入解析结果的路径。
+它不会创建或扩展 Ref 声明。若传入 Context，它必须已经声明所有将要
+写入解析结果的路径。注入后应显式调用 Node：
+
+```python
+context = Context(schema=R)
+parse_and_inject(
+    context=context,
+    node=node_def,
+    cli_args=["--model.config", '{"debug": true}'],
+)
+node_def(context)
+```
 
 ### `populate_parser` 与 `prepare_args`
 

@@ -3,18 +3,18 @@
 ## Value-producing and effectful Nodes
 
 ```python
-from slyme.context import ARG, Arg, Compose, Context, Ref, Schema
+from slyme.context import ARG, Arg, Compose, Context, Ref, Schema, ref
 from slyme.node import Auto, Node, node, sequential_exec, wrapper
 
 
 R = Schema(
     {
         "input": {
-            "value": Ref(metadata={ARG: Arg(type=float, required=True)}),
+            "value": ref(metadata={ARG: Arg(type=float, required=True)}),
         },
-        "state": {"counter": ...},
-        "output": {"result": ...},
-        "request": {"id": ...},
+        "state": {"counter": ref()},
+        "output": {"result": ref()},
+        "request": {"id": ref()},
     }
 )
 
@@ -54,7 +54,7 @@ Context mutation methods modify data in place and return `None`. A Node may retu
 root_ctx = Context(schema=R)
 agent_ctx = root_ctx.fork()
 
-remove_request = agent_ctx.add(R.request.id, "request-1")
+remove_request = agent_ctx.add(R.resolve("request.id"), "request-1")
 
 tools = Compose[str, tuple[str, ...]].collect()
 remove_global = tools.add(root_ctx, "read")
@@ -90,19 +90,21 @@ A Wrapper has exactly three non-keyword-only runtime parameters. Attach it only 
 ```python
 root = execute(
     derived=calculate(
-        value=R.input.value,
+        value=R.resolve("input.value"),
         scale=2.0,
     ),
-    children=(increment(counter=R.state.counter),),
-    output=R.output.result,
+    children=(increment(counter=R.resolve("state.counter")),),
+    output=R.resolve("output.result"),
 ).add_wrappers(trace(name="execute"))
 
-result = root.run(
-    inputs={R.input.value: 3.0, R.state.counter: 0},
-    outputs=R.output.result,
+ctx = Context(
+    {R.resolve("input.value"): 3.0, R.resolve("state.counter"): 0},
+    schema=R,
 )
+result = root(ctx)
+assert ctx.get(R.resolve("output.result")) == result
 ```
 
-The Node graph stays mutable. Build parameters are real attributes (`root.derived`, `root.children`, and so on), and assignment runs the parameter's `Spec` build logic. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. A change affects subsequent calls without an explicit prepare phase. Call the relevant factory or Builder again when another independently configurable graph is needed, and copy mutable application values explicitly when they must not be shared.
+The Node graph stays mutable. Read build parameters with `root.get(name)`, replace them with `root.set(name, value)`, and restore defaults with `root.reset(name)`. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. A change affects subsequent calls without an explicit prepare phase. Call the relevant factory or Builder again when another independently configurable graph is needed, and copy mutable application values explicitly when they must not be shared.
 
 Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

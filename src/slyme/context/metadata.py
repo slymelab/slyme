@@ -42,7 +42,7 @@ class Arg:
     Designed to be minimal and universal, compatible with argparse, hydra, etc.
 
     Example:
-        Ref("model.lr", metadata={ARG: Arg(default=1e-3, help="Learning rate")})
+        ref(float, metadata={ARG: Arg(default=1e-3, help="Learning rate")})
     """
 
     default: Any = _MISSING

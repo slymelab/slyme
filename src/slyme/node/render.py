@@ -33,7 +33,7 @@ from .core import (
     NodeElement,
     Wrapper,
 )
-from .tree import NODE_ENGINE
+from .tree import NODE_ENGINE, _NodeParameterKey
 
 __all__ = ["get_render_string", "Config"]
 
@@ -141,17 +141,19 @@ def _build_render_lines(obj: Any) -> _RenderResult:
         # Only display children that have a valid category or content
         if child_result.category is not None:
             key_str = key_path[-1].codify("")  # e.g., ".name" or "[0]"
-            if (
-                isinstance(obj, NodeElement)
-                and len(key_path) == 1
-                and isinstance(key_path[0], AttributeKey)
-            ):
-                name = key_path[0].name
-                if name == "wrappers" and isinstance(obj, (Node, AsyncNode)):
+            if isinstance(obj, NodeElement) and len(key_path) == 1:
+                key = key_path[0]
+                if (
+                    isinstance(key, AttributeKey)
+                    and key.name == "wrappers"
+                    and isinstance(obj, (Node, AsyncNode))
+                ):
                     if not child:
                         continue
                     child_result.category = "wrappers"
-                elif name in obj.specs:
+                elif isinstance(key, _NodeParameterKey):
+                    name = key.name
+                    key_str = f".{name}"
                     if obj.specs[name].should_eval(child):
                         key_str = f"? {key_str}"
                     elif child_result.category == "wrappers":

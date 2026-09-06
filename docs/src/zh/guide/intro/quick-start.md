@@ -7,16 +7,16 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 from slyme.node import Auto, Node, node, wrapper
 
 
 R = Schema(
     {
         "input": {
-            "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
+            "articles": ref(),
         },
-        "output": {"responses": ...},
+        "output": {"responses": ref()},
     }
 )
 
@@ -49,20 +49,23 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 @builder
 def build() -> Node:
-    formatter = format_prompts(articles=R.input.articles)
+    formatter = format_prompts(articles=R.resolve("input.articles"))
     return call_llm(
         prompts=formatter,
-        output=R.output.responses,
+        output=R.resolve("output.responses"),
     ).add_wrappers(timing(name="llm"))
 
 
-responses = build().run(
-    inputs={
-        R.input.articles: [{"title": "Slyme", "content": "Composable Python Nodes"}]
+ctx = Context(
+    {
+        R.resolve("input.articles"): [
+            {"title": "Slyme", "content": "Composable Python Nodes"}
+        ]
     },
-    outputs=R.output.responses,
+    schema=R,
 )
-print(responses)
+build()(ctx)
+print(ctx.get(R.resolve("output.responses")))
 ```
 
 其中：
@@ -71,6 +74,6 @@ print(responses)
 - `Auto` 会在调用 `call_llm` 前求值 formatter Node。
 - `@wrapper` 为挂载的 Node 添加中间件行为。
 - `@builder` 要求最外层结果是 `Node` 或 `AsyncNode`：`None` 会触发表示遗漏返回值的 `ValueError`，其他错误根对象会触发 `TypeError`，参数图则不会被递归校验。
-- `run()` 准备应用输入并提取输出，也可以直接调用 `node(ctx)`。
+- 应用代码显式创建 Context、提供外部输入、调用 Node 并读取输出。
 
 Node 始终可变，调用期间静态参数容器也保持实时状态；不再存在 Def/Exec 或显式 prepare 阶段。需要另一张可独立配置的图时，应再次调用 Builder。

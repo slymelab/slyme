@@ -40,16 +40,19 @@ pip install slyme
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, Schema
+from slyme.context import ARG, Arg, Context, Ref, Schema, ref
 from slyme.node import node, wrapper, Auto, Node
 
 
 R = Schema(
     {
         "input": {
-            "articles": Ref(metadata={ARG: Arg(type=list[dict], required=True)}),
+            "articles": ref(
+                list,
+                metadata={ARG: Arg(type=list[dict], required=True)},
+            ),
         },
-        "output": {"responses": ...},
+        "output": {"responses": ref()},
     }
 )
 
@@ -91,25 +94,26 @@ def timing(
 @builder
 def build_pipeline():
     return llm_api(
-        responses=R.output.responses,
+        responses=R.resolve("output.responses"),
         prompts=format_prompts(
-            articles=R.input.articles,
+            articles=R.resolve("input.articles"),
         ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
 # 5. 在运行时执行
 if __name__ == "__main__":
-    responses = build_pipeline().run(
-        inputs={
-            R.input.articles: [
+    ctx = Context(
+        {
+            R.resolve("input.articles"): [
                 {"title": "Article 1", "content": "Content 1"},
                 {"title": "Article 2", "content": "Content 2"},
             ]
         },
-        outputs=R.output.responses,
+        schema=R,
     )
-    print(responses)
+    build_pipeline()(ctx)
+    print(ctx.get(R.resolve("output.responses")))
 ```
 
 ## Context 分层与 Compose

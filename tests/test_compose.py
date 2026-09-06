@@ -7,9 +7,9 @@ from types import MappingProxyType
 import pytest
 
 import slyme.context as context_module
-from slyme.context import Compose, Context, Ref, Schema
+from slyme.context import Compose, Context, Schema, ref
 
-R = Schema({"hooks": ..., "tools": ...})
+R = Schema({"hooks": ref(), "tools": ref()})
 
 
 def test_compose_is_the_only_public_composition_type() -> None:
@@ -198,7 +198,7 @@ def test_context_branches_can_share_an_explicit_ancestor() -> None:
 
 
 def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
-    tools_ref = Ref("tools")
+    tools_ref = R.resolve("tools")
     root = Context(schema=R)
     inherited = Compose[str, tuple[str, ...]].collect()
     root.add(tools_ref, inherited)
@@ -217,7 +217,7 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
 
 
 def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
-    ref = Ref("hooks")
+    ref = R.resolve("hooks")
     ctx = Context(schema=R)
     hooks = Compose[str, tuple[str, ...]].collect()
     ctx.add(ref, hooks)

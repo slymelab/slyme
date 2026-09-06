@@ -16,9 +16,9 @@ breaking changes when they are documented here.
   pre-commit/pre-push hooks, CodeQL, dependency review, and Dependabot updates.
 - Added verified package builds, trusted PyPI publishing with provenance
   attestations, contribution guidance, issue templates, and a security policy.
-- Added immutable `Schema` declaration trees with undeclared attribute
-  validation, branch metadata, leaf/container-aware recursive merging, and
-  explicit branch-Ref declaration tracking.
+- Added mutable, monotonic `Schema` declaration trees with explicit `resolve()`
+  lookup, branch metadata, leaf/container-aware recursive merging, and
+  path-free `ref()` declarations.
 - Added application-owned Ref declarations to `Context`; forks share later
   `declare()` additions while Context data continues to follow C3 lookup.
 - Added live `Context.fork()` layers with C3 multiple inheritance, local-only
@@ -40,6 +40,9 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `Node.run()`, `AsyncNode.run()`, and their convenience runner module;
+  applications now construct Context, handle external inputs and outputs, and
+  invoke Nodes explicitly.
 - Removed the experimental runner, command package, command-line entry point,
   and their runner-only output metadata.
 - Removed the Def/Exec split and recursive `Node.prepare()` compilation model;
@@ -57,8 +60,10 @@ breaking changes when they are documented here.
 - Removed whole-graph Node structure validation. Node and Wrapper parameters
   may contain arbitrary nested values; mounted wrappers still match Node mode.
 - Removed `Ref.key_path` and its `CallKey`, `KeyPathExpr`, and `P` helpers.
-- Removed the global open-path `R`, declaration-less reference construction,
-  and reference deletion; applications now declare paths through `Schema`.
+- Removed the global open-path `R` and reference deletion; applications now
+  declare Context paths through `Schema`.
+- Removed Schema attribute paths, `Schema.from_refs()`, `RefLike`, and the
+  `...` declaration shorthand.
 
 ### Changed
 
@@ -66,12 +71,11 @@ breaking changes when they are documented here.
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
 - Renamed `RefFactory` to `Schema` and aligned Context construction and
   inspection on `Context(..., schema=R)` and `ctx.schema`.
-- `Ref()` can now represent an unbound declaration; `Schema` binds
-  declarations to concrete paths while Context and
-  evaluation APIs continue to require bound references.
-- Node and Wrapper build parameters are now real instance attributes. Parameter
-  names are checked against reserved framework attributes when decorated;
-  `_kwargs` and mapping-style parameter access have been removed.
+- `Ref` is now an immutable path value, `ref()` creates path-free Schema
+  declarations, and `Schema.resolve()` returns the Ref declared for a path.
+- Node and Wrapper build parameters now use explicit `get()`, `set()`, and
+  `reset()` methods. Parameter names may overlap framework API names without
+  changing attribute behavior.
 - Node and Wrapper construction now uses separate mode-aware factories while
   synchronous and asynchronous decorators share the same signature-analysis
   path.
@@ -85,8 +89,6 @@ breaking changes when they are documented here.
 - `Context.mro` is now an immutable property, `Context.root` exposes its final
   application ancestor, and descendant `schema` properties resolve the Schema
   stored by that root.
-- `Node.run()` derives a root Context's declarations from its graph, inputs,
-  and outputs when the caller does not supply a Context.
 - Auto evaluation now gives every child Node an independent Context fork while
   Ref evaluation reads the supplied Context directly.
 - Builder functions now require their outer result to be a `Node` or
