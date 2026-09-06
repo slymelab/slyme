@@ -3,14 +3,14 @@
 ## Value-producing and effectful Nodes
 
 ```python
-from slyme.context import ARG, Arg, Compose, Context, Ref, Schema, ref
+from slyme.context import Compose, Context, Ref, Schema, ref
 from slyme.node import Auto, Node, node, sequential_exec, wrapper
 
 
 R = Schema(
     {
         "input": {
-            "value": ref(metadata={ARG: Arg(type=float, required=True)}),
+            "value": ref(float),
         },
         "state": {"counter": ref()},
         "output": {"result": ref()},

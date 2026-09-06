@@ -17,20 +17,17 @@ assert Ref("user.name") == name
 ```
 
 直接构造 `Ref` 不会修改 Schema。Context 操作会在 `ctx.schema` 中解析它的路径；
-路径角色与 metadata 仍由该 Schema 决定。
+路径角色与声明的 value type 仍由该 Schema 决定。
 
 应用应使用 `Schema` 描述可用路径：
 
 ```python
-from slyme.context import ARG, Arg, Schema, ref
+from slyme.context import Schema, ref
 
 R = Schema(
     {
         "user": {
-            "name": ref(
-                str,
-                metadata={ARG: Arg(type=str, required=True, help="User name")},
-            ),
+            "name": ref(str),
             "age": ref(),
         },
         "status": ref(),
@@ -44,22 +41,21 @@ name = R.resolve("user.name")
 `R` 对象。组合代码可以把当前应用的 Schema 简写为局部变量 `R`；`ctx.schema`
 则提供该应用使用的完整实时 Schema。
 
-Schema 校验路径声明及其 metadata，但不校验这些路径中存储值的运行时类型。
+Schema 校验路径声明，并拒绝互相冲突的 value type 声明，但不校验所存值的运行时类型。
 
 该路径是稳定的语义名称，不依赖物理 Node 图的位置。
 
-`ref()` 创建不含路径的声明；构造过程会将每项声明绑定到完整路径，并对输入
-mapping 建立快照。声明树内不接受其他值。Schema 对象本身仍可通过单调的
-`declare()` 扩展。
+`ref()` 创建带有可选 value type 的无路径声明；构造过程会将每项声明绑定到完整
+路径。声明树内不接受其他值。Schema 对象本身仍可通过单调的 `declare()` 扩展。
 
 ```python
-from slyme.context import ARG, Arg, Schema, ref
+from slyme.context import Schema, ref
 
 R = Schema(
     {
         "input": {
-            "": ref(metadata={"description": "应用输入"}),
-            "name": ref(str, metadata={ARG: Arg(type=str, required=True)}),
+            "": ref(),
+            "name": ref(str),
             "age": ref(),
         },
         "output": {
@@ -73,10 +69,10 @@ assert R.resolve("input.name").path == "input.name"
 R.resolve("input.naem")  # 抛出 KeyError，并提示 "name"
 ```
 
-每个 `ref()` entry 声明 leaf；mapping entry 一定声明 container，空 mapping 也属于
-container。可选的空 key 声明仅用于定制该 container 的 Ref 及其 metadata，不会
-让它成为 leaf；省略时 Schema 会自动生成 container Ref。Schema 只通过
-`resolve()` 暴露已声明路径，因此应用路径不会与未来新增的 Schema 方法冲突。
+每个具名 `ref()` entry 声明 leaf；mapping entry 一定声明 container，空 mapping 也
+属于 container。可选的空 key `ref()` 会显式声明该 container 自身的 Ref，而不会让
+它成为 leaf；省略时 Schema 会自动生成 container Ref。Schema 只通过 `resolve()`
+暴露已声明路径，因此应用路径不会与未来新增的 Schema 方法冲突。
 
 `declare()` 会原子地递归扩展同一个 Schema 对象。等价声明是幂等的；如果已有
 Ref 的新声明不同，或者 leaf/container 结构冲突，则抛出异常且 Schema 保持

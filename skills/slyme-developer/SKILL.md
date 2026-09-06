@@ -11,7 +11,7 @@ Slyme uses one mutable `Node` graph throughout assembly and execution. Node and 
 
 Build parameters use the explicit Node and Wrapper parameter API. Read with `node.get(name)`, replace with `node.set(name, value)`, and restore the declared default with `node.reset(name)`. The read-only `node.params` mapping exposes all current parameters. Parameter names may overlap framework API names because parameters are not projected as attributes.
 
-Application code creates a `Context`, handles external inputs, calls the root Node with that Context, and reads outputs explicitly. `Arg` metadata and `slyme.cli` can prepare command-line inputs without adding a second Node execution interface. Wrappers modify a mounted Node's execution and are not independently runnable workflow boundaries.
+Application code creates a `Context`, handles external inputs, calls the root Node with that Context, and reads outputs explicitly. Wrappers modify a mounted Node's execution and are not independently runnable workflow boundaries.
 
 - `@node` defines an execution unit and may return either a derived value or control information.
 - `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.

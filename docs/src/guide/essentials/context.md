@@ -18,20 +18,18 @@ assert Ref("user.name") == name
 ```
 
 Constructing a `Ref` does not alter the Schema. Context operations resolve its
-path against `ctx.schema`, which remains the source of path roles and metadata.
+path against `ctx.schema`, which remains the source of path roles and declared
+value types.
 
 For an application, describe its available paths with `Schema`:
 
 ```python
-from slyme.context import ARG, Arg, Schema, ref
+from slyme.context import Schema, ref
 
 R = Schema(
     {
         "user": {
-            "name": ref(
-                str,
-                metadata={ARG: Arg(type=str, required=True, help="User name")},
-            ),
+            "name": ref(str),
             "age": ref(),
         },
         "status": ref(),
@@ -46,24 +44,24 @@ not export a global `R` object. Composition code may use `R` as a short local
 name for its application Schema, while `ctx.schema` exposes the complete live
 Schema used by that application.
 
-Schema validates path declarations and their metadata. It does not validate the
-runtime type of values stored at those paths.
+Schema validates path declarations and rejects conflicting declared value
+types. It does not validate the runtime type of stored values.
 
 The path remains a stable semantic name independent of the physical Node graph.
 
-`ref()` creates a path-free declaration. Construction binds every declaration
-to its complete path and snapshots the input mapping. Other values are invalid
-inside a declaration tree. The Schema itself remains mutable through the
-monotonic `declare()` operation.
+`ref()` creates a path-free declaration with an optional value type.
+Construction binds every declaration to its complete path. Other values are
+invalid inside a declaration tree. The Schema itself remains mutable through
+the monotonic `declare()` operation.
 
 ```python
-from slyme.context import ARG, Arg, Schema, ref
+from slyme.context import Schema, ref
 
 R = Schema(
     {
         "input": {
-            "": ref(metadata={"description": "Application inputs"}),
-            "name": ref(str, metadata={ARG: Arg(type=str, required=True)}),
+            "": ref(),
+            "name": ref(str),
             "age": ref(),
         },
         "output": {
@@ -77,12 +75,11 @@ assert R.resolve("input.name").path == "input.name"
 R.resolve("input.naem")  # raises KeyError and suggests "name"
 ```
 
-Every `ref()` entry declares a leaf. Every mapping entry declares a container,
-including an empty mapping. The optional empty-key declaration customizes that
-container's Ref and metadata instead of making it a leaf. When omitted, Schema
-generates the container Ref automatically. Schema exposes declared paths
-through `resolve()`, so application paths cannot collide with future Schema
-methods.
+Every named `ref()` entry declares a leaf. Every mapping entry declares a
+container, including an empty mapping. An optional empty-key `ref()` explicitly
+declares that container's own Ref instead of making it a leaf; Schema generates
+the container Ref when it is omitted. Schema exposes declared paths through
+`resolve()`, so application paths cannot collide with future Schema methods.
 
 `declare()` extends the same Schema object recursively and atomically. An
 equivalent declaration is idempotent. A different declaration for an existing

@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import difflib
-import types
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
@@ -27,7 +26,6 @@ from typing_extensions import Self
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
-_EMPTY_MAPPING: Mapping[str, Any] = types.MappingProxyType({})
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
@@ -84,18 +82,12 @@ class Ref(Generic[_T]):
     """Immutable Context dependency handle for one dotted path."""
 
     path: str
-    metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
     value_type: Any | None = None
     parts: tuple[str, ...] = field(init=False)
     hash: int = field(init=False)
 
     def __post_init__(self) -> None:
         parts = _split_ref_path(self.path)
-        object.__setattr__(
-            self,
-            "metadata",
-            types.MappingProxyType(dict(self.metadata)),
-        )
         object.__setattr__(self, "parts", parts)
         object.__setattr__(self, "hash", hash(parts))
 
@@ -109,17 +101,14 @@ class Ref(Generic[_T]):
         items = [f"path={self.path!r}"]
         if self.value_type is not None:
             items.append(f"value_type={self.value_type!r}")
-        if self.metadata:
-            items.append(f"metadata={self.metadata!r}")
         return f"{type(self).__name__}({', '.join(items)})"
 
 
 def _make_ref(
     path: str,
     value_type: Any | None = None,
-    metadata: Mapping[str, Any] | None = None,
 ) -> Ref[Any]:
-    return Ref(path, metadata or _EMPTY_MAPPING, value_type)
+    return Ref(path, value_type)
 
 
 @dataclass(frozen=True, repr=False)
@@ -127,46 +116,30 @@ class _RefDeclaration(Generic[_T]):
     """Path-free declaration consumed by :class:`Schema`."""
 
     value_type: Any | None = None
-    metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "metadata",
-            types.MappingProxyType(dict(self.metadata)),
-        )
 
     def _bind(self, path: str) -> Ref[_T]:
-        return cast(Ref[_T], _make_ref(path, self.value_type, self.metadata))
+        return cast(Ref[_T], _make_ref(path, self.value_type))
 
     def __repr__(self) -> str:
         items = []
         if self.value_type is not None:
             items.append(f"value_type={self.value_type!r}")
-        if self.metadata:
-            items.append(f"metadata={self.metadata!r}")
         return f"ref({', '.join(items)})"
 
 
 @overload
 def ref(
     value_type: type[_T],
-    *,
-    metadata: Mapping[str, Any] | None = None,
 ) -> _RefDeclaration[_T]: ...
 @overload
 def ref(
     value_type: None = None,
-    *,
-    metadata: Mapping[str, Any] | None = None,
 ) -> _RefDeclaration[Any]: ...
 def ref(
     value_type: Any | None = None,
-    *,
-    metadata: Mapping[str, Any] | None = None,
 ) -> _RefDeclaration[Any]:
     """Declare one Schema leaf without assigning its path directly."""
-    return _RefDeclaration(value_type, metadata or _EMPTY_MAPPING)
+    return _RefDeclaration(value_type)
 
 
 _REF_ENTRY_KEY = ""
@@ -251,10 +224,7 @@ def _merge_entries(
     if left_is_leaf and right_is_leaf:
         left_ref = cast(Ref[Any], left)
         right_ref = cast(Ref[Any], right)
-        if (
-            left_ref.value_type == right_ref.value_type
-            and left_ref.metadata == right_ref.metadata
-        ):
+        if left_ref.value_type == right_ref.value_type:
             return left_ref
         raise ValueError(f"Conflicting Ref declarations at path {path!r}.")
     if left_is_leaf != right_is_leaf:
@@ -271,10 +241,7 @@ def _merge_entries(
     right_container_ref = cast(Ref[Any] | None, right_container.get(_REF_ENTRY_KEY))
     current_ref: Ref[Any] | None
     if left_container_ref is not None and right_container_ref is not None:
-        if (
-            left_container_ref.value_type != right_container_ref.value_type
-            or left_container_ref.metadata != right_container_ref.metadata
-        ):
+        if left_container_ref.value_type != right_container_ref.value_type:
             raise ValueError(
                 f"Conflicting container Ref declarations at path {path!r}."
             )

@@ -23,7 +23,6 @@ from .core import (
     Schema,
     ref,
 )
-from .metadata import ARG, HELP, TYPE, Arg
 
 __all__ = [
     "Compose",
@@ -33,8 +32,4 @@ __all__ = [
     "Schema",
     "ref",
     "ContextConfig",
-    "ARG",
-    "Arg",
-    "HELP",
-    "TYPE",
 ]

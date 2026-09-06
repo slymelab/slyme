@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gc
 import weakref
-from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -11,8 +10,6 @@ from hypothesis import strategies as st
 
 import slyme.context as context_module
 from slyme.context import (
-    ARG,
-    Arg,
     Context,
     ContextConfig,
     Ref,
@@ -74,10 +71,8 @@ R = Schema(
 )
 
 
-def test_ref_is_directly_constructible_and_declarations_snapshot_metadata() -> None:
-    metadata = {"source": "plugin"}
-    declaration = ref(str, metadata=metadata)
-    metadata["late"] = True
+def test_ref_is_directly_constructible_and_declarations_preserve_type() -> None:
+    declaration = ref(str)
     schema = Schema({"input": {"value": declaration}})
 
     value = schema.resolve("input.value")
@@ -86,18 +81,11 @@ def test_ref_is_directly_constructible_and_declarations_snapshot_metadata() -> N
     assert value.path == "input.value"
     assert value.parts == ("input", "value")
     assert value.value_type is str
-    assert value.metadata == {"source": "plugin"}
-    assert isinstance(value.metadata, MappingProxyType)
     assert value == equivalent
     assert hash(value) == hash(equivalent)
     assert "value_type=" in repr(value)
-    assert "metadata=" in repr(value)
-    assert "source" in repr(declaration)
 
-    manual_metadata = {"source": "manual"}
-    manual = Ref("input.value", metadata=manual_metadata, value_type=bytes)
-    manual_metadata["late"] = True
-    assert manual.metadata == {"source": "manual"}
+    manual = Ref("input.value", value_type=bytes)
     assert manual.value_type is bytes
     assert manual == value
 
@@ -111,17 +99,17 @@ def test_schema_resolves_leaf_and_container_refs() -> None:
     schema = Schema(
         {
             "input": {
-                "": ref(metadata={"description": "inputs"}),
+                "": ref(),
                 "articles": ref(list),
-                "count": ref(metadata={ARG: Arg(type=int, required=True)}),
+                "count": ref(int),
             },
             "args": ref(),
         }
     )
 
-    assert schema.resolve("input").metadata == {"description": "inputs"}
+    assert schema.resolve("input").path == "input"
     assert schema.resolve("input.articles").value_type is list
-    assert schema.resolve("input.count").metadata[ARG].required
+    assert schema.resolve("input.count").value_type is int
     assert schema.resolve("args").path == "args"
     with pytest.raises(KeyError, match="Did you mean 'articles'"):
         schema.resolve("input.artcles")
@@ -194,7 +182,7 @@ def test_schema_declare_is_monotonic_idempotent_and_atomic() -> None:
     base = Schema(
         {
             "input": {
-                "": ref(metadata={"description": "inputs"}),
+                "": ref(),
                 "a": ref(int),
             },
             "keep": ref(),
@@ -208,7 +196,7 @@ def test_schema_declare_is_monotonic_idempotent_and_atomic() -> None:
     )
 
     assert base.declare(extension) is base
-    assert base.resolve("input").metadata == {"description": "inputs"}
+    assert base.resolve("input").path == "input"
     assert base.resolve("input.a").value_type is int
     assert base.resolve("input.b").path == "input.b"
     assert base.resolve("output.result").path == "output.result"
@@ -244,20 +232,20 @@ def test_schema_declare_is_monotonic_idempotent_and_atomic() -> None:
     explicit = Schema(
         {
             "group": {
-                "": ref(metadata={"owner": "right"}),
+                "": ref(str),
                 "right": ref(),
             }
         }
     )
     implicit.declare(explicit)
-    assert implicit.resolve("group").metadata == {"owner": "right"}
+    assert implicit.resolve("group").value_type is str
     assert implicit.resolve("group.left").path == "group.left"
     assert implicit.resolve("group.right").path == "group.right"
 
-    conflicting = Schema({"group": {"": ref(metadata={"owner": "replacement"})}})
+    conflicting = Schema({"group": {"": ref(int)}})
     with pytest.raises(ValueError, match="container Ref declarations.*group"):
         explicit.declare(conflicting)
-    assert explicit.resolve("group").metadata == {"owner": "right"}
+    assert explicit.resolve("group").value_type is str
 
 
 def test_schema_can_be_built_before_or_through_context() -> None:
@@ -317,7 +305,7 @@ def test_context_operations_respect_schema_leaf_and_container_roles() -> None:
             "leaf": ref(),
             "container": {"child": ref()},
             "custom_container": {
-                "": ref(metadata={"description": "group"}),
+                "": ref(str),
                 "child": ref(),
             },
         }
@@ -346,7 +334,7 @@ def test_context_operations_respect_schema_leaf_and_container_roles() -> None:
     assert ctx.get("leaf") == {"child": 1}
     assert ctx.to_dict("container") == {"child": 2}
     assert ctx.to_dict("custom_container") == {"child": 3}
-    assert schema.resolve("custom_container").metadata == {"description": "group"}
+    assert schema.resolve("custom_container").value_type is str
 
 
 def test_context_crud_views_and_user_dict_leaves() -> None:

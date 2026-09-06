@@ -40,6 +40,9 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `slyme.cli`, its argparse helpers, Context argument metadata, and
+  general-purpose Ref metadata so the core model no longer embeds input-adapter
+  configuration.
 - Removed `Node.run()`, `AsyncNode.run()`, and their convenience runner module;
   applications now construct Context, handle external inputs and outputs, and
   invoke Nodes explicitly.

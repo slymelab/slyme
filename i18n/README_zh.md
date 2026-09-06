@@ -40,17 +40,14 @@ pip install slyme
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import ARG, Arg, Context, Ref, Schema, ref
+from slyme.context import Context, Ref, Schema, ref
 from slyme.node import node, wrapper, Auto, Node
 
 
 R = Schema(
     {
         "input": {
-            "articles": ref(
-                list,
-                metadata={ARG: Arg(type=list[dict], required=True)},
-            ),
+            "articles": ref(list),
         },
         "output": {"responses": ref()},
     }
