@@ -20,9 +20,10 @@ import types
 import weakref
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from .core import Context
+if TYPE_CHECKING:
+    from .core import Context
 
 __all__ = ["Compose"]
 
@@ -33,7 +34,7 @@ _V = TypeVar("_V")
 
 
 @dataclass(frozen=True)
-class _Entry(Generic[_T]):
+class _ComposeEntry(Generic[_T]):
     identity: object
     value: _T
     metadata: Mapping[str, Any]
@@ -46,9 +47,9 @@ class Compose(Generic[_T, _R]):
 
     def __init__(self, resolver: Callable[[tuple[_T, ...]], _R]) -> None:
         self._resolver = resolver
-        self._buckets: weakref.WeakKeyDictionary[Context, dict[object, _Entry[_T]]] = (
-            weakref.WeakKeyDictionary()
-        )
+        self._buckets: weakref.WeakKeyDictionary[
+            Context, dict[object, _ComposeEntry[_T]]
+        ] = weakref.WeakKeyDictionary()
 
     @classmethod
     def one(cls) -> Compose[_T, _T]:
@@ -85,7 +86,7 @@ class Compose(Generic[_T, _R]):
         ctx: Context,
         *,
         local: bool,
-    ) -> tuple[tuple[Context, _Entry[_T]], ...]:
+    ) -> tuple[tuple[Context, _ComposeEntry[_T]], ...]:
         contexts = (ctx,) if local else ctx.mro
         return tuple(
             (context, entry)
@@ -102,11 +103,27 @@ class Compose(Generic[_T, _R]):
         position: Literal["prepend", "append"] = "append",
     ) -> Callable[[], None]:
         """Add one Context-local value and return an idempotent exact disposer."""
+        entry = self._insert(
+            ctx,
+            value,
+            metadata=metadata,
+            position=position,
+        )
+        return self._disposer(ctx, entry)
+
+    def _insert(
+        self,
+        ctx: Context,
+        value: _T,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        position: Literal["prepend", "append"] = "append",
+    ) -> _ComposeEntry[_T]:
         if position not in ("prepend", "append"):
             raise ValueError(f"Unknown Compose position: {position!r}.")
 
         identity = object()
-        entry = _Entry(
+        entry = _ComposeEntry(
             identity,
             value,
             types.MappingProxyType(dict(metadata or {})),
@@ -116,6 +133,21 @@ class Compose(Generic[_T, _R]):
             bucket[identity] = entry
         else:
             self._buckets[ctx] = {identity: entry, **bucket}
+        return entry
+
+    def _remove(self, ctx: Context, expected: _ComposeEntry[_T]) -> None:
+        current = self._buckets.get(ctx)
+        if current is None or current.get(expected.identity) is not expected:
+            return
+        current.pop(expected.identity)
+        if not current:
+            self._buckets.pop(ctx, None)
+
+    def _disposer(
+        self,
+        ctx: Context,
+        entry: _ComposeEntry[_T],
+    ) -> Callable[[], None]:
 
         compose_ref = weakref.ref(self)
         context_ref = weakref.ref(ctx)
@@ -127,12 +159,7 @@ class Compose(Generic[_T, _R]):
             expected = entry_ref()
             if compose is None or context is None or expected is None:
                 return
-            current = compose._buckets.get(context)
-            if current is None or current.get(identity) is not expected:
-                return
-            current.pop(identity)
-            if not current:
-                compose._buckets.pop(context, None)
+            compose._remove(context, expected)
 
         return dispose
 

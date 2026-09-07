@@ -7,10 +7,10 @@
 Node 函数必须恰好有一个非 keyword-only 运行时参数，所有构建参数必须是 keyword-only：
 
 ```python
-from slyme.context import Context, Ref, Schema, ref
+from slyme.context import Context, Ref, Schema
 from slyme.node import Auto, node
 
-R = Schema({"input": {"x": ref()}, "output": {"total": ref()}})
+R = Schema({"input": {"x": Schema.leaf()}, "output": {"total": Schema.leaf()}})
 
 
 @node

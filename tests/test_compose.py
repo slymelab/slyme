@@ -7,9 +7,9 @@ from types import MappingProxyType
 import pytest
 
 import slyme.context as context_module
-from slyme.context import Compose, Context, Schema, ref
+from slyme.context import Compose, Context, Schema
 
-R = Schema({"hooks": ref(), "tools": ref()})
+R = Schema({"hooks": Schema.leaf(), "tools": Schema.leaf()})
 
 
 def test_compose_is_the_only_public_composition_type() -> None:

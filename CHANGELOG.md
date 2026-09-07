@@ -16,27 +16,26 @@ breaking changes when they are documented here.
   pre-commit/pre-push hooks, CodeQL, dependency review, and Dependabot updates.
 - Added verified package builds, trusted PyPI publishing with provenance
   attestations, contribution guidance, issue templates, and a security policy.
-- Added mutable, monotonic `Schema` declaration trees with explicit `resolve()`
-  lookup, branch metadata, leaf/container-aware recursive merging, and
-  path-free `ref()` declarations.
-- Added application-owned Ref declarations to `Context`; forks share later
+- Added mutable `Schema` declaration trees with explicit `resolve()` lookup,
+  leaf/container-aware recursive merging, independent declaration ownership,
+  and exact reversible teardown.
+- Added application-owned Schema declarations to `Context`; forks share later
   `declare()` additions while Context data continues to follow C3 lookup.
 - Added live `Context.fork()` layers with C3 multiple inheritance, local-only
   read options, and reversible `Context.add()` bindings.
 - Added `Context.flatten()` for exact visible Ref-to-value leaf mappings.
 - Added `Compose` for ordered, reversible values resolved through a Context's
   C3 hierarchy, including first-value, collection, mapping, and custom rules.
+- Added Schema-owned `replaceable` policies and `Context.isolate()` for child
+  layers that must block selected inherited leaves.
 
 ### Fixed
 
 - Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
   they cannot bypass fixed runtime-arity and named build-parameter validation.
-- Prevented Context updates from implicitly changing existing leaf/container
-  roles; an exact-path `delete` or `drop` now makes structural replacement
-  explicit.
+- Prevented Context updates from changing Schema-owned leaf/container roles.
 - Context mutations now validate the complete transaction before applying it
-  directly to existing local branches, avoiding full-tree replacement while
-  retaining no-partial-write behavior.
+  to flat per-entry bindings, retaining no-partial-write behavior.
 
 ### Removed
 
@@ -74,8 +73,9 @@ breaking changes when they are documented here.
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
 - Renamed `RefFactory` to `Schema` and aligned Context construction and
   inspection on `Context(..., schema=R)` and `ctx.schema`.
-- `Ref` is now an immutable path value, `ref()` creates path-free Schema
-  declarations, and `Schema.resolve()` returns the Ref declared for a path.
+- `Ref` is now an immutable path-only value. `Schema.leaf()` and
+  `Schema.container()` configure declared paths, while `Schema.resolve()`
+  returns their Refs.
 - Node and Wrapper build parameters now use explicit `get()`, `set()`, and
   `reset()` methods. Parameter names may overlap framework API names without
   changing attribute behavior.
@@ -86,9 +86,13 @@ breaking changes when they are documented here.
   directly to user functions instead of creating an implicit frozen snapshot.
 - Context construction now accepts a Ref-to-value mapping and keyword-only
   `schema` or direct parents. All parents share one application root, and every
-  Context access rejects undeclared paths. Context mutations prune empty
-  structural containers; use `to_dict()` for a nested projection and
-  `flatten()` for the exact leaf mapping.
+  Context access rejects undeclared paths. Schema is the only source of
+  container structure; Context stores flat entry-indexed bindings, releases
+  them with their final Schema declaration, uses `to_dict()` for a nested
+  projection, and uses `flatten()` for the exact leaf mapping.
+- `Context.add()` now provides only exact reversible installation. Schema's
+  stable `replaceable` policy determines whether `set()` may replace that
+  Context layer's current value.
 - `Context.mro` is now an immutable property, `Context.root` exposes its final
   application ancestor, and descendant `schema` properties resolve the Schema
   stored by that root.

@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from slyme.builder import builder
-from slyme.context import Context, Ref, Schema, ref
+from slyme.context import Context, Ref, Schema
 from slyme.node import (
     UNDEFINED,
     AsyncNode,
@@ -47,17 +47,21 @@ from slyme.node.tree import NODE_ENGINE
 R = Schema(
     {
         "auto": {
-            "async_temporary": ref(),
-            "dynamic": ref(),
-            "inherited": ref(),
-            "temporary": ref(),
+            "async_temporary": Schema.leaf(),
+            "dynamic": Schema.leaf(),
+            "inherited": Schema.leaf(),
+            "temporary": Schema.leaf(),
         },
-        "async_value": ref(),
-        "input": {"base": ref(), "label": ref(), "value": ref()},
-        "names": {"outer": ref()},
-        "output": {"value": ref()},
-        "sync": ref(),
-        "value": ref(),
+        "async_value": Schema.leaf(),
+        "input": {
+            "base": Schema.leaf(),
+            "label": Schema.leaf(),
+            "value": Schema.leaf(),
+        },
+        "names": {"outer": Schema.leaf()},
+        "output": {"value": Schema.leaf()},
+        "sync": Schema.leaf(),
+        "value": Schema.leaf(),
     }
 )
 
@@ -92,7 +96,7 @@ def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None
 
 
 def test_schema_integrates_with_auto_and_builder() -> None:
-    schema = Schema({"input": {"value": ref()}})
+    schema = Schema({"input": {"value": Schema.leaf()}})
 
     @node
     def increment(ctx: Context, /, *, value: Auto[int]) -> int:
@@ -112,7 +116,7 @@ def test_schema_integrates_with_auto_and_builder() -> None:
 
 
 def test_prebuilt_node_uses_schema_declared_after_runtime_fork() -> None:
-    plugin_schema = Schema({"plugin": {"value": ref()}})
+    plugin_schema = Schema({"plugin": {"value": Schema.leaf()}})
 
     @node
     def read(ctx: Context, /, *, value: Auto[int]) -> int:

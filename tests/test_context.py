@@ -14,7 +14,6 @@ from slyme.context import (
     ContextConfig,
     Ref,
     Schema,
-    ref,
 )
 from slyme.context.core import ContextPathError
 from slyme.context.tree import CTX_EVAL_ENGINE
@@ -22,71 +21,72 @@ from slyme.context.tree import CTX_EVAL_ENGINE
 R = Schema(
     {
         "a": {
-            "b": {"c": ref(), "d": ref()},
-            "first": ref(),
-            "from_nearest": ref(),
-            "from_oldest": ref(),
-            "keep": ref(),
-            "left": ref(),
-            "new": ref(),
-            "old": ref(),
-            "regular": ref(),
-            "root": ref(),
-            "second": ref(),
-            "temporary": ref(),
+            "b": {"c": Schema.leaf(), "d": Schema.leaf()},
+            "first": Schema.leaf(),
+            "from_nearest": Schema.leaf(),
+            "from_oldest": Schema.leaf(),
+            "keep": Schema.leaf(),
+            "left": Schema.leaf(),
+            "new": Schema.leaf(),
+            "old": Schema.leaf(),
+            "regular": Schema.leaf(),
+            "root": Schema.leaf(),
+            "second": Schema.leaf(),
+            "temporary": Schema.leaf(),
         },
-        "absent": ref(),
-        "added": ref(),
-        "age": ref(),
-        "application": {"input": ref()},
-        "blocked": {"child": ref()},
-        "branch": {"added": ref(), "marker": ref(), "value": ref()},
-        "c": ref(),
-        "changed": ref(),
+        "absent": Schema.leaf(),
+        "added": Schema.leaf(),
+        "age": Schema.leaf(),
+        "application": {"input": Schema.leaf()},
+        "blocked": {"child": Schema.leaf()},
+        "branch": {
+            "added": Schema.leaf(),
+            "marker": Schema.leaf(),
+            "value": Schema.leaf(),
+        },
+        "c": Schema.leaf(),
+        "changed": Schema.leaf(),
         "group": {
-            "child": ref(),
-            "initial": ref(),
-            "later": ref(),
-            "local": ref(),
-            "parent": ref(),
+            "child": Schema.leaf(),
+            "initial": Schema.leaf(),
+            "later": Schema.leaf(),
+            "local": Schema.leaf(),
+            "parent": Schema.leaf(),
         },
-        "long": ref(),
-        "missing": ref(),
-        "name": ref(),
-        "nested": {"x": ref()},
-        "not_present": ref(),
-        "other": ref(),
-        "payload": ref(),
-        "parent": {"child": ref()},
-        "point": {"label": ref(), "x": ref(), "y": ref()},
-        "removed": ref(),
-        "same": ref(),
-        "runtime": {"value": ref()},
-        "service": ref(),
-        "settings": ref(),
-        "short": ref(),
-        "user": {"age": ref(), "name": ref(), "unknown": ref()},
-        "value": ref(),
+        "long": Schema.leaf(),
+        "missing": Schema.leaf(),
+        "name": Schema.leaf(),
+        "nested": {"x": Schema.leaf()},
+        "not_present": Schema.leaf(),
+        "other": Schema.leaf(),
+        "payload": Schema.leaf(),
+        "parent": {"child": Schema.leaf()},
+        "point": {"label": Schema.leaf(), "x": Schema.leaf(), "y": Schema.leaf()},
+        "removed": Schema.leaf(),
+        "same": Schema.leaf(),
+        "runtime": {"value": Schema.leaf()},
+        "service": Schema.leaf(replaceable=False),
+        "settings": Schema.leaf(),
+        "short": Schema.leaf(),
+        "user": {"age": Schema.leaf(), "name": Schema.leaf(), "unknown": Schema.leaf()},
+        "value": Schema.leaf(),
     }
 )
 
 
-def test_ref_is_directly_constructible_and_declarations_preserve_type() -> None:
-    declaration = ref(str)
-    schema = Schema({"input": {"value": declaration}})
+def test_ref_is_a_directly_constructible_path_handle() -> None:
+    schema = Schema({"input": {"value": Schema.leaf(str)}})
 
     value = schema.resolve("input.value")
-    equivalent = Schema({"input": {"value": ref(int)}}).resolve("input.value")
+    equivalent = Schema({"input": {"value": Schema.leaf(int)}}).resolve("input.value")
 
     assert value.path == "input.value"
     assert value.parts == ("input", "value")
-    assert value.value_type is str
     assert value == equivalent
     assert hash(value) == hash(equivalent)
-    assert "value_type=" in repr(value)
+    assert repr(value) == "Ref(path='input.value')"
 
-    manual = Ref("input.value", value_type=bytes)
-    assert manual.value_type is bytes
+    manual = Ref("input.value")
     assert manual == value
 
     with pytest.raises(ValueError, match="cannot be empty"):
@@ -99,17 +99,17 @@ def test_schema_resolves_leaf_and_container_refs() -> None:
     schema = Schema(
         {
             "input": {
-                "": ref(),
-                "articles": ref(list),
-                "count": ref(int),
+                "": Schema.container(),
+                "articles": Schema.leaf(list),
+                "count": Schema.leaf(int),
             },
-            "args": ref(),
+            "args": Schema.leaf(),
         }
     )
 
     assert schema.resolve("input").path == "input"
-    assert schema.resolve("input.articles").value_type is list
-    assert schema.resolve("input.count").value_type is int
+    assert schema.resolve("input.articles").path == "input.articles"
+    assert schema.resolve("input.count").path == "input.count"
     assert schema.resolve("args").path == "args"
     with pytest.raises(KeyError, match="Did you mean 'articles'"):
         schema.resolve("input.artcles")
@@ -120,9 +120,9 @@ def test_schema_resolves_leaf_and_container_refs() -> None:
 
 
 def test_schema_snapshots_input_and_has_no_attribute_path_api() -> None:
-    declarations: dict[str, Any] = {"input": {"value": ref()}}
+    declarations: dict[str, Any] = {"input": {"value": Schema.leaf()}}
     schema = Schema(declarations)
-    declarations["late"] = ref()
+    declarations["late"] = Schema.leaf()
 
     assert schema.resolve("input.value").path == "input.value"
     with pytest.raises(KeyError, match="late"):
@@ -131,7 +131,7 @@ def test_schema_snapshots_input_and_has_no_attribute_path_api() -> None:
         schema.input  # type: ignore[attr-defined]
     with pytest.raises(AttributeError, match="read-only"):
         schema.input = 1  # type: ignore[attr-defined]
-    with pytest.raises(AttributeError, match="cannot be deleted"):
+    with pytest.raises(AttributeError, match="read-only"):
         del schema.input
 
 
@@ -142,19 +142,27 @@ def test_schema_declaration_validation() -> None:
     assert repr(Schema(None)) == "Schema()"
     with pytest.raises(TypeError, match="declarations must be a mapping"):
         Schema("bad")  # type: ignore[arg-type]
+    assert repr(Schema.leaf()) == "Schema.leaf()"
+    assert repr(Schema.container()) == "Schema.container()"
     with pytest.raises(ValueError, match="root.*empty-key"):
-        Schema({"": ref()})
+        Schema({"": Schema.container()})
     with pytest.raises(ValueError, match="without dots"):
-        Schema({"bad.path": ref()})
-    with pytest.raises(TypeError, match="mapping or ref"):
+        Schema({"bad.path": Schema.leaf()})
+    with pytest.raises(TypeError, match=r"mapping or Schema\.leaf"):
         Schema({"bad": None})
-    with pytest.raises(TypeError, match="mapping or ref"):
+    with pytest.raises(TypeError, match=r"mapping or Schema\.leaf"):
         Schema({"bad": ...})
-    with pytest.raises(TypeError, match="empty key"):
+    with pytest.raises(TypeError, match=r"empty key.*Schema\.container"):
         Schema({"bad": {"": None}})
+    with pytest.raises(TypeError, match=r"empty key.*Schema\.container"):
+        Schema({"bad": {"": Schema.leaf()}})
+    with pytest.raises(TypeError, match=r"Schema\.container.*empty key"):
+        Schema({"bad": Schema.container()})
+    with pytest.raises(TypeError, match="replaceable must be bool"):
+        Schema.leaf(replaceable=1)  # type: ignore[arg-type]
 
-    resolved = Schema({"source": ref()}).resolve("source")
-    with pytest.raises(TypeError, match="mapping or ref"):
+    resolved = Schema({"source": Schema.leaf()}).resolve("source")
+    with pytest.raises(TypeError, match=r"mapping or Schema\.leaf"):
         Schema({"copied": resolved})
 
     cyclic: dict[str, Any] = {}
@@ -164,11 +172,11 @@ def test_schema_declaration_validation() -> None:
 
     names = Schema(
         {
-            "declare": ref(),
-            "from_refs": ref(),
-            "class": ref(),
-            "_private": ref(),
-            "hyphen-name": ref(),
+            "declare": Schema.leaf(),
+            "from_refs": Schema.leaf(),
+            "class": Schema.leaf(),
+            "_private": Schema.leaf(),
+            "hyphen-name": Schema.leaf(),
         }
     )
     for path in ("declare", "from_refs", "class", "_private", "hyphen-name"):
@@ -178,45 +186,54 @@ def test_schema_declaration_validation() -> None:
         names.declare(None)  # type: ignore[arg-type]
 
 
-def test_schema_declare_is_monotonic_idempotent_and_atomic() -> None:
+def test_schema_declare_is_reversible_independent_and_atomic() -> None:
     base = Schema(
         {
             "input": {
-                "": ref(),
-                "a": ref(int),
+                "": Schema.container(),
+                "a": Schema.leaf(int),
             },
-            "keep": ref(),
+            "keep": Schema.leaf(),
         }
     )
     extension = Schema(
         {
-            "input": {"b": ref()},
-            "output": {"result": ref()},
+            "input": {"b": Schema.leaf()},
+            "output": {"result": Schema.leaf()},
         }
     )
 
-    assert base.declare(extension) is base
+    remove_extension = base.declare(extension)
     assert base.resolve("input").path == "input"
-    assert base.resolve("input.a").value_type is int
+    assert base.resolve("input.a").path == "input.a"
     assert base.resolve("input.b").path == "input.b"
     assert base.resolve("output.result").path == "output.result"
     assert extension.resolve("input.b").path == "input.b"
-    assert base.declare(extension) is base
-    assert base.declare(base) is base
+    remove_duplicate = base.declare(extension)
 
-    with pytest.raises(ValueError, match="Ref declarations.*input.a"):
+    remove_extension()
+    assert base.resolve("input.b").path == "input.b"
+    remove_duplicate()
+    remove_duplicate()
+    with pytest.raises(KeyError, match="input"):
+        base.resolve("input.b")
+    with pytest.raises(KeyError, match="output"):
+        base.resolve("output.result")
+    assert base.resolve("input.a").path == "input.a"
+
+    with pytest.raises(ValueError, match="Ref configuration.*input.a"):
         base.declare(
             {
-                "partial": ref(),
-                "input": {"a": ref(str)},
+                "partial": Schema.leaf(),
+                "input": {"a": Schema.leaf(str)},
             }
         )
-    assert base.resolve("input.a").value_type is int
+    assert base.resolve("input.a").path == "input.a"
     with pytest.raises(KeyError, match="partial"):
         base.resolve("partial")
 
-    leaf = Schema({"entry": ref()})
-    container = Schema({"entry": {"child": ref()}})
+    leaf = Schema({"entry": Schema.leaf()})
+    container = Schema({"entry": {"child": Schema.leaf()}})
     empty_container = Schema({"entry": {}})
     assert empty_container.resolve("entry").path == "entry"
     with pytest.raises(ValueError, match="leaf.*container"):
@@ -225,52 +242,141 @@ def test_schema_declare_is_monotonic_idempotent_and_atomic() -> None:
         leaf.declare(empty_container)
     with pytest.raises(ValueError, match="container.*leaf"):
         container.declare(leaf)
-    empty_container.declare(container)
+    remove_child = empty_container.declare(container)
     assert empty_container.resolve("entry.child").path == "entry.child"
+    remove_child()
+    assert empty_container.resolve("entry").path == "entry"
+    with pytest.raises(KeyError, match="child"):
+        empty_container.resolve("entry.child")
 
-    implicit = Schema({"group": {"left": ref()}})
+    implicit = Schema({"group": {"left": Schema.leaf()}})
     explicit = Schema(
         {
             "group": {
-                "": ref(str),
-                "right": ref(),
+                "": Schema.container(),
+                "right": Schema.leaf(),
             }
         }
     )
-    implicit.declare(explicit)
-    assert implicit.resolve("group").value_type is str
+    remove_explicit = implicit.declare(explicit)
+    assert implicit.resolve("group").path == "group"
     assert implicit.resolve("group.left").path == "group.left"
     assert implicit.resolve("group.right").path == "group.right"
+    remove_explicit()
+    with pytest.raises(KeyError, match="right"):
+        implicit.resolve("group.right")
 
-    conflicting = Schema({"group": {"": ref(int)}})
-    with pytest.raises(ValueError, match="container Ref declarations.*group"):
-        explicit.declare(conflicting)
-    assert explicit.resolve("group").value_type is str
+    with pytest.raises(ValueError, match="Ref configuration.*fixed"):
+        Schema({"fixed": Schema.leaf(replaceable=False)}).declare(
+            {"fixed": Schema.leaf()}
+        )
+
+
+def test_schema_declarations_keep_shared_ancestors_until_the_last_owner() -> None:
+    schema = Schema()
+    remove_left = schema.declare({"group": {"left": Schema.leaf()}})
+    remove_right = schema.declare({"group": {"right": Schema.leaf()}})
+
+    remove_left()
+    with pytest.raises(KeyError, match="left"):
+        schema.resolve("group.left")
+    assert schema.resolve("group.right").path == "group.right"
+    assert schema.resolve("group").path == "group"
+
+    remove_right()
+    with pytest.raises(KeyError, match="group"):
+        schema.resolve("group")
+
+
+def test_schema_path_can_be_redeclared_with_a_new_structure_after_disposal() -> None:
+    schema = Schema()
+    remove_leaf = schema.declare({"entry": Schema.leaf(int)})
+    remove_leaf()
+
+    remove_container = schema.declare({"entry": {"child": Schema.leaf(str)}})
+    assert schema.resolve("entry.child").path == "entry.child"
+    remove_container()
+    with pytest.raises(KeyError, match="entry"):
+        schema.resolve("entry")
+
+
+def test_schema_disposal_prevents_old_context_values_from_reappearing() -> None:
+    schema = Schema()
+    remove_old = schema.declare({"plugin": {"value": Schema.leaf(replaceable=False)}})
+    left = Context(schema=schema)
+    right = Context(schema=schema)
+    old_ref = schema.resolve("plugin.value")
+    left.set(old_ref, "left-old")
+    right.set(old_ref, "right-old")
+
+    remove_old()
+    with pytest.raises(ContextPathError, match="plugin.value"):
+        left.get(old_ref)
+
+    remove_new = schema.declare({"plugin": {"value": Schema.leaf()}})
+    assert not left.exists(old_ref)
+    assert not right.exists(old_ref)
+    left.set(old_ref, "left-new")
+    assert left.get(old_ref) == "left-new"
+    assert not right.exists(old_ref)
+    remove_new()
+
+
+def test_context_view_tracks_the_live_schema_path() -> None:
+    schema = Schema()
+    remove_old = schema.declare({"plugin": {"value": Schema.leaf()}})
+    ctx = Context(schema=schema)
+    ctx.set("plugin.value", "old")
+    view = ctx.get("plugin")
+
+    remove_old()
+    assert repr(view) == "ContextView(<invalid path>)"
+    with pytest.raises(ContextPathError, match="plugin"):
+        view.get("value")
+    with pytest.raises(ContextPathError, match="plugin"):
+        view.flatten()
+
+    remove_new = schema.declare({"plugin": {"value": Schema.leaf()}})
+    assert view.get("value", "missing") == "missing"
+    ctx.set("plugin.value", "new")
+    assert view.to_dict() == {"value": "new"}
+    remove_new()
 
 
 def test_schema_can_be_built_before_or_through_context() -> None:
-    core = Schema({"plugin": {"base": ref()}})
-    extension = Schema({"plugin": {"extra": ref()}})
+    core = Schema({"plugin": {"base": Schema.leaf()}})
+    extension = Schema({"plugin": {"extra": Schema.leaf()}})
     plugin_ref = extension.resolve("plugin.extra")
     root = Context(schema=core)
     child = root.fork()
 
-    core.declare(extension)
+    remove_core_extension = core.declare(extension)
 
     assert root.schema is core
     assert child.schema is root.schema
     child.set(plugin_ref, 1)
     assert child.get(root.schema.resolve("plugin.extra")) == 1
 
-    root.declare(extension)
-    root.declare({"context_only": ref()})
+    remove_root_extension = root.declare(extension)
+    remove_context_only = root.declare({"context_only": Schema.leaf()})
     root.set("context_only", 2)
     assert child.get("context_only") == 2
 
+    remove_context_only()
+    with pytest.raises(ContextPathError, match="context_only"):
+        child.get("context_only")
+    remove_root_extension()
+    remove_core_extension()
+    with pytest.raises(ContextPathError, match="plugin"):
+        child.get("plugin.extra")
+
     context_first = Context()
-    context_first.declare({"late": {"value": ref()}})
+    remove_late = context_first.declare({"late": {"value": Schema.leaf()}})
     context_first.set("late.value", 3)
     assert context_first.get("late.value") == 3
+    remove_late()
+    with pytest.raises(ContextPathError, match="late"):
+        context_first.get("late.value")
 
 
 def test_context_rejects_undeclared_keys_and_unrelated_parents() -> None:
@@ -285,7 +391,7 @@ def test_context_rejects_undeclared_keys_and_unrelated_parents() -> None:
         with pytest.raises(ContextPathError, match="unknown"):
             operation()
 
-    foreign = Schema({"value": ref(str)}).resolve("value")
+    foreign = Schema({"value": Schema.leaf(str)}).resolve("value")
     root.set("value", 1)
     assert root.get(foreign) == 1
     assert root.flatten() == {root.schema.resolve("value"): 1}
@@ -293,6 +399,7 @@ def test_context_rejects_undeclared_keys_and_unrelated_parents() -> None:
     unrelated = Context(schema=R)
     assert unrelated.root is unrelated
     assert unrelated.schema is root.schema
+    assert not unrelated.exists("value")
     with pytest.raises(TypeError, match="same application root"):
         root.fork(unrelated)
     with pytest.raises(TypeError, match="inherits its schema"):
@@ -302,11 +409,11 @@ def test_context_rejects_undeclared_keys_and_unrelated_parents() -> None:
 def test_context_operations_respect_schema_leaf_and_container_roles() -> None:
     schema = Schema(
         {
-            "leaf": ref(),
-            "container": {"child": ref()},
+            "leaf": Schema.leaf(),
+            "container": {"child": Schema.leaf()},
             "custom_container": {
-                "": ref(str),
-                "child": ref(),
+                "": Schema.container(),
+                "child": Schema.leaf(),
             },
         }
     )
@@ -334,7 +441,6 @@ def test_context_operations_respect_schema_leaf_and_container_roles() -> None:
     assert ctx.get("leaf") == {"child": 1}
     assert ctx.to_dict("container") == {"child": 2}
     assert ctx.to_dict("custom_container") == {"child": 3}
-    assert schema.resolve("custom_container").value_type is str
 
 
 def test_context_crud_views_and_user_dict_leaves() -> None:
@@ -524,7 +630,7 @@ def test_context_repr_modes_and_invalid_view() -> None:
     try:
         ContextConfig.set_compact_repr().set_truncated_repr(4)
         compact = repr(ctx)
-        assert "Context({'short': 1, 'long': 'abc...})" == compact
+        assert "Context({'long': 'abc..., 'short': 1})" == compact
         ContextConfig.set_pretty_repr()
         assert "\n" in repr(ctx)
         assert repr(Context(schema=R)) == "Context()"
@@ -599,8 +705,8 @@ def test_flatten_reconstructs_context_without_copying_leaf_values() -> None:
 
 
 def test_to_dict_is_a_nested_projection_while_flatten_preserves_leaf_paths() -> None:
-    leaf_schema = Schema({"settings": ref()})
-    tree_schema = Schema({"settings": {"theme": ref()}})
+    leaf_schema = Schema({"settings": Schema.leaf()})
+    tree_schema = Schema({"settings": {"theme": Schema.leaf()}})
     mapping_leaf = Context(
         {leaf_schema.resolve("settings"): {"theme": "dark"}},
         schema=leaf_schema,
@@ -720,6 +826,31 @@ def test_context_structural_lookup_merges_declared_container_branches() -> None:
     assert child.to_dict(R.resolve("a.b")) == {"d": 2, "c": 3}
 
 
+def test_context_views_follow_schema_structure_and_declaration_order() -> None:
+    schema = Schema(
+        {
+            "group": {
+                "first": Schema.leaf(),
+                "nested": {"value": Schema.leaf()},
+                "empty": {"value": Schema.leaf()},
+            }
+        }
+    )
+    ctx = Context(schema=schema)
+    ctx.set("group.nested.value", 2)
+    ctx.set("group.first", 1)
+    view = ctx.get("group")
+
+    assert tuple(ctx.keys("group")) == ("first", "nested")
+    assert tuple(view.keys()) == ("first", "nested")
+    assert list(ctx.to_dict("group")) == ["first", "nested"]
+    assert not ctx.exists("group.empty")
+
+    schema.declare({"group": {"later": Schema.leaf()}})
+    ctx.set("group.later", 3)
+    assert tuple(view.keys()) == ("first", "nested", "later")
+
+
 def test_c3_branch_merge_uses_nearest_value_for_each_leaf() -> None:
     root = Context(schema=R)
     root.set(R.resolve("a.root"), 1)
@@ -734,14 +865,14 @@ def test_c3_branch_merge_uses_nearest_value_for_each_leaf() -> None:
     assert child.to_dict(R.resolve("a")) == {"left": 2, "root": 3}
 
 
-def test_context_add_is_local_immutable_and_exactly_reversible() -> None:
+def test_context_add_uses_schema_replaceability_and_is_exactly_reversible() -> None:
     value = R.resolve("service")
     root = Context(schema=R)
     remove_root = root.add(value, "root")
 
     with pytest.raises(ContextPathError, match="existing local"):
         root.add(value, "other")
-    with pytest.raises(ContextPathError, match="Cannot replace added"):
+    with pytest.raises(ContextPathError, match="non-replaceable"):
         root.set(value, "other")
 
     child = root.fork()
@@ -753,6 +884,61 @@ def test_context_add_is_local_immutable_and_exactly_reversible() -> None:
 
     remove_root()
     assert not root.exists(value)
+
+
+def test_context_add_does_not_define_runtime_replaceability() -> None:
+    value = R.resolve("value")
+    ctx = Context(schema=R)
+    remove = ctx.add(value, 1)
+
+    ctx.set(value, 2)
+    remove()
+
+    assert ctx.get(value) == 2
+
+
+def test_context_isolate_blocks_inheritance_until_the_child_is_discarded() -> None:
+    value = R.resolve("service")
+    root = Context(schema=R)
+    root.set(value, "root")
+
+    isolated = root.isolate(value)
+    assert isolated.get(value, "missing") == "missing"
+    assert not isolated.exists(value)
+    assert not isolated.exists(value, local=True)
+
+    isolated.set(value, "local")
+    assert isolated.get(value) == "local"
+    with pytest.raises(ContextPathError, match="non-replaceable"):
+        isolated.set(value, "other")
+    isolated.delete(value)
+    assert isolated.get(value, "missing") == "missing"
+    assert root.get(value) == "root"
+
+
+def test_context_isolation_stops_c3_lookup_before_later_parents() -> None:
+    value = R.resolve("value")
+    root = Context(schema=R)
+    root.set(value, "root")
+    left = root.isolate(value)
+    right = root.fork()
+    right.set(value, "right")
+    child = left.fork(right)
+
+    assert child.mro == (child, left, right, root)
+    assert child.get(value, "missing") == "missing"
+
+    child.set(value, "child")
+    assert child.get(value) == "child"
+    child.delete(value)
+    assert child.get(value, "missing") == "missing"
+
+
+def test_context_isolate_requires_declared_leaves() -> None:
+    ctx = Context(schema=R)
+
+    with pytest.raises(ContextPathError, match="container.*not a leaf"):
+        ctx.isolate(R.resolve("group"))
 
 
 def test_context_add_disposer_prunes_a_temporary_container() -> None:
@@ -806,6 +992,27 @@ def test_context_add_disposer_does_not_retain_removed_payload() -> None:
 
     assert payload_ref() is None
     dispose()
+
+
+def test_context_storage_does_not_retain_discarded_child_layers() -> None:
+    class Payload:
+        pass
+
+    value = R.resolve("payload")
+    root = Context(schema=R)
+    child = root.fork()
+    payload = Payload()
+    child_ref = weakref.ref(child)
+    payload_ref = weakref.ref(payload)
+    child.set(value, payload)
+
+    del child
+    del payload
+    gc.collect()
+
+    assert child_ref() is None
+    assert payload_ref() is None
+    assert not root.exists(value)
 
 
 def test_context_removes_a_container_after_its_last_local_leaf() -> None:

@@ -21,7 +21,6 @@ from .core import (
     ContextKey,
     Ref,
     Schema,
-    ref,
 )
 
 __all__ = [
@@ -30,6 +29,5 @@ __all__ = [
     "ContextKey",
     "Ref",
     "Schema",
-    "ref",
     "ContextConfig",
 ]

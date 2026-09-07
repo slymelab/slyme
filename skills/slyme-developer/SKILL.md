@@ -17,8 +17,9 @@ Application code creates a `Context`, handles external inputs, calls the root No
 - `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.
 - `@builder` is a build-time factory that assembles reusable Node trees. It requires the outer result to be a `Node` or `AsyncNode` (`None` is reported as a missing return), but does not validate the nested object graph or perform runtime work.
 - `Context` has local mutable data and immutable ordered parents. Reads are effective by default, writes are local, and `local=True` restricts read operations to one Context.
-- Context construction accepts a declared path-to-value mapping. Structural containers are derived from leaf paths and disappear when their last leaf is deleted.
-- `Context.add()` installs one non-replaceable local binding and returns its exact idempotent disposer.
+- Context construction accepts a declared path-to-value mapping. Schema fixes each path's leaf or container role; runtime data stores only leaf bindings.
+- `Context.add()` installs one local binding and returns its exact idempotent disposer. `Schema.leaf(replaceable=False)` prevents later local replacement through `set()`.
+- `Context.isolate()` creates a child that blocks selected inherited leaf values.
 - `Compose` stores ordered values by Context identity and resolves those visible through C3 lookup. Use `one()`, `collect()`, `merge()`, or a synchronous custom resolver.
 
 ## Architecture

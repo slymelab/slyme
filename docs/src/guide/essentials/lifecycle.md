@@ -5,10 +5,10 @@ Slyme uses one live `Node` graph rather than separate definition and execution t
 ## Build and modify
 
 ```python
-from slyme.context import Context, Schema, ref
+from slyme.context import Context, Schema
 from slyme.node import Auto, node
 
-R = Schema({"user": {"age": ref(), "name": ref()}, "a": ref(), "b": ref(), "items": ref()})
+R = Schema({"user": {"age": Schema.leaf(), "name": Schema.leaf()}, "a": Schema.leaf(), "b": Schema.leaf(), "items": Schema.leaf()})
 
 
 @node

@@ -15,11 +15,11 @@
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema, ref
+from slyme.context import Schema
 # 假设有定义好的 nodes
 # from my_nodes import load_data, process_data, save_data
 
-R = Schema({"process_config": ref(), "output_path": ref()})
+R = Schema({"process_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
 @builder
@@ -53,9 +53,9 @@ Builder 最大的优势在于**可复用性**。一个 Builder 可以调用另�
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema, ref
+from slyme.context import Schema
 
-R = Schema({"default_config": ref(), "output_path": ref()})
+R = Schema({"default_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
 @builder

@@ -3,18 +3,18 @@
 ## Value-producing and effectful Nodes
 
 ```python
-from slyme.context import Compose, Context, Ref, Schema, ref
+from slyme.context import Compose, Context, Ref, Schema
 from slyme.node import Auto, Node, node, sequential_exec, wrapper
 
 
 R = Schema(
     {
         "input": {
-            "value": ref(float),
+            "value": Schema.leaf(float),
         },
-        "state": {"counter": ref()},
-        "output": {"result": ref()},
-        "request": {"id": ref()},
+        "state": {"counter": Schema.leaf()},
+        "output": {"result": Schema.leaf()},
+        "request": {"id": Schema.leaf()},
     }
 )
 
@@ -69,7 +69,7 @@ remove_request()
 
 Context reads follow C3 order by default and accept `local=True` for one local layer. Writes affect only the receiver. `Context.add()` rejects an existing local path and returns an idempotent disposer. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
 
-Create an application root with `Context(data, schema=R)`. Every path must belong to its Schema declaration tree. Forks inherit the same `ctx.schema`; `ctx.declare(plugin_schema)` adds a plugin's immutable declarations for every existing and future fork. Pass direct parents as `Context(data, parents=(base, mixin))`; all parents must share one application root. `ctx.mro` is the immutable C3 order and `ctx.root` is its final entry. `base.fork(mixin)` is the empty-data shorthand. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
+Create an application root with `Context(data, schema=R)`. Every path must belong to its Schema declaration tree. Forks inherit the same `ctx.schema`; `ctx.declare(plugin_schema)` adds a plugin's declarations for every existing and future fork and returns their exact disposer. Pass direct parents as `Context(data, parents=(base, mixin))`; all parents must share one application root. `ctx.mro` is the immutable C3 order and `ctx.root` is its final entry. `base.fork(mixin)` is the empty-data shorthand. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
 
 ## Wrappers
 

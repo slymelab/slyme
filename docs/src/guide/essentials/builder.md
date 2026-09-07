@@ -15,11 +15,11 @@ You can define a Builder like a normal function, just add the `@builder` decorat
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema, ref
+from slyme.context import Schema
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
 
-R = Schema({"process_config": ref(), "output_path": ref()})
+R = Schema({"process_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
 @builder
@@ -53,9 +53,9 @@ This is very useful when building different variants of pipelines, avoiding a lo
 ```python
 from slyme.builder import builder
 from slyme.node import sequential
-from slyme.context import Schema, ref
+from slyme.context import Schema
 
-R = Schema({"default_config": ref(), "output_path": ref()})
+R = Schema({"default_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
 @builder

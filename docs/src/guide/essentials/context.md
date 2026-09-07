@@ -1,6 +1,6 @@
 # Context
 
-`Context` is Slyme's hierarchical mutable data store. Each instance has a local structured tree and an immutable ordered list of parents. Reads use the Context's C3-linearized hierarchy by default, while writes change only the current Context.
+`Context` is Slyme's hierarchical mutable data store. Schema is the sole source of leaf and container structure. An application root keeps a flat binding for each active Schema leaf, while each binding stores the values assigned to individual Context identities. Reads use the Context's C3-linearized hierarchy by default, while writes change only the current Context layer.
 
 ## Ref and Schema {#ref}
 
@@ -9,30 +9,31 @@ records the paths available to an application, and `resolve()` returns their
 canonical Refs:
 
 ```python
-from slyme.context import Ref, Schema, ref
+from slyme.context import Ref, Schema
 
-schema = Schema({"user": {"name": ref(str)}})
+schema = Schema({"user": {"name": Schema.leaf(str)}})
 name = schema.resolve("user.name")
 assert name.path == "user.name"
 assert Ref("user.name") == name
 ```
 
 Constructing a `Ref` does not alter the Schema. Context operations resolve its
-path against `ctx.schema`, which remains the source of path roles and declared
-value types.
+path against `ctx.schema`, which remains the source of path roles, declared
+value types, and replacement policies. A Ref itself contains only its path and
+cached path parts.
 
 For an application, describe its available paths with `Schema`:
 
 ```python
-from slyme.context import Schema, ref
+from slyme.context import Schema
 
 R = Schema(
     {
         "user": {
-            "name": ref(str),
-            "age": ref(),
+            "name": Schema.leaf(str),
+            "age": Schema.leaf(),
         },
-        "status": ref(),
+        "status": Schema.leaf(),
     }
 )
 
@@ -44,28 +45,28 @@ not export a global `R` object. Composition code may use `R` as a short local
 name for its application Schema, while `ctx.schema` exposes the complete live
 Schema used by that application.
 
-Schema validates path declarations and rejects conflicting declared value
-types. It does not validate the runtime type of stored values.
+Schema validates path declarations and rejects conflicting declared value types
+or replacement policies. It does not validate the runtime type of stored values.
 
 The path remains a stable semantic name independent of the physical Node graph.
 
-`ref()` creates a path-free declaration with an optional value type.
-Construction binds every declaration to its complete path. Other values are
-invalid inside a declaration tree. The Schema itself remains mutable through
-the monotonic `declare()` operation.
+`Schema.leaf()` creates a path-free leaf configuration with an optional value
+type and a `replaceable` policy. Construction binds every configuration to its
+complete path. Other values are invalid inside a declaration tree. Schema
+declarations remain mutable through the reversible `declare()` operation.
 
 ```python
-from slyme.context import Schema, ref
+from slyme.context import Schema
 
 R = Schema(
     {
         "input": {
-            "": ref(),
-            "name": ref(str),
-            "age": ref(),
+            "": Schema.container(),
+            "name": Schema.leaf(str),
+            "age": Schema.leaf(),
         },
         "output": {
-            "message": ref(),
+            "message": Schema.leaf(),
         },
     }
 )
@@ -75,19 +76,24 @@ assert R.resolve("input.name").path == "input.name"
 R.resolve("input.naem")  # raises KeyError and suggests "name"
 ```
 
-Every named `ref()` entry declares a leaf. Every mapping entry declares a
-container, including an empty mapping. An optional empty-key `ref()` explicitly
-declares that container's own Ref instead of making it a leaf; Schema generates
-the container Ref when it is omitted. Schema exposes declared paths through
-`resolve()`, so application paths cannot collide with future Schema methods.
+Every named `Schema.leaf()` entry declares a leaf. Every mapping entry declares
+a container, including an empty mapping. An optional empty-key
+`Schema.container()` supplies that container's configuration; Schema uses the
+default container configuration when it is omitted. Schema exposes declared
+paths through `resolve()`, so application paths cannot collide with future
+Schema methods.
 
-`declare()` extends the same Schema object recursively and atomically. An
-equivalent declaration is idempotent. A different declaration for an existing
+`declare()` extends the same Schema object recursively and atomically, then
+returns an idempotent disposer for that exact declaration. Equivalent active
+declarations coexist independently. A different configuration for an existing
 Ref, or a leaf/container structural conflict, raises without changing the
-Schema. Declarations cannot be replaced or deleted.
+Schema. After the final declaration of a path is disposed, that path and its
+runtime bindings disappear; a later declaration may therefore reuse it with a
+different definition without reviving old values.
 
 ```python
-R.declare({"output": {"score": ref()}})
+remove_score = R.declare({"output": {"score": Schema.leaf()}})
+remove_score()
 ```
 
 Schema keys must be non-empty strings without dots. Names such as `declare`,
@@ -98,13 +104,13 @@ as `Compose`, rather than becoming Context paths.
 ## Read and write
 
 ```python
-from slyme.context import Context, Schema, ref
+from slyme.context import Context, Schema
 
 R = Schema(
     {
-        "user": {"name": ref(), "age": ref()},
-        "status": ref(),
-        "settings": ref(),
+        "user": {"name": Schema.leaf(), "age": Schema.leaf()},
+        "status": Schema.leaf(replaceable=False),
+        "settings": Schema.leaf(),
     }
 )
 
@@ -126,15 +132,18 @@ Applications can therefore build declarations before creating a Context, or star
 
 ```python
 schema = Schema()
-schema.declare({"core": {"ready": ref()}})
+remove_core = schema.declare({"core": {"ready": Schema.leaf()}})
 ctx = Context(schema=schema)
 
-plugin_schema = Schema({"plugin": {"enabled": ref()}})
-ctx.declare(plugin_schema)
+plugin_schema = Schema({"plugin": {"enabled": Schema.leaf()}})
+remove_plugin = ctx.declare(plugin_schema)
 child = ctx.fork()
 
 child.set(plugin_schema.resolve("plugin.enabled"), True)
 assert child.schema.resolve("plugin.enabled").path == "plugin.enabled"
+
+remove_plugin()
+remove_core()
 ```
 
 A declaration fragment is not a plugin's private lookup space. A plugin that
@@ -146,14 +155,15 @@ R = ctx.schema
 ```
 
 The fragment remains useful for declaring and exporting the paths owned by the
-plugin; `ctx.schema` is the application-wide union. Plugin teardown removes
-values and Compose entries, not monotonic path declarations.
+plugin; `ctx.schema` is the application-wide union. A plugin owns the disposer
+returned by `declare()` alongside the disposers for its values and Compose
+entries.
 
 `set`, `update`, and the update side of `mutate` accept only paths declared as leaves. `keys` and `to_dict(ref)` accept only paths declared as containers. `get`, `exists`, `delete`, and the drop side of `mutate` accept either role. Batch mutations validate every path before applying changes, so a conflict produces no partial writes.
 
-Schema fixes every declared path as exactly one leaf or container for the application. Context data cannot change that role: deleting a value does not turn its path into a container, and deleting a branch does not make its path writable as a leaf. Applications may extend the Schema with new paths, but an existing declaration cannot change role. Context stores values only at leaf paths and prunes empty data branches after mutation.
+Schema fixes every actively declared path as exactly one leaf or container for the application. Context data cannot change that role: deleting a value does not turn its path into a container, and deleting a container's local values does not make its path writable as a leaf. Applications may extend the Schema with new paths, but a definition cannot change while any matching declaration remains active. Context stores only flat leaf bindings. Container access traverses Schema first and then reads the corresponding bindings.
 
-A user mapping remains a leaf. Context branches are created only by writing a deeper Ref:
+A user mapping remains an atomic leaf. A deeper Ref belongs to a Schema-defined container rather than creating runtime structure:
 
 ```python
 ctx.set(R.resolve("settings"), {"theme": "dark"})  # one mapping-valued leaf
@@ -167,7 +177,7 @@ Every read operation accepts `local=True` when only the current Context should b
 `fork()` is shorthand for constructing an empty Context whose first parent is the receiver. Additional mixins become later direct parents:
 
 ```python
-R = Schema({"settings": {"timeout": ref(), "mode": ref()}})
+R = Schema({"settings": {"timeout": Schema.leaf(), "mode": Schema.leaf()}})
 root = Context(schema=R)
 root.set(R.resolve("settings.timeout"), 30)
 
@@ -184,38 +194,55 @@ assert agent.to_dict() == {
 ```
 
 `mro` is the immutable linearization computed when a Context is constructed,
-and `root` is its final entry. That root stores the Schema reference; every
-descendant's `schema` property returns the same object through `root`. Separate
-Context roots may deliberately reuse one Schema without sharing Context data.
+and `root` is its final entry. That root stores the Schema reference and the
+flat active-entry-to-binding index; every descendant's `schema` property
+returns the same Schema through `root`. Separate Context roots may deliberately
+reuse one Schema without sharing Context data.
 
-All direct parents in a C3 hierarchy must descend from the same application root and therefore share one `schema` object. Parent changes remain visible until a child writes the same leaf, and sibling writes are isolated. Declared container branches merge recursively in C3 order; for each leaf, the first Context defining it supplies the visible value.
+All direct parents in a C3 hierarchy must descend from the same application root and therefore share one `schema` object. Parent changes remain visible until a child writes the same leaf, and sibling writes are isolated. Schema traversal determines which leaves form a container; each leaf independently selects its first visible value in C3 order.
 
-Deleting a local value removes any now-empty local path prefixes and reveals inherited values that they previously overrode.
+Deleting a local value normally reveals the inherited value that it previously overrode.
+
+`isolate()` creates a child and blocks selected leaf values from crossing into it. The private barrier participates in C3 lookup: a later parent cannot bypass it. A value written in the isolated child appears normally, and deleting that value exposes the barrier again rather than the parent's value:
+
+```python
+service_schema = Schema({"service": Schema.leaf(replaceable=False)})
+root = Context({"service": "default"}, schema=service_schema)
+service = service_schema.resolve("service")
+isolated = root.isolate(service)
+assert not isolated.exists(service)
+
+isolated.set(service, "ready")
+assert isolated.get(service) == "ready"
+isolated.delete(service)
+assert not isolated.exists(service)
+```
 
 ## Reversible local bindings
 
 `add()` installs a value only when the path is absent locally and returns an idempotent disposer for that exact installation:
 
 ```python
-request_schema = Schema({"request": {"abort": ref()}})
-agent.declare(request_schema)
+request_schema = Schema({"request": {"abort": Schema.leaf()}})
+remove_schema = agent.declare(request_schema)
 remove = agent.add(request_schema.resolve("request.abort"), abort_controller)
 try:
     run_request()
 finally:
     remove()
+    remove_schema()
 ```
 
-An inherited value does not prevent a child from adding its own local value. A value installed by `add()` cannot be replaced with `set()` in the same Context; remove it first or write in a fork. If another value has already replaced or removed that exact entry, its disposer does nothing.
+An inherited value does not prevent a child from adding its own local value. `add()` itself does not decide whether later replacement is allowed: `Schema.leaf(replaceable=False)` rejects `set()` while a normal value exists in that same Context layer, whereas the default permits replacement. Deletion and child shadowing remain allowed. If another value has already replaced or removed the exact entry created by `add()`, its disposer does nothing.
 
 ## Compose
 
 `Compose` stores ordered values by Context identity and resolves the entries visible through that Context's C3 order. Store a Compose object in Context when other Nodes need to discover it through a Ref:
 
 ```python
-from slyme.context import Compose, Context, Schema, ref
+from slyme.context import Compose, Context, Schema
 
-R = Schema({"tools": ref()})
+R = Schema({"tools": Schema.leaf()})
 root = Context(schema=R)
 tools = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("tools"), tools)
@@ -240,11 +267,11 @@ A child can replace an inherited Compose object at its Ref with a new Compose ob
 
 Context accepts Ref PyTrees for batch reads and writes. `extract` preserves the requested Python structure, and `update_tree` assigns values from a matching tree.
 
-`to_dict()` projects Context paths into nested ordinary dictionaries for display or serialization. Across different Schemas, this projection cannot distinguish a mapping-valued leaf from equivalent nested Context paths. `flatten()` instead returns the exact visible `dict[Ref, Any]` leaf mapping:
+`keys()`, `ContextView`, and `to_dict()` traverse Schema structure before reading the flat leaf cells. Empty containers therefore have a stable declared role but do not appear in the effective data view. `to_dict()` projects visible Context leaves into nested ordinary dictionaries for display or serialization. Across different Schemas, this projection cannot distinguish a mapping-valued leaf from equivalent nested Context paths. `flatten()` instead returns the exact visible `dict[Ref, Any]` leaf mapping:
 
 ```python
-leaf_schema = Schema({"settings": ref()})
-tree_schema = Schema({"settings": {"theme": ref()}})
+leaf_schema = Schema({"settings": Schema.leaf()})
+tree_schema = Schema({"settings": {"theme": Schema.leaf()}})
 mapping_leaf = Context(
     {leaf_schema.resolve("settings"): {"theme": "dark"}}, schema=leaf_schema
 )

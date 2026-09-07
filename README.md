@@ -41,16 +41,16 @@ Here is a quick example using Slyme's core primitives (`@node`, `@wrapper`, and 
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import Context, Ref, Schema, ref
+from slyme.context import Context, Ref, Schema
 from slyme.node import node, wrapper, Auto, Node
 
 
 R = Schema(
     {
         "input": {
-            "articles": ref(),
+            "articles": Schema.leaf(),
         },
-        "output": {"responses": ref()},
+        "output": {"responses": Schema.leaf()},
     }
 )
 
@@ -116,7 +116,7 @@ if __name__ == "__main__":
 
 ## Context layers and Compose
 
-A Context root holds a monotonic `Schema` declaration tree, which may be built before the Context or extended through `Context.declare()`. `Context.fork()` shares that exact Schema while creating an empty child with local writes and live C3 lookup into its parents. `Compose` associates ordered values with Context identities and returns an exact disposer for every addition:
+A Context root holds a live `Schema` declaration tree, which may be built before the Context or extended reversibly through `Context.declare()`. Schema is the sole source of leaf/container structure; Context values use flat per-entry bindings with live C3 lookup. `Context.fork()` creates an empty child layer, while `Context.isolate()` can additionally block selected inherited leaves. `Compose` associates ordered values with Context identities and returns an exact disposer for every addition:
 
 ```python
 from slyme.context import Compose, Context
@@ -139,7 +139,7 @@ remove_root()
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to PyTree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Explicit State Layers:** Every Context path and its leaf/container role is declared by a shared Schema. `Context.fork()` creates a child with live C3 lookup and local writes, while `flatten()` exposes the visible Ref-to-value mapping. `Compose` provides ordered, reversible values across the same Context hierarchy.
+**Explicit State Layers:** Every Context path, structural role, and replacement policy is declared by a shared Schema. `Context.fork()` creates a child with live C3 lookup and local writes, while `flatten()` exposes the visible Ref-to-value mapping. `Compose` provides ordered, reversible values across the same Context hierarchy.
 
 **Seamless Collaboration:** Highly decoupled Nodes communicate through explicit Context paths and Compose objects. This allows teams to independently develop features and write unit tests, reducing "glue code" and deep system coupling.
 

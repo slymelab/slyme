@@ -7,16 +7,16 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.builder import builder
-from slyme.context import Context, Ref, Schema, ref
+from slyme.context import Context, Ref, Schema
 from slyme.node import Auto, Node, node, wrapper
 
 
 R = Schema(
     {
         "input": {
-            "articles": ref(),
+            "articles": Schema.leaf(),
         },
-        "output": {"responses": ref()},
+        "output": {"responses": Schema.leaf()},
     }
 )
 

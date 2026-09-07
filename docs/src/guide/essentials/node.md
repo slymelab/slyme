@@ -7,10 +7,10 @@
 A Node function has exactly one non-keyword-only runtime parameter. Every build parameter must be keyword-only:
 
 ```python
-from slyme.context import Context, Ref, Schema, ref
+from slyme.context import Context, Ref, Schema
 from slyme.node import Auto, node
 
-R = Schema({"input": {"x": ref()}, "output": {"total": ref()}})
+R = Schema({"input": {"x": Schema.leaf()}, "output": {"total": Schema.leaf()}})
 
 
 @node

@@ -40,16 +40,16 @@ pip install slyme
 from time import time
 from collections.abc import Callable
 from slyme.builder import builder
-from slyme.context import Context, Ref, Schema, ref
+from slyme.context import Context, Ref, Schema
 from slyme.node import node, wrapper, Auto, Node
 
 
 R = Schema(
     {
         "input": {
-            "articles": ref(list),
+            "articles": Schema.leaf(list),
         },
-        "output": {"responses": ref()},
+        "output": {"responses": Schema.leaf()},
     }
 )
 
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
 ## Context 分层与 Compose
 
-应用根拥有一棵 `Schema` 声明树。`Context.fork()` 共享这些声明，同时创建局部写入、实时按 C3 查找父级的空子层。`Compose` 将有序值与 Context identity 关联，并为每次新增返回精确的 disposer：
+应用根拥有一棵实时 `Schema` 声明树，可通过 `Context.declare()` 进行可撤销扩展。Schema 是 leaf/container 结构的唯一来源，Context value 使用平铺的 per-entry binding，并实时按 C3 查找。`Context.fork()` 创建空子层，`Context.isolate()` 还可阻止指定 leaf 继承。`Compose` 将有序值与 Context identity 关联，并为每次新增返回精确的 disposer：
 
 ```python
 from slyme.context import Compose, Context
@@ -138,7 +138,7 @@ remove_root()
 
 **无限可组合性：** 通过完全解耦构建任意复杂的执行流程。得益于 PyTree 增强，节点 containment 关系可以直接通过原生 Python 结构表示。
 
-**显式状态分层：** 每个 Context 路径都由应用根声明。`Context.fork()` 隔离局部写入并实时继承父级，`flatten()` 暴露可见的 Ref 到 value 映射；`Compose` 管理有序、可撤销的组合值。
+**显式状态分层：** 每个 Context 路径、结构角色和替换策略都由共享 Schema 声明。`Context.fork()` 隔离局部写入并实时继承父级，`flatten()` 暴露可见的 Ref 到 value 映射；`Compose` 管理有序、可撤销的组合值。
 
 **无缝协作：** 高度解耦的节点通过显式 Context 路径与 Compose 对象通信。这允许团队独立开发功能并编写单元测试，减少“胶水代码”和深层系统耦合。
 

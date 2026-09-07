@@ -5,10 +5,10 @@ Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行
 ## 构建与修改
 
 ```python
-from slyme.context import Context, Schema, ref
+from slyme.context import Context, Schema
 from slyme.node import Auto, node
 
-R = Schema({"user": {"age": ref(), "name": ref()}, "a": ref(), "b": ref(), "items": ref()})
+R = Schema({"user": {"age": Schema.leaf(), "name": Schema.leaf()}, "a": Schema.leaf(), "b": Schema.leaf(), "items": Schema.leaf()})
 
 
 @node
