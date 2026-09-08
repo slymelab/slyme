@@ -4,7 +4,7 @@ A PyTree is a nested structure whose containers define topology and whose unregi
 
 ## `NODE_ENGINE`
 
-`NODE_ENGINE` registers `Node`, `Wrapper`, their asynchronous variants, and ordinary containers. It is used for physical graph inspection, rendering, and Ref discovery. Node parameters may contain heterogeneous nested values; the engine describes traversal, not which combinations are legal.
+`NODE_ENGINE` registers `Node`, `Wrapper`, their asynchronous variants, and ordinary containers. It is used for physical graph inspection and Ref discovery. Node parameters may contain heterogeneous nested values; the engine describes traversal, not which combinations are legal.
 
 ## Object identity
 

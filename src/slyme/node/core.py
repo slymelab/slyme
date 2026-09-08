@@ -182,15 +182,6 @@ class NodeElement:
         """Restore one build parameter to its declared default."""
         self.set(name, UNSET)
 
-    def __repr__(self) -> str:
-        return get_render_string(self)
-
-    def extra_repr(self) -> str:
-        return ""
-
-    def type_repr(self) -> str:
-        return f"{self._func.__name__}<{self.__class__.__name__}>"
-
 
 class Node(NodeElement, Generic[_R]):
     """Mutable synchronous Node."""
@@ -479,9 +470,6 @@ class _FactoryBase(Generic[_P, _E]):
     def func(self) -> Callable:
         return self._func
 
-    def __repr__(self) -> str:
-        return f"<{type(self).__name__}[{self.mode}] of {self._func.__name__}>"
-
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _E:
         if args:
             raise TypeError("Node and Wrapper factories accept keyword arguments only.")
@@ -659,5 +647,4 @@ def wrapper(
 
 
 from .eval import async_execute_eval_plan, execute_eval_plan, prepare_eval_plan
-from .render import get_render_string
 from .tree import NODE_ENGINE

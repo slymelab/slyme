@@ -31,7 +31,6 @@ from .core import (
 
 # NOTE: register eval funcs here through import
 from .eval import async_eval_tree, eval_tree
-from .render import Config as RenderConfig
 from .signature import UNDEFINED, UNSET, Auto, spec
 
 __all__ = [
@@ -51,7 +50,6 @@ __all__ = [
     "Auto",
     "UNSET",
     "UNDEFINED",
-    "RenderConfig",
     "eval_tree",
     "async_eval_tree",
 ]

@@ -61,8 +61,6 @@ assert root(Context()) == 5
 
 `Auto` 会递归解析已注册的 evaluator 叶子，例如 `Ref` 和 `Node`。Ref 会直接读取传入的 Context；每个产生值的子 Node 则分别获得独立的 `ctx.fork()`，因此它的局部 Context 写入不会泄漏到父级或其他 Auto 子 Node。返回值、对共享 leaf 对象的修改以及外部副作用并不会被隔离。没有 `Auto` 时，Ref 和 Node 对象会原样传入。
 
-Node 渲染会展示当前参数值。参数边前的 `?` 表示该值会在 Node 运行时根据传入的 Context 求值。
-
 缺失的必需构建参数以 `UNDEFINED` 表示，并在 Node 调用时被拒绝。使用 `UNSET` 可以显式请求声明的默认值。
 
 ## 动态修改

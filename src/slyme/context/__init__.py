@@ -14,9 +14,6 @@
 
 from .compose import Compose
 from .core import (
-    Config as ContextConfig,
-)
-from .core import (
     Context,
     ContextKey,
     Ref,
@@ -29,5 +26,4 @@ __all__ = [
     "ContextKey",
     "Ref",
     "Schema",
-    "ContextConfig",
 ]

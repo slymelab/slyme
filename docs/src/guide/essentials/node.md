@@ -62,8 +62,6 @@ assert root(Context()) == 5
 
 `Auto` recursively resolves registered evaluator leaves such as `Ref` and `Node`. A Ref reads the supplied Context directly. Each value-producing child Node receives its own `ctx.fork()`, so its local Context writes do not leak into the parent or a sibling Auto child. Returned values, mutations to shared leaf objects, and external side effects are not isolated. Without `Auto`, Ref and Node objects are passed through unchanged.
 
-Node rendering shows the current parameter values. A `?` prefix on a parameter edge means that the value will be evaluated from the supplied Context when the Node runs.
-
 Missing required build parameters are represented by `UNDEFINED` and rejected when the Node is called. Use `UNSET` to request a declared default explicitly.
 
 ## Dynamic modification

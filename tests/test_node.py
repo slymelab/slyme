@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections import UserDict
 from collections.abc import Awaitable, Callable
 from types import MappingProxyType
 from typing import Any
@@ -16,7 +15,6 @@ from slyme.node import (
     AsyncNode,
     Auto,
     Node,
-    RenderConfig,
     Wrapper,
     async_eval_tree,
     async_sequential,
@@ -197,7 +195,6 @@ def test_decorator_validation_and_factory_behavior() -> None:
 
     assert detected.mode == "async"
     assert detected.element_type is AsyncNode
-    assert "NodeFactory[async]" in repr(detected)
     assert detected.func.__name__ == "detected"
 
 
@@ -790,7 +787,7 @@ async def test_async_wrapper_slot_is_revalidated_at_execution() -> None:
         await invalid_async(Context(schema=R))
 
 
-def test_node_tree_round_trip_and_render_configuration() -> None:
+def test_node_tree_round_trip() -> None:
     @wrapper
     def trace(
         ctx: Context,
@@ -813,73 +810,3 @@ def test_node_tree_round_trip_and_render_configuration() -> None:
     rebuilt = NODE_ENGINE.unflatten(definition, leaves)
     assert isinstance(rebuilt, Node)
     assert rebuilt(Context(schema=R)) == 1
-
-    rendered = repr(graph)
-    assert "parent<Node>" in rendered
-    assert "@wrappers" in rendered
-    assert "(nodes)" in rendered
-    assert "? .nested" in rendered
-    assert "1" in rendered
-    assert "#refs" in repr(parent(nested=R.resolve("input.value")))
-    assert RenderConfig.visible_categories is None
-
-    try:
-        RenderConfig.visible_categories = ("nodes",)
-        filtered = repr(graph)
-        assert "(nodes)" in filtered
-        assert "@wrappers" not in filtered
-        assert "(values)" not in filtered
-    finally:
-        RenderConfig.visible_categories = None
-
-
-def test_render_distinguishes_executable_edges_from_stored_node_values() -> None:
-    @wrapper
-    def trace(
-        ctx: Context,
-        wrapped: Node[Any],
-        call_next: Callable[[Context], Any],
-        /,
-    ) -> Any:
-        return call_next(ctx)
-
-    @node
-    def child(ctx: Context, /) -> int:
-        return 1
-
-    @node
-    def container(ctx: Context, /, *, stored: Any = None) -> Any:
-        return stored
-
-    @wrapper
-    def configured_wrapper(
-        ctx: Context,
-        wrapped: Node[Any],
-        call_next: Callable[[Context], Any],
-        /,
-        *,
-        wrappers: list[int],
-    ) -> Any:
-        return call_next(ctx)
-
-    stored_wrapper = trace()
-    stored_node = child()
-    rendered = repr(container(stored=[stored_wrapper, stored_node]))
-
-    assert "@wrappers" not in rendered
-    assert "(nodes)" not in rendered
-    assert "(values)" in rendered
-    assert "(nodes)" in repr(container(stored=stored_node))
-    assert "@wrappers" not in repr(container(stored=stored_wrapper))
-    assert ".wrappers" not in repr(child())
-    assert "(nodes)" in repr(sequential(nodes=[stored_node]))
-
-    user_mapping = UserDict({"secret": 42})
-    assert "{'secret': 42}" in repr(container(stored=user_mapping))
-
-    proxy = MappingProxyType({"secret": 42})
-    assert repr(container(stored=proxy)).count("secret") == 1
-
-    configured = repr(configured_wrapper(wrappers=[]))
-    assert ".wrappers" in configured
-    assert "@wrappers" not in configured

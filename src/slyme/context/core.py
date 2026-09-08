@@ -22,8 +22,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
-from typing_extensions import Self
-
 from .compose import Compose
 
 _T = TypeVar("_T")
@@ -32,42 +30,6 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 _Blocked = Enum("_Blocked", ["MARK"])
 _BLOCKED = _Blocked.MARK
-
-
-class Config:
-    repr_indent: str
-    repr_newline: str
-    repr_suffix: str
-    repr_last_suffix: str
-    leaf_formatter: Callable[[Any], str]
-
-    @classmethod
-    def set_compact_repr(cls) -> type[Self]:
-        cls.repr_indent = ""
-        cls.repr_newline = ""
-        cls.repr_suffix = ", "
-        cls.repr_last_suffix = ""
-        return cls
-
-    @classmethod
-    def set_pretty_repr(cls) -> type[Self]:
-        cls.repr_indent = "    "
-        cls.repr_newline = "\n"
-        cls.repr_suffix = ","
-        cls.repr_last_suffix = ","
-        return cls
-
-    @classmethod
-    def set_truncated_repr(cls, max_len: int = 100) -> type[Self]:
-        def _truncated(obj: Any) -> str:
-            s = repr(obj)
-            return s if len(s) <= max_len else s[:max_len] + "..."
-
-        cls.leaf_formatter = _truncated
-        return cls
-
-
-Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 
 @dataclass(frozen=True, repr=False)
@@ -105,9 +67,6 @@ class Ref(Generic[_T]):
     def __post_init__(self) -> None:
         object.__setattr__(self, "parts", self._split_path(self.path))
 
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}(path={self.path!r})"
-
 
 @dataclass(frozen=True)
 class _RefLeafConfig(Generic[_T]):
@@ -123,21 +82,10 @@ class _RefLeafConfig(Generic[_T]):
                 f"got {type(self.replaceable).__name__}."
             )
 
-    def __repr__(self) -> str:
-        items = []
-        if self.value_type is not None:
-            items.append(f"value_type={self.value_type!r}")
-        if not self.replaceable:
-            items.append("replaceable=False")
-        return f"Schema.leaf({', '.join(items)})"
-
 
 @dataclass(frozen=True)
 class _RefContainerConfig:
     """Behavior of one container declared in a Schema."""
-
-    def __repr__(self) -> str:
-        return "Schema.container()"
 
 
 _RefConfig = _RefLeafConfig[Any] | _RefContainerConfig
@@ -531,9 +479,6 @@ class Schema:
         collect(node)
         return tuple(leaves)
 
-    def __repr__(self) -> str:
-        return "Schema()"
-
 
 ContextKey = str | Ref[Any]
 _RefRole = Literal["any", "leaf", "container"]
@@ -664,48 +609,6 @@ class ContextElement(ABC):
         local: bool = False,
     ) -> Iterable[tuple[Ref[Any], Any]]:
         pass
-
-    def type_repr(self) -> str:
-        return type(self).__name__
-
-    def __repr__(self) -> str:
-        name = self.type_repr()
-        try:
-            keys = list(self.keys())
-        except ContextPathError:
-            return f"{name}(<invalid path>)"
-
-        if not keys:
-            return f"{name}()"
-
-        newline = Config.repr_newline
-        indent = Config.repr_indent
-        formatter = Config.leaf_formatter
-
-        item_blocks: list[list[str]] = []
-        for key in keys:
-            val: Any = self.get(key)
-            v_str = repr(val) if isinstance(val, ContextElement) else formatter(val)
-
-            if newline:
-                v_lines = v_str.split(newline)
-                if len(v_lines) > 1 and not v_lines[-1]:
-                    v_lines.pop()
-            else:
-                v_lines = [v_str]
-
-            block = [f"{indent}{key!r}: {v_lines[0]}"]
-            block.extend(f"{indent}{line}" for line in v_lines[1:])
-            item_blocks.append(block)
-
-        body_lines = []
-        count = len(item_blocks)
-        for i, block in enumerate(item_blocks):
-            suffix = Config.repr_last_suffix if i == count - 1 else Config.repr_suffix
-            block[-1] += suffix
-            body_lines.extend(block)
-
-        return f"{name}({{{newline}{newline.join(body_lines)}{newline}}})"
 
     def flatten(self, *, local: bool = False) -> dict[Ref[Any], Any]:
         """Return the visible Context leaves as a flat Ref-to-value mapping."""

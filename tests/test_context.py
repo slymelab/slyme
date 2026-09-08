@@ -11,7 +11,6 @@ from hypothesis import strategies as st
 import slyme.context as context_module
 from slyme.context import (
     Context,
-    ContextConfig,
     Ref,
     Schema,
 )
@@ -84,8 +83,6 @@ def test_ref_is_a_directly_constructible_path_handle() -> None:
     assert value.parts == ("input", "value")
     assert value == equivalent
     assert hash(value) == hash(equivalent)
-    assert repr(value) == "Ref(path='input.value')"
-
     manual = Ref("input.value")
     assert manual == value
 
@@ -138,12 +135,10 @@ def test_schema_snapshots_input_and_has_no_attribute_path_api() -> None:
 def test_schema_declaration_validation() -> None:
     assert not hasattr(context_module, "R")
     assert not hasattr(context_module, "Refs")
-    assert repr(Schema()) == "Schema()"
-    assert repr(Schema(None)) == "Schema()"
+    assert isinstance(Schema(), Schema)
+    assert isinstance(Schema(None), Schema)
     with pytest.raises(TypeError, match="declarations must be a mapping"):
         Schema("bad")  # type: ignore[arg-type]
-    assert repr(Schema.leaf()) == "Schema.leaf()"
-    assert repr(Schema.container()) == "Schema.container()"
     with pytest.raises(ValueError, match="root.*empty-key"):
         Schema({"": Schema.container()})
     with pytest.raises(ValueError, match="without dots"):
@@ -330,7 +325,6 @@ def test_context_view_tracks_the_live_schema_path() -> None:
     view = ctx.get("plugin")
 
     remove_old()
-    assert repr(view) == "ContextView(<invalid path>)"
     with pytest.raises(ContextPathError, match="plugin"):
         view.get("value")
     with pytest.raises(ContextPathError, match="plugin"):
@@ -621,23 +615,6 @@ def test_update_tree_and_structured_extract() -> None:
         3,
         {"y": 4},
     ]
-
-
-def test_context_repr_modes_and_invalid_view() -> None:
-    ctx = Context(schema=R)
-    ctx.update({R.resolve("short"): 1, R.resolve("long"): "abcdefghij"})
-
-    try:
-        ContextConfig.set_compact_repr().set_truncated_repr(4)
-        compact = repr(ctx)
-        assert "Context({'long': 'abc..., 'short': 1})" == compact
-        ContextConfig.set_pretty_repr()
-        assert "\n" in repr(ctx)
-        assert repr(Context(schema=R)) == "Context()"
-        invalid = ctx.get(R.resolve("short"))
-        assert invalid == 1
-    finally:
-        ContextConfig.set_pretty_repr().set_truncated_repr(100)
 
 
 @given(
