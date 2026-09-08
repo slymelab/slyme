@@ -104,6 +104,10 @@ breaking changes when they are documented here.
   child Scope inheriting the caller's Scope, and disposes it before parent
   execution continues. Asynchronous Auto evaluation awaits cleanup, including
   after cancellation.
+- Context trees, mutable Schema declarations, and Compose values are now
+  single-thread-owned. Asynchronous evaluation invokes synchronous child Nodes
+  inline instead of moving live Context state into worker threads; applications
+  explicitly offload ordinary value computation when needed.
 - Builder functions now require their outer result to be a `Node` or
   `AsyncNode` without recursively validating the returned parameter graph.
 - Node and Wrapper construction now binds every declared parameter through one

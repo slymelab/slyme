@@ -11,4 +11,4 @@ Slyme 选择性采用函数式思想，而不要求整个运行时都不可变�
 
 纯度仍由应用决定：产生值的 Node 可以是纯函数，I/O Node 可以执行副作用，高阶 Node 可以协调子 Node。Slyme 负责描述它们的组合与生命周期，而不试图建模这些 Python 操作的内部细节。
 
-通过 `Auto` 求值的每个子 Node 都会获得由父级管理、绑定到独立 child Scope 的 Context，Slyme 会在继续执行前 dispose 它。显式并发编排需要隔离局部写入时，也应为每个分支创建 child Scope。fork 会保留应用 leaf 的 identity，因此不会让共享 Python 对象自动获得线程安全性，也不会撤销没有注册 cleanup 的外部副作用；需要时应单独隔离这些资源。
+通过 `Auto` 求值的每个子 Node 都会获得由父级管理、绑定到独立 child Scope 的 Context，Slyme 会在继续执行前 dispose 它。显式并发编排需要隔离局部写入时，也应为每个分支创建 child Scope。一棵 Context 树及其使用的可变 Schema 和 Compose 对象只归属于一个线程和一个事件循环。显式提交到线程或进程的工作应只处理普通值，并在返回结果后由 owner 线程修改 Context。fork 会保留应用 leaf 的 identity，也不会撤销没有注册 cleanup 的外部副作用。

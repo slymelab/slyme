@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 from collections.abc import Iterable, Sequence
 
 from slyme.context import Context
 
-from ._async import wait_uninterruptibly
 from .core import AsyncNode, Node, node
 
 __all__ = [
@@ -77,8 +75,7 @@ async def async_sequential_exec(
         if isinstance(node_, AsyncNode):
             await node_(ctx)
         elif isinstance(node_, Node):
-            worker = asyncio.create_task(asyncio.to_thread(node_, ctx))
-            await wait_uninterruptibly(worker)
+            node_(ctx)
         else:
             raise TypeError("async_sequential_exec only accepts Nodes and AsyncNodes.")
 

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import threading
 import types
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
@@ -42,21 +41,18 @@ class _ComposeEntry(Generic[_T]):
 class Compose(Generic[_T, _R]):
     """Store reversible values and combine those visible through Scope C3 order."""
 
-    __slots__ = ("_buckets", "_lock", "_resolver", "__weakref__")
+    __slots__ = ("_buckets", "_resolver", "__weakref__")
 
     def __init__(self, resolver: Callable[[tuple[_T, ...]], _R]) -> None:
         if not callable(resolver):
             raise TypeError("Compose resolver must be callable.")
         self._resolver = resolver
         self._buckets: dict[Scope, dict[object, _ComposeEntry[_T]]] = {}
-        self._lock = threading.RLock()
 
     @staticmethod
     def _validate_scope(scope: Scope) -> Scope:
         if not isinstance(scope, Scope):
-            raise TypeError(
-                f"Compose scope must be Scope, got {type(scope).__name__}."
-            )
+            raise TypeError(f"Compose scope must be Scope, got {type(scope).__name__}.")
         return scope
 
     @classmethod
@@ -97,12 +93,11 @@ class Compose(Generic[_T, _R]):
     ) -> tuple[tuple[Scope, _ComposeEntry[_T]], ...]:
         scope = self._validate_scope(scope)
         scopes = (scope,) if local else scope.mro
-        with self._lock:
-            return tuple(
-                (current, entry)
-                for current in scopes
-                for entry in self._buckets.get(current, {}).values()
-            )
+        return tuple(
+            (current, entry)
+            for current in scopes
+            for entry in self._buckets.get(current, {}).values()
+        )
 
     def add(
         self,
@@ -139,22 +134,20 @@ class Compose(Generic[_T, _R]):
             value,
             types.MappingProxyType(dict(metadata or {})),
         )
-        with self._lock:
-            bucket = self._buckets.setdefault(scope, {})
-            if position == "append":
-                bucket[identity] = entry
-            else:
-                self._buckets[scope] = {identity: entry, **bucket}
-            return entry
+        bucket = self._buckets.setdefault(scope, {})
+        if position == "append":
+            bucket[identity] = entry
+        else:
+            self._buckets[scope] = {identity: entry, **bucket}
+        return entry
 
     def _remove(self, scope: Scope, identity: object) -> None:
-        with self._lock:
-            current = self._buckets.get(scope)
-            if current is None or identity not in current:
-                return
-            current.pop(identity)
-            if not current:
-                self._buckets.pop(scope, None)
+        current = self._buckets.get(scope)
+        if current is None or identity not in current:
+            return
+        current.pop(identity)
+        if not current:
+            self._buckets.pop(scope, None)
 
     def _disposer(
         self,
@@ -195,12 +188,11 @@ class Compose(Generic[_T, _R]):
         if scope is None:
             if local:
                 raise ValueError("local=True requires a Scope.")
-            with self._lock:
-                scoped = tuple(
-                    (current, entry)
-                    for current, bucket in tuple(self._buckets.items())
-                    for entry in bucket.values()
-                )
+            scoped = tuple(
+                (current, entry)
+                for current, bucket in tuple(self._buckets.items())
+                for entry in bucket.values()
+            )
         else:
             scope = self._validate_scope(scope)
             scoped = self._scoped_entries(scope, local=local)
@@ -218,5 +210,4 @@ class Compose(Generic[_T, _R]):
         )
 
     def __len__(self) -> int:
-        with self._lock:
-            return sum(len(bucket) for bucket in self._buckets.values())
+        return sum(len(bucket) for bucket in self._buckets.values())

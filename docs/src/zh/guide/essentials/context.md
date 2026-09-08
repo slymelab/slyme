@@ -2,6 +2,8 @@
 
 `Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按 Scope 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则只修改该 Scope。
 
+一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程。同步 workflow 在该线程使用它们；异步 workflow 则在一个事件循环中使用它们。worker 线程和进程应只接收普通值，并把结果返回 owner 线程后再修改 Context。
+
 ## Ref 与 Schema {#ref}
 
 `Ref` 是标识 Context 依赖的不可变路径值。Schema 记录应用可用的路径，

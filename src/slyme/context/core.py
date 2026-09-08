@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import difflib
 import inspect
-import threading
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -244,9 +243,8 @@ _SchemaNode = _RefEntry[Any] | _SchemaContainer
 class Schema:
     """Mutable tree of independently reversible Context path declarations."""
 
-    __slots__ = ("__data", "_lock", "__weakref__")
+    __slots__ = ("__data", "__weakref__")
     __data: _SchemaContainer
-    _lock: threading.RLock
 
     @staticmethod
     def leaf(
@@ -495,7 +493,6 @@ class Schema:
                 "Schema declarations must be a mapping, "
                 f"got {type(declarations).__name__}."
             )
-        object.__setattr__(self, "_lock", threading.RLock())
         object.__setattr__(
             self,
             "_Schema__data",
@@ -515,21 +512,18 @@ class Schema:
 
     def _resolve_node(self, path: str) -> _SchemaNode:
         parts = Ref._split_path(path)
-        with self._lock:
-            node: _SchemaNode = self.__data
-            for index, part in enumerate(parts):
-                if not isinstance(node, dict) or part not in node:
-                    candidates = (
-                        [key for key in node if key] if isinstance(node, dict) else []
-                    )
-                    suggestion = difflib.get_close_matches(part, candidates, n=1)
-                    detail = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
-                    parent = ".".join(parts[:index]) or "<root>"
-                    raise KeyError(
-                        f"Schema path {parent!r} has no entry {part!r}.{detail}"
-                    )
-                node = cast(_SchemaNode, node[part])
-            return node
+        node: _SchemaNode = self.__data
+        for index, part in enumerate(parts):
+            if not isinstance(node, dict) or part not in node:
+                candidates = (
+                    [key for key in node if key] if isinstance(node, dict) else []
+                )
+                suggestion = difflib.get_close_matches(part, candidates, n=1)
+                detail = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+                parent = ".".join(parts[:index]) or "<root>"
+                raise KeyError(f"Schema path {parent!r} has no entry {part!r}.{detail}")
+            node = cast(_SchemaNode, node[part])
+        return node
 
     def _resolve_entry(self, path: str) -> _RefEntry[Any]:
         node = self._resolve_node(path)
@@ -548,11 +542,10 @@ class Schema:
         """Add one atomic declaration and return its idempotent disposer."""
         declaration_id = object()
         if isinstance(declarations, Schema):
-            with declarations._lock:
-                incoming = self._copy_declaration(
-                    declarations.__data,
-                    declaration_id,
-                )
+            incoming = self._copy_declaration(
+                declarations.__data,
+                declaration_id,
+            )
         elif isinstance(declarations, Mapping):
             incoming = self._build(declarations, declaration_id)
         else:
@@ -561,10 +554,9 @@ class Schema:
                 f"got {type(declarations).__name__}."
             )
 
-        with self._lock:
-            self._validate_merge(self.__data, incoming)
-            paths = tuple(path for path, _ in self._iter_entries(incoming))
-            self._commit_merge(self.__data, incoming)
+        self._validate_merge(self.__data, incoming)
+        paths = tuple(path for path, _ in self._iter_entries(incoming))
+        self._commit_merge(self.__data, incoming)
 
         schema_ref = weakref.ref(self)
         disposed = False
@@ -576,53 +568,49 @@ class Schema:
             disposed = True
             schema = schema_ref()
             if schema is not None:
-                with schema._lock:
-                    schema._remove_declaration(
-                        schema.__data,
-                        paths,
-                        declaration_id,
-                    )
+                schema._remove_declaration(
+                    schema.__data,
+                    paths,
+                    declaration_id,
+                )
 
         return dispose
 
     def _node_at(self, parts: tuple[str, ...]) -> _SchemaNode:
-        with self._lock:
-            node: _SchemaNode = self.__data
-            for part in parts:
-                if not isinstance(node, dict):
-                    raise KeyError(".".join(parts))
-                node = cast(_SchemaNode, node[part])
-            return node
+        node: _SchemaNode = self.__data
+        for part in parts:
+            if not isinstance(node, dict):
+                raise KeyError(".".join(parts))
+            node = cast(_SchemaNode, node[part])
+        return node
 
     def _child_names(self, parts: tuple[str, ...]) -> tuple[str, ...]:
-        with self._lock:
-            node = self._node_at(parts)
-            if not isinstance(node, dict):
-                raise TypeError("Schema leaf paths do not have children.")
-            return tuple(name for name in node if name != _REF_ENTRY_KEY)
+        node = self._node_at(parts)
+        if not isinstance(node, dict):
+            raise TypeError("Schema leaf paths do not have children.")
+        return tuple(name for name in node if name != _REF_ENTRY_KEY)
 
     def _leaf_entries(
         self,
         parts: tuple[str, ...] = (),
     ) -> tuple[_RefEntry[Any], ...]:
-        with self._lock:
-            node = self._node_at(parts)
-            if isinstance(node, _RefEntry):
-                return (node,)
+        node = self._node_at(parts)
+        if isinstance(node, _RefEntry):
+            return (node,)
 
-            leaves: list[_RefEntry[Any]] = []
+        leaves: list[_RefEntry[Any]] = []
 
-            def collect(container: _SchemaContainer) -> None:
-                for name, child_node in container.items():
-                    if name == _REF_ENTRY_KEY:
-                        continue
-                    if isinstance(child_node, _RefEntry):
-                        leaves.append(child_node)
-                    else:
-                        collect(child_node)
+        def collect(container: _SchemaContainer) -> None:
+            for name, child_node in container.items():
+                if name == _REF_ENTRY_KEY:
+                    continue
+                if isinstance(child_node, _RefEntry):
+                    leaves.append(child_node)
+                else:
+                    collect(child_node)
 
-            collect(node)
-            return tuple(leaves)
+        collect(node)
+        return tuple(leaves)
 
 
 ContextKey = str | Ref[Any]
@@ -649,15 +637,14 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         super().__init__(resolve)
 
     def _local_value_entry(self, scope: Scope) -> Any | None:
-        with self._lock:
-            return next(
-                (
-                    entry
-                    for entry in self._buckets.get(scope, {}).values()
-                    if entry.value is not _BLOCKED
-                ),
-                None,
-            )
+        return next(
+            (
+                entry
+                for entry in self._buckets.get(scope, {}).values()
+                if entry.value is not _BLOCKED
+            ),
+            None,
+        )
 
     def has_value(self, scope: Scope, *, local: bool = False) -> bool:
         try:
@@ -673,45 +660,38 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         *,
         replaceable: bool,
     ) -> None:
-        with self._lock:
-            current = self._local_value_entry(scope)
-            if current is not None:
-                if not replaceable:
-                    raise ValueError("Context local value is not replaceable.")
-                self._remove(scope, current.identity)
-            self._insert(scope, value, position="prepend")
+        current = self._local_value_entry(scope)
+        if current is not None:
+            if not replaceable:
+                raise ValueError("Context local value is not replaceable.")
+            self._remove(scope, current.identity)
+        self._insert(scope, value, position="prepend")
 
     def add_value(self, scope: Scope, value: Any) -> Callable[[], None]:
-        with self._lock:
-            if self._local_value_entry(scope) is not None:
-                raise ValueError("Context already has a local value.")
-            entry = self._insert(scope, value, position="prepend")
-            return self._disposer(scope, entry)
+        if self._local_value_entry(scope) is not None:
+            raise ValueError("Context already has a local value.")
+        entry = self._insert(scope, value, position="prepend")
+        return self._disposer(scope, entry)
 
     def delete_value(self, scope: Scope) -> None:
-        with self._lock:
-            current = self._local_value_entry(scope)
-            if current is not None:
-                self._remove(scope, current.identity)
+        current = self._local_value_entry(scope)
+        if current is not None:
+            self._remove(scope, current.identity)
 
     def block(self, scope: Scope) -> None:
-        with self._lock:
-            if any(
-                entry.value is _BLOCKED
-                for entry in self._buckets.get(scope, {}).values()
-            ):
-                return
-            self._insert(scope, _BLOCKED, position="append")
+        if any(
+            entry.value is _BLOCKED for entry in self._buckets.get(scope, {}).values()
+        ):
+            return
+        self._insert(scope, _BLOCKED, position="append")
 
     def clear_scope(self, scope: Scope) -> None:
         """Remove every value stored directly at *scope*."""
-        with self._lock:
-            self._buckets.pop(scope, None)
+        self._buckets.pop(scope, None)
 
     @property
     def empty(self) -> bool:
-        with self._lock:
-            return not self._buckets
+        return not self._buckets
 
 
 _ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]
@@ -791,7 +771,6 @@ class Context(ContextElement):
     parent: Context | None = field(init=False)
     scope: Scope = field(init=False)
     _data: _ContextData = field(init=False)
-    _data_lock: threading.RLock = field(init=False)
     _root: Context = field(init=False)
     _schema: Schema | None = field(init=False)
     _owned: list[Context | _Effect] = field(init=False)
@@ -835,7 +814,6 @@ class Context(ContextElement):
             application_root = parent.root
             root_schema = None
             root_data = application_root._data
-            data_lock = application_root._data_lock
             bound_scope = parent.scope if scope is None else scope
             scope_counts = None
             sync_only = parent._sync_only
@@ -849,7 +827,6 @@ class Context(ContextElement):
                     f"Context schema must be Schema, got {type(schema).__name__}."
                 )
             root_data = weakref.WeakKeyDictionary()
-            data_lock = threading.RLock()
             application_root = self
             bound_scope = Scope() if scope is None else scope
             scope_counts = {}
@@ -858,7 +835,6 @@ class Context(ContextElement):
         object.__setattr__(self, "parent", parent)
         object.__setattr__(self, "scope", bound_scope)
         object.__setattr__(self, "_data", root_data)
-        object.__setattr__(self, "_data_lock", data_lock)
         object.__setattr__(self, "_root", application_root)
         object.__setattr__(self, "_schema", root_schema)
         object.__setattr__(self, "_owned", [])
@@ -903,29 +879,27 @@ class Context(ContextElement):
 
     def _acquire_scope(self) -> None:
         counts = cast(dict[Scope, int], self.root._scope_counts)
-        with self._data_lock:
-            for scope in self.scope.mro:
-                counts[scope] = counts.get(scope, 0) + 1
+        for scope in self.scope.mro:
+            counts[scope] = counts.get(scope, 0) + 1
 
     def _release_scope(self) -> None:
         counts = cast(dict[Scope, int], self.root._scope_counts)
-        with self._data_lock:
-            expired: list[Scope] = []
-            for scope in self.scope.mro:
-                remaining = counts[scope] - 1
-                if remaining:
-                    counts[scope] = remaining
-                else:
-                    counts.pop(scope)
-                    expired.append(scope)
+        expired: list[Scope] = []
+        for scope in self.scope.mro:
+            remaining = counts[scope] - 1
+            if remaining:
+                counts[scope] = remaining
+            else:
+                counts.pop(scope)
+                expired.append(scope)
 
-            if not expired:
-                return
-            for entry, binding in tuple(self._data.items()):
-                for scope in expired:
-                    binding.clear_scope(scope)
-                if binding.empty:
-                    self._data.pop(entry, None)
+        if not expired:
+            return
+        for entry, binding in tuple(self._data.items()):
+            for scope in expired:
+                binding.clear_scope(scope)
+            if binding.empty:
+                self._data.pop(entry, None)
 
     def _remove_child(self, child: Context) -> None:
         if child in self._owned:
@@ -1198,12 +1172,11 @@ class Context(ContextElement):
         *,
         create: bool,
     ) -> _ContextBinding | None:
-        with self._data_lock:
-            binding = self._data.get(entry)
-            if binding is None and create:
-                binding = _ContextBinding()
-                self._data[entry] = binding
-            return binding
+        binding = self._data.get(entry)
+        if binding is None and create:
+            binding = _ContextBinding()
+            self._data[entry] = binding
+        return binding
 
     def _leaf_value(self, entry: _RefEntry[Any], *, local: bool) -> Any:
         binding = self._binding(entry, create=False)
@@ -1335,9 +1308,7 @@ class Context(ContextElement):
             updates: A mapping of References to new values.
             drops: An iterable of References to remove.
 
-        Validation failures leave existing bindings unchanged. Calls from separate
-        threads may interleave and require application-level synchronization when
-        several paths must change as one transaction.
+        Validation failures leave existing bindings unchanged.
         """
         self._assert_mutable()
         if not updates and not drops:

@@ -2,6 +2,8 @@
 
 `Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by Scope. Reads follow the bound Scope's C3 order by default, while writes change only that exact Scope.
 
+A Context tree and its mutable Schema and Compose objects are single-thread-owned. Synchronous workflows use them on that thread; asynchronous workflows use them on one event loop. Worker threads and processes should receive ordinary values and return results for Context mutation on the owner thread.
+
 ## Ref and Schema {#ref}
 
 `Ref` is an immutable path value identifying a Context dependency. A Schema

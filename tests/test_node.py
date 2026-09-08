@@ -702,44 +702,14 @@ async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None
     assert await parent(value=child())(Context(schema=R)) == 1
 
 
-async def test_cancelled_sync_auto_waits_for_worker_before_cleanup() -> None:
-    started = threading.Event()
-    release = threading.Event()
-    events: list[str] = []
-
-    @node
-    def child(ctx: Context, /) -> int:
-        ctx.effect(lambda: lambda: events.append("cleanup"))
-        started.set()
-        release.wait(timeout=5)
-        events.append("worker-finished")
-        return 1
-
-    @node
-    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
-        return value
-
-    task = asyncio.create_task(parent(value=child())(Context(schema=R)))
-    assert await asyncio.to_thread(started.wait, 5)
-    task.cancel()
-    await asyncio.sleep(0)
-    task.cancel()
-    await asyncio.sleep(0)
-    assert events == []
-
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert events == ["worker-finished", "cleanup"]
-
-
-async def test_concurrent_sync_auto_nodes_isolate_shared_context_data() -> None:
-    barrier = threading.Barrier(2)
+async def test_async_auto_runs_sync_nodes_inline_with_isolated_contexts() -> None:
+    owner_thread = threading.get_ident()
+    observed: list[tuple[int, int, object]] = []
 
     @node
     def child(ctx: Context, /, *, value: int) -> tuple[int, object]:
-        barrier.wait(timeout=5)
         ctx.set("auto.temporary", value)
+        observed.append((value, threading.get_ident(), ctx.scope))
         return ctx.get("auto.temporary", local=True), ctx.scope
 
     @node
@@ -754,43 +724,13 @@ async def test_concurrent_sync_auto_nodes_isolate_shared_context_data() -> None:
     ctx = Context(schema=R)
     results = await parent(values=[child(value=1), child(value=2)])(ctx)
 
-    assert sorted(value for value, _ in results) == [1, 2]
+    assert [value for value, _ in results] == [1, 2]
+    assert [entry[:2] for entry in observed] == [
+        (1, owner_thread),
+        (2, owner_thread),
+    ]
     assert results[0][1] is not results[1][1]
     assert not ctx.exists("auto.temporary")
-
-
-async def test_cancelled_nested_async_sequence_waits_for_sync_worker() -> None:
-    started = threading.Event()
-    release = threading.Event()
-    events: list[str] = []
-
-    @node
-    def step(ctx: Context, /) -> None:
-        ctx.effect(lambda: lambda: events.append("cleanup"))
-        started.set()
-        release.wait(timeout=5)
-        ctx.get("auto.inherited", None)
-        events.append("worker-finished")
-
-    @node
-    async def child(ctx: Context, /) -> int:
-        await async_sequential_exec(ctx, [step()])
-        return 1
-
-    @node
-    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
-        return value
-
-    task = asyncio.create_task(parent(value=child())(Context(schema=R)))
-    assert await asyncio.to_thread(started.wait, 5)
-    task.cancel()
-    await asyncio.sleep(0)
-    assert events == []
-
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert events == ["worker-finished", "cleanup"]
 
 
 def test_sync_auto_preserves_node_failure_when_cleanup_also_fails() -> None:
@@ -894,8 +834,13 @@ def test_sync_sequential_rejects_non_sync_execution_entries() -> None:
 
 
 async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
+    owner_thread = threading.get_ident()
+    sync_thread: int | None = None
+
     @node
     def sync_step(ctx: Context, /) -> None:
+        nonlocal sync_thread
+        sync_thread = threading.get_ident()
         ctx.set(R.resolve("sync"), True)
 
     @node
@@ -906,6 +851,7 @@ async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
     nodes = [sync_step(), async_step()]
     await async_sequential_exec(ctx, nodes)
     assert ctx.get(R.resolve("sync")) and ctx.get(R.resolve("async_value"))
+    assert sync_thread == owner_thread
     await async_sequential(nodes=nodes)(ctx)
 
     with pytest.raises(TypeError, match="only accepts Nodes and AsyncNodes"):

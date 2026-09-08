@@ -49,7 +49,7 @@ process(data=[R.resolve("a"), R.resolve("b")])(ctx)  # Auto produces the evaluat
 process(data=R.resolve("items"))(ctx)  # data is the list stored in Context
 ```
 
-Auto Ref values are read from `ctx`. Every Auto child Node instead executes with an owned child Context and a distinct child Scope. Synchronous evaluation disposes that child before continuing and rejects `async_effect()` before setup; asynchronous evaluation awaits child cleanup. Cancellation of a synchronous child running in a worker waits for the worker before cleanup. The child still shares mutable leaf objects and cannot undo files, network requests, or other external side effects that did not register cleanup.
+Auto Ref values are read from `ctx`. Every Auto child Node instead executes with an owned child Context and a distinct child Scope. Synchronous evaluation disposes that child before continuing and rejects `async_effect()` before setup; asynchronous evaluation awaits child cleanup, including after cancellation. A synchronous child reached during asynchronous evaluation runs inline on the event-loop thread and cannot be cancelled until it returns. The child still shares mutable leaf objects and cannot undo files, network requests, or other external side effects that did not register cleanup.
 
 Explicit orchestration has different semantics. Calling a Node directly or using `sequential_exec(ctx, children)` passes the selected Context itself, so those steps intentionally observe one another's local writes.
 

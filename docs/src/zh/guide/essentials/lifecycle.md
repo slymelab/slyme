@@ -49,7 +49,7 @@ process(data=[R.resolve("a"), R.resolve("b")])(ctx)  # Auto 生成求值后的 l
 process(data=R.resolve("items"))(ctx)  # data 是 Context 中保存的 list
 ```
 
-Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。同步求值会在继续前 dispose 子 Context，并在 setup 前拒绝 `async_effect()`；异步求值会等待子 Context cleanup。在线程中运行的同步 child 被取消时，系统会先等待 worker 结束再清理。子 Context 仍会共享可变 leaf 对象，也无法撤销没有注册 cleanup 的文件、网络请求或其他外部副作用。
+Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。同步求值会在继续前 dispose 子 Context，并在 setup 前拒绝 `async_effect()`；异步求值会等待子 Context cleanup，取消时也不例外。异步求值遇到同步 child 时，会在事件循环线程内直接执行，并且只能在 child 返回后响应取消。子 Context 仍会共享可变 leaf 对象，也无法撤销没有注册 cleanup 的文件、网络请求或其他外部副作用。
 
 显式编排采用不同语义。直接调用 Node 或使用 `sequential_exec(ctx, children)` 时会传入指定的 Context 本身，因此这些步骤会有意观察到彼此的局部写入。
 

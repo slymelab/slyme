@@ -210,8 +210,7 @@ async def async_node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[A
             if isinstance(node, AsyncNode):
                 result = await node(child_ctx)
             else:
-                worker = asyncio.create_task(asyncio.to_thread(node, child_ctx))
-                result = await wait_uninterruptibly(worker)
+                result = node(child_ctx)
         except BaseException as error:
             try:
                 await _dispose_child(child_ctx)

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import threading
 import weakref
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -321,28 +319,6 @@ def test_parent_disposal_blocks_new_effects_in_active_children() -> None:
         root.dispose()
     with pytest.raises(RuntimeError, match="disposed"):
         child.fork()
-
-
-def test_non_replaceable_binding_rejects_concurrent_same_scope_writes() -> None:
-    schema = Schema({"value": Schema.leaf(replaceable=False)})
-    ctx = Context(schema=schema)
-    barrier = threading.Barrier(2)
-
-    def write(value: int) -> BaseException | None:
-        barrier.wait(timeout=5)
-        try:
-            ctx.set("value", value)
-        except BaseException as error:
-            return error
-        return None
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        outcomes = tuple(executor.map(write, (1, 2)))
-
-    assert sum(outcome is None for outcome in outcomes) == 1
-    error = next(outcome for outcome in outcomes if outcome is not None)
-    assert isinstance(error, ContextPathError)
-    ctx.dispose()
 
 
 def test_cleanup_failures_do_not_skip_remaining_cleanup_or_scope_release() -> None:
