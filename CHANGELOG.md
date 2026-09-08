@@ -19,15 +19,17 @@ breaking changes when they are documented here.
 - Added mutable `Schema` declaration trees with explicit `resolve()` lookup,
   leaf/container-aware recursive merging, independent declaration ownership,
   and exact reversible teardown.
-- Added application-owned Schema declarations to `Context`; forks share later
-  `declare()` additions while Context data continues to follow C3 lookup.
-- Added live `Context.fork()` layers with C3 multiple inheritance, local-only
-  read options, and reversible `Context.add()` bindings.
+- Added immutable `Scope` identities with names, C3 multiple inheritance across
+  otherwise unrelated visibility roots, and unique visible-name lookup.
+- Added single-parent Context lifetime trees with synchronous and asynchronous
+  effects, recursive owner-local LIFO disposal, and explicit Scope binding.
+- Added lifecycle-owned `Context.add()`, `declare()`, and `contribute()`
+  operations, each with an exact disposer for optional early cleanup.
 - Added `Context.flatten()` for exact visible Ref-to-value leaf mappings.
-- Added `Compose` for ordered, reversible values resolved through a Context's
-  C3 hierarchy, including first-value, collection, mapping, and custom rules.
-- Added Schema-owned `replaceable` policies and `Context.isolate()` for child
-  layers that must block selected inherited leaves.
+- Added `Compose` for ordered, reversible values resolved through a Scope's C3
+  hierarchy, including first-value, collection, mapping, and custom rules.
+- Added Schema-owned `replaceable` policies and `Context.isolate()` for owned
+  child Contexts that block selected inherited Scope values.
 
 ### Fixed
 
@@ -55,7 +57,7 @@ breaking changes when they are documented here.
 - Removed Context hooks and the asynchronous mirrors of locally synchronous
   Context operations.
 - Removed the public Context data-container type and Context PyTree
-  registration; Context hierarchies are identity-bearing C3 graphs.
+  registration; runtime Context objects remain opaque PyTree leaves.
 - Removed `Context.clear()` and `collect_leaves()`; empty structural containers
   are not retained, and `flatten()` returns Ref-keyed leaf mappings.
 - Removed `Context.diff()`, `ContextDiff`, and `DIFF_MISSING`.
@@ -85,19 +87,23 @@ breaking changes when they are documented here.
 - Node and Wrapper calls now pass their current static parameter containers
   directly to user functions instead of creating an implicit frozen snapshot.
 - Context construction now accepts a Ref-to-value mapping and keyword-only
-  `schema` or direct parents. All parents share one application root, and every
-  Context access rejects undeclared paths. Schema is the only source of
-  container structure; Context stores flat entry-indexed bindings, releases
-  them with their final Schema declaration, uses `to_dict()` for a nested
-  projection, and uses `flatten()` for the exact leaf mapping.
+  `schema`, `parent`, or `scope`. Every Context access rejects undeclared paths.
+  Schema is the only source of container structure; an application root stores
+  flat entry-indexed bindings by Scope, uses `to_dict()` for a nested projection,
+  and uses `flatten()` for the exact leaf mapping.
 - `Context.add()` now provides only exact reversible installation. Schema's
   stable `replaceable` policy determines whether `set()` may replace that
-  Context layer's current value.
-- `Context.mro` is now an immutable property, `Context.root` exposes its final
-  application ancestor, and descendant `schema` properties resolve the Schema
-  stored by that root.
-- Auto evaluation now gives every child Node an independent Context fork while
-  Ref evaluation reads the supplied Context directly.
+  Scope's current value.
+- `Context` now has one lifetime parent and one bound Scope. `fork()` creates an
+  owned child and shares the Scope by default; a forked Scope provides an
+  explicit local data layer. Context CRUD always uses the bound Scope.
+- `Context.root` owns the application data store and lifetime subtree and holds
+  their shared Schema reference. Scope C3 order is independent of the Context
+  lifetime tree and has no common-root restriction.
+- Auto evaluation now gives every child Node an owned Context with a distinct
+  child Scope inheriting the caller's Scope, and disposes it before parent
+  execution continues. Asynchronous Auto evaluation awaits cleanup, including
+  after cancellation.
 - Builder functions now require their outer result to be a `Node` or
   `AsyncNode` without recursively validating the returned parameter graph.
 - Node and Wrapper construction now binds every declared parameter through one

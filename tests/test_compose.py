@@ -7,7 +7,7 @@ from types import MappingProxyType
 import pytest
 
 import slyme.context as context_module
-from slyme.context import Compose, Context, Schema
+from slyme.context import Compose, Context, Schema, Scope
 
 R = Schema({"hooks": Schema.leaf(), "tools": Schema.leaf()})
 
@@ -17,9 +17,9 @@ def test_compose_is_the_only_public_composition_type() -> None:
     assert not hasattr(context_module, "Value")
 
 
-def test_one_uses_context_and_entry_precedence() -> None:
-    root = Context()
-    agent = root.fork()
+def test_one_uses_scope_and_entry_precedence() -> None:
+    root = Scope("root")
+    agent = root.fork(name="agent")
     values = Compose[str, str].one()
 
     remove_root = values.add(root, "root")
@@ -44,10 +44,10 @@ def test_one_uses_context_and_entry_precedence() -> None:
 
 
 def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
-    root = Context()
-    left = root.fork()
-    right = root.fork()
-    child = left.fork(right)
+    root = Scope("root")
+    left = root.fork(name="left")
+    right = root.fork(name="right")
+    child = left.fork(right, name="child")
     values = Compose[str, tuple[str, ...]].collect()
 
     values.add(root, "root")
@@ -67,8 +67,8 @@ def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
 
 
 def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
-    root = Context()
-    child = root.fork()
+    root = Scope("root")
+    child = root.fork(name="child")
     values = Compose.merge()
 
     remove_root = values.add(root, {"shared": "root", "root": 1})
@@ -97,8 +97,8 @@ def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
 
 
 def test_compose_accepts_a_custom_resolver() -> None:
-    root = Context()
-    child = root.fork()
+    root = Scope("root")
+    child = root.fork(name="child")
     values = Compose[int, int](sum)
     values.add(root, 2)
     values.add(child, 3)
@@ -108,18 +108,18 @@ def test_compose_accepts_a_custom_resolver() -> None:
 
 
 def test_entries_are_immutable_snapshots_with_exact_disposal() -> None:
-    ctx = Context()
+    scope = Scope()
     values = Compose[str, tuple[str, ...]].collect()
     metadata = {"plugin": "example"}
 
-    remove_first = values.add(ctx, "same", metadata=metadata)
-    remove_second = values.add(ctx, "same", metadata=metadata)
+    remove_first = values.add(scope, "same", metadata=metadata)
+    remove_second = values.add(scope, "same", metadata=metadata)
     metadata["late"] = True
 
-    entries = values.entries(ctx)
+    entries = values.entries(scope)
     assert len(entries) == 2
     assert entries[0]["id"] is not entries[1]["id"]
-    assert entries[0]["context"] is ctx
+    assert entries[0]["scope"] is scope
     assert entries[0]["value"] == "same"
     assert entries[0]["metadata"] == {"plugin": "example"}
     assert isinstance(entries[0], MappingProxyType)
@@ -129,35 +129,48 @@ def test_entries_are_immutable_snapshots_with_exact_disposal() -> None:
 
     remove_second()
     remove_second()
-    assert values.values(ctx) == ("same",)
+    assert values.values(scope) == ("same",)
     remove_first()
     assert len(values) == 0
 
 
-def test_compose_uses_weak_context_keys() -> None:
-    values = Compose[str, tuple[str, ...]].collect()
-    ctx = Context()
-    ctx_ref = weakref.ref(ctx)
-    dispose = values.add(ctx, "temporary")
-
-    assert len(values) == 1
-    del ctx
-    gc.collect()
-
-    assert ctx_ref() is None
-    assert len(values) == 0
-    dispose()
-
-
-def test_compose_disposer_does_not_retain_removed_value() -> None:
+def test_compose_retains_scope_and_value_until_exact_disposal() -> None:
     class Value:
         pass
 
     values = Compose[Value, tuple[Value, ...]].collect()
-    ctx = Context()
+    scope = Scope()
+    value = Value()
+    scope_ref = weakref.ref(scope)
+    value_ref = weakref.ref(value)
+    dispose = values.add(scope, value)
+
+    del scope
+    del value
+    gc.collect()
+
+    assert scope_ref() is not None
+    assert value_ref() is not None
+    assert len(values) == 1
+
+    dispose()
+    gc.collect()
+
+    assert scope_ref() is None
+    assert value_ref() is None
+    assert len(values) == 0
+    dispose()
+
+
+def test_compose_disposer_does_not_retain_an_already_removed_value() -> None:
+    class Value:
+        pass
+
+    values = Compose[Value, tuple[Value, ...]].collect()
+    scope = Scope()
     value = Value()
     value_ref = weakref.ref(value)
-    dispose = values.add(ctx, value)
+    dispose = values.add(scope, value)
 
     dispose()
     del value
@@ -167,34 +180,80 @@ def test_compose_disposer_does_not_retain_removed_value() -> None:
     dispose()
 
 
-def test_unrelated_context_trees_do_not_share_visible_entries() -> None:
-    left = Context()
-    right = Context()
+def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> None:
+    left = Scope("left")
+    right = Scope("right")
+    combined = left.fork(right, name="combined")
     values = Compose[str, tuple[str, ...]].collect()
     values.add(left, "left")
     values.add(right, "right")
 
     assert values.resolve(left) == ("left",)
     assert values.resolve(right) == ("right",)
+    assert values.resolve(combined) == ("left", "right")
     assert {entry["value"] for entry in values.entries()} == {"left", "right"}
-    with pytest.raises(ValueError, match="requires a Context"):
+    with pytest.raises(ValueError, match="requires a Scope"):
         values.entries(local=True)
     with pytest.raises(ValueError, match="position"):
         values.add(left, "bad", position="middle")  # type: ignore[arg-type]
 
 
-def test_context_branches_can_share_an_explicit_ancestor() -> None:
+@pytest.mark.parametrize("operation", ["add", "values", "resolve", "entries"])
+def test_compose_rejects_contexts_in_place_of_scopes(operation: str) -> None:
+    values = Compose[str, tuple[str, ...]].collect()
+    context = Context()
+
+    with pytest.raises(TypeError, match="must be Scope"):
+        if operation == "add":
+            values.add(context, "bad")  # type: ignore[arg-type]
+        elif operation == "values":
+            values.values(context)  # type: ignore[arg-type]
+        elif operation == "resolve":
+            values.resolve(context)  # type: ignore[arg-type]
+        else:
+            values.entries(context)  # type: ignore[arg-type]
+
+
+def test_context_fork_shares_scope_unless_one_is_explicit() -> None:
     root = Context(schema=R)
     shared = root.fork()
-    left = shared.fork()
-    right = shared.fork()
-    values = Compose[str, tuple[str, ...]].collect()
+    child_scope = root.scope.fork(name="child")
+    isolated = root.fork(scope=child_scope)
 
-    values.add(shared, "shared")
-    values.add(left, "left")
+    assert shared.scope is root.scope
+    assert isolated.scope is child_scope
+    assert isolated.parent is root
 
-    assert values.resolve(left) == ("left", "shared")
-    assert values.resolve(right) == ("shared",)
+
+def test_context_data_and_scope_identity_are_orthogonal() -> None:
+    ref = R.resolve("tools")
+    left = Scope("left")
+    right = Scope("right")
+    combined = left.fork(right, name="combined")
+    root = Context(schema=R, scope=left)
+    right_context = root.fork(scope=right)
+    combined_context = root.fork(scope=combined)
+
+    root.set(ref, "left")
+    right_context.set(ref, "right")
+
+    assert root.get(ref) == "left"
+    assert right_context.get(ref) == "right"
+    assert combined_context.get(ref) == "left"
+    root.delete(ref)
+    assert combined_context.get(ref) == "right"
+
+
+def test_independent_context_roots_do_not_share_data_with_the_same_scope() -> None:
+    ref = R.resolve("tools")
+    scope = Scope("shared-identity")
+    left = Context(schema=R, scope=scope)
+    right = Context(schema=R, scope=scope)
+
+    left.set(ref, "left")
+
+    assert left.get(ref) == "left"
+    assert not right.exists(ref)
 
 
 def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
@@ -202,18 +261,44 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
     root = Context(schema=R)
     inherited = Compose[str, tuple[str, ...]].collect()
     root.add(tools_ref, inherited)
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork(name="child"))
 
-    inherited.add(root, "root-tool")
-    inherited.add(child, "agent-tool")
+    inherited.add(root.scope, "root-tool")
+    inherited.add(child.scope, "agent-tool")
     assert child.get(tools_ref) is inherited
-    assert inherited.resolve(child) == ("agent-tool", "root-tool")
+    assert inherited.resolve(child.scope) == ("agent-tool", "root-tool")
 
     isolated = Compose[str, tuple[str, ...]].collect()
     child.add(tools_ref, isolated)
-    isolated.add(child, "isolated-tool")
+    isolated.add(child.scope, "isolated-tool")
     assert child.get(tools_ref) is isolated
-    assert isolated.resolve(child) == ("isolated-tool",)
+    assert isolated.resolve(child.scope) == ("isolated-tool",)
+
+
+def test_context_contribution_uses_bound_or_explicit_scope_and_is_owned() -> None:
+    hooks_ref = R.resolve("hooks")
+    root = Context(schema=R)
+    hooks = Compose[str, tuple[str, ...]].collect()
+    root.add(hooks_ref, hooks)
+    child = root.fork(scope=root.scope.fork(name="child"))
+    external = Scope("external")
+
+    remove_bound = child.contribute(
+        hooks_ref,
+        "bound",
+        metadata={"source": "child"},
+        position="prepend",
+    )
+    child.contribute(hooks_ref, "external", scope=external)
+
+    assert hooks.resolve(child.scope) == ("bound",)
+    assert hooks.resolve(external) == ("external",)
+    assert hooks.entries(child.scope)[0]["metadata"] == {"source": "child"}
+
+    remove_bound()
+    assert hooks.resolve(child.scope) == ()
+    child.dispose()
+    assert hooks.resolve(external) == ()
 
 
 def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
@@ -221,9 +306,9 @@ def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
     ctx = Context(schema=R)
     hooks = Compose[str, tuple[str, ...]].collect()
     ctx.add(ref, hooks)
-    hooks.add(ctx, "handler")
+    hooks.add(ctx.scope, "handler")
 
     snapshot = Context(ctx.flatten(), schema=ctx.schema)
     assert snapshot.get(ref) is hooks
-    assert hooks.resolve(ctx) == ("handler",)
-    assert hooks.resolve(snapshot) == ()
+    assert hooks.resolve(ctx.scope) == ("handler",)
+    assert hooks.resolve(snapshot.scope) == ()

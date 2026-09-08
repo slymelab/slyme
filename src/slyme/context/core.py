@@ -14,15 +14,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import difflib
+import inspect
+import threading
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from .compose import Compose
+from .scope import Scope
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
@@ -30,6 +35,135 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 _Blocked = Enum("_Blocked", ["MARK"])
 _BLOCKED = _Blocked.MARK
+_DISPOSAL_CHAIN: ContextVar[tuple[object, ...]] = ContextVar(
+    "slyme_context_disposal_chain",
+    default=(),
+)
+
+
+class _Effect:
+    """One cleanup operation owned by a Context."""
+
+    __slots__ = ("owner",)
+    is_async: bool
+
+    def __init__(self, owner: Context) -> None:
+        self.owner: Context | None = owner
+
+    @staticmethod
+    def _is_async_callable(callback: Callable[..., Any]) -> bool:
+        unwrapped = inspect.unwrap(callback)
+        if inspect.iscoroutinefunction(unwrapped):
+            return True
+        return callable(unwrapped) and inspect.iscoroutinefunction(
+            type(unwrapped).__call__
+        )
+
+    @staticmethod
+    def _close_awaitable(value: Awaitable[Any]) -> None:
+        close = getattr(value, "close", None)
+        if close is not None:
+            close()
+
+    @staticmethod
+    def _observe_task_result(task: asyncio.Task[Any]) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    def _release(self) -> None:
+        owner = self.owner
+        self.owner = None
+        if owner is not None:
+            owner._forget_effect(self)
+
+
+class _SyncEffect(_Effect):
+    __slots__ = ("_cleanup", "_disposed")
+    is_async = False
+
+    def __init__(
+        self,
+        owner: Context,
+        cleanup: Callable[[], None],
+    ) -> None:
+        super().__init__(owner)
+        self._cleanup: Callable[[], None] | None = cleanup
+        self._disposed = False
+
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
+        cleanup = self._cleanup
+        self._cleanup = None
+        try:
+            if cleanup is None:
+                return
+            result = cast(Callable[[], Any], cleanup)()
+            if inspect.isawaitable(result):
+                self._close_awaitable(result)
+                raise TypeError(
+                    "A synchronous Context effect returned an awaitable; "
+                    "use async_effect()."
+                )
+        finally:
+            self._release()
+
+
+class _AsyncEffect(_Effect):
+    __slots__ = ("_cleanup", "_task")
+    is_async = True
+
+    def __init__(
+        self,
+        owner: Context,
+        cleanup: Callable[[], Awaitable[None]],
+    ) -> None:
+        super().__init__(owner)
+        self._cleanup: Callable[[], Awaitable[None]] | None = cleanup
+        self._task: asyncio.Task[None] | None = None
+
+    async def _run(self) -> None:
+        cleanup = self._cleanup
+        self._cleanup = None
+        owners: list[Context] = []
+        owner = self.owner
+        while owner is not None:
+            owners.append(owner)
+            owner = owner.parent
+        token = _DISPOSAL_CHAIN.set((*_DISPOSAL_CHAIN.get(), self, *owners))
+        try:
+            if cleanup is None:
+                return
+            result = cleanup()
+            if not inspect.isawaitable(result):
+                raise TypeError(
+                    "An asynchronous Context effect did not return an awaitable."
+                )
+            await result
+        finally:
+            try:
+                self._release()
+            finally:
+                _DISPOSAL_CHAIN.reset(token)
+
+    async def dispose(self) -> None:
+        if any(owner is self for owner in _DISPOSAL_CHAIN.get()):
+            raise RuntimeError("Context effect disposal cannot await itself.")
+        task = self._task
+        if task is None:
+            task = asyncio.create_task(self._run())
+            task.add_done_callback(self._observe_task_result)
+            self._task = task
+        elif task is asyncio.current_task():
+            raise RuntimeError("Context effect disposal cannot await itself.")
+        await asyncio.shield(task)
+
+
+class _ContextState(Enum):
+    ACTIVE = "active"
+    DISPOSING = "disposing"
+    DISPOSED = "disposed"
 
 
 @dataclass(frozen=True, repr=False)
@@ -110,8 +244,9 @@ _SchemaNode = _RefEntry[Any] | _SchemaContainer
 class Schema:
     """Mutable tree of independently reversible Context path declarations."""
 
-    __slots__ = ("__data", "__weakref__")
+    __slots__ = ("__data", "_lock", "__weakref__")
     __data: _SchemaContainer
+    _lock: threading.RLock
 
     @staticmethod
     def leaf(
@@ -360,6 +495,7 @@ class Schema:
                 "Schema declarations must be a mapping, "
                 f"got {type(declarations).__name__}."
             )
+        object.__setattr__(self, "_lock", threading.RLock())
         object.__setattr__(
             self,
             "_Schema__data",
@@ -379,18 +515,21 @@ class Schema:
 
     def _resolve_node(self, path: str) -> _SchemaNode:
         parts = Ref._split_path(path)
-        node: _SchemaNode = self.__data
-        for index, part in enumerate(parts):
-            if not isinstance(node, dict) or part not in node:
-                candidates = (
-                    [key for key in node if key] if isinstance(node, dict) else []
-                )
-                suggestion = difflib.get_close_matches(part, candidates, n=1)
-                detail = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
-                parent = ".".join(parts[:index]) or "<root>"
-                raise KeyError(f"Schema path {parent!r} has no entry {part!r}.{detail}")
-            node = cast(_SchemaNode, node[part])
-        return node
+        with self._lock:
+            node: _SchemaNode = self.__data
+            for index, part in enumerate(parts):
+                if not isinstance(node, dict) or part not in node:
+                    candidates = (
+                        [key for key in node if key] if isinstance(node, dict) else []
+                    )
+                    suggestion = difflib.get_close_matches(part, candidates, n=1)
+                    detail = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+                    parent = ".".join(parts[:index]) or "<root>"
+                    raise KeyError(
+                        f"Schema path {parent!r} has no entry {part!r}.{detail}"
+                    )
+                node = cast(_SchemaNode, node[part])
+            return node
 
     def _resolve_entry(self, path: str) -> _RefEntry[Any]:
         node = self._resolve_node(path)
@@ -409,10 +548,11 @@ class Schema:
         """Add one atomic declaration and return its idempotent disposer."""
         declaration_id = object()
         if isinstance(declarations, Schema):
-            incoming = self._copy_declaration(
-                declarations.__data,
-                declaration_id,
-            )
+            with declarations._lock:
+                incoming = self._copy_declaration(
+                    declarations.__data,
+                    declaration_id,
+                )
         elif isinstance(declarations, Mapping):
             incoming = self._build(declarations, declaration_id)
         else:
@@ -421,9 +561,10 @@ class Schema:
                 f"got {type(declarations).__name__}."
             )
 
-        self._validate_merge(self.__data, incoming)
-        paths = tuple(path for path, _ in self._iter_entries(incoming))
-        self._commit_merge(self.__data, incoming)
+        with self._lock:
+            self._validate_merge(self.__data, incoming)
+            paths = tuple(path for path, _ in self._iter_entries(incoming))
+            self._commit_merge(self.__data, incoming)
 
         schema_ref = weakref.ref(self)
         disposed = False
@@ -435,49 +576,53 @@ class Schema:
             disposed = True
             schema = schema_ref()
             if schema is not None:
-                schema._remove_declaration(
-                    schema.__data,
-                    paths,
-                    declaration_id,
-                )
+                with schema._lock:
+                    schema._remove_declaration(
+                        schema.__data,
+                        paths,
+                        declaration_id,
+                    )
 
         return dispose
 
     def _node_at(self, parts: tuple[str, ...]) -> _SchemaNode:
-        node: _SchemaNode = self.__data
-        for part in parts:
-            if not isinstance(node, dict):
-                raise KeyError(".".join(parts))
-            node = cast(_SchemaNode, node[part])
-        return node
+        with self._lock:
+            node: _SchemaNode = self.__data
+            for part in parts:
+                if not isinstance(node, dict):
+                    raise KeyError(".".join(parts))
+                node = cast(_SchemaNode, node[part])
+            return node
 
     def _child_names(self, parts: tuple[str, ...]) -> tuple[str, ...]:
-        node = self._node_at(parts)
-        if not isinstance(node, dict):
-            raise TypeError("Schema leaf paths do not have children.")
-        return tuple(name for name in node if name != _REF_ENTRY_KEY)
+        with self._lock:
+            node = self._node_at(parts)
+            if not isinstance(node, dict):
+                raise TypeError("Schema leaf paths do not have children.")
+            return tuple(name for name in node if name != _REF_ENTRY_KEY)
 
     def _leaf_entries(
         self,
         parts: tuple[str, ...] = (),
     ) -> tuple[_RefEntry[Any], ...]:
-        node = self._node_at(parts)
-        if isinstance(node, _RefEntry):
-            return (node,)
+        with self._lock:
+            node = self._node_at(parts)
+            if isinstance(node, _RefEntry):
+                return (node,)
 
-        leaves: list[_RefEntry[Any]] = []
+            leaves: list[_RefEntry[Any]] = []
 
-        def collect(container: _SchemaContainer) -> None:
-            for name, child_node in container.items():
-                if name == _REF_ENTRY_KEY:
-                    continue
-                if isinstance(child_node, _RefEntry):
-                    leaves.append(child_node)
-                else:
-                    collect(child_node)
+            def collect(container: _SchemaContainer) -> None:
+                for name, child_node in container.items():
+                    if name == _REF_ENTRY_KEY:
+                        continue
+                    if isinstance(child_node, _RefEntry):
+                        leaves.append(child_node)
+                    else:
+                        collect(child_node)
 
-        collect(node)
-        return tuple(leaves)
+            collect(node)
+            return tuple(leaves)
 
 
 ContextKey = str | Ref[Any]
@@ -503,46 +648,70 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
 
         super().__init__(resolve)
 
-    def _local_value_entry(self, ctx: Context) -> Any | None:
-        return next(
-            (
-                entry
-                for entry in self._buckets.get(ctx, {}).values()
-                if entry.value is not _BLOCKED
-            ),
-            None,
-        )
+    def _local_value_entry(self, scope: Scope) -> Any | None:
+        with self._lock:
+            return next(
+                (
+                    entry
+                    for entry in self._buckets.get(scope, {}).values()
+                    if entry.value is not _BLOCKED
+                ),
+                None,
+            )
 
-    def has_value(self, ctx: Context, *, local: bool = False) -> bool:
+    def has_value(self, scope: Scope, *, local: bool = False) -> bool:
         try:
-            self.resolve(ctx, local=local)
+            self.resolve(scope, local=local)
             return True
         except LookupError:
             return False
 
-    def set_value(self, ctx: Context, value: Any) -> None:
-        current = self._local_value_entry(ctx)
-        if current is not None:
-            self._remove(ctx, current)
-        self._insert(ctx, value, position="prepend")
+    def set_value(
+        self,
+        scope: Scope,
+        value: Any,
+        *,
+        replaceable: bool,
+    ) -> None:
+        with self._lock:
+            current = self._local_value_entry(scope)
+            if current is not None:
+                if not replaceable:
+                    raise ValueError("Context local value is not replaceable.")
+                self._remove(scope, current.identity)
+            self._insert(scope, value, position="prepend")
 
-    def add_value(self, ctx: Context, value: Any) -> Callable[[], None]:
-        if self._local_value_entry(ctx) is not None:
-            raise ValueError("Context already has a local value.")
-        entry = self._insert(ctx, value, position="prepend")
-        return self._disposer(ctx, entry)
+    def add_value(self, scope: Scope, value: Any) -> Callable[[], None]:
+        with self._lock:
+            if self._local_value_entry(scope) is not None:
+                raise ValueError("Context already has a local value.")
+            entry = self._insert(scope, value, position="prepend")
+            return self._disposer(scope, entry)
 
-    def delete_value(self, ctx: Context) -> None:
-        current = self._local_value_entry(ctx)
-        if current is not None:
-            self._remove(ctx, current)
+    def delete_value(self, scope: Scope) -> None:
+        with self._lock:
+            current = self._local_value_entry(scope)
+            if current is not None:
+                self._remove(scope, current.identity)
 
-    def block(self, ctx: Context) -> None:
-        if any(
-            entry.value is _BLOCKED for entry in self._buckets.get(ctx, {}).values()
-        ):
-            return
-        self._insert(ctx, _BLOCKED, position="append")
+    def block(self, scope: Scope) -> None:
+        with self._lock:
+            if any(
+                entry.value is _BLOCKED
+                for entry in self._buckets.get(scope, {}).values()
+            ):
+                return
+            self._insert(scope, _BLOCKED, position="append")
+
+    def clear_scope(self, scope: Scope) -> None:
+        """Remove every value stored directly at *scope*."""
+        with self._lock:
+            self._buckets.pop(scope, None)
+
+    @property
+    def empty(self) -> bool:
+        with self._lock:
+            return not self._buckets
 
 
 _ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]
@@ -617,47 +786,19 @@ class ContextElement(ABC):
 
 @dataclass(frozen=True, repr=False, eq=False, init=False)
 class Context(ContextElement):
-    """Declared runtime data with local writes and live C3 parent lookup."""
+    """Declared runtime data and reversible effects bound to one Scope."""
 
-    parents: tuple[Context, ...] = field(init=False)
+    parent: Context | None = field(init=False)
+    scope: Scope = field(init=False)
     _data: _ContextData = field(init=False)
-    _mro: tuple[Context, ...] = field(init=False)
+    _data_lock: threading.RLock = field(init=False)
+    _root: Context = field(init=False)
     _schema: Schema | None = field(init=False)
-
-    @staticmethod
-    def _contains_identity(values: Iterable[Context], target: Context) -> bool:
-        return any(value is target for value in values)
-
-    @staticmethod
-    def _merge_mro(parents: tuple[Context, ...]) -> tuple[Context, ...]:
-        """Merge immutable Context parent chains using C3."""
-        pending = [list(parent.mro) for parent in parents]
-        pending.append(list(parents))
-        result: list[Context] = []
-
-        while True:
-            pending = [sequence for sequence in pending if sequence]
-            if not pending:
-                return tuple(result)
-
-            candidate = next(
-                (
-                    sequence[0]
-                    for sequence in pending
-                    if not any(
-                        Context._contains_identity(other[1:], sequence[0])
-                        for other in pending
-                    )
-                ),
-                None,
-            )
-            if candidate is None:
-                raise TypeError("Cannot create a consistent Context C3 linearization.")
-
-            result.append(candidate)
-            for sequence in pending:
-                if sequence and sequence[0] is candidate:
-                    sequence.pop(0)
+    _owned: list[Context | _Effect] = field(init=False)
+    _scope_counts: dict[Scope, int] | None = field(init=False)
+    _state: _ContextState = field(init=False)
+    _dispose_task: asyncio.Task[None] | None = field(init=False)
+    _sync_only: bool = field(init=False)
 
     @staticmethod
     def _set_nested_value(
@@ -675,33 +816,29 @@ class Context(ContextElement):
         data: Mapping[ContextKey, Any] | None = None,
         *,
         schema: Schema | None = None,
-        parents: tuple[Context, ...] = (),
+        parent: Context | None = None,
+        scope: Scope | None = None,
     ) -> None:
-        direct_parents = tuple(parents)
-        if any(not isinstance(parent, Context) for parent in direct_parents):
-            raise TypeError("Context parents must be Context objects.")
-        if any(
-            left is right
-            for index, left in enumerate(direct_parents)
-            for right in direct_parents[index + 1 :]
-        ):
-            raise TypeError("A Context cannot contain duplicate direct parents.")
+        scope_counts: dict[Scope, int] | None
+        if parent is not None and not isinstance(parent, Context):
+            raise TypeError("Context parent must be a Context object.")
+        if scope is not None and not isinstance(scope, Scope):
+            raise TypeError("Context scope must be a Scope object.")
 
-        if direct_parents:
+        if parent is not None:
+            parent._assert_mutable()
             if schema is not None:
                 raise TypeError(
                     "A child Context inherits its schema and cannot provide one "
                     "during construction."
                 )
-            application_root = direct_parents[0].root
-            if any(
-                parent.root is not application_root for parent in direct_parents[1:]
-            ):
-                raise TypeError(
-                    "Context parents must belong to the same application root."
-                )
+            application_root = parent.root
             root_schema = None
             root_data = application_root._data
+            data_lock = application_root._data_lock
+            bound_scope = parent.scope if scope is None else scope
+            scope_counts = None
+            sync_only = parent._sync_only
         else:
             if schema is None:
                 root_schema = Schema()
@@ -712,27 +849,247 @@ class Context(ContextElement):
                     f"Context schema must be Schema, got {type(schema).__name__}."
                 )
             root_data = weakref.WeakKeyDictionary()
+            data_lock = threading.RLock()
+            application_root = self
+            bound_scope = Scope() if scope is None else scope
+            scope_counts = {}
+            sync_only = False
 
-        object.__setattr__(self, "parents", direct_parents)
+        object.__setattr__(self, "parent", parent)
+        object.__setattr__(self, "scope", bound_scope)
         object.__setattr__(self, "_data", root_data)
+        object.__setattr__(self, "_data_lock", data_lock)
+        object.__setattr__(self, "_root", application_root)
         object.__setattr__(self, "_schema", root_schema)
-        object.__setattr__(self, "_mro", (self, *self._merge_mro(direct_parents)))
-        if data is not None:
-            if not isinstance(data, Mapping):
-                raise TypeError(
-                    f"Context data must be a mapping, got {type(data).__name__}."
+        object.__setattr__(self, "_owned", [])
+        object.__setattr__(self, "_scope_counts", scope_counts)
+        object.__setattr__(self, "_state", _ContextState.ACTIVE)
+        object.__setattr__(self, "_dispose_task", None)
+        object.__setattr__(self, "_sync_only", sync_only)
+
+        self._acquire_scope()
+        if parent is not None:
+            parent._owned.append(self)
+        try:
+            if data is not None:
+                if not isinstance(data, Mapping):
+                    raise TypeError(
+                        f"Context data must be a mapping, got {type(data).__name__}."
+                    )
+                self.update(data)
+        except BaseException:
+            self._release_scope()
+            if parent is not None:
+                parent._remove_child(self)
+            object.__setattr__(self, "_state", _ContextState.DISPOSED)
+            raise
+
+    def _assert_readable(self) -> None:
+        if self._state is _ContextState.DISPOSED:
+            raise RuntimeError("Context has been disposed.")
+
+    def _assert_mutable(self) -> None:
+        if self._state is _ContextState.DISPOSING:
+            raise RuntimeError("Context is being disposed.")
+        if self._state is _ContextState.DISPOSED:
+            raise RuntimeError("Context has been disposed.")
+        ancestor = self.parent
+        while ancestor is not None:
+            if ancestor._state is _ContextState.DISPOSING:
+                raise RuntimeError("An ancestor Context is being disposed.")
+            if ancestor._state is _ContextState.DISPOSED:
+                raise RuntimeError("An ancestor Context has been disposed.")
+            ancestor = ancestor.parent
+
+    def _acquire_scope(self) -> None:
+        counts = cast(dict[Scope, int], self.root._scope_counts)
+        with self._data_lock:
+            for scope in self.scope.mro:
+                counts[scope] = counts.get(scope, 0) + 1
+
+    def _release_scope(self) -> None:
+        counts = cast(dict[Scope, int], self.root._scope_counts)
+        with self._data_lock:
+            expired: list[Scope] = []
+            for scope in self.scope.mro:
+                remaining = counts[scope] - 1
+                if remaining:
+                    counts[scope] = remaining
+                else:
+                    counts.pop(scope)
+                    expired.append(scope)
+
+            if not expired:
+                return
+            for entry, binding in tuple(self._data.items()):
+                for scope in expired:
+                    binding.clear_scope(scope)
+                if binding.empty:
+                    self._data.pop(entry, None)
+
+    def _remove_child(self, child: Context) -> None:
+        if child in self._owned:
+            self._owned.remove(child)
+
+    def _forget_effect(self, effect: _Effect) -> None:
+        if effect in self._owned:
+            self._owned.remove(effect)
+
+    def _adopt_sync_effect(
+        self,
+        cleanup: Callable[[], None],
+    ) -> Callable[[], None]:
+        self._assert_mutable()
+        if not callable(cleanup):
+            raise TypeError("Context effect cleanup must be callable.")
+        if _Effect._is_async_callable(cleanup):
+            raise TypeError(
+                "Context.effect() requires synchronous cleanup; use async_effect()."
+            )
+        effect = _SyncEffect(self, cleanup)
+        self._owned.append(effect)
+        return effect.dispose
+
+    def _adopt_async_effect(
+        self,
+        cleanup: Callable[[], Awaitable[None]],
+    ) -> Callable[[], Awaitable[None]]:
+        self._assert_mutable()
+        if not callable(cleanup):
+            raise TypeError("Context effect cleanup must be callable.")
+        effect = _AsyncEffect(self, cleanup)
+        self._owned.append(effect)
+        return effect.dispose
+
+    def effect(
+        self,
+        setup: Callable[[], Callable[[], None]],
+    ) -> Callable[[], None]:
+        """Run synchronous setup and own its cleanup until early or Context disposal."""
+        self._assert_mutable()
+        if not callable(setup):
+            raise TypeError("Context effect setup must be callable.")
+        cleanup = cast(Callable[[], Any], setup)()
+        if inspect.isawaitable(cleanup):
+            _Effect._close_awaitable(cleanup)
+            raise TypeError(
+                "Context.effect() setup returned an awaitable; setup must be "
+                "synchronous."
+            )
+        return self._adopt_sync_effect(cleanup)
+
+    def async_effect(
+        self,
+        setup: Callable[[], Callable[[], Awaitable[None]]],
+    ) -> Callable[[], Awaitable[None]]:
+        """Run synchronous setup and own its asynchronous cleanup."""
+        self._assert_mutable()
+        if self._sync_only:
+            raise RuntimeError(
+                "A synchronous evaluation Context cannot own asynchronous cleanup."
+            )
+        if not callable(setup):
+            raise TypeError("Context effect setup must be callable.")
+        cleanup = cast(Callable[[], Any], setup)()
+        if inspect.isawaitable(cleanup):
+            _Effect._close_awaitable(cleanup)
+            raise TypeError(
+                "Context.async_effect() setup returned an awaitable; setup must be "
+                "synchronous."
+            )
+        return self._adopt_async_effect(cleanup)
+
+    def _preflight_sync_dispose(self) -> None:
+        if self._state is _ContextState.DISPOSED:
+            return
+        if self._state is _ContextState.DISPOSING:
+            raise RuntimeError("Context disposal is already in progress.")
+        for owned in self._owned:
+            if isinstance(owned, Context):
+                owned._preflight_sync_dispose()
+            elif owned.is_async:
+                raise RuntimeError(
+                    "Context owns asynchronous cleanup; use await async_dispose()."
                 )
-            self.update(data)
+
+    def _finish_dispose(self) -> None:
+        self._owned.clear()
+        self._release_scope()
+        if self.parent is not None:
+            self.parent._remove_child(self)
+        object.__setattr__(self, "_state", _ContextState.DISPOSED)
+
+    def dispose(self) -> None:
+        """Dispose synchronous direct ownership in LIFO order, recursively."""
+        if self._state is _ContextState.DISPOSED:
+            return
+        self._preflight_sync_dispose()
+        object.__setattr__(self, "_state", _ContextState.DISPOSING)
+        first_error: BaseException | None = None
+        try:
+            for owned in reversed(tuple(self._owned)):
+                try:
+                    if isinstance(owned, Context):
+                        owned.dispose()
+                    else:
+                        cast(_SyncEffect, owned).dispose()
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+        finally:
+            self._finish_dispose()
+        if first_error is not None:
+            raise first_error
+
+    async def _run_async_dispose(self) -> None:
+        token = _DISPOSAL_CHAIN.set((*_DISPOSAL_CHAIN.get(), self))
+        first_error: BaseException | None = None
+        try:
+            for owned in reversed(tuple(self._owned)):
+                try:
+                    if isinstance(owned, Context):
+                        await owned.async_dispose()
+                    elif isinstance(owned, _AsyncEffect):
+                        await owned.dispose()
+                    else:
+                        cast(_SyncEffect, owned).dispose()
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+        finally:
+            try:
+                self._finish_dispose()
+            finally:
+                _DISPOSAL_CHAIN.reset(token)
+        if first_error is not None:
+            raise first_error
+
+    async def async_dispose(self) -> None:
+        """Dispose all direct ownership in LIFO order, recursively."""
+        if self._state is _ContextState.DISPOSED:
+            return
+        if any(owner is self for owner in _DISPOSAL_CHAIN.get()):
+            raise RuntimeError(
+                "Context disposal cannot be re-entered from its cleanup."
+            )
+        task = self._dispose_task
+        if task is not None:
+            if task is asyncio.current_task():
+                raise RuntimeError("Context disposal cannot await itself.")
+            await asyncio.shield(task)
+            return
+        if self._state is _ContextState.DISPOSING:
+            raise RuntimeError("Synchronous Context disposal is already in progress.")
+        object.__setattr__(self, "_state", _ContextState.DISPOSING)
+        task = asyncio.create_task(self._run_async_dispose())
+        task.add_done_callback(_Effect._observe_task_result)
+        object.__setattr__(self, "_dispose_task", task)
+        await asyncio.shield(task)
 
     @property
     def root(self) -> Context:
         """Return the application root shared by this Context hierarchy."""
-        return self._mro[-1]
-
-    @property
-    def mro(self) -> tuple[Context, ...]:
-        """Return this Context followed by its C3-linearized ancestors."""
-        return self._mro
+        return self._root
 
     @property
     def schema(self) -> Schema:
@@ -743,8 +1100,8 @@ class Context(ContextElement):
         self,
         declarations: Schema | Mapping[str, Any],
     ) -> Callable[[], None]:
-        """Add declarations to the shared Schema and return their disposer."""
-        return self.schema.declare(declarations)
+        """Declare shared Schema paths owned by this Context."""
+        return self.effect(lambda: self.schema.declare(declarations))
 
     def _validate_entry(
         self,
@@ -752,6 +1109,7 @@ class Context(ContextElement):
         *,
         role: _RefRole = "any",
     ) -> _RefEntry[Any]:
+        self._assert_readable()
         if isinstance(key, str):
             path = key
         elif isinstance(key, Ref):
@@ -791,16 +1149,31 @@ class Context(ContextElement):
     ) -> Ref[Any]:
         return self._validate_entry(key, role=role).ref
 
-    def fork(self, *mixins: Context) -> Context:
-        """Create an empty child inheriting this Context and optional mixins."""
-        return type(self)(parents=(self, *mixins))
+    def fork(self, *, scope: Scope | None = None) -> Context:
+        """Create an owned child sharing this Context's Scope by default."""
+        self._assert_mutable()
+        return type(self)(parent=self, scope=scope)
+
+    def _fork_for_auto(self, *, synchronous: bool) -> Context:
+        child = self.fork(scope=self.scope.fork())
+        object.__setattr__(
+            child,
+            "_sync_only",
+            synchronous,
+        )
+        return child
 
     def isolate(self, *refs: ContextKey) -> Context:
         """Create a child that blocks inherited values for selected leaves."""
+        self._assert_mutable()
         entries = tuple(self._validate_entry(ref, role="leaf") for ref in refs)
-        child = self.fork()
-        for entry in entries:
-            child._binding(entry, create=True).block(child)
+        child = self.fork(scope=self.scope.fork())
+        try:
+            for entry in entries:
+                child._binding(entry, create=True).block(child.scope)
+        except BaseException:
+            child.dispose()
+            raise
         return child
 
     @overload
@@ -825,18 +1198,19 @@ class Context(ContextElement):
         *,
         create: bool,
     ) -> _ContextBinding | None:
-        binding = self._data.get(entry)
-        if binding is None and create:
-            binding = _ContextBinding()
-            self._data[entry] = binding
-        return binding
+        with self._data_lock:
+            binding = self._data.get(entry)
+            if binding is None and create:
+                binding = _ContextBinding()
+                self._data[entry] = binding
+            return binding
 
     def _leaf_value(self, entry: _RefEntry[Any], *, local: bool) -> Any:
         binding = self._binding(entry, create=False)
         if binding is None:
             raise ContextPathError(entry.ref.path)
         try:
-            return binding.resolve(self, local=local)
+            return binding.resolve(self.scope, local=local)
         except LookupError as error:
             raise ContextPathError(entry.ref.path) from error
 
@@ -865,9 +1239,11 @@ class Context(ContextElement):
         *,
         local: bool = False,
     ) -> Iterable[tuple[Ref[Any], Any]]:
+        self._assert_readable()
         return self._leaf_items((), local=local)
 
     def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
+        self._assert_readable()
         entry_tree = CTX_EVAL_ENGINE.map(self._validate_entry, ref_tree)
         entries, treedef = CTX_EVAL_ENGINE.flatten(entry_tree)
         values = [self._entry_value(entry, local=local) for entry in entries]
@@ -905,6 +1281,7 @@ class Context(ContextElement):
         *,
         local: bool = False,
     ) -> Iterable[str]:
+        self._assert_readable()
         parts = () if ref is None else self._validate_ref(ref, role="container").parts
         visible = tuple(self._leaf_items(parts, local=local))
         if ref is not None and not visible:
@@ -925,6 +1302,7 @@ class Context(ContextElement):
         *,
         local: bool = False,
     ) -> _Tree:
+        self._assert_readable()
         parts = () if ref is None else self._validate_ref(ref, role="container").parts
         visible = tuple(self._leaf_items(parts, local=local))
         if ref is not None and not visible:
@@ -951,14 +1329,17 @@ class Context(ContextElement):
         drops: Iterable[ContextKey] | None = None,
     ) -> None:
         """
-        Apply local updates and drops atomically.
+        Validate all local updates and drops before applying them.
 
         Args:
             updates: A mapping of References to new values.
             drops: An iterable of References to remove.
 
-        The mutation is atomic and returns ``None``.
+        Validation failures leave existing bindings unchanged. Calls from separate
+        threads may interleave and require application-level synchronization when
+        several paths must change as one transaction.
         """
+        self._assert_mutable()
         if not updates and not drops:
             return None
 
@@ -983,20 +1364,32 @@ class Context(ContextElement):
             if (
                 entry not in dropped_leaves
                 and binding is not None
-                and binding.has_value(self, local=True)
+                and binding.has_value(self.scope, local=True)
                 and not config.replaceable
             ):
                 raise ContextPathError(
                     f"Cannot replace non-replaceable local path {entry.ref.path!r}; "
-                    "delete it or write through a forked Context."
+                    "delete it or use a Context bound to a child Scope."
                 )
 
         for entry in dropped_leaves:
             binding = self._binding(entry, create=False)
             if binding is not None:
-                binding.delete_value(self)
+                binding.delete_value(self.scope)
         for entry, value in normalized_updates.items():
-            self._binding(entry, create=True).set_value(self, value)
+            config = cast(_RefLeafConfig[Any], entry.config)
+            try:
+                self._binding(entry, create=True).set_value(
+                    self.scope,
+                    value,
+                    replaceable=config.replaceable or entry in dropped_leaves,
+                )
+            except ValueError as error:
+                raise ContextPathError(
+                    f"Cannot replace non-replaceable local path "
+                    f"{entry.ref.path!r}; delete it or use a Context bound to "
+                    "a child Scope."
+                ) from error
 
     # --- Convenience Interfaces ---
     def update(self, updates: Mapping[ContextKey, Any]) -> None:
@@ -1012,14 +1405,59 @@ class Context(ContextElement):
         self.mutate(updates={ref: value})
 
     def add(self, ref: ContextKey, value: _T) -> Callable[[], None]:
-        """Add a new local binding and return its exact disposer."""
+        """Add one local binding owned by this Context."""
+        self._assert_mutable()
         entry = self._validate_entry(ref, role="leaf")
         binding = self._binding(entry, create=True)
-        if binding.has_value(self, local=True):
+        if binding.has_value(self.scope, local=True):
             raise ContextPathError(
                 f"Cannot add existing local path {entry.ref.path!r}."
             )
-        return binding.add_value(self, value)
+        try:
+            cleanup = binding.add_value(self.scope, value)
+        except ValueError as error:
+            raise ContextPathError(
+                f"Cannot add existing local path {entry.ref.path!r}."
+            ) from error
+        try:
+            return self._adopt_sync_effect(cleanup)
+        except BaseException:
+            cleanup()
+            raise
+
+    def contribute(
+        self,
+        ref: ContextKey,
+        value: _T,
+        *,
+        scope: Scope | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        position: Literal["prepend", "append"] = "append",
+    ) -> Callable[[], None]:
+        """Add an owned value to the Compose stored at *ref*."""
+        self._assert_mutable()
+        target = self.scope if scope is None else scope
+        if not isinstance(target, Scope):
+            raise TypeError(
+                f"Context contribution scope must be Scope, got "
+                f"{type(target).__name__}."
+            )
+        composition = self.get(ref)
+        if not isinstance(composition, Compose):
+            raise TypeError(
+                f"Context path {self._validate_ref(ref).path!r} does not hold Compose."
+            )
+        cleanup = composition.add(
+            target,
+            value,
+            metadata=metadata,
+            position=position,
+        )
+        try:
+            return self._adopt_sync_effect(cleanup)
+        except BaseException:
+            cleanup()
+            raise
 
     def update_tree(self, ref_tree: Any, value_tree: Any) -> None:
         """

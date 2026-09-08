@@ -1,6 +1,6 @@
 # Context
 
-`Context` 是 Slyme 的层次化可变数据存储。Schema 是 leaf/container 结构的唯一来源。应用根为每个有效 Schema leaf 保存一个平铺 binding，每个 binding 再保存各个 Context identity 对应的值。读取默认沿 C3 线性化结果查找，写入则只修改当前 Context 层。
+`Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按 Scope 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则只修改该 Scope。
 
 ## Ref 与 Schema {#ref}
 
@@ -115,7 +115,7 @@ assert ctx.extract({"name": R.resolve("user.name"), "age": R.resolve("user.age")
 }
 ```
 
-仅限关键字的 `schema` 参数会把这个 Schema 对象本身安装到新的 Context 根。Context 的所有路径都必须已经声明，包括带 default 的读取和 `exists()` 检查。可选的 data mapping 随后等价于调用 `update()`。子 Context 从父级继承同一个 `ctx.schema` 对象，不能再提供另一个。
+仅限关键字的 `schema` 参数会把这个 Schema 对象本身安装到新的 Context 根。Context 的所有路径都必须已经声明，包括带 default 的读取和 `exists()` 检查。可选的 data mapping 随后等价于调用 `update()`。子 Context 从唯一 parent 继承同一个 `ctx.schema` 和应用数据存储，不能再提供另一个 Schema。
 
 因此，应用既可以先构建 Schema 再创建 Context，也可以先创建 Context，再通过它声明路径。两种方式修改的是同一个 Schema 对象，已有 fork 会立即看到新增路径：
 
@@ -127,6 +127,8 @@ ctx = Context(schema=schema)
 plugin_schema = Schema({"plugin": {"enabled": Schema.leaf()}})
 remove_plugin = ctx.declare(plugin_schema)
 child = ctx.fork()
+assert child.parent is ctx
+assert child.scope is ctx.scope
 
 child.set(plugin_schema.resolve("plugin.enabled"), True)
 assert child.schema.resolve("plugin.enabled").path == "plugin.enabled"
@@ -142,8 +144,9 @@ remove_core()
 R = ctx.schema
 ```
 
-fragment 仍用于声明和导出该插件拥有的路径；`ctx.schema` 是整个应用的并集。插件应像
-管理 value 和 Compose entry 的 disposer 一样，管理 `declare()` 返回的 disposer。
+fragment 仍用于声明和导出该插件拥有的路径；`ctx.schema` 是整个应用的并集。
+`Schema.declare()` 返回由调用方管理的 disposer；`ctx.declare()` 还会把该声明作为
+`ctx` 拥有的 effect，同时保留同一个精确的提前 disposer。
 
 `set`、`update` 和 `mutate` 的 update 部分只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `mutate` 的 drop 部分接受任一角色。批量修改会先校验全部路径；发生冲突时不会产生部分写入。
 
@@ -156,39 +159,46 @@ ctx.set(R.resolve("settings"), {"theme": "dark"})  # 一个以 mapping 为值的
 ctx.set(R.resolve("user.name"), "Ada")              # 一个结构 branch 和 leaf
 ```
 
-所有读取操作都接受 `local=True`，用于只检查当前 Context；默认读取 C3 层次合并后的有效视图。
+所有读取操作都接受 `local=True`，用于只检查 `ctx.scope`；默认读取 `ctx.scope.mro` 上的有效视图。Context CRUD 不接受单独的 Scope 参数；需要在其他 Scope 读写数据时，应使用绑定到目标 Scope 的 Context。
 
-## Fork 与查找
+## Context 生命周期与 Scope 查找 {#scope}
 
-`fork()` 是创建空子 Context 的简写：当前 Context 是它的第一个父级，额外传入的 mixin 按顺序成为后续父级：
+`fork()` 创建由当前 Context 管理的子 Context，其 `parent` 为当前 Context。默认情况下两者共享 Scope，因此同一应用根中绑定到该 Scope 的 Context 会看到相同的局部值。需要不同数据层时，应显式传入 child Scope：
 
 ```python
+from slyme.context import Context, Schema
+
 R = Schema({"settings": {"timeout": Schema.leaf(), "mode": Schema.leaf()}})
 root = Context(schema=R)
 root.set(R.resolve("settings.timeout"), 30)
 
-feature = root.fork()
-feature.set(R.resolve("settings.mode"), "fast")
+plugin = root.fork()
+assert plugin.scope is root.scope
 
-mixin = root.fork()
-agent = feature.fork(mixin)
+feature_scope = root.scope.fork(name="feature")
+mixin_scope = root.scope.fork(name="mixin")
+agent_scope = feature_scope.fork(mixin_scope, name="agent")
+
+feature = root.fork(scope=feature_scope)
+mixin = root.fork(scope=mixin_scope)
+agent = feature.fork(scope=agent_scope)
+feature.set(R.resolve("settings.mode"), "fast")
+mixin.set(R.resolve("settings.timeout"), 45)
+
+assert agent.parent is feature
 assert agent.root is root
-assert agent.mro == (agent, feature, mixin, root)
+assert agent.scope.mro == (agent_scope, feature_scope, mixin_scope, root.scope)
+assert agent.scope.find("mixin") is mixin_scope
 assert agent.to_dict() == {
-    "settings": {"mode": "fast", "timeout": 30},
+    "settings": {"mode": "fast", "timeout": 45},
 }
 ```
 
-`mro` 是构造 Context 时计算出的不可变线性化结果，`root` 是其中最后一项。
-该根 Context 保存 Schema 引用和平铺的有效 Schema entry 到 binding 索引；所有后代的
-`schema` property 都通过 `root` 返回同一个 Schema。两棵独立的 Context 树也可以
-有意复用同一个 Schema，而不共享 Context 数据。
+Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周期归属，以及保存 Schema 和数据的应用根；Scope 决定查找顺序。Scope 可以有多个 parent，C3 只要求能得到一致的线性化结果，这些 parent 可以来自彼此无关的 Scope 根。即使复用同一个 Scope 对象，不同 Context 根也不会共享 Context 数据。
 
-C3 层次中的所有直接父级都必须来自同一个应用根，因而共享同一个 `schema` 对象。父级的后续修改会持续可见，直到子 Context 写入同一个 leaf；兄弟分支互不影响。Schema 遍历决定一个 container 包含哪些 leaf，每个 leaf 分别选择 C3 顺序中第一个可见的值。
+删除局部值通常会让 Scope MRO 中的下一个值重新可见。
 
-删除局部值通常会让此前被覆盖的父级值重新可见。
-
-`isolate()` 创建一个子 Context，并阻止指定 leaf 的父级值穿透。私有阻断标记会参与 C3 查找，后续父级无法绕过它。写入隔离后的子 Context 时值正常可见；删除该值后会重新看到阻断状态，而不是父级值：
+`isolate()` 创建带有 child Scope、由当前 Context 管理的子 Context，并阻止指定 leaf 的祖先值穿透。私有阻断标记会参与 Scope C3 查找，后续 Scope parent 无法绕过它。写入隔离后的子 Context 时值正常可见；删除该值后会重新看到阻断状态，而不是祖先值：
 
 ```python
 service_schema = Schema({"service": Schema.leaf(replaceable=False)})
@@ -205,7 +215,7 @@ assert not isolated.exists(service)
 
 ## 可撤销的局部绑定
 
-`add()` 仅在当前 Context 不存在该路径时安装值，并返回一个幂等 disposer，用于撤销这一次安装：
+`add()` 仅在绑定 Scope 不存在该路径时安装值。调用它的 Context 会拥有这次安装并在 dispose 时撤销；返回的幂等 disposer 可用于提前移除：
 
 ```python
 request_schema = Schema({"request": {"abort": Schema.leaf()}})
@@ -218,35 +228,50 @@ finally:
     remove_schema()
 ```
 
-父级已有同路径值不会阻止子级添加局部值。`add()` 本身不决定之后能否替换：`Schema.leaf(replaceable=False)` 会在同一个 Context 层已有普通值时拒绝 `set()`，默认策略则允许替换。删除和子层 shadow 始终允许。如果 `add()` 创建的精确 entry 已被其他操作删除或替换，原 disposer 不会影响当前值。
+Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add()` 本身不决定之后能否替换：`Schema.leaf(replaceable=False)` 会在同一个 Scope 已有普通值时拒绝 `set()`，默认策略则允许替换。删除和 child Scope shadow 始终允许。如果 `add()` 创建的精确 entry 已被其他操作删除或替换，原 disposer 不会影响当前值。
+
+## Effect 与 dispose
+
+`ctx.effect(setup)` 会立即同步执行 setup，并拥有其返回的同步 cleanup callable；该方法返回同步的精确提前 disposer。`ctx.async_effect(setup)` 同样同步执行 setup，但拥有其返回的异步 cleanup callable，并返回必须 await 的提前 disposer。
+
+parent 会强引用并拥有其子 Context。每个 Context 都按后进先出顺序处理自己直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 处理完全同步的子树；如果任一后代拥有异步 cleanup，它会在任何清理开始前拒绝整个操作，此时应使用 `await async_dispose()` 处理同步和异步 cleanup。某项 cleanup 失败不会跳过其余清理；子树释放完毕后会重新抛出第一个异常。两种 dispose 都是幂等的，已 dispose 的 Context 会拒绝后续 Context 数据访问、修改、fork、effect 与注册操作。
+
+cleanup 不得等待其 owner Context、正在 dispose 的 ancestor，或自身 async effect disposer 的销毁。此类重入等待会依赖自身，因此 Slyme 会抛出 `RuntimeError`。
+
+dispose Context 后，它不再维持 `ctx.scope.mro` 中各 Context 数据层的活跃状态，但不会解除或销毁 `ctx.scope`。同一应用根内，只要仍有活跃 Context 的 MRO 包含某个 Scope，该 Scope 上的 Context leaf value 就会保持可见，并在最后一个观察者 dispose 后清除。Compose entry 则由各自的精确 disposer 管理。调用方因此应确定性地 dispose 子 Context，而不是依赖垃圾回收。
 
 ## Compose
 
-`Compose` 按 Context identity 保存有序值，并根据目标 Context 的 C3 顺序解析可见 entry。其他 Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context：
+`Compose` 按 Scope 保存有序值，并根据 Scope C3 顺序解析可见 entry。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.contribute()` 将 contribution 的清理绑定到生命周期：
 
 ```python
 from slyme.context import Compose, Context, Schema
 
-R = Schema({"tools": Schema.leaf()})
+R = Schema({"tools": Schema.leaf(replaceable=False)})
 root = Context(schema=R)
 tools = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("tools"), tools)
 
-remove_base = tools.add(root, "read")
-agent = root.fork()
-remove_agent = tools.add(agent, "shell", metadata={"plugin": "shell"})
+root.contribute(R.resolve("tools"), "read")
+agent = root.fork(scope=root.scope.fork(name="agent"))
+remove_agent = agent.contribute(
+    R.resolve("tools"), "shell", metadata={"plugin": "shell"}
+)
 
 assert agent.get(R.resolve("tools")) is tools
-assert tools.resolve(agent) == ("shell", "read")
+assert tools.resolve(agent.scope) == ("shell", "read")
 remove_agent()
-remove_base()
+agent.dispose()
+root.dispose()
 ```
 
-`Compose.one()` 选择第一个可见值，`Compose.collect()` 将所有可见值组成 tuple，`Compose.merge()` 合并 mapping，并为每个 key 保留第一个可见值。向 `Compose(...)` 传入同步 resolver 可以定义其他结果规则。在同一个 Context 内，`position="prepend"` 将 entry 放在现有 entry 之前；默认值是 `"append"`。
+`ctx.contribute(ref, value, scope=target)` 会通过 `ctx.scope` 查找 Compose；`scope` 只选择 contribution 的保存位置，默认为 `ctx.scope`。即使目标 Scope 位于其他位置，调用该方法的 Context 仍拥有 contribution 的生命周期。`compose.add(scope, value)` 是底层原语，适用于调用方自行管理其 disposer 的情况。
 
-`values(ctx, local=True)` 可在不执行 resolver 的情况下检查单个 Context 的 entry，`resolve(ctx, local=True)` 则对同一组局部值应用 resolver。`entries(ctx)` 返回不可变记录，包括每项的 id、Context、value 与 metadata；省略 `ctx` 会检查当前仍存活的所有 Context。Compose 对 Context 使用弱 key，因此 key 本身不会让 Context 保持存活；但存储的 value 或 metadata 仍可能反向持有该 Context，所以返回的 disposer 才是确定性的清理机制。
+`Compose.one()` 选择第一个可见值，`Compose.collect()` 将所有可见值组成 tuple，`Compose.merge()` 合并 mapping，并为每个 key 保留第一个可见值。向 `Compose(...)` 传入同步 resolver 可以定义其他结果规则。在同一个 Scope 内，`position="prepend"` 将 entry 放在现有 entry 之前；默认值是 `"append"`。
 
-子 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
+`values(scope, local=True)` 可在不执行 resolver 的情况下检查单个 Scope 的 entry，`resolve(scope, local=True)` 则对同一组局部值应用 resolver。`entries(scope)` 返回不可变记录，包括每项的 id、Scope、value 与 metadata；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
+
+绑定到 child Scope 的 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
 
 ## 结构化操作与投影
 
@@ -271,9 +296,10 @@ assert mapping_leaf.flatten() == {
 assert nested_path.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 
-两者默认解析 C3 层次上的有效视图，也都接受 `local=True`。`ContextView` 使用相对
+两者默认解析绑定 Scope 的 C3 有效视图，也都接受 `local=True`。`ContextView` 使用相对
 字符串访问子树，而已经解析的 Ref 始终是绝对路径，因此它的 `flatten()` 也返回
 Schema 中的绝对 Ref。两种方法都不会复制 leaf value。
 `Context(ctx.flatten(), schema=ctx.schema)` 会显式物化一个共享相同声明和可见 leaf
-对象、但没有父级的新应用根；它拥有新的 Context identity，因此不会转移源 Context
-名下注册的 Compose entry。
+对象、但没有 parent 的新应用根。它默认获得新的 Scope，因此看不到目标为源 Scope 的
+contribution；显式复用该 Scope 会共享 Compose 可见性，但不同 Context 根仍不会共享
+Context 数据。

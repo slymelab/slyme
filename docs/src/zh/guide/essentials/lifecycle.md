@@ -33,7 +33,9 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 调用过程不再创建隐式冻结快照。在 Node 或 Wrapper 内修改静态 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。包含 `Ref` 或子 Node 的 Auto 结构仍会用求值结果重建，因为求值本身会生成结果树。
 
-需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 Builder。需要拥有空局部层、同时实时读取父级 C3 层次时使用 `context.fork()`；需要把当前可见 binding 物化为新应用根时使用 `Context(context.flatten(), schema=context.schema)`。两种操作都不会复制应用值。
+需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 Builder。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；需要把当前可见 binding 物化为新应用根时使用 `Context(context.flatten(), schema=context.schema)`。这些操作都不会复制应用值。
+
+Context 会拥有其子 Context，以及通过 `effect()`、`async_effect()`、`add()`、`declare()` 和 `contribute()` 注册的 cleanup。每个 Context 都按后进先出顺序处理自己的直接归属项，并递归销毁子级。`dispose()` 处理完全同步的子树，`await async_dispose()` 同时处理同步与异步 cleanup。注册操作返回的 disposer 可用于提前清理，但不会改变生命周期归属模型。
 
 ## Auto 值
 
@@ -47,7 +49,7 @@ process(data=[R.resolve("a"), R.resolve("b")])(ctx)  # Auto 生成求值后的 l
 process(data=R.resolve("items"))(ctx)  # data 是 Context 中保存的 list
 ```
 
-Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用独立的 `ctx.fork()` 执行。子 Node 返回后，其局部写入会被丢弃，也不会与其他 Auto 子 Node 的局部写入发生竞争。fork 仍会共享可变 leaf 对象，也不会撤销文件、网络请求或其他外部副作用。
+Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。同步求值会在继续前 dispose 子 Context，并在 setup 前拒绝 `async_effect()`；异步求值会等待子 Context cleanup。在线程中运行的同步 child 被取消时，系统会先等待 worker 结束再清理。子 Context 仍会共享可变 leaf 对象，也无法撤销没有注册 cleanup 的文件、网络请求或其他外部副作用。
 
 显式编排采用不同语义。直接调用 Node 或使用 `sequential_exec(ctx, children)` 时会传入指定的 Context 本身，因此这些步骤会有意观察到彼此的局部写入。
 

@@ -60,7 +60,7 @@ root = parent(child=child(value=4))
 assert root(Context()) == 5
 ```
 
-`Auto` recursively resolves registered evaluator leaves such as `Ref` and `Node`. A Ref reads the supplied Context directly. Each value-producing child Node receives its own `ctx.fork()`, so its local Context writes do not leak into the parent or a sibling Auto child. Returned values, mutations to shared leaf objects, and external side effects are not isolated. Without `Auto`, Ref and Node objects are passed through unchanged.
+`Auto` recursively resolves registered evaluator leaves such as `Ref` and `Node`. A Ref reads the supplied Context directly. Each value-producing child Node receives an owned child Context bound to a distinct `ctx.scope.fork()`. Slyme disposes that Context and its effects before parent execution continues, so child-Scope writes and Context-owned registrations do not leak into the parent or a sibling Auto child. Returned values, mutations to shared leaf objects, direct registrations whose disposers were not adopted by the child Context, and external side effects without registered cleanup are not isolated. Without `Auto`, Ref and Node objects are passed through unchanged.
 
 Missing required build parameters are represented by `UNDEFINED` and rejected when the Node is called. Use `UNSET` to request a declared default explicitly.
 

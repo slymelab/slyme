@@ -10,8 +10,8 @@ PyTree 是一种嵌套结构：容器描述拓扑，未注册对象作为叶子�
 
 Slyme 不提供通用的 Node 图 clone。PyTree 重建无法决定哪些共享引用应继续作为别名、哪些 value 应被复制，以及循环应用图应如何处理。需要另一张图时，应重新调用对应的 Node factory 或 Builder，并由应用显式复制所需 value。
 
-Context 不会被注册为 PyTree container。一个 Context 可以拥有多个父级，因此它是带 identity 的 C3 层次，而不是一棵自包含的值树。需要显式物化时，`Context.flatten()` 会提供其可见的 Ref 到 value 映射。
+Context 不会被注册为 PyTree container。它是最多拥有一个 parent、带 identity 的生命周期 owner，而不是自包含的值树；绑定的 Scope 承载独立的 C3 可见性图。需要显式物化时，`Context.flatten()` 会提供其可见的 Ref 到 value 映射。
 
 ## Auto 求值
 
-Auto 使用 `CTX_EVAL_ENGINE` 查找已注册 leaf，并把 Context 本身视为不透明对象。Ref 读取当前 Context；每个子 Node 在该 Context 的独立 fork 中求值，随后以返回值重建动态 Auto tree。普通 leaf 保持不变。
+Auto 使用 `CTX_EVAL_ENGINE` 查找已注册 leaf，并把 Context 本身视为不透明对象。Ref 读取当前 Context；每个子 Node 在由父级管理、绑定到独立 child Scope 的 Context 中求值。Slyme dispose 该 Context 后，再使用返回值重建动态 Auto tree。普通 leaf 保持不变。

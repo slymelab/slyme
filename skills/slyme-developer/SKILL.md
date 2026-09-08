@@ -7,7 +7,7 @@ description: API guidance, architectural best practices, and code-style conventi
 
 ## Mental model
 
-Slyme uses one mutable `Node` graph throughout assembly and execution. Node and Wrapper calls pass their current static parameter containers directly to user functions; mutations to those containers remain on the live element and are visible to later calls. Call the corresponding factory or Builder again when another independently configurable graph is needed. An application Context owns an explicit `Schema`; `Context.fork()` shares those declarations while creating a live local layer with C3 parent lookup. `Context.flatten()` exposes the visible Ref-to-value mapping without copying stored values.
+Slyme uses one mutable `Node` graph throughout assembly and execution. Node and Wrapper calls pass their current static parameter containers directly to user functions; mutations to those containers remain on the live element and are visible to later calls. Call the corresponding factory or Builder again when another independently configurable graph is needed. An application Context root holds an explicit `Schema` reference and owns its data store and lifetime subtree. Contexts form a single-parent lifetime tree, while immutable `Scope` objects independently provide C3 visibility. `Context.fork()` creates an owned child that shares its parent's Scope by default; use `ctx.fork(scope=ctx.scope.fork())` for a local data layer. `Context.flatten()` exposes the visible Ref-to-value mapping without copying stored values.
 
 Build parameters use the explicit Node and Wrapper parameter API. Read with `node.get(name)`, replace with `node.set(name, value)`, and restore the declared default with `node.reset(name)`. The read-only `node.params` mapping exposes all current parameters. Parameter names may overlap framework API names because parameters are not projected as attributes.
 
@@ -16,11 +16,12 @@ Application code creates a `Context`, handles external inputs, calls the root No
 - `@node` defines an execution unit and may return either a derived value or control information.
 - `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.
 - `@builder` is a build-time factory that assembles reusable Node trees. It requires the outer result to be a `Node` or `AsyncNode` (`None` is reported as a missing return), but does not validate the nested object graph or perform runtime work.
-- `Context` has local mutable data and immutable ordered parents. Reads are effective by default, writes are local, and `local=True` restricts read operations to one Context.
+- `Context` has at most one lifetime parent and one bound Scope. Reads follow `ctx.scope.mro` by default, writes target `ctx.scope`, and `local=True` restricts reads to that exact Scope. Context CRUD never accepts a separate Scope.
 - Context construction accepts a declared path-to-value mapping. Schema fixes each path's leaf or container role; runtime data stores only leaf bindings.
-- `Context.add()` installs one local binding and returns its exact idempotent disposer. `Schema.leaf(replaceable=False)` prevents later local replacement through `set()`.
-- `Context.isolate()` creates a child that blocks selected inherited leaf values.
-- `Compose` stores ordered values by Context identity and resolves those visible through C3 lookup. Use `one()`, `collect()`, `merge()`, or a synchronous custom resolver.
+- `Context.effect()` and `async_effect()` run synchronous setup and own its cleanup. Each Context processes directly owned effects and child Contexts in LIFO order, recursively; use `dispose()` for a wholly synchronous subtree and `await async_dispose()` when asynchronous cleanup may exist.
+- `Context.add()` installs one binding at the bound Scope and owns its exact disposer. `Context.declare()` and `contribute()` likewise bind registration cleanup to the calling Context. `Schema.leaf(replaceable=False)` prevents later replacement through `set()` at the same Scope.
+- `Context.isolate()` creates an owned child with a child Scope that blocks selected inherited leaf values.
+- `Compose` stores ordered values by Scope and resolves those visible through Scope C3 lookup. Prefer `ctx.contribute()` for a lifecycle-owned registration; use `compose.add(scope, ...)` as the lower-level primitive.
 
 ## Architecture
 
@@ -28,9 +29,9 @@ Decompose the execution flow from top to bottom into atomic operations and steps
 
 A higher-order Node accepts child Nodes through named parameters containing either one child or a structured collection. Each parameter represents a distinct role or extensible region in the execution topology, while the higher-order Node defines how its children participate in execution. Use a custom higher-order Node when it should provide execution semantics beyond simple linear chaining; use `sequential(...)` for a plain linear pipeline.
 
-Represent a single, stable child role with an individual named `Node` parameter. For a statically assembled extensible group, use a container such as `Sequence[Node]` for ordered execution or `Mapping[K, Node]` for keyed dispatch. Use `Compose` when independent owners must add and remove values by Context at runtime. Keep independently meaningful roles or phases in separate named parameters. See [references/core-api.md](references/core-api.md) for examples.
+Represent a single, stable child role with an individual named `Node` parameter. For a statically assembled extensible group, use a container such as `Sequence[Node]` for ordered execution or `Mapping[K, Node]` for keyed dispatch. Use `Compose` when independent owners must add and remove values by Scope at runtime. Keep independently meaningful roles or phases in separate named parameters. See [references/core-api.md](references/core-api.md) for examples.
 
-`Auto` Ref parameters read the supplied Context. Every Auto child Node receives its own Context fork, so use a returned value for dataflow. Call children explicitly with a selected Context when their local writes must be shared.
+`Auto` Ref parameters read the supplied Context. Every Auto child Node receives an owned child Context with a distinct child Scope, and Slyme disposes that child before parent execution continues. Use a returned value for dataflow. Call children explicitly with a selected Context when their writes and effects must share its lifetime.
 
 Reuse existing Nodes whenever possible. Extend behavior through composition before introducing new Nodes.
 

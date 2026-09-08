@@ -3,7 +3,7 @@
 ## Value-producing and effectful Nodes
 
 ```python
-from slyme.context import Compose, Context, Ref, Schema
+from slyme.context import Compose, Context, Ref, Schema, Scope
 from slyme.node import Auto, Node, node, sequential_exec, wrapper
 
 
@@ -15,6 +15,7 @@ R = Schema(
         "state": {"counter": Schema.leaf()},
         "output": {"result": Schema.leaf()},
         "request": {"id": Schema.leaf()},
+        "tools": Schema.leaf(replaceable=False),
     }
 )
 
@@ -44,32 +45,45 @@ def execute(
 
 A Node function has exactly one non-keyword-only runtime parameter. All build parameters are keyword-only. `Auto` resolves registered leaves such as `Ref` and value-producing `Node`; omit it when the function needs the object itself.
 
-An Auto Ref reads the supplied Context. Every Auto child Node runs with its own `ctx.fork()`, so its local writes are discarded after it returns. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe those writes. In rendered Node trees, `?` marks a parameter that will be evaluated at call time.
+An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned child Context with a distinct `ctx.scope.fork()`. Slyme disposes that child, including its effects, before parent execution continues. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe its writes.
 
-Context mutation methods modify data in place and return `None`. A Node may return any value.
+`set()`, `update()`, `delete()`, and other ordinary Context mutations modify data in place and return `None`. `add()`, `declare()`, and `contribute()` return exact early disposers and are also removed automatically with their owning Context. A Node may return any value.
 
-## Context layers and Compose
+## Context lifetime, Scope visibility, and Compose
 
 ```python
 root_ctx = Context(schema=R)
-agent_ctx = root_ctx.fork()
+agent_scope = root_ctx.scope.fork(name="agent")
+agent_ctx = root_ctx.fork(scope=agent_scope)
 
 remove_request = agent_ctx.add(R.resolve("request.id"), "request-1")
 
 tools = Compose[str, tuple[str, ...]].collect()
-remove_global = tools.add(root_ctx, "read")
-remove_agent = tools.add(agent_ctx, "shell", metadata={"plugin": "shell"})
+root_ctx.add(R.resolve("tools"), tools)
+root_ctx.contribute(R.resolve("tools"), "read")
+remove_agent = agent_ctx.contribute(
+    R.resolve("tools"), "shell", metadata={"plugin": "shell"}
+)
 
-assert tools.resolve(agent_ctx) == ("shell", "read")
+assert tools.resolve(agent_ctx.scope) == ("shell", "read")
 
 remove_agent()
-remove_global()
 remove_request()
+agent_ctx.dispose()
+root_ctx.dispose()
 ```
 
-Context reads follow C3 order by default and accept `local=True` for one local layer. Writes affect only the receiver. `Context.add()` rejects an existing local path and returns an idempotent disposer. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
+Context reads follow the bound Scope's C3 order by default and accept `local=True` for that exact Scope. Writes always target the bound Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data, while independent Context roots keep separate data even when bound to the same Scope. `Context.add()` rejects an existing value at the bound Scope. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
 
-Create an application root with `Context(data, schema=R)`. Every path must belong to its Schema declaration tree. Forks inherit the same `ctx.schema`; `ctx.declare(plugin_schema)` adds a plugin's declarations for every existing and future fork and returns their exact disposer. Pass direct parents as `Context(data, parents=(base, mixin))`; all parents must share one application root. `ctx.mro` is the immutable C3 order and `ctx.root` is its final entry. `base.fork(mixin)` is the empty-data shorthand. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
+Create an application root with `Context(data, schema=R, scope=optional_scope)`. Every path must belong to its Schema declaration tree. A child has one `parent`, inherits `ctx.schema`, and is owned by that parent until disposal. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. Scope parents may come from unrelated roots as long as C3 can linearize them: `Scope(name="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree and holds their shared Schema reference. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
+
+## Effects and disposal
+
+`ctx.effect(setup)` runs synchronous setup immediately; setup returns synchronous cleanup and the method returns an idempotent synchronous early disposer. `ctx.async_effect(setup)` also runs setup synchronously, but setup returns asynchronous cleanup and its early disposer must be awaited. Each Context disposes directly owned child Contexts and effects in LIFO order, recursively; cleanup continues after failures and then raises the first failure. `ctx.dispose()` first rejects a subtree containing asynchronous cleanup without partially tearing it down; use `await ctx.async_dispose()` for mixed cleanup. Disposal is idempotent, and a disposed Context rejects further data and lifecycle operations.
+
+Cleanup must not await disposal of its owner Context, an ancestor already being disposed, or its own async-effect disposer; Slyme rejects these self-dependent waits with `RuntimeError`.
+
+Use `ctx.contribute(ref, value, scope=target)` when a Compose stored at `ref` should receive a lifecycle-owned contribution. The Compose is looked up through `ctx.scope`; `scope` only selects the contribution's target and defaults to `ctx.scope`. Direct `compose.add(scope, value)` remains available when the caller will manage its returned disposer itself.
 
 ## Wrappers
 

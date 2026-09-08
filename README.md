@@ -114,23 +114,26 @@ if __name__ == "__main__":
     print(ctx.get(R.resolve("output.responses")))
 ```
 
-## Context layers and Compose
+## Context lifetimes, Scope visibility, and Compose
 
-A Context root holds a live `Schema` declaration tree, which may be built before the Context or extended reversibly through `Context.declare()`. Schema is the sole source of leaf/container structure; Context values use flat per-entry bindings with live C3 lookup. `Context.fork()` creates an empty child layer, while `Context.isolate()` can additionally block selected inherited leaves. `Compose` associates ordered values with Context identities and returns an exact disposer for every addition:
+A Context root holds a live `Schema` reference and owns an application data store and lifetime tree. Each Context has at most one parent and is bound to one immutable `Scope`. `Context.fork()` creates an owned child that shares the current Scope by default; pass `scope=ctx.scope.fork()` when the child needs its own local visibility layer. Reads follow the bound Scope's C3 order, while writes target that exact Scope. `Compose` also stores ordered values by Scope. `effect()`, `add()`, `declare()`, and `contribute()` attach synchronous cleanup to the calling Context; `async_effect()` attaches asynchronous cleanup. Use `dispose()` for synchronous trees and `await async_dispose()` when asynchronous cleanup may exist. Registrations return exact disposers for optional early removal:
 
 ```python
-from slyme.context import Compose, Context
+from slyme.context import Compose, Context, Schema
 
-root = Context()
-agent = root.fork()
+R = Schema({"hooks": Schema.leaf(replaceable=False)})
+root = Context(schema=R)
 hooks = Compose[str, tuple[str, ...]].collect()
+root.add(R.resolve("hooks"), hooks)
+agent = root.fork(scope=root.scope.fork(name="agent"))
 
-remove_root = hooks.add(root, "root")
-remove_agent = hooks.add(agent, "agent")
-assert hooks.resolve(agent) == ("agent", "root")
+root.contribute(R.resolve("hooks"), "root")
+agent.contribute(R.resolve("hooks"), "agent")
+assert hooks.resolve(agent.scope) == ("agent", "root")
 
-remove_agent()
-remove_root()
+agent.dispose()
+assert hooks.resolve(root.scope) == ("root",)
+root.dispose()
 ```
 
 ## Core Advantages
@@ -139,7 +142,7 @@ remove_root()
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to PyTree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Explicit State Layers:** Every Context path, structural role, and replacement policy is declared by a shared Schema. `Context.fork()` creates a child with live C3 lookup and local writes, while `flatten()` exposes the visible Ref-to-value mapping. `Compose` provides ordered, reversible values across the same Context hierarchy.
+**Explicit Lifetime and Visibility:** Context provides single-parent lifetime ownership, while Scope provides independent C3 visibility. Every Context path, structural role, and replacement policy is declared by a shared Schema; `flatten()` exposes the visible Ref-to-value mapping, and `Compose` provides ordered, reversible values across Scope hierarchies.
 
 **Seamless Collaboration:** Highly decoupled Nodes communicate through explicit Context paths and Compose objects. This allows teams to independently develop features and write unit tests, reducing "glue code" and deep system coupling.
 

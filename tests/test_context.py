@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import inspect
 import weakref
 from typing import Any
 
@@ -13,6 +14,7 @@ from slyme.context import (
     Context,
     Ref,
     Schema,
+    Scope,
 )
 from slyme.context.core import ContextPathError
 from slyme.context.tree import CTX_EVAL_ENGINE
@@ -373,7 +375,7 @@ def test_schema_can_be_built_before_or_through_context() -> None:
         context_first.get("late.value")
 
 
-def test_context_rejects_undeclared_keys_and_unrelated_parents() -> None:
+def test_context_rejects_undeclared_keys_and_invalid_parent_arguments() -> None:
     root = Context(schema=R)
 
     for operation in (
@@ -394,10 +396,10 @@ def test_context_rejects_undeclared_keys_and_unrelated_parents() -> None:
     assert unrelated.root is unrelated
     assert unrelated.schema is root.schema
     assert not unrelated.exists("value")
-    with pytest.raises(TypeError, match="same application root"):
-        root.fork(unrelated)
+    with pytest.raises(TypeError, match="parent must be a Context"):
+        Context(parent=object())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="inherits its schema"):
-        Context(parents=(root,), schema=R)
+        Context(parent=root, schema=R)
 
 
 def test_context_operations_respect_schema_leaf_and_container_roles() -> None:
@@ -494,19 +496,16 @@ def test_context_constructor_requires_a_declared_path_mapping() -> None:
         Context({R.resolve("value"): 1})
 
 
-def test_context_constructor_accepts_data_and_keyword_only_parents() -> None:
+def test_context_constructor_accepts_data_and_a_keyword_only_parent() -> None:
     root = Context({R.resolve("a.b.c"): 1}, schema=R)
-    base = root.fork()
-    mixin = root.fork()
-    mixin.set(R.resolve("other"), 2)
-    child = Context({R.resolve("c"): 3}, parents=(base, mixin))
+    child_scope = root.scope.fork()
+    child = Context({R.resolve("c"): 3}, parent=root, scope=child_scope)
 
-    assert child.parents == (base, mixin)
+    assert child.parent is root
+    assert child.scope is child_scope
     assert root.root is root
-    assert root.mro == (root,)
     assert child.root is root
-    assert child.mro == (child, base, mixin, root)
-    assert child.to_dict() == {"c": 3, "a": {"b": {"c": 1}}, "other": 2}
+    assert child.to_dict() == {"c": 3, "a": {"b": {"c": 1}}}
     assert child.to_dict(local=True) == {"c": 3}
 
     with pytest.raises(TypeError, match="positional"):
@@ -700,11 +699,33 @@ def test_to_dict_is_a_nested_projection_while_flatten_preserves_leaf_paths() -> 
     assert structured.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 
 
-def test_context_fork_has_live_parent_lookup_and_local_writes() -> None:
+def test_context_fork_shares_its_scope_by_default() -> None:
     value = R.resolve("runtime.value")
     root = Context(schema=R)
     child = root.fork()
     sibling = root.fork()
+
+    assert child.parent is root
+    assert sibling.parent is root
+    assert child.scope is root.scope
+    assert sibling.scope is root.scope
+
+    root.set(value, 1)
+    assert child.get(value, local=True) == 1
+
+    child.set(value, 2)
+    assert root.get(value) == 2
+    assert sibling.get(value) == 2
+    sibling.delete(value)
+    assert not root.exists(value)
+    assert not child.exists(value)
+
+
+def test_context_explicit_child_scope_has_live_inheritance_and_local_writes() -> None:
+    value = R.resolve("runtime.value")
+    root = Context(schema=R)
+    child = root.fork(scope=root.scope.fork())
+    sibling = root.fork(scope=root.scope.fork())
 
     root.set(value, 1)
     assert child.get(value) == 1
@@ -725,10 +746,64 @@ def test_context_fork_has_live_parent_lookup_and_local_writes() -> None:
     assert not hasattr(child, "parent_contexts")
 
 
+def test_context_lifecycle_parent_and_scope_visibility_are_orthogonal() -> None:
+    value = R.resolve("value")
+    root = Context(schema=R)
+    left_scope = Scope(name="left")
+    right_scope = Scope(name="right")
+    left = root.fork(scope=left_scope)
+    right = root.fork(scope=right_scope)
+
+    left.set(value, "left")
+    right.set(value, "right")
+    assert left.get(value) == "left"
+    assert right.get(value) == "right"
+
+    combined_scope = Scope(name="combined", parents=(left_scope, right_scope))
+    combined = right.fork(scope=combined_scope)
+    assert combined.parent is right
+    assert combined.get(value) == "left"
+
+
+def test_independent_context_roots_do_not_share_data_through_a_scope() -> None:
+    value = R.resolve("value")
+    shared_scope = Scope(name="shared")
+    left = Context(schema=R, scope=shared_scope)
+    right = Context(schema=R, scope=shared_scope)
+
+    left.set(value, 1)
+
+    assert left.scope is right.scope
+    assert right.get(value, "missing") == "missing"
+
+
+def test_context_crud_uses_only_the_bound_scope() -> None:
+    operations = (
+        Context.extract,
+        Context.get,
+        Context.exists,
+        Context.keys,
+        Context.to_dict,
+        Context.flatten,
+        Context.mutate,
+        Context.update,
+        Context.drop,
+        Context.set,
+        Context.add,
+        Context.update_tree,
+        Context.delete,
+    )
+
+    for operation in operations:
+        assert "scope" not in inspect.signature(operation).parameters
+    assert "scope" in inspect.signature(Context.fork).parameters
+    assert "scope" in inspect.signature(Context.contribute).parameters
+
+
 def test_context_read_operations_can_select_local_or_effective_data() -> None:
     root = Context(schema=R)
     root.set(R.resolve("group.parent"), 1)
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork())
     child.set(R.resolve("group.child"), 2)
 
     assert tuple(child.keys(R.resolve("group"))) == ("child", "parent")
@@ -746,7 +821,7 @@ def test_context_read_operations_can_select_local_or_effective_data() -> None:
 def test_context_views_follow_later_parent_and_child_changes() -> None:
     root = Context(schema=R)
     root.set(R.resolve("group.initial"), 1)
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork())
     view = child.get(R.resolve("group"))
 
     root.set(R.resolve("group.later"), 2)
@@ -759,35 +834,44 @@ def test_context_views_follow_later_parent_and_child_changes() -> None:
         view.to_dict()
 
 
-def test_context_uses_c3_for_multiple_parents() -> None:
+def test_scope_uses_c3_for_multiple_parents() -> None:
     value = R.resolve("value")
-    root = Context(schema=R)
-    left = root.fork()
-    right = root.fork()
-    child = left.fork(right)
+    root_scope = Scope(name="root")
+    left_scope = root_scope.fork(name="left")
+    right_scope = root_scope.fork(name="right")
+    child_scope = left_scope.fork(right_scope, name="child")
+    root = Context(schema=R, scope=root_scope)
+    left = root.fork(scope=left_scope)
+    right = root.fork(scope=right_scope)
+    child = left.fork(scope=child_scope)
 
     root.set(value, "root")
     right.set(value, "right")
     left.set(value, "left")
 
-    assert child.mro == (child, left, right, root)
+    assert child.scope.mro == (
+        child_scope,
+        left_scope,
+        right_scope,
+        root_scope,
+    )
     assert child.get(value) == "left"
 
-    x = root.fork()
-    y = root.fork()
+    x = root_scope.fork()
+    y = root_scope.fork()
     xy = x.fork(y)
     yx = y.fork(x)
     with pytest.raises(TypeError, match="C3"):
         xy.fork(yx)
     with pytest.raises(TypeError, match="duplicate"):
-        root.fork(root)
+        root_scope.fork(root_scope)
 
 
 def test_context_structural_lookup_merges_declared_container_branches() -> None:
     root = Context(schema=R)
     root.set(R.resolve("a.b.c"), 1)
 
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork())
     child.set(R.resolve("a.b.d"), 2)
     assert child.to_dict(R.resolve("a.b")) == {"d": 2, "c": 1}
 
@@ -828,17 +912,26 @@ def test_context_views_follow_schema_structure_and_declaration_order() -> None:
     assert tuple(view.keys()) == ("first", "nested", "later")
 
 
-def test_c3_branch_merge_uses_nearest_value_for_each_leaf() -> None:
-    root = Context(schema=R)
+def test_scope_c3_branch_merge_uses_nearest_value_for_each_leaf() -> None:
+    root_scope = Scope()
+    root = Context(schema=R, scope=root_scope)
     root.set(R.resolve("a.root"), 1)
-    left = root.fork()
+    left_scope = root_scope.fork()
+    left = root.fork(scope=left_scope)
     left.set(R.resolve("a.left"), 2)
-    right = root.fork()
+    right_scope = root_scope.fork()
+    right = root.fork(scope=right_scope)
     right.set(R.resolve("a.root"), 3)
 
-    child = left.fork(right)
+    child_scope = left_scope.fork(right_scope)
+    child = left.fork(scope=child_scope)
 
-    assert child.mro == (child, left, right, root)
+    assert child.scope.mro == (
+        child_scope,
+        left_scope,
+        right_scope,
+        root_scope,
+    )
     assert child.to_dict(R.resolve("a")) == {"left": 2, "root": 3}
 
 
@@ -852,7 +945,7 @@ def test_context_add_uses_schema_replaceability_and_is_exactly_reversible() -> N
     with pytest.raises(ContextPathError, match="non-replaceable"):
         root.set(value, "other")
 
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork())
     remove_child = child.add(value, "child")
     assert child.get(value) == "child"
     remove_child()
@@ -898,11 +991,17 @@ def test_context_isolation_stops_c3_lookup_before_later_parents() -> None:
     root = Context(schema=R)
     root.set(value, "root")
     left = root.isolate(value)
-    right = root.fork()
+    right = root.fork(scope=root.scope.fork())
     right.set(value, "right")
-    child = left.fork(right)
+    child_scope = left.scope.fork(right.scope)
+    child = left.fork(scope=child_scope)
 
-    assert child.mro == (child, left, right, root)
+    assert child.scope.mro == (
+        child_scope,
+        left.scope,
+        right.scope,
+        root.scope,
+    )
     assert child.get(value, "missing") == "missing"
 
     child.set(value, "child")
@@ -971,13 +1070,13 @@ def test_context_add_disposer_does_not_retain_removed_payload() -> None:
     dispose()
 
 
-def test_context_storage_does_not_retain_discarded_child_layers() -> None:
+def test_context_parent_retains_children_until_explicit_disposal() -> None:
     class Payload:
         pass
 
     value = R.resolve("payload")
     root = Context(schema=R)
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork())
     payload = Payload()
     child_ref = weakref.ref(child)
     payload_ref = weakref.ref(payload)
@@ -985,6 +1084,13 @@ def test_context_storage_does_not_retain_discarded_child_layers() -> None:
 
     del child
     del payload
+    gc.collect()
+
+    retained_child = child_ref()
+    assert retained_child is not None
+    assert payload_ref() is not None
+    retained_child.dispose()
+    del retained_child
     gc.collect()
 
     assert child_ref() is None
@@ -995,7 +1101,7 @@ def test_context_storage_does_not_retain_discarded_child_layers() -> None:
 def test_context_removes_a_container_after_its_last_local_leaf() -> None:
     root = Context(schema=R)
     root.set(R.resolve("a.root"), "root")
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork())
 
     remove = child.add(R.resolve("a.temporary"), 1)
     child.set(R.resolve("a.regular"), 2)
@@ -1020,10 +1126,10 @@ def test_flatten_can_materialize_an_effective_context() -> None:
     value = R.resolve("value")
     root = Context(schema=R)
     root.set(value, 1)
-    child = root.fork()
+    child = root.fork(scope=root.scope.fork())
 
     snapshot = Context(child.flatten(), schema=child.schema)
-    assert snapshot.parents == ()
+    assert snapshot.parent is None
     assert snapshot.get(value) == 1
 
     root.set(value, 2)

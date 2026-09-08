@@ -17,6 +17,7 @@ from collections.abc import Iterable, Sequence
 
 from slyme.context import Context
 
+from ._async import wait_uninterruptibly
 from .core import AsyncNode, Node, node
 
 __all__ = [
@@ -76,7 +77,8 @@ async def async_sequential_exec(
         if isinstance(node_, AsyncNode):
             await node_(ctx)
         elif isinstance(node_, Node):
-            await asyncio.to_thread(node_, ctx)
+            worker = asyncio.create_task(asyncio.to_thread(node_, ctx))
+            await wait_uninterruptibly(worker)
         else:
             raise TypeError("async_sequential_exec only accepts Nodes and AsyncNodes.")
 

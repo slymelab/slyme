@@ -18,10 +18,10 @@ For each call, Slyme:
 4. batches leaves by evaluator type;
 5. resolves them with the supplied Context and invokes the user function, passing static containers directly.
 
-`Ref` evaluators batch effective Context extraction. `Node` evaluators call value-producing child Nodes, giving each child an independent fork of the supplied Context. Synchronous tree evaluation runs child Nodes in evaluation order. Asynchronous tree evaluation may run both synchronous and asynchronous children concurrently; synchronous children are dispatched through `asyncio.to_thread`. Their local Context writes remain isolated in either mode. More realization types can be added through `EVALUATOR_REGISTRY` without teaching Slyme their internal execution mechanism.
+`Ref` evaluators batch effective Context extraction. `Node` evaluators call value-producing child Nodes, giving each an owned child Context bound to a distinct child Scope. Synchronous tree evaluation runs child Nodes in evaluation order. Asynchronous tree evaluation may run both synchronous and asynchronous children concurrently; synchronous children are dispatched through `asyncio.to_thread`. Their Scope-local writes remain isolated in either mode. More realization types can be added through `EVALUATOR_REGISTRY` without teaching Slyme their internal execution mechanism.
 
 The plan is deliberately temporary. This avoids invalidation bookkeeping when a live Node graph changes between calls.
 
 ## Evaluation timing
 
-Auto values are resolved once when their containing Node or Wrapper is entered. An Auto child may return a derived value, but its local Context writes are discarded with its fork. If a higher-order Node explicitly invokes children with its own Context, read a later value through its Ref after those calls instead of relying on the earlier Auto value.
+Auto values are resolved once when their containing Node or Wrapper is entered. An Auto child may return a derived value, but Slyme disposes its Context and registered effects before parent execution continues. Synchronous Auto evaluation rejects asynchronous cleanup before setup; asynchronous evaluation awaits cleanup, including after cancellation. If a higher-order Node explicitly invokes children with its own Context, read a later value through its Ref after those calls instead of relying on the earlier Auto value.

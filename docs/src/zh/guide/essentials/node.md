@@ -59,7 +59,7 @@ root = parent(child=child(value=4))
 assert root(Context()) == 5
 ```
 
-`Auto` 会递归解析已注册的 evaluator 叶子，例如 `Ref` 和 `Node`。Ref 会直接读取传入的 Context；每个产生值的子 Node 则分别获得独立的 `ctx.fork()`，因此它的局部 Context 写入不会泄漏到父级或其他 Auto 子 Node。返回值、对共享 leaf 对象的修改以及外部副作用并不会被隔离。没有 `Auto` 时，Ref 和 Node 对象会原样传入。
+`Auto` 会递归解析已注册的 evaluator 叶子，例如 `Ref` 和 `Node`。Ref 会直接读取传入的 Context；每个产生值的子 Node 则获得由父 Context 管理、绑定到独立 `ctx.scope.fork()` 的子 Context。父 Node 继续执行前，Slyme 会 dispose 该 Context 及其 effect，因此 child Scope 的写入与由 Context 管理的注册不会泄漏到父级或其他 Auto 子 Node。返回值、对共享 leaf 对象的修改、disposer 未交给子 Context 管理的直接注册，以及没有注册 cleanup 的外部副作用并不会被隔离。没有 `Auto` 时，Ref 和 Node 对象会原样传入。
 
 缺失的必需构建参数以 `UNDEFINED` 表示，并在 Node 调用时被拒绝。使用 `UNSET` 可以显式请求声明的默认值。
 

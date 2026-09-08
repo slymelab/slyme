@@ -19,6 +19,7 @@ from .core import (
     Ref,
     Schema,
 )
+from .scope import Scope
 
 __all__ = [
     "Compose",
@@ -26,4 +27,5 @@ __all__ = [
     "ContextKey",
     "Ref",
     "Schema",
+    "Scope",
 ]

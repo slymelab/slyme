@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import threading
 from collections.abc import Awaitable, Callable
 from types import MappingProxyType
 from typing import Any
@@ -563,8 +564,11 @@ def test_auto_nodes_receive_isolated_child_contexts() -> None:
     assert parent(left=shared_child, right=shared_child)(ctx) == (1, 2)
     assert len(seen) == 2
     assert seen[0] is not seen[1]
-    assert seen[0].parents == (ctx,)
-    assert seen[1].parents == (ctx,)
+    assert seen[0].parent is ctx
+    assert seen[1].parent is ctx
+    assert seen[0].scope is not seen[1].scope
+    assert seen[0].scope.parents == (ctx.scope,)
+    assert seen[1].scope.parents == (ctx.scope,)
     assert not ctx.exists(temporary)
 
 
@@ -623,9 +627,244 @@ async def test_async_auto_nodes_receive_isolated_child_contexts() -> None:
     assert result == 4
     assert len(seen) == 2
     assert seen[0] is not seen[1]
-    assert seen[0].parents == (ctx,)
-    assert seen[1].parents == (ctx,)
+    assert seen[0].parent is ctx
+    assert seen[1].parent is ctx
+    assert seen[0].scope is not seen[1].scope
+    assert seen[0].scope.parents == (ctx.scope,)
+    assert seen[1].scope.parents == (ctx.scope,)
     assert not ctx.exists(temporary)
+
+
+def test_sync_auto_disposes_child_effects_before_parent_execution() -> None:
+    events: list[str] = []
+
+    @node
+    def child(ctx: Context, /) -> int:
+        ctx.effect(lambda: lambda: events.append("cleanup"))
+        events.append("child")
+        return 1
+
+    @node
+    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        assert events == ["child", "cleanup"]
+        return value
+
+    assert parent(value=child())(Context(schema=R)) == 1
+
+
+def test_sync_auto_rejects_async_cleanup_before_setup() -> None:
+    setup_called = False
+
+    @node
+    def child(ctx: Context, /) -> None:
+        nonlocal setup_called
+
+        def setup():
+            nonlocal setup_called
+            setup_called = True
+
+            async def cleanup() -> None:
+                pass
+
+            return cleanup
+
+        ctx.async_effect(setup)
+
+    @node
+    def parent(ctx: Context, /, *, value: Auto[None]) -> None:
+        return value
+
+    with pytest.raises(NodeExceptionRecord) as caught:
+        parent(value=child())(Context(schema=R))
+    assert isinstance(caught.value.exception, RuntimeError)
+    assert "synchronous evaluation" in str(caught.value.exception)
+    assert not setup_called
+
+
+async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None:
+    events: list[str] = []
+
+    @node
+    async def child(ctx: Context, /) -> int:
+        async def cleanup() -> None:
+            await asyncio.sleep(0)
+            events.append("cleanup")
+
+        ctx.async_effect(lambda: cleanup)
+        events.append("child")
+        return 1
+
+    @node
+    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        assert events == ["child", "cleanup"]
+        return value
+
+    assert await parent(value=child())(Context(schema=R)) == 1
+
+
+async def test_cancelled_sync_auto_waits_for_worker_before_cleanup() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    events: list[str] = []
+
+    @node
+    def child(ctx: Context, /) -> int:
+        ctx.effect(lambda: lambda: events.append("cleanup"))
+        started.set()
+        release.wait(timeout=5)
+        events.append("worker-finished")
+        return 1
+
+    @node
+    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        return value
+
+    task = asyncio.create_task(parent(value=child())(Context(schema=R)))
+    assert await asyncio.to_thread(started.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert events == []
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert events == ["worker-finished", "cleanup"]
+
+
+async def test_concurrent_sync_auto_nodes_isolate_shared_context_data() -> None:
+    barrier = threading.Barrier(2)
+
+    @node
+    def child(ctx: Context, /, *, value: int) -> tuple[int, object]:
+        barrier.wait(timeout=5)
+        ctx.set("auto.temporary", value)
+        return ctx.get("auto.temporary", local=True), ctx.scope
+
+    @node
+    async def parent(
+        ctx: Context,
+        /,
+        *,
+        values: Auto[list[tuple[int, object]]],
+    ) -> list[tuple[int, object]]:
+        return values
+
+    ctx = Context(schema=R)
+    results = await parent(values=[child(value=1), child(value=2)])(ctx)
+
+    assert sorted(value for value, _ in results) == [1, 2]
+    assert results[0][1] is not results[1][1]
+    assert not ctx.exists("auto.temporary")
+
+
+async def test_cancelled_nested_async_sequence_waits_for_sync_worker() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    events: list[str] = []
+
+    @node
+    def step(ctx: Context, /) -> None:
+        ctx.effect(lambda: lambda: events.append("cleanup"))
+        started.set()
+        release.wait(timeout=5)
+        ctx.get("auto.inherited", None)
+        events.append("worker-finished")
+
+    @node
+    async def child(ctx: Context, /) -> int:
+        await async_sequential_exec(ctx, [step()])
+        return 1
+
+    @node
+    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        return value
+
+    task = asyncio.create_task(parent(value=child())(Context(schema=R)))
+    assert await asyncio.to_thread(started.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert events == []
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert events == ["worker-finished", "cleanup"]
+
+
+def test_sync_auto_preserves_node_failure_when_cleanup_also_fails() -> None:
+    def fail_cleanup() -> None:
+        raise RuntimeError("cleanup failed")
+
+    @node
+    def child(ctx: Context, /) -> int:
+        ctx.effect(lambda: fail_cleanup)
+        raise ValueError("node failed")
+
+    @node
+    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        return value
+
+    child_node = child()
+    with pytest.raises(NodeExceptionRecord) as caught:
+        parent(value=child_node)(Context(schema=R))
+
+    assert caught.value.exception_node is child_node
+    assert isinstance(caught.value.exception, ValueError)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+async def test_async_auto_preserves_node_failure_when_cleanup_also_fails() -> None:
+    async def fail_cleanup() -> None:
+        raise RuntimeError("cleanup failed")
+
+    @node
+    async def child(ctx: Context, /) -> int:
+        ctx.async_effect(lambda: fail_cleanup)
+        raise ValueError("node failed")
+
+    @node
+    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        return value
+
+    child_node = child()
+    with pytest.raises(NodeExceptionRecord) as caught:
+        await parent(value=child_node)(Context(schema=R))
+
+    assert caught.value.exception_node is child_node
+    assert isinstance(caught.value.exception, ValueError)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+async def test_async_auto_failure_disposes_cancelled_siblings() -> None:
+    started = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    @node
+    async def waiting(ctx: Context, /) -> int:
+        async def cleanup() -> None:
+            cleaned.set()
+
+        ctx.async_effect(lambda: cleanup)
+        started.set()
+        await asyncio.Event().wait()
+        return 1
+
+    @node
+    async def failing(ctx: Context, /) -> int:
+        await started.wait()
+        raise RuntimeError("child failed")
+
+    @node
+    async def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+        return sum(values)
+
+    with pytest.raises(NodeExceptionRecord) as caught:
+        await parent(values=[waiting(), failing()])(Context(schema=R))
+    assert isinstance(caught.value.exception, RuntimeError)
+    assert str(caught.value.exception) == "child failed"
+    assert cleaned.is_set()
 
 
 def test_sequential_nodes_share_context() -> None:

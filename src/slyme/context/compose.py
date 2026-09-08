@@ -12,18 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Context-aware reversible composition."""
+"""Scope-aware reversible composition."""
 
 from __future__ import annotations
 
+import threading
 import types
-import weakref
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
-if TYPE_CHECKING:
-    from .core import Context
+from .scope import Scope
 
 __all__ = ["Compose"]
 
@@ -41,15 +40,24 @@ class _ComposeEntry(Generic[_T]):
 
 
 class Compose(Generic[_T, _R]):
-    """Store reversible values and combine those visible through Context C3 order."""
+    """Store reversible values and combine those visible through Scope C3 order."""
 
-    __slots__ = ("_buckets", "_resolver", "__weakref__")
+    __slots__ = ("_buckets", "_lock", "_resolver", "__weakref__")
 
     def __init__(self, resolver: Callable[[tuple[_T, ...]], _R]) -> None:
+        if not callable(resolver):
+            raise TypeError("Compose resolver must be callable.")
         self._resolver = resolver
-        self._buckets: weakref.WeakKeyDictionary[
-            Context, dict[object, _ComposeEntry[_T]]
-        ] = weakref.WeakKeyDictionary()
+        self._buckets: dict[Scope, dict[object, _ComposeEntry[_T]]] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _validate_scope(scope: Scope) -> Scope:
+        if not isinstance(scope, Scope):
+            raise TypeError(
+                f"Compose scope must be Scope, got {type(scope).__name__}."
+            )
+        return scope
 
     @classmethod
     def one(cls) -> Compose[_T, _T]:
@@ -57,7 +65,7 @@ class Compose(Generic[_T, _R]):
 
         def resolve(values: tuple[_T, ...]) -> _T:
             if not values:
-                raise LookupError("Compose has no value visible from this Context.")
+                raise LookupError("Compose has no value visible from this Scope.")
             return values[0]
 
         return Compose(resolve)
@@ -83,42 +91,45 @@ class Compose(Generic[_T, _R]):
 
     def _scoped_entries(
         self,
-        ctx: Context,
+        scope: Scope,
         *,
         local: bool,
-    ) -> tuple[tuple[Context, _ComposeEntry[_T]], ...]:
-        contexts = (ctx,) if local else ctx.mro
-        return tuple(
-            (context, entry)
-            for context in contexts
-            for entry in self._buckets.get(context, {}).values()
-        )
+    ) -> tuple[tuple[Scope, _ComposeEntry[_T]], ...]:
+        scope = self._validate_scope(scope)
+        scopes = (scope,) if local else scope.mro
+        with self._lock:
+            return tuple(
+                (current, entry)
+                for current in scopes
+                for entry in self._buckets.get(current, {}).values()
+            )
 
     def add(
         self,
-        ctx: Context,
+        scope: Scope,
         value: _T,
         *,
         metadata: Mapping[str, Any] | None = None,
         position: Literal["prepend", "append"] = "append",
     ) -> Callable[[], None]:
-        """Add one Context-local value and return an idempotent exact disposer."""
+        """Add one Scope-local value and return an idempotent exact disposer."""
         entry = self._insert(
-            ctx,
+            scope,
             value,
             metadata=metadata,
             position=position,
         )
-        return self._disposer(ctx, entry)
+        return self._disposer(scope, entry)
 
     def _insert(
         self,
-        ctx: Context,
+        scope: Scope,
         value: _T,
         *,
         metadata: Mapping[str, Any] | None = None,
         position: Literal["prepend", "append"] = "append",
     ) -> _ComposeEntry[_T]:
+        scope = self._validate_scope(scope)
         if position not in ("prepend", "append"):
             raise ValueError(f"Unknown Compose position: {position!r}.")
 
@@ -128,78 +139,84 @@ class Compose(Generic[_T, _R]):
             value,
             types.MappingProxyType(dict(metadata or {})),
         )
-        bucket = self._buckets.setdefault(ctx, {})
-        if position == "append":
-            bucket[identity] = entry
-        else:
-            self._buckets[ctx] = {identity: entry, **bucket}
-        return entry
+        with self._lock:
+            bucket = self._buckets.setdefault(scope, {})
+            if position == "append":
+                bucket[identity] = entry
+            else:
+                self._buckets[scope] = {identity: entry, **bucket}
+            return entry
 
-    def _remove(self, ctx: Context, expected: _ComposeEntry[_T]) -> None:
-        current = self._buckets.get(ctx)
-        if current is None or current.get(expected.identity) is not expected:
-            return
-        current.pop(expected.identity)
-        if not current:
-            self._buckets.pop(ctx, None)
+    def _remove(self, scope: Scope, identity: object) -> None:
+        with self._lock:
+            current = self._buckets.get(scope)
+            if current is None or identity not in current:
+                return
+            current.pop(identity)
+            if not current:
+                self._buckets.pop(scope, None)
 
     def _disposer(
         self,
-        ctx: Context,
+        scope: Scope,
         entry: _ComposeEntry[_T],
     ) -> Callable[[], None]:
-
-        compose_ref = weakref.ref(self)
-        context_ref = weakref.ref(ctx)
-        entry_ref = weakref.ref(entry)
+        compose: Compose[_T, _R] | None = self
+        target: Scope | None = scope
+        identity = entry.identity
 
         def dispose() -> None:
-            compose = compose_ref()
-            context = context_ref()
-            expected = entry_ref()
-            if compose is None or context is None or expected is None:
+            nonlocal compose, target
+            if compose is None or target is None:
                 return
-            compose._remove(context, expected)
+            compose._remove(target, identity)
+            compose = None
+            target = None
 
         return dispose
 
-    def values(self, ctx: Context, *, local: bool = False) -> tuple[_T, ...]:
-        """Return values from most-specific to least-specific Context."""
-        return tuple(entry.value for _, entry in self._scoped_entries(ctx, local=local))
+    def values(self, scope: Scope, *, local: bool = False) -> tuple[_T, ...]:
+        """Return values from most-specific to least-specific Scope."""
+        return tuple(
+            entry.value for _, entry in self._scoped_entries(scope, local=local)
+        )
 
-    def resolve(self, ctx: Context, *, local: bool = False) -> _R:
-        """Resolve values visible from a context."""
-        return self._resolver(self.values(ctx, local=local))
+    def resolve(self, scope: Scope, *, local: bool = False) -> _R:
+        """Resolve values visible from a Scope."""
+        return self._resolver(self.values(scope, local=local))
 
     def entries(
         self,
-        ctx: Context | None = None,
+        scope: Scope | None = None,
         *,
         local: bool = False,
     ) -> tuple[Mapping[str, Any], ...]:
         """Return immutable entry snapshots for introspection."""
-        if ctx is None:
+        if scope is None:
             if local:
-                raise ValueError("local=True requires a Context.")
-            scoped = tuple(
-                (context, entry)
-                for context, bucket in tuple(self._buckets.items())
-                for entry in bucket.values()
-            )
+                raise ValueError("local=True requires a Scope.")
+            with self._lock:
+                scoped = tuple(
+                    (current, entry)
+                    for current, bucket in tuple(self._buckets.items())
+                    for entry in bucket.values()
+                )
         else:
-            scoped = self._scoped_entries(ctx, local=local)
+            scope = self._validate_scope(scope)
+            scoped = self._scoped_entries(scope, local=local)
 
         return tuple(
             types.MappingProxyType(
                 {
                     "id": entry.identity,
-                    "context": context,
+                    "scope": current,
                     "value": entry.value,
                     "metadata": entry.metadata,
                 }
             )
-            for context, entry in scoped
+            for current, entry in scoped
         )
 
     def __len__(self) -> int:
-        return sum(len(bucket) for bucket in self._buckets.values())
+        with self._lock:
+            return sum(len(bucket) for bucket in self._buckets.values())

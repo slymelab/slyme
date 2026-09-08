@@ -10,8 +10,8 @@ A PyTree is a nested structure whose containers define topology and whose unregi
 
 Slyme does not expose a generic Node graph clone. PyTree reconstruction cannot decide which shared references should remain aliases, which values should be copied, or how cyclic application graphs should behave. Call the relevant Node factory or Builder again and copy application values explicitly when another graph is required.
 
-Context is not registered as a PyTree container. A Context may have multiple parents and therefore forms an identity-bearing C3 hierarchy rather than a self-contained value tree. `Context.flatten()` provides its visible Ref-to-value mapping when explicit materialization is needed.
+Context is not registered as a PyTree container. It is an identity-bearing lifetime owner with at most one parent, not a self-contained value tree. Its bound Scope carries the independent C3 visibility graph. `Context.flatten()` provides the visible Ref-to-value mapping when explicit materialization is needed.
 
 ## Auto evaluation
 
-Auto evaluation uses `CTX_EVAL_ENGINE` to find registered leaves while treating Context itself as opaque. Ref values read the current Context. Each child Node evaluates in a separate fork of that Context, and the dynamic Auto tree is reconstructed from the returned values. Ordinary leaves pass through unchanged.
+Auto evaluation uses `CTX_EVAL_ENGINE` to find registered leaves while treating Context itself as opaque. Ref values read the current Context. Each child Node evaluates in an owned child Context with a distinct child Scope; Slyme disposes that Context before reconstructing the dynamic Auto tree from returned values. Ordinary leaves pass through unchanged.

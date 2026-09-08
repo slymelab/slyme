@@ -1,6 +1,6 @@
 # Context
 
-`Context` is Slyme's hierarchical mutable data store. Schema is the sole source of leaf and container structure. An application root keeps a flat binding for each active Schema leaf, while each binding stores the values assigned to individual Context identities. Reads use the Context's C3-linearized hierarchy by default, while writes change only the current Context layer.
+`Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by Scope. Reads follow the bound Scope's C3 order by default, while writes change only that exact Scope.
 
 ## Ref and Schema {#ref}
 
@@ -126,7 +126,7 @@ assert ctx.extract({"name": R.resolve("user.name"), "age": R.resolve("user.age")
 }
 ```
 
-The keyword-only `schema` argument installs that exact Schema object on a new Context root. Every Context path must be declared there, including reads with a default and `exists()` checks. The optional data mapping is then equivalent to calling `update()`. A child inherits the exact same `ctx.schema` object from its parents and cannot provide another one.
+The keyword-only `schema` argument installs that exact Schema object on a new Context root. Every Context path must be declared there, including reads with a default and `exists()` checks. The optional data mapping is then equivalent to calling `update()`. A child inherits the exact same `ctx.schema` and application data store from its single parent and cannot provide another Schema.
 
 Applications can therefore build declarations before creating a Context, or start with a Context and declare paths through it. Both forms mutate the same Schema object, and existing forks see additions immediately:
 
@@ -138,6 +138,8 @@ ctx = Context(schema=schema)
 plugin_schema = Schema({"plugin": {"enabled": Schema.leaf()}})
 remove_plugin = ctx.declare(plugin_schema)
 child = ctx.fork()
+assert child.parent is ctx
+assert child.scope is ctx.scope
 
 child.set(plugin_schema.resolve("plugin.enabled"), True)
 assert child.schema.resolve("plugin.enabled").path == "plugin.enabled"
@@ -155,9 +157,9 @@ R = ctx.schema
 ```
 
 The fragment remains useful for declaring and exporting the paths owned by the
-plugin; `ctx.schema` is the application-wide union. A plugin owns the disposer
-returned by `declare()` alongside the disposers for its values and Compose
-entries.
+plugin; `ctx.schema` is the application-wide union. `Schema.declare()` returns a
+caller-managed disposer. `ctx.declare()` additionally makes that declaration an
+effect owned by `ctx`, while preserving the same exact early disposer.
 
 `set`, `update`, and the update side of `mutate` accept only paths declared as leaves. `keys` and `to_dict(ref)` accept only paths declared as containers. `get`, `exists`, `delete`, and the drop side of `mutate` accept either role. Batch mutations validate every path before applying changes, so a conflict produces no partial writes.
 
@@ -170,40 +172,46 @@ ctx.set(R.resolve("settings"), {"theme": "dark"})  # one mapping-valued leaf
 ctx.set(R.resolve("user.name"), "Ada")              # a structural branch and leaf
 ```
 
-Every read operation accepts `local=True` when only the current Context should be inspected. The default is the effective view across the C3 hierarchy.
+Every read operation accepts `local=True` to inspect only `ctx.scope`. The default is the effective view across `ctx.scope.mro`. Context CRUD never accepts a separate Scope argument; use a Context bound to the target Scope when data must be read or written elsewhere.
 
-## Fork and lookup
+## Context lifetime and Scope lookup {#scope}
 
-`fork()` is shorthand for constructing an empty Context whose first parent is the receiver. Additional mixins become later direct parents:
+`fork()` creates an owned child Context whose `parent` is the receiver. It shares the receiver's Scope by default, so Contexts in the same application root and bound to that Scope observe the same local values. Pass an explicit child Scope when a distinct data layer is required:
 
 ```python
+from slyme.context import Context, Schema
+
 R = Schema({"settings": {"timeout": Schema.leaf(), "mode": Schema.leaf()}})
 root = Context(schema=R)
 root.set(R.resolve("settings.timeout"), 30)
 
-feature = root.fork()
-feature.set(R.resolve("settings.mode"), "fast")
+plugin = root.fork()
+assert plugin.scope is root.scope
 
-mixin = root.fork()
-agent = feature.fork(mixin)
+feature_scope = root.scope.fork(name="feature")
+mixin_scope = root.scope.fork(name="mixin")
+agent_scope = feature_scope.fork(mixin_scope, name="agent")
+
+feature = root.fork(scope=feature_scope)
+mixin = root.fork(scope=mixin_scope)
+agent = feature.fork(scope=agent_scope)
+feature.set(R.resolve("settings.mode"), "fast")
+mixin.set(R.resolve("settings.timeout"), 45)
+
+assert agent.parent is feature
 assert agent.root is root
-assert agent.mro == (agent, feature, mixin, root)
+assert agent.scope.mro == (agent_scope, feature_scope, mixin_scope, root.scope)
+assert agent.scope.find("mixin") is mixin_scope
 assert agent.to_dict() == {
-    "settings": {"mode": "fast", "timeout": 30},
+    "settings": {"mode": "fast", "timeout": 45},
 }
 ```
 
-`mro` is the immutable linearization computed when a Context is constructed,
-and `root` is its final entry. That root stores the Schema reference and the
-flat active-entry-to-binding index; every descendant's `schema` property
-returns the same Schema through `root`. Separate Context roots may deliberately
-reuse one Schema without sharing Context data.
+Context parentage and Scope ancestry are independent. The parent determines lifetime ownership and the application root that holds Schema and data; the Scope determines lookup. A Scope may have multiple parents, and C3 only requires a consistent linearization. Those parents may come from otherwise unrelated Scope roots. Separate Context roots never share Context data, even when they use the same Scope object.
 
-All direct parents in a C3 hierarchy must descend from the same application root and therefore share one `schema` object. Parent changes remain visible until a child writes the same leaf, and sibling writes are isolated. Schema traversal determines which leaves form a container; each leaf independently selects its first visible value in C3 order.
+Deleting a local value normally reveals the next value in the Scope MRO.
 
-Deleting a local value normally reveals the inherited value that it previously overrode.
-
-`isolate()` creates a child and blocks selected leaf values from crossing into it. The private barrier participates in C3 lookup: a later parent cannot bypass it. A value written in the isolated child appears normally, and deleting that value exposes the barrier again rather than the parent's value:
+`isolate()` creates an owned child with a child Scope and blocks selected leaf values from crossing into it. The private barrier participates in Scope C3 lookup, so a later Scope parent cannot bypass it. A value written in the isolated child appears normally, and deleting that value exposes the barrier again rather than an ancestor's value:
 
 ```python
 service_schema = Schema({"service": Schema.leaf(replaceable=False)})
@@ -220,7 +228,7 @@ assert not isolated.exists(service)
 
 ## Reversible local bindings
 
-`add()` installs a value only when the path is absent locally and returns an idempotent disposer for that exact installation:
+`add()` installs a value only when the path is absent at the bound Scope. The calling Context owns the installation and removes it during disposal; the returned idempotent disposer can remove it early:
 
 ```python
 request_schema = Schema({"request": {"abort": Schema.leaf()}})
@@ -233,35 +241,50 @@ finally:
     remove_schema()
 ```
 
-An inherited value does not prevent a child from adding its own local value. `add()` itself does not decide whether later replacement is allowed: `Schema.leaf(replaceable=False)` rejects `set()` while a normal value exists in that same Context layer, whereas the default permits replacement. Deletion and child shadowing remain allowed. If another value has already replaced or removed the exact entry created by `add()`, its disposer does nothing.
+An inherited Scope value does not prevent adding a value at a more specific Scope. `add()` itself does not decide whether later replacement is allowed: `Schema.leaf(replaceable=False)` rejects `set()` while a normal value exists at the same Scope, whereas the default permits replacement. Deletion and child-Scope shadowing remain allowed. If another operation has already replaced or removed the exact entry created by `add()`, its disposer does nothing.
+
+## Effects and disposal
+
+`ctx.effect(setup)` runs synchronous setup immediately and owns the synchronous cleanup callable it returns; the method returns an exact synchronous early disposer. `ctx.async_effect(setup)` also runs setup synchronously, but owns an asynchronous cleanup callable and returns an early disposer that must be awaited.
+
+A parent strongly owns its child Contexts. Each Context processes its directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` handles a wholly synchronous subtree. If any descendant owns asynchronous cleanup, it rejects the entire operation before teardown begins; use `await async_dispose()` to process both synchronous and asynchronous cleanup. Disposal continues after a cleanup failure, finishes releasing the subtree, and then raises the first failure. Both forms are idempotent, and a disposed Context rejects further Context data access, mutations, forks, effects, and registrations.
+
+Cleanup must not await disposal of its owning Context, an ancestor already being disposed, or its own async-effect disposer. These reentrant waits would depend on themselves, so Slyme rejects them with `RuntimeError`.
+
+Disposing a Context stops it from keeping the Context-data layers in `ctx.scope.mro` active; it does not detach or destroy `ctx.scope`. A Context leaf value at a Scope remains available while another active Context in the same application root has that Scope in its MRO, and is cleared after the final viewer is disposed. Compose entries instead remain until their exact disposers run. Callers should therefore dispose child Contexts deterministically rather than rely on garbage collection.
 
 ## Compose
 
-`Compose` stores ordered values by Context identity and resolves the entries visible through that Context's C3 order. Store a Compose object in Context when other Nodes need to discover it through a Ref:
+`Compose` stores ordered values by Scope and resolves entries through Scope C3 order. Store a Compose object in Context when Nodes need to discover it through a Ref, then use `Context.contribute()` to attach contribution cleanup to a lifetime:
 
 ```python
 from slyme.context import Compose, Context, Schema
 
-R = Schema({"tools": Schema.leaf()})
+R = Schema({"tools": Schema.leaf(replaceable=False)})
 root = Context(schema=R)
 tools = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("tools"), tools)
 
-remove_base = tools.add(root, "read")
-agent = root.fork()
-remove_agent = tools.add(agent, "shell", metadata={"plugin": "shell"})
+root.contribute(R.resolve("tools"), "read")
+agent = root.fork(scope=root.scope.fork(name="agent"))
+remove_agent = agent.contribute(
+    R.resolve("tools"), "shell", metadata={"plugin": "shell"}
+)
 
 assert agent.get(R.resolve("tools")) is tools
-assert tools.resolve(agent) == ("shell", "read")
+assert tools.resolve(agent.scope) == ("shell", "read")
 remove_agent()
-remove_base()
+agent.dispose()
+root.dispose()
 ```
 
-`Compose.one()` selects the first visible value, `Compose.collect()` returns all visible values as a tuple, and `Compose.merge()` combines mappings while preserving the first visible value for each key. Passing a synchronous resolver to `Compose(...)` defines another result rule. Within one Context, `position="prepend"` places an entry before existing entries; the default is `"append"`.
+`ctx.contribute(ref, value, scope=target)` looks up the Compose through `ctx.scope`; `scope` only chooses where the contribution is stored and defaults to `ctx.scope`. The calling Context owns the contribution even when its target Scope is elsewhere. `compose.add(scope, value)` is the lower-level primitive for callers that will manage its disposer themselves.
 
-`values(ctx, local=True)` inspects one Context's entries without resolving them, while `resolve(ctx, local=True)` applies the resolver to that same local set. `entries(ctx)` returns immutable records with each entry's id, Context, value, and metadata; omitting `ctx` inspects all currently live Contexts. Compose uses weak Context keys, so a key alone does not keep its Context alive. A stored value or metadata may still refer back to that Context, so the returned disposer remains the deterministic teardown mechanism.
+`Compose.one()` selects the first visible value, `Compose.collect()` returns all visible values as a tuple, and `Compose.merge()` combines mappings while preserving the first visible value for each key. Passing a synchronous resolver to `Compose(...)` defines another result rule. Within one Scope, `position="prepend"` places an entry before existing entries; the default is `"append"`.
 
-A child can replace an inherited Compose object at its Ref with a new Compose object to create an independent set. Compose remains an ordinary Context leaf.
+`values(scope, local=True)` inspects one Scope's entries without resolving them, while `resolve(scope, local=True)` applies the resolver to that same local set. `entries(scope)` returns immutable records with each entry's id, Scope, value, and metadata; omitting the Scope inspects every current entry. Compose retains those entries until their exact disposer runs, so lifecycle-owned contributions are the preferred cleanup mechanism.
+
+A Context bound to a child Scope can replace an inherited Compose object at its Ref with a new Compose object to create an independent set. Compose remains an ordinary Context leaf.
 
 ## Structured operations and projections
 
@@ -286,4 +309,4 @@ assert mapping_leaf.flatten() == {
 assert nested_path.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 
-Both methods resolve the effective C3 view by default and accept `local=True`. A `ContextView` accepts relative string paths for subtree access, while resolved Ref objects remain absolute; its `flatten()` result therefore contains absolute Schema refs. Neither method copies leaf values. `Context(ctx.flatten(), schema=ctx.schema)` explicitly materializes a new application root with the same declarations and visible leaf objects; it has a new Context identity, so Compose entries registered for the source Context are not transferred.
+Both methods resolve the bound Scope's effective C3 view by default and accept `local=True`. A `ContextView` accepts relative string paths for subtree access, while resolved Ref objects remain absolute; its `flatten()` result therefore contains absolute Schema refs. Neither method copies leaf values. `Context(ctx.flatten(), schema=ctx.schema)` explicitly materializes a new application root with the same declarations and visible leaf objects. It receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.

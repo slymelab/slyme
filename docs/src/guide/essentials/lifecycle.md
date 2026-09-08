@@ -33,7 +33,9 @@ At the start of each Node or Wrapper call, Slyme:
 
 There is no implicit frozen snapshot. Mutating a static `list`, `dict`, or other leaf from inside a Node or Wrapper mutates the live parameter and is visible to later calls. An Auto structure containing `Ref` or child Node leaves is reconstructed with the evaluated values, because evaluation produces a new result tree.
 
-Call the relevant Node factory or Builder again when another independently configurable graph is required. Use `context.fork()` for an empty local Context layer with live C3 lookup into its parents. Use `Context(context.flatten(), schema=context.schema)` when current visible bindings must be materialized into a new application root. Neither operation copies application values.
+Call the relevant Node factory or Builder again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. Use `Context(context.flatten(), schema=context.schema)` when current visible bindings must be materialized into a new application root. None of these operations copies application values.
+
+A Context owns its child Contexts and the cleanup registered through `effect()`, `async_effect()`, `add()`, `declare()`, and `contribute()`. Each Context processes its direct ownership in last-in-first-out order, recursively. `dispose()` handles a wholly synchronous subtree; `await async_dispose()` handles both synchronous and asynchronous cleanup. The returned registration disposers permit early cleanup without changing this ownership model.
 
 ## Auto values
 
@@ -47,7 +49,7 @@ process(data=[R.resolve("a"), R.resolve("b")])(ctx)  # Auto produces the evaluat
 process(data=R.resolve("items"))(ctx)  # data is the list stored in Context
 ```
 
-Auto Ref values are read from `ctx`. Every Auto child Node instead executes with its own `ctx.fork()`: child-local writes are discarded after its return and cannot race with writes from sibling Auto children. The fork still shares mutable leaf objects and does not undo files, network requests, or other external side effects.
+Auto Ref values are read from `ctx`. Every Auto child Node instead executes with an owned child Context and a distinct child Scope. Synchronous evaluation disposes that child before continuing and rejects `async_effect()` before setup; asynchronous evaluation awaits child cleanup. Cancellation of a synchronous child running in a worker waits for the worker before cleanup. The child still shares mutable leaf objects and cannot undo files, network requests, or other external side effects that did not register cleanup.
 
 Explicit orchestration has different semantics. Calling a Node directly or using `sequential_exec(ctx, children)` passes the selected Context itself, so those steps intentionally observe one another's local writes.
 

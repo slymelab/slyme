@@ -22,6 +22,7 @@ from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.pytree import PyTreeDef
 from slyme.utils.registry import TypeRegistry
 
+from ._async import wait_uninterruptibly
 from .core import AsyncNode, Node
 
 __all__ = [
@@ -183,22 +184,54 @@ def node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
             raise RuntimeError(
                 f"Cannot evaluate AsyncNode in synchronous context: {node}"
             )
-        results.append(node(ctx.fork()))
+        child_ctx = ctx._fork_for_auto(synchronous=True)
+        try:
+            result = node(child_ctx)
+        except BaseException as error:
+            try:
+                child_ctx.dispose()
+            except BaseException as cleanup_error:
+                raise error from cleanup_error
+            raise
+        else:
+            child_ctx.dispose()
+            results.append(result)
     return results
 
 
 async def async_node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
+    async def _dispose_child(child_ctx: Context) -> None:
+        cleanup = asyncio.create_task(child_ctx.async_dispose())
+        await wait_uninterruptibly(cleanup)
 
-    async def _evaluate_single(node: Any, child_ctx: Context) -> Any:
-        if isinstance(node, AsyncNode):
-            return await node(child_ctx)
+    async def _evaluate_single(node: Any) -> Any:
+        child_ctx = ctx._fork_for_auto(synchronous=False)
+        try:
+            if isinstance(node, AsyncNode):
+                result = await node(child_ctx)
+            else:
+                worker = asyncio.create_task(asyncio.to_thread(node, child_ctx))
+                result = await wait_uninterruptibly(worker)
+        except BaseException as error:
+            try:
+                await _dispose_child(child_ctx)
+            except BaseException as cleanup_error:
+                raise error from cleanup_error
+            raise
         else:
-            return await asyncio.to_thread(node, child_ctx)
+            await _dispose_child(child_ctx)
+            return result
 
-    children = tuple((node, ctx.fork()) for node in nodes)
-    return await asyncio.gather(
-        *(_evaluate_single(node, child_ctx) for node, child_ctx in children)
-    )
+    tasks = tuple(asyncio.create_task(_evaluate_single(node)) for node in nodes)
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        pending = asyncio.gather(*tasks, return_exceptions=True)
+        await wait_uninterruptibly(pending)
+        raise
 
 
 SHARED_NODE_EVALUATOR = EvaluatorDef(
