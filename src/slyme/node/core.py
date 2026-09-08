@@ -86,45 +86,6 @@ _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
-def _collect_params(element: "NodeElement") -> dict[str, Any]:
-    """Return a mutable call-time snapshot of an element's parameters."""
-    return dict(element.params)
-
-
-def _prepare_eval(
-    specs: Mapping[str, Spec], kwargs: Mapping[str, Any]
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """
-    Split kwargs into static values and dynamic evaluators based on specs.
-    """
-    raw_kwargs = {}
-    eval_kwargs = {}
-    for key, value in kwargs.items():
-        if specs[key].should_eval(value):
-            eval_kwargs[key] = value
-        else:
-            raw_kwargs[key] = value
-    return raw_kwargs, eval_kwargs
-
-
-def _validate_inputs(specs: Mapping[str, Spec], params: Mapping[str, Any]) -> None:
-    """Reject parameters that are not declared by the decorated function."""
-    allowed_names = set(specs.keys())
-    unknown_args = set(params.keys()) - allowed_names
-    if unknown_args:
-        raise TypeError(
-            f"Got unexpected keyword argument(s) {list(unknown_args)}. "
-            f"Allowed arguments: {list(allowed_names)}."
-        )
-
-
-def _validate_ready(params: Mapping[str, Any]) -> None:
-    """Reject unresolved required parameters at the call boundary."""
-    undefined_args = [name for name, value in params.items() if value is UNDEFINED]
-    if undefined_args:
-        raise ValueError(f"Missing required parameter(s): {undefined_args}.")
-
-
 # Node Family
 class NodeElement:
     """Base class for node-related graph elements."""
@@ -140,10 +101,50 @@ class NodeElement:
     ) -> None:
         self._func = func
         self._specs = specs
-        _validate_inputs(specs, params)
+        self._validate_inputs(specs, params)
         self._params: dict[str, Any] = {}
         for name in specs:
             self.set(name, params[name] if name in params else UNSET)
+
+    @staticmethod
+    def _validate_inputs(
+        specs: Mapping[str, Spec],
+        params: Mapping[str, Any],
+    ) -> None:
+        """Reject parameters that are not declared by the decorated function."""
+        allowed_names = set(specs.keys())
+        unknown_args = set(params.keys()) - allowed_names
+        if unknown_args:
+            raise TypeError(
+                f"Got unexpected keyword argument(s) {list(unknown_args)}. "
+                f"Allowed arguments: {list(allowed_names)}."
+            )
+
+    @staticmethod
+    def _prepare_eval(
+        specs: Mapping[str, Spec],
+        params: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Split parameters into static values and dynamic evaluators."""
+        raw_params = {}
+        eval_params = {}
+        for name, value in params.items():
+            if specs[name].should_eval(value):
+                eval_params[name] = value
+            else:
+                raw_params[name] = value
+        return raw_params, eval_params
+
+    @staticmethod
+    def _validate_ready(params: Mapping[str, Any]) -> None:
+        """Reject unresolved required parameters at the call boundary."""
+        undefined = [name for name, value in params.items() if value is UNDEFINED]
+        if undefined:
+            raise ValueError(f"Missing required parameter(s): {undefined}.")
+
+    def _collect_params(self) -> dict[str, Any]:
+        """Return a mutable call-time snapshot of this element's parameters."""
+        return dict(self.params)
 
     @property
     def func(self) -> Callable:
@@ -221,10 +222,10 @@ class Node(NodeElement, Generic[_R]):
         if any(not isinstance(item, Wrapper) for item in wrappers):
             raise TypeError("Synchronous Nodes only accept synchronous Wrappers.")
         try:
-            kwargs = _collect_params(self)
+            kwargs = self._collect_params()
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+                self._validate_ready(kwargs)
+            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
             if not eval_kwargs:
                 chain: Callable[[Context], _R] = partial(self._func, **raw_kwargs)
             else:
@@ -280,10 +281,10 @@ class AsyncNode(NodeElement, Generic[_R]):
         if any(not isinstance(item, AsyncWrapper) for item in wrappers):
             raise TypeError("Async Nodes only accept AsyncWrappers.")
         try:
-            kwargs = _collect_params(self)
+            kwargs = self._collect_params()
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+                self._validate_ready(kwargs)
+            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
             if not eval_kwargs:
                 chain: Callable[[Context], Awaitable[_R]] = partial(
                     self._func, **raw_kwargs
@@ -333,10 +334,10 @@ class Wrapper(NodeElement, Generic[_R]):
         call_next: Callable[[Context], Any],
     ) -> _R:
         try:
-            kwargs = _collect_params(self)
+            kwargs = self._collect_params()
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+                self._validate_ready(kwargs)
+            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
             if eval_kwargs:
                 raw_kwargs.update(
                     execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs))
@@ -372,10 +373,10 @@ class AsyncWrapper(NodeElement, Generic[_R]):
         call_next: Callable[[Context], Awaitable[Any]],
     ) -> _R:
         try:
-            kwargs = _collect_params(self)
+            kwargs = self._collect_params()
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                _validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = _prepare_eval(self._specs, kwargs)
+                self._validate_ready(kwargs)
+            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
             if eval_kwargs:
                 raw_kwargs.update(
                     await async_execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs))
@@ -393,7 +394,68 @@ class AsyncWrapper(NodeElement, Generic[_R]):
 class _FactoryBase(Generic[_P, _E]):
     """Shared implementation for mode-aware graph element factories."""
 
+    _decorator_name: str
+    _runtime_count: int
     _element_types: Mapping[ExecutionMode, type[NodeElement]]
+
+    @staticmethod
+    def _is_async_callable(func: Callable[..., Any]) -> bool:
+        """Return whether *func* is declared with ``async def``.
+
+        Return annotations are intentionally ignored. A synchronous function that
+        returns an Awaitable must opt in with ``mode="async"``.
+        """
+        unwrapped = inspect.unwrap(func)
+        if inspect.iscoroutinefunction(unwrapped):
+            return True
+        return callable(unwrapped) and inspect.iscoroutinefunction(unwrapped.__call__)
+
+    @classmethod
+    def _resolve_execution_mode(
+        cls,
+        func: Callable[..., Any],
+        mode: ExecutionMode | None,
+    ) -> ExecutionMode:
+        if mode not in (None, "sync", "async"):
+            raise ValueError(
+                f"@{cls._decorator_name} mode must be 'sync', 'async', or None, "
+                f"got {mode!r}."
+            )
+        detected_async = cls._is_async_callable(func)
+        if mode is None:
+            return "async" if detected_async else "sync"
+        if mode == "sync" and detected_async:
+            raise TypeError(
+                f"@{cls._decorator_name}(mode='sync') cannot decorate an async "
+                "function."
+            )
+        return mode
+
+    @classmethod
+    def _decorate(
+        cls,
+        func: Callable[..., Any],
+        /,
+        *,
+        mode: ExecutionMode | None,
+        resolve_type_hints: bool,
+    ) -> Self:
+        resolved_mode = cls._resolve_execution_mode(func, mode)
+        analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
+        if len(analysis.runtime_params) != cls._runtime_count:
+            raise TypeError(
+                f"@{cls._decorator_name} '{func.__name__}' requires exactly "
+                f"{cls._runtime_count} runtime "
+                f"argument{'s' if cls._runtime_count != 1 else ''}, "
+                f"but found {len(analysis.runtime_params)}. "
+                "All build arguments must be keyword-only."
+            )
+        return cls(
+            func,
+            analysis.specs,
+            analysis.public_signature,
+            mode=resolved_mode,
+        )
 
     def __init__(
         self,
@@ -430,6 +492,8 @@ class _FactoryBase(Generic[_P, _E]):
 class NodeFactory(_FactoryBase[_P, _E]):
     """Build a Node or AsyncNode according to ``mode``."""
 
+    _decorator_name = "node"
+    _runtime_count = 1
     _element_types: Mapping[ExecutionMode, type[NodeElement]] = {
         "sync": Node,
         "async": AsyncNode,
@@ -439,42 +503,12 @@ class NodeFactory(_FactoryBase[_P, _E]):
 class WrapperFactory(_FactoryBase[_P, _E]):
     """Build a Wrapper or AsyncWrapper according to ``mode``."""
 
+    _decorator_name = "wrapper"
+    _runtime_count = 3
     _element_types: Mapping[ExecutionMode, type[NodeElement]] = {
         "sync": Wrapper,
         "async": AsyncWrapper,
     }
-
-
-def _decorate(
-    func: Callable[..., Any],
-    /,
-    *,
-    mode: ExecutionMode | None,
-    resolve_type_hints: bool,
-    kind: Literal["node", "wrapper"],
-) -> NodeFactory[Any, Any] | WrapperFactory[Any, Any]:
-    resolved_mode = _resolve_execution_mode(func, mode, kind)
-    factory_type: Any
-    if kind == "node":
-        factory_type = NodeFactory
-        runtime_count = 1
-    else:
-        factory_type = WrapperFactory
-        runtime_count = 3
-    analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
-    if len(analysis.runtime_params) != runtime_count:
-        raise TypeError(
-            f"@{kind} '{func.__name__}' requires exactly {runtime_count} runtime "
-            f"argument{'s' if runtime_count != 1 else ''}, "
-            f"but found {len(analysis.runtime_params)}. "
-            "All build arguments must be keyword-only."
-        )
-    return factory_type(
-        func,
-        analysis.specs,
-        analysis.public_signature,
-        mode=resolved_mode,
-    )
 
 
 class _AutoNodeDecorator(Protocol):
@@ -495,37 +529,6 @@ class _AutoWrapperDecorator(Protocol):
     def __call__(
         self, func: AsyncWrapperFunc[_P, _R], /
     ) -> WrapperFactory[_P, AsyncWrapper[_R]]: ...
-
-
-def _is_async_callable(func: Callable[..., Any]) -> bool:
-    """Return whether *func* is declared with ``async def``.
-
-    Return annotations are intentionally ignored. A synchronous function that
-    returns an Awaitable must opt in with ``mode="async"``.
-    """
-    unwrapped = inspect.unwrap(func)
-    if inspect.iscoroutinefunction(unwrapped):
-        return True
-    return callable(unwrapped) and inspect.iscoroutinefunction(unwrapped.__call__)
-
-
-def _resolve_execution_mode(
-    func: Callable[..., Any],
-    mode: ExecutionMode | None,
-    decorator_name: str,
-) -> ExecutionMode:
-    if mode not in (None, "sync", "async"):
-        raise ValueError(
-            f"@{decorator_name} mode must be 'sync', 'async', or None, got {mode!r}."
-        )
-    detected_async = _is_async_callable(func)
-    if mode is None:
-        return "async" if detected_async else "sync"
-    if mode == "sync" and detected_async:
-        raise TypeError(
-            f"@{decorator_name}(mode='sync') cannot decorate an async function."
-        )
-    return mode
 
 
 @overload
@@ -583,13 +586,14 @@ def node(
     """
     if func is _MISSING:
         return partial(
-            _decorate,
+            NodeFactory._decorate,
             mode=mode,
             resolve_type_hints=resolve_type_hints,
-            kind="node",
         )
-    return _decorate(
-        func, mode=mode, resolve_type_hints=resolve_type_hints, kind="node"
+    return NodeFactory._decorate(
+        func,
+        mode=mode,
+        resolve_type_hints=resolve_type_hints,
     )
 
 
@@ -643,13 +647,14 @@ def wrapper(
     """Create a synchronous or asynchronous Wrapper factory."""
     if func is _MISSING:
         return partial(
-            _decorate,
+            WrapperFactory._decorate,
             mode=mode,
             resolve_type_hints=resolve_type_hints,
-            kind="wrapper",
         )
-    return _decorate(
-        func, mode=mode, resolve_type_hints=resolve_type_hints, kind="wrapper"
+    return WrapperFactory._decorate(
+        func,
+        mode=mode,
+        resolve_type_hints=resolve_type_hints,
     )
 
 

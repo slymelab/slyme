@@ -70,17 +70,6 @@ class Config:
 Config.set_pretty_repr().set_truncated_repr(max_len=100)
 
 
-def _split_ref_path(path: str) -> tuple[str, ...]:
-    if not isinstance(path, str):
-        raise TypeError(f"Ref path must be str, got {type(path).__name__}.")
-    if not path:
-        raise ValueError("Ref path cannot be empty.")
-    parts = tuple(path.split("."))
-    if any(not part for part in parts):
-        raise ValueError(f"Invalid Ref path: {path!r}.")
-    return parts
-
-
 @dataclass(frozen=True, repr=False)
 class Ref(Generic[_T]):
     """Immutable Context dependency handle for one declared dotted path."""
@@ -88,8 +77,33 @@ class Ref(Generic[_T]):
     path: str
     parts: tuple[str, ...] = field(init=False)
 
+    @staticmethod
+    def _split_path(path: str) -> tuple[str, ...]:
+        if not isinstance(path, str):
+            raise TypeError(f"Ref path must be str, got {type(path).__name__}.")
+        if not path:
+            raise ValueError("Ref path cannot be empty.")
+        parts = tuple(path.split("."))
+        if any(not part for part in parts):
+            raise ValueError(f"Invalid Ref path: {path!r}.")
+        return parts
+
+    @staticmethod
+    def _validate_name(name: Any, path: str) -> str:
+        if not isinstance(name, str):
+            raise TypeError(
+                f"Invalid Schema key at {path or '<root>'}: expected str, "
+                f"got {type(name).__name__}."
+            )
+        if not name or "." in name:
+            raise ValueError(
+                f"Invalid Schema key {name!r} at {path or '<root>'}; "
+                "keys must be non-empty strings without dots."
+            )
+        return name
+
     def __post_init__(self) -> None:
-        object.__setattr__(self, "parts", _split_ref_path(self.path))
+        object.__setattr__(self, "parts", self._split_path(self.path))
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(path={self.path!r})"
@@ -145,245 +159,6 @@ class _RefEntry(Generic[_T]):
 _SchemaNode = _RefEntry[Any] | _SchemaContainer
 
 
-def _validate_ref_name(name: Any, path: str) -> str:
-    if not isinstance(name, str):
-        raise TypeError(
-            f"Invalid Schema key at {path or '<root>'}: expected str, "
-            f"got {type(name).__name__}."
-        )
-    if not name or "." in name:
-        raise ValueError(
-            f"Invalid Schema key {name!r} at {path or '<root>'}; "
-            "keys must be non-empty strings without dots."
-        )
-    return name
-
-
-def _build_schema_entry(
-    value: Any,
-    path: str,
-    active_mappings: set[int],
-    declaration_id: object,
-) -> _SchemaNode:
-    if isinstance(value, _RefLeafConfig):
-        return _RefEntry(Ref(path), value, {declaration_id})
-    if isinstance(value, _RefContainerConfig):
-        raise TypeError(
-            f"Invalid Schema declaration at {path!r}: Schema.container() is only "
-            "valid under the empty key of a container mapping."
-        )
-    if not isinstance(value, Mapping):
-        raise TypeError(
-            f"Invalid Schema declaration at {path!r}: expected a mapping or "
-            f"Schema.leaf(), got {type(value).__name__}."
-        )
-
-    mapping_id = id(value)
-    if mapping_id in active_mappings:
-        raise ValueError(f"Cyclic Schema declarations detected at {path!r}.")
-    active_mappings.add(mapping_id)
-    try:
-        container_config = _RefContainerConfig()
-        if _REF_ENTRY_KEY in value:
-            current = value[_REF_ENTRY_KEY]
-            if not isinstance(current, _RefContainerConfig):
-                raise TypeError(
-                    f"Invalid current-entry declaration at {path!r}: "
-                    "the empty key must contain Schema.container()."
-                )
-            container_config = current
-
-        result: _SchemaContainer = {
-            _REF_ENTRY_KEY: _RefEntry(
-                Ref(path),
-                container_config,
-                {declaration_id},
-            )
-        }
-
-        for raw_name, child in value.items():
-            if raw_name == _REF_ENTRY_KEY:
-                continue
-            name = _validate_ref_name(raw_name, path)
-            child_path = f"{path}.{name}"
-            result[name] = _build_schema_entry(
-                child,
-                child_path,
-                active_mappings,
-                declaration_id,
-            )
-        return result
-    finally:
-        active_mappings.remove(mapping_id)
-
-
-def _build_schema(
-    declarations: Mapping[str, Any],
-    declaration_id: object,
-) -> _SchemaContainer:
-    if _REF_ENTRY_KEY in declarations:
-        raise ValueError(
-            "The root Schema declaration cannot define an empty-key Schema.container()."
-        )
-
-    active_mappings = {id(declarations)}
-    result: _SchemaContainer = {}
-    for raw_name, value in declarations.items():
-        name = _validate_ref_name(raw_name, "")
-        result[name] = _build_schema_entry(
-            value,
-            name,
-            active_mappings,
-            declaration_id,
-        )
-    return result
-
-
-def _container_entry(container: _SchemaContainer) -> _RefEntry[Any]:
-    return cast(_RefEntry[Any], container[_REF_ENTRY_KEY])
-
-
-def _iter_schema_entries(
-    container: _SchemaContainer,
-    prefix: tuple[str, ...] = (),
-) -> Iterable[tuple[tuple[str, ...], _RefEntry[Any]]]:
-    for name, node in container.items():
-        if name == _REF_ENTRY_KEY:
-            continue
-        parts = (*prefix, name)
-        if isinstance(node, _RefEntry):
-            yield parts, node
-            continue
-        child = cast(_SchemaContainer, node)
-        yield parts, _container_entry(child)
-        yield from _iter_schema_entries(child, parts)
-
-
-def _copy_schema_declaration(
-    source: _SchemaContainer,
-    declaration_id: object,
-) -> _SchemaContainer:
-    result: _SchemaContainer = {}
-    for name, node in source.items():
-        if name == _REF_ENTRY_KEY:
-            entry = cast(_RefEntry[Any], node)
-            result[name] = _RefEntry(
-                Ref(entry.ref.path),
-                entry.config,
-                {declaration_id},
-            )
-        elif isinstance(node, _RefEntry):
-            result[name] = _RefEntry(
-                Ref(node.ref.path),
-                node.config,
-                {declaration_id},
-            )
-        else:
-            result[name] = _copy_schema_declaration(
-                cast(_SchemaContainer, node),
-                declaration_id,
-            )
-    return result
-
-
-def _validate_schema_merge(
-    current: _SchemaContainer,
-    incoming: _SchemaContainer,
-    prefix: tuple[str, ...] = (),
-) -> None:
-    for name, incoming_node in incoming.items():
-        if name == _REF_ENTRY_KEY:
-            current_entry = _container_entry(current)
-            incoming_entry = cast(_RefEntry[Any], incoming_node)
-            if current_entry.config != incoming_entry.config:
-                path = ".".join(prefix)
-                raise ValueError(f"Conflicting Ref configuration at path {path!r}.")
-            continue
-        if name not in current:
-            continue
-
-        path_parts = (*prefix, name)
-        path = ".".join(path_parts)
-        current_node = current[name]
-        current_is_leaf = isinstance(current_node, _RefEntry)
-        incoming_is_leaf = isinstance(incoming_node, _RefEntry)
-        if current_is_leaf != incoming_is_leaf:
-            current_kind = "leaf" if current_is_leaf else "container"
-            incoming_kind = "leaf" if incoming_is_leaf else "container"
-            raise ValueError(
-                f"Conflicting Schema structure at path {path!r}: existing entry "
-                f"is {current_kind}, incoming entry is {incoming_kind}."
-            )
-        if current_is_leaf:
-            current_entry = cast(_RefEntry[Any], current_node)
-            incoming_entry = cast(_RefEntry[Any], incoming_node)
-            if current_entry.config != incoming_entry.config:
-                raise ValueError(f"Conflicting Ref configuration at path {path!r}.")
-            continue
-        _validate_schema_merge(
-            cast(_SchemaContainer, current_node),
-            cast(_SchemaContainer, incoming_node),
-            path_parts,
-        )
-
-
-def _commit_schema_merge(
-    current: _SchemaContainer,
-    incoming: _SchemaContainer,
-) -> None:
-    for name, incoming_node in incoming.items():
-        if name not in current:
-            current[name] = incoming_node
-            continue
-        current_node = current[name]
-        if isinstance(incoming_node, _RefEntry):
-            cast(_RefEntry[Any], current_node).declarations.update(
-                incoming_node.declarations
-            )
-            continue
-        _commit_schema_merge(
-            cast(_SchemaContainer, current_node),
-            cast(_SchemaContainer, incoming_node),
-        )
-
-
-def _remove_schema_declaration(
-    root: _SchemaContainer,
-    paths: tuple[tuple[str, ...], ...],
-    declaration_id: object,
-) -> None:
-    for parts in sorted(paths, key=len, reverse=True):
-        parent = root
-        missing_parent = False
-        for part in parts[:-1]:
-            node = parent.get(part)
-            if not isinstance(node, dict):
-                missing_parent = True
-                break
-            parent = cast(_SchemaContainer, node)
-        if missing_parent:
-            continue
-
-        name = parts[-1]
-        node = parent.get(name)
-        if node is None:
-            continue
-        entry = (
-            node
-            if isinstance(node, _RefEntry)
-            else _container_entry(cast(_SchemaContainer, node))
-        )
-        entry.declarations.discard(declaration_id)
-        if entry.declarations:
-            continue
-        if isinstance(node, dict) and any(key for key in node if key):
-            raise RuntimeError(
-                "Schema declaration ownership invariant was violated at "
-                f"{'.'.join(parts)!r}."
-            )
-        del parent[name]
-
-
 class Schema:
     """Mutable tree of independently reversible Context path declarations."""
 
@@ -404,6 +179,231 @@ class Schema:
         """Describe one container explicitly at a mapping's empty key."""
         return _RefContainerConfig()
 
+    @staticmethod
+    def _build_entry(
+        value: Any,
+        path: str,
+        active_mappings: set[int],
+        declaration_id: object,
+    ) -> _SchemaNode:
+        if isinstance(value, _RefLeafConfig):
+            return _RefEntry(Ref(path), value, {declaration_id})
+        if isinstance(value, _RefContainerConfig):
+            raise TypeError(
+                f"Invalid Schema declaration at {path!r}: Schema.container() is "
+                "only valid under the empty key of a container mapping."
+            )
+        if not isinstance(value, Mapping):
+            raise TypeError(
+                f"Invalid Schema declaration at {path!r}: expected a mapping or "
+                f"Schema.leaf(), got {type(value).__name__}."
+            )
+
+        mapping_id = id(value)
+        if mapping_id in active_mappings:
+            raise ValueError(f"Cyclic Schema declarations detected at {path!r}.")
+        active_mappings.add(mapping_id)
+        try:
+            container_config = _RefContainerConfig()
+            if _REF_ENTRY_KEY in value:
+                current = value[_REF_ENTRY_KEY]
+                if not isinstance(current, _RefContainerConfig):
+                    raise TypeError(
+                        f"Invalid current-entry declaration at {path!r}: "
+                        "the empty key must contain Schema.container()."
+                    )
+                container_config = current
+
+            result: _SchemaContainer = {
+                _REF_ENTRY_KEY: _RefEntry(
+                    Ref(path),
+                    container_config,
+                    {declaration_id},
+                )
+            }
+            for raw_name, child in value.items():
+                if raw_name == _REF_ENTRY_KEY:
+                    continue
+                name = Ref._validate_name(raw_name, path)
+                child_path = f"{path}.{name}"
+                result[name] = Schema._build_entry(
+                    child,
+                    child_path,
+                    active_mappings,
+                    declaration_id,
+                )
+            return result
+        finally:
+            active_mappings.remove(mapping_id)
+
+    @staticmethod
+    def _build(
+        declarations: Mapping[str, Any],
+        declaration_id: object,
+    ) -> _SchemaContainer:
+        if _REF_ENTRY_KEY in declarations:
+            raise ValueError(
+                "The root Schema declaration cannot define an empty-key "
+                "Schema.container()."
+            )
+
+        active_mappings = {id(declarations)}
+        result: _SchemaContainer = {}
+        for raw_name, value in declarations.items():
+            name = Ref._validate_name(raw_name, "")
+            result[name] = Schema._build_entry(
+                value,
+                name,
+                active_mappings,
+                declaration_id,
+            )
+        return result
+
+    @staticmethod
+    def _container_entry(container: _SchemaContainer) -> _RefEntry[Any]:
+        return cast(_RefEntry[Any], container[_REF_ENTRY_KEY])
+
+    @staticmethod
+    def _iter_entries(
+        container: _SchemaContainer,
+        prefix: tuple[str, ...] = (),
+    ) -> Iterable[tuple[tuple[str, ...], _RefEntry[Any]]]:
+        for name, node in container.items():
+            if name == _REF_ENTRY_KEY:
+                continue
+            parts = (*prefix, name)
+            if isinstance(node, _RefEntry):
+                yield parts, node
+                continue
+            child = cast(_SchemaContainer, node)
+            yield parts, Schema._container_entry(child)
+            yield from Schema._iter_entries(child, parts)
+
+    @staticmethod
+    def _copy_declaration(
+        source: _SchemaContainer,
+        declaration_id: object,
+    ) -> _SchemaContainer:
+        result: _SchemaContainer = {}
+        for name, node in source.items():
+            if name == _REF_ENTRY_KEY:
+                entry = cast(_RefEntry[Any], node)
+                result[name] = _RefEntry(
+                    Ref(entry.ref.path),
+                    entry.config,
+                    {declaration_id},
+                )
+            elif isinstance(node, _RefEntry):
+                result[name] = _RefEntry(
+                    Ref(node.ref.path),
+                    node.config,
+                    {declaration_id},
+                )
+            else:
+                result[name] = Schema._copy_declaration(
+                    cast(_SchemaContainer, node),
+                    declaration_id,
+                )
+        return result
+
+    @staticmethod
+    def _validate_merge(
+        current: _SchemaContainer,
+        incoming: _SchemaContainer,
+        prefix: tuple[str, ...] = (),
+    ) -> None:
+        for name, incoming_node in incoming.items():
+            if name == _REF_ENTRY_KEY:
+                current_entry = Schema._container_entry(current)
+                incoming_entry = cast(_RefEntry[Any], incoming_node)
+                if current_entry.config != incoming_entry.config:
+                    path = ".".join(prefix)
+                    raise ValueError(f"Conflicting Ref configuration at path {path!r}.")
+                continue
+            if name not in current:
+                continue
+
+            path_parts = (*prefix, name)
+            path = ".".join(path_parts)
+            current_node = current[name]
+            current_is_leaf = isinstance(current_node, _RefEntry)
+            incoming_is_leaf = isinstance(incoming_node, _RefEntry)
+            if current_is_leaf != incoming_is_leaf:
+                current_kind = "leaf" if current_is_leaf else "container"
+                incoming_kind = "leaf" if incoming_is_leaf else "container"
+                raise ValueError(
+                    f"Conflicting Schema structure at path {path!r}: existing "
+                    f"entry is {current_kind}, incoming entry is {incoming_kind}."
+                )
+            if current_is_leaf:
+                current_entry = cast(_RefEntry[Any], current_node)
+                incoming_entry = cast(_RefEntry[Any], incoming_node)
+                if current_entry.config != incoming_entry.config:
+                    raise ValueError(f"Conflicting Ref configuration at path {path!r}.")
+                continue
+            Schema._validate_merge(
+                cast(_SchemaContainer, current_node),
+                cast(_SchemaContainer, incoming_node),
+                path_parts,
+            )
+
+    @staticmethod
+    def _commit_merge(
+        current: _SchemaContainer,
+        incoming: _SchemaContainer,
+    ) -> None:
+        for name, incoming_node in incoming.items():
+            if name not in current:
+                current[name] = incoming_node
+                continue
+            current_node = current[name]
+            if isinstance(incoming_node, _RefEntry):
+                cast(_RefEntry[Any], current_node).declarations.update(
+                    incoming_node.declarations
+                )
+                continue
+            Schema._commit_merge(
+                cast(_SchemaContainer, current_node),
+                cast(_SchemaContainer, incoming_node),
+            )
+
+    @staticmethod
+    def _remove_declaration(
+        root: _SchemaContainer,
+        paths: tuple[tuple[str, ...], ...],
+        declaration_id: object,
+    ) -> None:
+        for parts in sorted(paths, key=len, reverse=True):
+            parent = root
+            missing_parent = False
+            for part in parts[:-1]:
+                node = parent.get(part)
+                if not isinstance(node, dict):
+                    missing_parent = True
+                    break
+                parent = cast(_SchemaContainer, node)
+            if missing_parent:
+                continue
+
+            name = parts[-1]
+            node = parent.get(name)
+            if node is None:
+                continue
+            entry = (
+                node
+                if isinstance(node, _RefEntry)
+                else Schema._container_entry(cast(_SchemaContainer, node))
+            )
+            entry.declarations.discard(declaration_id)
+            if entry.declarations:
+                continue
+            if isinstance(node, dict) and any(key for key in node if key):
+                raise RuntimeError(
+                    "Schema declaration ownership invariant was violated at "
+                    f"{'.'.join(parts)!r}."
+                )
+            del parent[name]
+
     def __init__(self, declarations: Mapping[str, Any] | None = None) -> None:
         if declarations is None:
             declarations = {}
@@ -415,7 +415,7 @@ class Schema:
         object.__setattr__(
             self,
             "_Schema__data",
-            _build_schema(declarations, object()),
+            self._build(declarations, object()),
         )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -430,7 +430,7 @@ class Schema:
         )
 
     def _resolve_node(self, path: str) -> _SchemaNode:
-        parts = _split_ref_path(path)
+        parts = Ref._split_path(path)
         node: _SchemaNode = self.__data
         for index, part in enumerate(parts):
             if not isinstance(node, dict) or part not in node:
@@ -448,7 +448,7 @@ class Schema:
         node = self._resolve_node(path)
         if isinstance(node, _RefEntry):
             return node
-        return _container_entry(node)
+        return self._container_entry(node)
 
     def resolve(self, path: str) -> Ref[Any]:
         """Return the immutable Ref declared at *path*."""
@@ -461,21 +461,21 @@ class Schema:
         """Add one atomic declaration and return its idempotent disposer."""
         declaration_id = object()
         if isinstance(declarations, Schema):
-            incoming = _copy_schema_declaration(
+            incoming = self._copy_declaration(
                 declarations.__data,
                 declaration_id,
             )
         elif isinstance(declarations, Mapping):
-            incoming = _build_schema(declarations, declaration_id)
+            incoming = self._build(declarations, declaration_id)
         else:
             raise TypeError(
                 "Schema declarations must be a mapping or Schema, "
                 f"got {type(declarations).__name__}."
             )
 
-        _validate_schema_merge(self.__data, incoming)
-        paths = tuple(path for path, _ in _iter_schema_entries(incoming))
-        _commit_schema_merge(self.__data, incoming)
+        self._validate_merge(self.__data, incoming)
+        paths = tuple(path for path, _ in self._iter_entries(incoming))
+        self._commit_merge(self.__data, incoming)
 
         schema_ref = weakref.ref(self)
         disposed = False
@@ -487,7 +487,7 @@ class Schema:
             disposed = True
             schema = schema_ref()
             if schema is not None:
-                _remove_schema_declaration(
+                schema._remove_declaration(
                     schema.__data,
                     paths,
                     declaration_id,
@@ -602,51 +602,6 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
 
 _ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]
 _Tree = dict[str, Any]
-
-
-def _contains_context_identity(
-    values: Iterable[Context],
-    target: Context,
-) -> bool:
-    return any(value is target for value in values)
-
-
-def _merge_context_mro(parents: tuple[Context, ...]) -> tuple[Context, ...]:
-    """Merge immutable Context parent chains using C3."""
-    pending = [list(parent.mro) for parent in parents]
-    pending.append(list(parents))
-    result: list[Context] = []
-
-    while True:
-        pending = [sequence for sequence in pending if sequence]
-        if not pending:
-            return tuple(result)
-
-        candidate = next(
-            (
-                sequence[0]
-                for sequence in pending
-                if not any(
-                    _contains_context_identity(other[1:], sequence[0])
-                    for other in pending
-                )
-            ),
-            None,
-        )
-        if candidate is None:
-            raise TypeError("Cannot create a consistent Context C3 linearization.")
-
-        result.append(candidate)
-        for sequence in pending:
-            if sequence and sequence[0] is candidate:
-                sequence.pop(0)
-
-
-def _set_nested_value(tree: _Tree, parts: tuple[str, ...], value: Any) -> None:
-    current = tree
-    for part in parts[:-1]:
-        current = current.setdefault(part, {})
-    current[parts[-1]] = value
 
 
 class ContextElement(ABC):
@@ -766,6 +721,52 @@ class Context(ContextElement):
     _mro: tuple[Context, ...] = field(init=False)
     _schema: Schema | None = field(init=False)
 
+    @staticmethod
+    def _contains_identity(values: Iterable[Context], target: Context) -> bool:
+        return any(value is target for value in values)
+
+    @staticmethod
+    def _merge_mro(parents: tuple[Context, ...]) -> tuple[Context, ...]:
+        """Merge immutable Context parent chains using C3."""
+        pending = [list(parent.mro) for parent in parents]
+        pending.append(list(parents))
+        result: list[Context] = []
+
+        while True:
+            pending = [sequence for sequence in pending if sequence]
+            if not pending:
+                return tuple(result)
+
+            candidate = next(
+                (
+                    sequence[0]
+                    for sequence in pending
+                    if not any(
+                        Context._contains_identity(other[1:], sequence[0])
+                        for other in pending
+                    )
+                ),
+                None,
+            )
+            if candidate is None:
+                raise TypeError("Cannot create a consistent Context C3 linearization.")
+
+            result.append(candidate)
+            for sequence in pending:
+                if sequence and sequence[0] is candidate:
+                    sequence.pop(0)
+
+    @staticmethod
+    def _set_nested_value(
+        tree: _Tree,
+        parts: tuple[str, ...],
+        value: Any,
+    ) -> None:
+        current = tree
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
     def __init__(
         self,
         data: Mapping[ContextKey, Any] | None = None,
@@ -812,7 +813,7 @@ class Context(ContextElement):
         object.__setattr__(self, "parents", direct_parents)
         object.__setattr__(self, "_data", root_data)
         object.__setattr__(self, "_schema", root_schema)
-        object.__setattr__(self, "_mro", (self, *_merge_context_mro(direct_parents)))
+        object.__setattr__(self, "_mro", (self, *self._merge_mro(direct_parents)))
         if data is not None:
             if not isinstance(data, Mapping):
                 raise TypeError(
@@ -872,7 +873,7 @@ class Context(ContextElement):
             entry = node
         else:
             kind = "container"
-            entry = _container_entry(node)
+            entry = Schema._container_entry(node)
         if role != "any" and role != kind:
             raise ContextPathError(
                 f"Ref path {path!r} is declared as a {kind}, not a {role}."
@@ -1028,7 +1029,7 @@ class Context(ContextElement):
 
         result: _Tree = {}
         for leaf, value in visible:
-            _set_nested_value(result, leaf.parts[len(parts) :], value)
+            self._set_nested_value(result, leaf.parts[len(parts) :], value)
         return result
 
     def to_dict(
@@ -1155,7 +1156,7 @@ class ContextView(ContextElement):
         if ref is None:
             return self._context._validate_ref(".".join(self._parts))
         if isinstance(ref, str):
-            relative_parts = _split_ref_path(ref)
+            relative_parts = Ref._split_path(ref)
             return self._context._validate_ref(
                 ".".join((*self._parts, *relative_parts))
             )
