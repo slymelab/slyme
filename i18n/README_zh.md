@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
 ## Context 生命周期、Scope 可见性与 Compose
 
-Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见层时，应传入 `scope=ctx.scope.fork()`。读取沿绑定 Scope 的 C3 顺序查找，写入只针对该 Scope。`Compose` 同样按 Scope 保存有序值。`effect()`、`add()`、`declare()` 和 `contribute()` 会把同步 cleanup 交给调用它们的 Context 管理，`async_effect()` 则注册异步 cleanup。完全同步的树使用 `dispose()`，可能存在异步 cleanup 时使用 `await async_dispose()`。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
+Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 Compose 局部 identity。`Compose.bind()` 可以让选定 Scope 共享 identity，而不改变其他 Compose 的可见性。`effect()`、`add()`、`declare()` 和 `contribute()` 会把同步 cleanup 交给调用它们的 Context 管理，`async_effect()` 则注册异步 cleanup。完全同步的树使用 `dispose()`，可能存在异步 cleanup 时使用 `await async_dispose()`。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
 
 ```python
 from slyme.context import Compose, Context, Schema

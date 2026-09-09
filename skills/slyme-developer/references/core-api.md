@@ -73,9 +73,9 @@ agent_ctx.dispose()
 root_ctx.dispose()
 ```
 
-Context reads follow the bound Scope's C3 order by default and accept `local=True` for that exact Scope. Writes always target the bound Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data, while independent Context roots keep separate data even when bound to the same Scope. `Context.add()` rejects an existing value at the bound Scope. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
+Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's Compose-local identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data, and `ctx.bind(ref, identity=key)` can make different Scopes share one selected Context leaf. Independent Context roots keep separate data even when bound to the same Scope. `Context.add()` rejects an existing value at the bound identity. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
 
-Create an application root with `Context(data, schema=R, scope=optional_scope)`. Every path must belong to its Schema declaration tree. A child has one `parent`, inherits `ctx.schema`, and is owned by that parent until disposal. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. Scope parents may come from unrelated roots as long as C3 can linearize them: `Scope(name="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree and holds their shared Schema reference. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
+Create an application root with `Context(data, schema=R, scope=optional_scope)`. Every path must belong to its Schema declaration tree. A child has one `parent`, inherits `ctx.schema`, and is owned by that parent until disposal. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(name="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree and holds their shared Schema reference. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
 
 ## Effects and disposal
 
@@ -83,7 +83,7 @@ Create an application root with `Context(data, schema=R, scope=optional_scope)`.
 
 Effect setup and cleanup cannot dispose their owner Context or an ancestor while running, and cleanup cannot re-enter its own disposer; Slyme rejects these operations with `RuntimeError`.
 
-Use `ctx.contribute(ref, value, scope=target)` when a Compose stored at `ref` should receive a lifecycle-owned contribution. The Compose is looked up through `ctx.scope`; `scope` only selects the contribution's target and defaults to `ctx.scope`. Direct `compose.add(scope, value)` remains available when the caller will manage its returned disposer itself.
+Use `ctx.contribute(ref, value, scope=target)` when a Compose stored at `ref` should receive a lifecycle-owned contribution. The Compose is looked up through `ctx.scope`; `scope` only selects the contribution's target and defaults to `ctx.scope`. Direct `compose.add(scope, value)` remains available when the caller will manage its returned disposer itself. `compose.bind(scope_a, scope_b, identity=key)` gives those Scopes one shared bucket in that Compose only. Binding is permanent for each live Scope and has no disposer; contributions remain independently reversible.
 
 ## Wrappers
 

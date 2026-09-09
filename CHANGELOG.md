@@ -28,6 +28,8 @@ breaking changes when they are documented here.
 - Added `Context.flatten()` for exact visible Ref-to-value leaf mappings.
 - Added `Compose` for ordered, reversible values resolved through a Scope's C3
   hierarchy, including first-value, collection, mapping, and custom rules.
+- Added immutable Compose-local identity bindings so selected Scopes can share
+  one contribution or Context-leaf bucket without changing other Scope lookup.
 - Added Schema-owned `replaceable` policies and `Context.isolate()` for owned
   child Contexts that block selected inherited Scope values.
 
@@ -105,6 +107,9 @@ breaking changes when they are documented here.
 - `Context` now has one lifetime parent and one bound Scope. `fork()` creates an
   owned child and shares the Scope by default; a forked Scope provides an
   explicit local data layer. Context CRUD always uses the bound Scope.
+- `Scope.fork()` now creates only a single-parent child; C3 multiple inheritance
+  uses explicit `Scope(parents=(...))` construction. Context roots track the
+  exact live Context viewers for every Scope instead of anonymous counts.
 - `Context.root` owns the application data store and lifetime subtree and holds
   their shared Schema reference. Scope C3 order is independent of the Context
   lifetime tree and has no common-root restriction.

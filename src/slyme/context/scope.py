@@ -94,11 +94,11 @@ class Scope:
 
     def fork(
         self,
-        *mixins: Scope,
+        *,
         name: Hashable | None = None,
     ) -> Scope:
-        """Create a child Scope inheriting this Scope and optional mixins."""
-        return type(self)(name=name, parents=(self, *mixins))
+        """Create a child Scope with this Scope as its only direct parent."""
+        return type(self)(name=name, parents=(self,))
 
     def find(self, name: Hashable) -> Scope:
         """Find the unique visible Scope carrying *name*."""

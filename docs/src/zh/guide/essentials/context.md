@@ -1,6 +1,6 @@
 # Context
 
-`Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按 Scope 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则只修改该 Scope。
+`Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按绑定到 Scope 的 Compose 局部 identity 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则修改绑定到该 Scope 的 identity。
 
 一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程。同步 workflow 在该线程使用它们；异步 workflow 则在一个事件循环中使用它们。这是使用约束，而不是运行时线程身份检查。worker 线程和进程应只接收普通值，并把结果返回 owner 线程后再修改 Context。
 
@@ -95,7 +95,7 @@ Schema key 必须是非空且不含点号的字符串。`declare`、Python 关�
 ## 读写
 
 ```python
-from slyme.context import Context, Schema
+from slyme.context import Context, Schema, Scope
 
 R = Schema(
     {
@@ -179,7 +179,7 @@ assert plugin.scope is root.scope
 
 feature_scope = root.scope.fork(name="feature")
 mixin_scope = root.scope.fork(name="mixin")
-agent_scope = feature_scope.fork(mixin_scope, name="agent")
+agent_scope = Scope(name="agent", parents=(feature_scope, mixin_scope))
 
 feature = root.fork(scope=feature_scope)
 mixin = root.fork(scope=mixin_scope)
@@ -196,11 +196,11 @@ assert agent.to_dict() == {
 }
 ```
 
-Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周期归属，以及保存 Schema 和数据的应用根；Scope 决定查找顺序。Scope 可以有多个 parent，C3 只要求能得到一致的线性化结果，这些 parent 可以来自彼此无关的 Scope 根。即使复用同一个 Scope 对象，不同 Context 根也不会共享 Context 数据。
+Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周期归属，以及保存 Schema 和数据的应用根；Scope 决定查找顺序。`scope.fork()` 始终创建单 parent 子级；多 parent 必须显式使用 `Scope(parents=(...))` 构造，并满足一致的 C3 线性化，这些 parent 可以来自彼此无关的 Scope 根。即使复用同一个 Scope 对象，不同 Context 根也不会共享 Context 数据。
 
 删除局部值通常会让 Scope MRO 中的下一个值重新可见。
 
-`isolate()` 创建带有 child Scope、由当前 Context 管理的子 Context，并阻止指定 leaf 的祖先值穿透。私有阻断标记会参与 Scope C3 查找，后续 Scope parent 无法绕过它。写入隔离后的子 Context 时值正常可见；删除该值后会重新看到阻断状态，而不是祖先值：
+`isolate()` 创建带有 child Scope、由当前 Context 管理的子 Context，并阻止指定 leaf 的祖先值穿透。私有阻断标记会参与 Scope C3 查找，后续 Scope parent 无法绕过它。写入隔离后的子 Context 时值正常可见；删除该值后会重新看到阻断状态，而不是祖先值。多次调用时传入相同的 `identity=`，可以让这些隔离子级共享指定 leaf 的存储，同时仍与 parent 分离：
 
 ```python
 service_schema = Schema({"service": Schema.leaf(replaceable=False)})
@@ -240,11 +240,11 @@ parent 会强引用并拥有其子 Context。每个 Context 都按后进先出�
 
 effect cleanup 执行期间不得 dispose 其 owner Context、ancestor 或自身。这类重入操作可能让 cleanup 仍在使用的资源提前失效，或者依赖自身完成，因此 Slyme 会抛出 `RuntimeError`。
 
-dispose Context 后，它不再维持 `ctx.scope.mro` 中各 Context 数据层的活跃状态，但不会解除或销毁 `ctx.scope`。通过 `set()` 安装的值，只要同一应用根内仍有活跃 Context 的 MRO 包含该 Scope，就会继续存储；通过 `add()` 安装的值还会在 owner Context 或其精确 disposer 执行时移除。Compose entry 同样保留到各自的精确 disposer 执行。数据仍然可见并不保证值中的外部资源仍处于打开状态：拥有该资源的 effect 可能已经关闭它。资源所有权应覆盖每个可能使用它的 Context，并且调用方应确定性地 dispose 子 Context，而不是依赖垃圾回收。
+dispose Context 后，它会从 `ctx.scope.mro` 中每个 Scope 的 viewer 集合移除，但不会解除或销毁 `ctx.scope`。通过 `set()` 安装的值，只要同一应用根内仍有活跃 Context 能看到对应的 Context-binding identity，就会继续存储；通过 `add()` 安装的值还会在 owner Context 或其精确 disposer 执行时移除。Compose entry 同样保留到各自的精确 disposer 执行。数据仍然可见并不保证值中的外部资源仍处于打开状态：拥有该资源的 effect 可能已经关闭它。资源所有权应覆盖每个可能使用它的 Context，并且调用方应确定性地 dispose 子 Context，而不是依赖垃圾回收。
 
 ## Compose
 
-`Compose` 按 Scope 保存有序值，并根据 Scope C3 顺序解析可见 entry。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.contribute()` 将 contribution 的清理绑定到生命周期：
+`Compose` 在 Compose 局部 identity 下保存有序值，并根据 Scope C3 顺序解析。尚未绑定的 Scope 会在第一次写入时获得私有 identity。`compose.bind(scope_a, scope_b, identity=key)` 可将多个 Scope 一次性绑定到共享 identity；重复绑定到相同 identity 是幂等操作，改绑则会失败。绑定属于不可撤销的结构信息。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.contribute()` 将 contribution 的清理绑定到生命周期：
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -271,7 +271,9 @@ root.dispose()
 
 `Compose.one()` 选择第一个可见值，`Compose.collect()` 将所有可见值组成 tuple，`Compose.merge()` 合并 mapping，并为每个 key 保留第一个可见值。向 `Compose(...)` 传入同步 resolver 可以定义其他结果规则。在同一个 Scope 内，`position="prepend"` 将 entry 放在现有 entry 之前；默认值是 `"append"`。
 
-`values(scope, local=True)` 可在不执行 resolver 的情况下检查单个 Scope 的 entry，`resolve(scope, local=True)` 则对同一组局部值应用 resolver。`entries(scope)` 返回不可变记录，包括每项的 id、Scope、value 与 metadata；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
+`values(scope, local=True)` 可在不执行 resolver 的情况下检查该 Scope identity 下的 entry，`resolve(scope, local=True)` 则对同一组值应用 resolver。多个 Scope 共享 identity 时，这一局部集合包含从所有这些 Scope 贡献的 entry；C3 查找只会访问共享 identity 一次。`entries(scope)` 返回不可变记录，包括每项的 id、贡献 Scope、identity、value 与 metadata；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
+
+`ctx.bind(ref, identity=key)` 对保存单个 Context leaf 的私有 Compose 执行对应的一次性绑定，并且始终使用 `ctx.scope`。对绑定不同 Scope 的多个 Context 调用该方法，只会共享指定 Ref 的存储。这与对作为 leaf value 保存的 Compose 对象调用 `bind()` 是两件独立的操作。
 
 绑定到 child Scope 的 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
 

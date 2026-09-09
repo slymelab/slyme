@@ -19,7 +19,7 @@ import difflib
 import inspect
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
@@ -653,10 +653,14 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         super().__init__(resolve)
 
     def _local_value_entry(self, scope: Scope) -> Any | None:
+        try:
+            identity = self._identity_for(scope, create=False)
+        except LookupError:
+            return None
         return next(
             (
                 entry
-                for entry in self._buckets.get(scope, {}).values()
+                for entry in self._buckets.get(identity, {}).values()
                 if entry.value is not _BLOCKED
             ),
             None,
@@ -680,47 +684,64 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         if current is not None:
             if not replaceable:
                 raise ValueError("Context local value is not replaceable.")
-            self._remove(scope, current.identity)
+            self._remove(current.identity, current.token)
         self._insert(scope, value, position="prepend")
 
     def add_value(self, scope: Scope, value: Any) -> Callable[[], None]:
         if self._local_value_entry(scope) is not None:
             raise ValueError("Context already has a local value.")
         entry = self._insert(scope, value, position="prepend")
-        binding_ref = weakref.ref(self)
+        binding_ref: weakref.ReferenceType[_ContextBinding] | None = weakref.ref(self)
         identity = entry.identity
-        target: Scope | None = scope
+        token = entry.token
 
         def dispose() -> None:
-            nonlocal target
-            if target is None:
+            nonlocal binding_ref
+            if binding_ref is None:
                 return
             binding = binding_ref()
             if binding is not None:
-                binding._remove(target, identity)
-            target = None
+                binding._remove(identity, token)
+            binding_ref = None
 
         return dispose
 
     def delete_value(self, scope: Scope) -> None:
         current = self._local_value_entry(scope)
         if current is not None:
-            self._remove(scope, current.identity)
+            self._remove(current.identity, current.token)
 
     def block(self, scope: Scope) -> None:
+        identity = self._identity_for(scope, create=True)
         if any(
-            entry.value is _BLOCKED for entry in self._buckets.get(scope, {}).values()
+            entry.value is _BLOCKED
+            for entry in self._buckets.get(identity, {}).values()
         ):
             return
         self._insert(scope, _BLOCKED, position="append")
 
-    def clear_scope(self, scope: Scope) -> None:
-        """Remove every value stored directly at *scope*."""
-        self._buckets.pop(scope, None)
+    def clear_unobserved(
+        self,
+        expired: Iterable[Scope],
+        viewers: Mapping[Scope, set[Context]],
+    ) -> None:
+        """Remove identities that no live Context can see through a bound Scope."""
+        candidates: set[Hashable] = set()
+        for scope in expired:
+            try:
+                candidates.add(self._identity_for(scope, create=False))
+            except LookupError:
+                continue
+        if not candidates:
+            return
 
-    @property
-    def empty(self) -> bool:
-        return not self._buckets
+        for scope, identity in tuple(self._scope_identities.items()):
+            if identity in candidates and viewers.get(scope):
+                candidates.remove(identity)
+                if not candidates:
+                    return
+        for identity in candidates:
+            self._buckets.pop(identity, None)
 
 
 _ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]
@@ -803,7 +824,7 @@ class Context(ContextElement):
     _root: Context = field(init=False)
     _schema: Schema | None = field(init=False)
     _owned: list[Context | _Effect] = field(init=False)
-    _scope_counts: dict[Scope, int] | None = field(init=False)
+    _scope_viewers: dict[Scope, set[Context]] | None = field(init=False)
     _state: _ContextState = field(init=False)
     _dispose_task: asyncio.Task[None] | None = field(init=False)
     _dispose_error: BaseException | None = field(init=False)
@@ -829,7 +850,7 @@ class Context(ContextElement):
         parent: Context | None = None,
         scope: Scope | None = None,
     ) -> None:
-        scope_counts: dict[Scope, int] | None
+        scope_viewers: dict[Scope, set[Context]] | None
         if parent is not None and not isinstance(parent, Context):
             raise TypeError("Context parent must be a Context object.")
         if scope is not None and not isinstance(scope, Scope):
@@ -846,7 +867,7 @@ class Context(ContextElement):
             root_schema = None
             root_data = application_root._data
             bound_scope = parent.scope if scope is None else scope
-            scope_counts = None
+            scope_viewers = None
             sync_only = parent._sync_only
         else:
             if schema is None:
@@ -860,7 +881,7 @@ class Context(ContextElement):
             root_data = weakref.WeakKeyDictionary()
             application_root = self
             bound_scope = Scope() if scope is None else scope
-            scope_counts = {}
+            scope_viewers = {}
             sync_only = False
 
         object.__setattr__(self, "parent", parent)
@@ -869,7 +890,7 @@ class Context(ContextElement):
         object.__setattr__(self, "_root", application_root)
         object.__setattr__(self, "_schema", root_schema)
         object.__setattr__(self, "_owned", [])
-        object.__setattr__(self, "_scope_counts", scope_counts)
+        object.__setattr__(self, "_scope_viewers", scope_viewers)
         object.__setattr__(self, "_state", _ContextState.ACTIVE)
         object.__setattr__(self, "_dispose_task", None)
         object.__setattr__(self, "_dispose_error", None)
@@ -941,28 +962,34 @@ class Context(ContextElement):
             )
 
     def _acquire_scope(self) -> None:
-        counts = cast(dict[Scope, int], self.root._scope_counts)
+        viewers = cast(dict[Scope, set[Context]], self.root._scope_viewers)
+        if any(self in viewers.get(scope, ()) for scope in self.scope.mro):
+            raise RuntimeError("Context is already registered as a Scope viewer.")
         for scope in self.scope.mro:
-            counts[scope] = counts.get(scope, 0) + 1
+            viewers.setdefault(scope, set()).add(self)
 
     def _release_scope(self) -> None:
-        counts = cast(dict[Scope, int], self.root._scope_counts)
+        viewers = cast(dict[Scope, set[Context]], self.root._scope_viewers)
+        if any(
+            (registered := viewers.get(scope)) is None or self not in registered
+            for scope in self.scope.mro
+        ):
+            raise RuntimeError("Context is not registered as a Scope viewer.")
+
         expired: list[Scope] = []
         for scope in self.scope.mro:
-            remaining = counts[scope] - 1
-            if remaining:
-                counts[scope] = remaining
-            else:
-                counts.pop(scope)
+            registered = viewers[scope]
+            registered.remove(self)
+            if not registered:
+                viewers.pop(scope)
                 expired.append(scope)
 
         if not expired:
             return
-        for entry, binding in tuple(self._data.items()):
-            for scope in expired:
-                binding.clear_scope(scope)
-            if binding.empty:
-                self._data.pop(entry, None)
+        for binding in tuple(self._data.values()):
+            binding.clear_unobserved(expired, viewers)
+        if not viewers:
+            self._data.clear()
 
     def _remove_child(self, child: Context) -> None:
         if child in self._owned:
@@ -1217,14 +1244,23 @@ class Context(ContextElement):
         )
         return child
 
-    def isolate(self, *refs: ContextKey) -> Context:
+    def isolate(
+        self,
+        *refs: ContextKey,
+        identity: Hashable | None = None,
+    ) -> Context:
         """Create a child that blocks inherited values for selected leaves."""
         self._assert_mutable()
         entries = tuple(self._validate_entry(ref, role="leaf") for ref in refs)
+        if identity is not None:
+            Compose._validate_identity(identity)
         child = self.fork(scope=self.scope.fork())
         try:
             for entry in entries:
-                child._binding(entry, create=True).block(child.scope)
+                binding = child._binding(entry, create=True)
+                if identity is not None:
+                    binding.bind(child.scope, identity=identity)
+                binding.block(child.scope)
         except BaseException:
             child.dispose()
             raise
@@ -1454,6 +1490,13 @@ class Context(ContextElement):
     def set(self, ref: ContextKey, value: _T) -> None:
         """Set one local binding."""
         self.mutate(updates={ref: value})
+
+    def bind(self, ref: ContextKey, *, identity: Hashable) -> None:
+        """Bind this Context's Scope to one identity for a Context leaf."""
+        self._assert_mutable()
+        entry = self._validate_entry(ref, role="leaf")
+        Compose._validate_identity(identity)
+        self._binding(entry, create=True).bind(self.scope, identity=identity)
 
     def add(self, ref: ContextKey, value: _T) -> Callable[[], None]:
         """Add one local binding owned by this Context."""

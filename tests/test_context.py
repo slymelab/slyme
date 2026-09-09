@@ -789,6 +789,7 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
         Context.update,
         Context.drop,
         Context.set,
+        Context.bind,
         Context.add,
         Context.update_tree,
         Context.delete,
@@ -798,6 +799,37 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
         assert "scope" not in inspect.signature(operation).parameters
     assert "scope" in inspect.signature(Context.fork).parameters
     assert "scope" in inspect.signature(Context.contribute).parameters
+
+
+def test_context_bind_shares_only_the_selected_leaf() -> None:
+    root = Context(schema=R)
+    left = root.fork(scope=root.scope.fork(name="left"))
+    right = root.fork(scope=root.scope.fork(name="right"))
+    identity = object()
+
+    left.bind(R.resolve("value"), identity=identity)
+    right.bind(R.resolve("value"), identity=identity)
+    left.set(R.resolve("value"), "shared")
+    left.set(R.resolve("runtime.value"), "left-only")
+
+    assert right.get(R.resolve("value"), local=True) == "shared"
+    assert not right.exists(R.resolve("runtime.value"), local=True)
+    right.delete(R.resolve("value"))
+    assert not left.exists(R.resolve("value"), local=True)
+    root.dispose()
+
+
+def test_context_bind_validates_the_leaf_and_precedes_writes() -> None:
+    ctx = Context(schema=R)
+
+    with pytest.raises(ContextPathError, match="container.*not a leaf"):
+        ctx.bind(R.resolve("group"), identity=object())
+    with pytest.raises(TypeError, match="identities must be hashable"):
+        ctx.bind(R.resolve("value"), identity=[])  # type: ignore[arg-type]
+
+    ctx.set(R.resolve("value"), 1)
+    with pytest.raises(ValueError, match="rebound"):
+        ctx.bind(R.resolve("value"), identity=object())
 
 
 def test_context_read_operations_can_select_local_or_effective_data() -> None:
@@ -839,7 +871,7 @@ def test_scope_uses_c3_for_multiple_parents() -> None:
     root_scope = Scope(name="root")
     left_scope = root_scope.fork(name="left")
     right_scope = root_scope.fork(name="right")
-    child_scope = left_scope.fork(right_scope, name="child")
+    child_scope = Scope(name="child", parents=(left_scope, right_scope))
     root = Context(schema=R, scope=root_scope)
     left = root.fork(scope=left_scope)
     right = root.fork(scope=right_scope)
@@ -859,12 +891,12 @@ def test_scope_uses_c3_for_multiple_parents() -> None:
 
     x = root_scope.fork()
     y = root_scope.fork()
-    xy = x.fork(y)
-    yx = y.fork(x)
+    xy = Scope(parents=(x, y))
+    yx = Scope(parents=(y, x))
     with pytest.raises(TypeError, match="C3"):
-        xy.fork(yx)
+        Scope(parents=(xy, yx))
     with pytest.raises(TypeError, match="duplicate"):
-        root_scope.fork(root_scope)
+        Scope(parents=(root_scope, root_scope))
 
 
 def test_context_structural_lookup_merges_declared_container_branches() -> None:
@@ -923,7 +955,7 @@ def test_scope_c3_branch_merge_uses_nearest_value_for_each_leaf() -> None:
     right = root.fork(scope=right_scope)
     right.set(R.resolve("a.root"), 3)
 
-    child_scope = left_scope.fork(right_scope)
+    child_scope = Scope(parents=(left_scope, right_scope))
     child = left.fork(scope=child_scope)
 
     assert child.scope.mro == (
@@ -993,7 +1025,7 @@ def test_context_isolation_stops_c3_lookup_before_later_parents() -> None:
     left = root.isolate(value)
     right = root.fork(scope=root.scope.fork())
     right.set(value, "right")
-    child_scope = left.scope.fork(right.scope)
+    child_scope = Scope(parents=(left.scope, right.scope))
     child = left.fork(scope=child_scope)
 
     assert child.scope.mro == (

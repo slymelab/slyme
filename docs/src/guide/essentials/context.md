@@ -1,6 +1,6 @@
 # Context
 
-`Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by Scope. Reads follow the bound Scope's C3 order by default, while writes change only that exact Scope.
+`Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by Compose-local identities bound to Scopes. Reads follow the bound Scope's C3 order by default, while writes change the identity bound to that exact Scope.
 
 A Context tree and its mutable Schema and Compose objects are single-thread-owned. Synchronous workflows use them on that thread; asynchronous workflows use them on one event loop. This is a usage requirement rather than a runtime thread-identity check. Worker threads and processes should receive ordinary values and return results for Context mutation on the owner thread.
 
@@ -106,7 +106,7 @@ as `Compose`, rather than becoming Context paths.
 ## Read and write
 
 ```python
-from slyme.context import Context, Schema
+from slyme.context import Context, Schema, Scope
 
 R = Schema(
     {
@@ -192,7 +192,7 @@ assert plugin.scope is root.scope
 
 feature_scope = root.scope.fork(name="feature")
 mixin_scope = root.scope.fork(name="mixin")
-agent_scope = feature_scope.fork(mixin_scope, name="agent")
+agent_scope = Scope(name="agent", parents=(feature_scope, mixin_scope))
 
 feature = root.fork(scope=feature_scope)
 mixin = root.fork(scope=mixin_scope)
@@ -209,11 +209,11 @@ assert agent.to_dict() == {
 }
 ```
 
-Context parentage and Scope ancestry are independent. The parent determines lifetime ownership and the application root that holds Schema and data; the Scope determines lookup. A Scope may have multiple parents, and C3 only requires a consistent linearization. Those parents may come from otherwise unrelated Scope roots. Separate Context roots never share Context data, even when they use the same Scope object.
+Context parentage and Scope ancestry are independent. The parent determines lifetime ownership and the application root that holds Schema and data; the Scope determines lookup. `scope.fork()` always creates a single-parent child. Multiple parents require explicit `Scope(parents=(...))` construction and a consistent C3 linearization; those parents may come from otherwise unrelated Scope roots. Separate Context roots never share Context data, even when they use the same Scope object.
 
 Deleting a local value normally reveals the next value in the Scope MRO.
 
-`isolate()` creates an owned child with a child Scope and blocks selected leaf values from crossing into it. The private barrier participates in Scope C3 lookup, so a later Scope parent cannot bypass it. A value written in the isolated child appears normally, and deleting that value exposes the barrier again rather than an ancestor's value:
+`isolate()` creates an owned child with a child Scope and blocks selected leaf values from crossing into it. The private barrier participates in Scope C3 lookup, so a later Scope parent cannot bypass it. A value written in the isolated child appears normally, and deleting that value exposes the barrier again rather than an ancestor's value. Passing the same `identity=` to multiple calls makes those isolated children share the selected leaf storage while keeping it separate from the parent:
 
 ```python
 service_schema = Schema({"service": Schema.leaf(replaceable=False)})
@@ -253,11 +253,11 @@ A parent strongly owns its child Contexts. Each Context processes its directly o
 
 Effect cleanup cannot dispose its owning Context, an ancestor, or itself while it is running. These reentrant operations could invalidate resources still used by that cleanup or depend on their own completion, so Slyme rejects them with `RuntimeError`.
 
-Disposing a Context stops it from keeping the Context-data layers in `ctx.scope.mro` active; it does not detach or destroy `ctx.scope`. A value installed by `set()` remains stored while another active Context in the same application root has that Scope in its MRO. A value installed by `add()` is additionally removed when its owning Context or exact disposer runs. Compose entries likewise remain until their exact disposers run. Data visibility never guarantees that an external resource inside a value is still open: its effect owner may have already closed it. Align resource ownership with every Context that may use it, and dispose child Contexts deterministically rather than relying on garbage collection.
+Disposing a Context removes it from the viewer sets for every Scope in `ctx.scope.mro`; it does not detach or destroy `ctx.scope`. A value installed by `set()` remains stored while another active Context in the same application root can view its Context-binding identity. A value installed by `add()` is additionally removed when its owning Context or exact disposer runs. Compose entries likewise remain until their exact disposers run. Data visibility never guarantees that an external resource inside a value is still open: its effect owner may have already closed it. Align resource ownership with every Context that may use it, and dispose child Contexts deterministically rather than relying on garbage collection.
 
 ## Compose
 
-`Compose` stores ordered values by Scope and resolves entries through Scope C3 order. Store a Compose object in Context when Nodes need to discover it through a Ref, then use `Context.contribute()` to attach contribution cleanup to a lifetime:
+`Compose` stores ordered values under Compose-local identities and resolves them through Scope C3 order. An unbound Scope receives a private identity on its first write. `compose.bind(scope_a, scope_b, identity=key)` binds several Scopes once to a shared identity; repeated binding to the same identity is idempotent, while rebinding fails. Binding is structural and has no disposer. Store a Compose object in Context when Nodes need to discover it through a Ref, then use `Context.contribute()` to attach contribution cleanup to a lifetime:
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -284,7 +284,9 @@ root.dispose()
 
 `Compose.one()` selects the first visible value, `Compose.collect()` returns all visible values as a tuple, and `Compose.merge()` combines mappings while preserving the first visible value for each key. Passing a synchronous resolver to `Compose(...)` defines another result rule. Within one Scope, `position="prepend"` places an entry before existing entries; the default is `"append"`.
 
-`values(scope, local=True)` inspects one Scope's entries without resolving them, while `resolve(scope, local=True)` applies the resolver to that same local set. `entries(scope)` returns immutable records with each entry's id, Scope, value, and metadata; omitting the Scope inspects every current entry. Compose retains those entries until their exact disposer runs, so lifecycle-owned contributions are the preferred cleanup mechanism.
+`values(scope, local=True)` inspects the entries under that Scope's identity without resolving them, while `resolve(scope, local=True)` applies the resolver to the same set. If several Scopes share an identity, this local set includes entries contributed through all of them. C3 lookup visits a shared identity only once. `entries(scope)` returns immutable records with each entry's id, contributing Scope, identity, value, and metadata; omitting the Scope inspects every current entry. Compose retains those entries until their exact disposer runs, so lifecycle-owned contributions are the preferred cleanup mechanism.
+
+`ctx.bind(ref, identity=key)` performs the corresponding one-time binding for the private Compose that stores one Context leaf, and always targets `ctx.scope`. Calling it on Contexts with different Scopes makes only that Ref share storage. This is separate from calling `bind()` on a Compose object stored as the leaf value.
 
 A Context bound to a child Scope can replace an inherited Compose object at its Ref with a new Compose object to create an independent set. Compose remains an ordinary Context leaf.
 

@@ -139,6 +139,106 @@ def test_scope_data_survives_until_its_last_context_viewer_is_disposed() -> None
     root.dispose()
 
 
+def test_scope_viewers_record_the_exact_live_contexts() -> None:
+    root = Context()
+    child_scope = root.scope.fork()
+    child = root.fork(scope=child_scope)
+    sibling = root.fork()
+    viewers = root._scope_viewers
+    assert viewers is not None
+
+    assert viewers[root.scope] == {root, child, sibling}
+    assert viewers[child_scope] == {child}
+    child.dispose()
+    assert child_scope not in viewers
+    assert viewers[root.scope] == {root, sibling}
+    sibling.dispose()
+    root.dispose()
+    assert viewers == {}
+
+
+def test_scope_viewer_registration_rejects_unbalanced_operations() -> None:
+    ctx = Context()
+
+    with pytest.raises(RuntimeError, match="already registered"):
+        ctx._acquire_scope()
+    ctx._release_scope()
+    with pytest.raises(RuntimeError, match="not registered"):
+        ctx._release_scope()
+    ctx._acquire_scope()
+    ctx.dispose()
+
+
+def test_bound_identity_data_survives_until_its_last_viewer_is_disposed() -> None:
+    class Payload:
+        pass
+
+    schema = Schema({"value": Schema.leaf()})
+    root = Context(schema=schema)
+    left_scope = root.scope.fork()
+    right_scope = root.scope.fork()
+    writer = root.fork(scope=left_scope)
+    reader = root.fork(scope=right_scope)
+    identity = object()
+    writer.bind("value", identity=identity)
+    reader.bind("value", identity=identity)
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    writer.set("value", payload)
+
+    writer.dispose()
+    assert reader.get("value") is payload
+    del payload
+    reader.dispose()
+    gc.collect()
+
+    assert payload_ref() is None
+    late_reader = root.fork(scope=right_scope)
+    late_reader.bind("value", identity=identity)
+    assert not late_reader.exists("value")
+    late_reader.dispose()
+    root.dispose()
+
+
+def test_bound_identity_keeps_add_owned_by_its_context() -> None:
+    schema = Schema({"value": Schema.leaf()})
+    root = Context(schema=schema)
+    owner = root.fork(scope=root.scope.fork())
+    viewer = root.fork(scope=root.scope.fork())
+    identity = object()
+    owner.bind("value", identity=identity)
+    viewer.bind("value", identity=identity)
+    owner.add("value", "temporary")
+
+    assert viewer.get("value") == "temporary"
+    owner.dispose()
+    assert not viewer.exists("value")
+    viewer.dispose()
+    root.dispose()
+
+
+def test_isolated_contexts_can_share_one_private_identity() -> None:
+    schema = Schema({"service": Schema.leaf()})
+    root = Context({"service": "root"}, schema=schema)
+    identity = object()
+    left = root.isolate("service", identity=identity)
+    right = root.isolate("service", identity=identity)
+
+    assert not left.exists("service")
+    assert not right.exists("service")
+    left.set("service", "isolated")
+    assert right.get("service") == "isolated"
+
+    left.dispose()
+    assert right.get("service") == "isolated"
+    right.dispose()
+
+    later = root.isolate("service", identity=identity)
+    assert not later.exists("service")
+    later.dispose()
+    root.dispose()
+
+
 def test_shared_scope_distinguishes_set_and_add_ownership() -> None:
     schema = Schema(
         {

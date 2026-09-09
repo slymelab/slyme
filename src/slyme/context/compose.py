@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import types
+import weakref
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
@@ -33,7 +34,9 @@ _V = TypeVar("_V")
 
 @dataclass(frozen=True)
 class _ComposeEntry(Generic[_T]):
-    identity: object
+    token: object
+    scope: Scope
+    identity: Hashable
     value: _T
     metadata: Mapping[str, Any]
 
@@ -41,19 +44,61 @@ class _ComposeEntry(Generic[_T]):
 class Compose(Generic[_T, _R]):
     """Store reversible values and combine those visible through Scope C3 order."""
 
-    __slots__ = ("_buckets", "_resolver", "__weakref__")
+    __slots__ = ("_buckets", "_resolver", "_scope_identities", "__weakref__")
 
     def __init__(self, resolver: Callable[[tuple[_T, ...]], _R]) -> None:
         if not callable(resolver):
             raise TypeError("Compose resolver must be callable.")
         self._resolver = resolver
-        self._buckets: dict[Scope, dict[object, _ComposeEntry[_T]]] = {}
+        self._scope_identities: weakref.WeakKeyDictionary[Scope, Hashable] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._buckets: dict[Hashable, dict[object, _ComposeEntry[_T]]] = {}
 
     @staticmethod
     def _validate_scope(scope: Scope) -> Scope:
         if not isinstance(scope, Scope):
             raise TypeError(f"Compose scope must be Scope, got {type(scope).__name__}.")
         return scope
+
+    @staticmethod
+    def _validate_identity(identity: Hashable) -> Hashable:
+        try:
+            hash(identity)
+        except TypeError as error:
+            raise TypeError("Compose identities must be hashable.") from error
+        return identity
+
+    def bind(self, *scopes: Scope, identity: Hashable) -> None:
+        """Bind Scopes once to one Compose-local storage identity."""
+        if not scopes:
+            raise ValueError("Compose.bind() requires at least one Scope.")
+        checked_scopes = tuple(self._validate_scope(scope) for scope in scopes)
+        checked_identity = self._validate_identity(identity)
+
+        conflicts = tuple(
+            scope
+            for scope in checked_scopes
+            if scope in self._scope_identities
+            and self._scope_identities[scope] != checked_identity
+        )
+        if conflicts:
+            raise ValueError("A Scope cannot be rebound to another Compose identity.")
+
+        for scope in checked_scopes:
+            if scope not in self._scope_identities:
+                self._scope_identities[scope] = checked_identity
+
+    def _identity_for(self, scope: Scope, *, create: bool) -> Hashable:
+        scope = self._validate_scope(scope)
+        try:
+            return self._scope_identities[scope]
+        except KeyError:
+            if not create:
+                raise LookupError("Scope is not bound to this Compose.") from None
+        identity = object()
+        self._scope_identities[scope] = identity
+        return identity
 
     @classmethod
     def one(cls) -> Compose[_T, _T]:
@@ -90,13 +135,23 @@ class Compose(Generic[_T, _R]):
         scope: Scope,
         *,
         local: bool,
-    ) -> tuple[tuple[Scope, _ComposeEntry[_T]], ...]:
+    ) -> tuple[_ComposeEntry[_T], ...]:
         scope = self._validate_scope(scope)
         scopes = (scope,) if local else scope.mro
+        identities: list[Hashable] = []
+        seen: set[Hashable] = set()
+        for current in scopes:
+            try:
+                identity = self._identity_for(current, create=False)
+            except LookupError:
+                continue
+            if identity not in seen:
+                seen.add(identity)
+                identities.append(identity)
         return tuple(
-            (current, entry)
-            for current in scopes
-            for entry in self._buckets.get(current, {}).values()
+            entry
+            for identity in identities
+            for entry in self._buckets.get(identity, {}).values()
         )
 
     def add(
@@ -114,7 +169,7 @@ class Compose(Generic[_T, _R]):
             metadata=metadata,
             position=position,
         )
-        return self._disposer(scope, entry)
+        return self._disposer(entry)
 
     def _insert(
         self,
@@ -128,51 +183,50 @@ class Compose(Generic[_T, _R]):
         if position not in ("prepend", "append"):
             raise ValueError(f"Unknown Compose position: {position!r}.")
 
-        identity = object()
+        identity = self._identity_for(scope, create=True)
+        token = object()
         entry = _ComposeEntry(
+            token,
+            scope,
             identity,
             value,
             types.MappingProxyType(dict(metadata or {})),
         )
-        bucket = self._buckets.setdefault(scope, {})
+        bucket = self._buckets.setdefault(identity, {})
         if position == "append":
-            bucket[identity] = entry
+            bucket[token] = entry
         else:
-            self._buckets[scope] = {identity: entry, **bucket}
+            self._buckets[identity] = {token: entry, **bucket}
         return entry
 
-    def _remove(self, scope: Scope, identity: object) -> None:
-        current = self._buckets.get(scope)
-        if current is None or identity not in current:
+    def _remove(self, identity: Hashable, token: object) -> None:
+        current = self._buckets.get(identity)
+        if current is None or token not in current:
             return
-        current.pop(identity)
+        current.pop(token)
         if not current:
-            self._buckets.pop(scope, None)
+            self._buckets.pop(identity, None)
 
     def _disposer(
         self,
-        scope: Scope,
         entry: _ComposeEntry[_T],
     ) -> Callable[[], None]:
         compose: Compose[_T, _R] | None = self
-        target: Scope | None = scope
         identity = entry.identity
+        token = entry.token
 
         def dispose() -> None:
-            nonlocal compose, target
-            if compose is None or target is None:
+            nonlocal compose
+            if compose is None:
                 return
-            compose._remove(target, identity)
+            compose._remove(identity, token)
             compose = None
-            target = None
 
         return dispose
 
     def values(self, scope: Scope, *, local: bool = False) -> tuple[_T, ...]:
         """Return values from most-specific to least-specific Scope."""
-        return tuple(
-            entry.value for _, entry in self._scoped_entries(scope, local=local)
-        )
+        return tuple(entry.value for entry in self._scoped_entries(scope, local=local))
 
     def resolve(self, scope: Scope, *, local: bool = False) -> _R:
         """Resolve values visible from a Scope."""
@@ -189,8 +243,8 @@ class Compose(Generic[_T, _R]):
             if local:
                 raise ValueError("local=True requires a Scope.")
             scoped = tuple(
-                (current, entry)
-                for current, bucket in tuple(self._buckets.items())
+                entry
+                for bucket in tuple(self._buckets.values())
                 for entry in bucket.values()
             )
         else:
@@ -200,13 +254,14 @@ class Compose(Generic[_T, _R]):
         return tuple(
             types.MappingProxyType(
                 {
-                    "id": entry.identity,
-                    "scope": current,
+                    "id": entry.token,
+                    "scope": entry.scope,
+                    "identity": entry.identity,
                     "value": entry.value,
                     "metadata": entry.metadata,
                 }
             )
-            for current, entry in scoped
+            for entry in scoped
         )
 
     def __len__(self) -> int:
