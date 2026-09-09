@@ -20,20 +20,35 @@ from typing import TypeVar
 _T = TypeVar("_T")
 
 
-async def wait_uninterruptibly(future: asyncio.Future[_T]) -> _T:
-    """Defer cancellation until an already-started operation has finished."""
+async def finish_uninterruptibly(
+    future: asyncio.Future[_T],
+) -> asyncio.CancelledError | None:
+    """Finish an operation and return cancellation requested of its waiter."""
     cancellation: asyncio.CancelledError | None = None
     while not future.done():
         try:
             await asyncio.shield(future)
         except asyncio.CancelledError as error:
+            if future.cancelled():
+                break
             if cancellation is None:
                 cancellation = error
         except BaseException:
             break
 
+    return cancellation
+
+
+async def wait_uninterruptibly(future: asyncio.Future[_T]) -> _T:
+    """Defer cancellation until an already-started operation has finished."""
+    cancellation = await finish_uninterruptibly(future)
+
     if cancellation is not None:
-        if not future.cancelled():
-            future.exception()
+        try:
+            future.result()
+        except asyncio.CancelledError:
+            raise cancellation from None
+        except BaseException as error:
+            raise cancellation from error
         raise cancellation
     return future.result()

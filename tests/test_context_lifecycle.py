@@ -51,6 +51,24 @@ def test_context_effect_can_be_disposed_early_exactly_once() -> None:
     assert calls == 1
 
 
+def test_failed_sync_effect_disposal_replays_error_without_repeating_cleanup() -> None:
+    calls = 0
+    ctx = Context()
+
+    def cleanup() -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("cleanup failed")
+
+    dispose = ctx.effect(lambda: cleanup)
+    with pytest.raises(ValueError, match="cleanup failed"):
+        dispose()
+    with pytest.raises(ValueError, match="cleanup failed"):
+        dispose()
+    assert calls == 1
+    ctx.dispose()
+
+
 def test_context_owns_add_declare_and_contribute() -> None:
     schema = Schema(
         {
@@ -118,6 +136,38 @@ def test_scope_data_survives_until_its_last_context_viewer_is_disposed() -> None
     gc.collect()
 
     assert payload_ref() is None
+    root.dispose()
+
+
+def test_shared_scope_distinguishes_set_and_add_ownership() -> None:
+    schema = Schema(
+        {
+            "set_value": Schema.leaf(),
+            "added_value": Schema.leaf(),
+            "replaced_value": Schema.leaf(),
+        }
+    )
+    root = Context(schema=schema)
+    shared_scope = root.scope.fork()
+    owner = root.fork(scope=shared_scope)
+    viewer = root.fork(scope=shared_scope)
+
+    owner.set("set_value", "scope-owned")
+    owner.add("added_value", "context-owned")
+    owner.add("replaced_value", "old")
+    viewer.set("replaced_value", "new")
+
+    owner.dispose()
+    assert viewer.get("set_value") == "scope-owned"
+    assert not viewer.exists("added_value")
+    assert viewer.get("replaced_value") == "new"
+
+    viewer.dispose()
+    late_viewer = root.fork(scope=shared_scope)
+    assert not late_viewer.exists("set_value")
+    assert not late_viewer.exists("added_value")
+    assert not late_viewer.exists("replaced_value")
+    late_viewer.dispose()
     root.dispose()
 
 
@@ -223,6 +273,48 @@ async def test_async_dispose_is_shared_and_runs_cleanup_once() -> None:
     assert calls == 1
 
 
+@pytest.mark.parametrize(
+    "rewait_before_cleanup_finishes",
+    [True, False],
+    ids=["before-finish", "after-finish"],
+)
+async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
+    rewait_before_cleanup_finishes: bool,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    ctx = Context()
+
+    async def cleanup() -> None:
+        started.set()
+        await release.wait()
+        raise ValueError("late cleanup failure")
+
+    ctx.async_effect(lambda: cleanup)
+    first_waiter = asyncio.create_task(ctx.async_dispose())
+    await started.wait()
+    first_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_waiter
+
+    if rewait_before_cleanup_finishes:
+        repeated = asyncio.create_task(ctx.async_dispose())
+        await asyncio.sleep(0)
+        assert not repeated.done()
+        release.set()
+    else:
+        release.set()
+        disposal_task = ctx._dispose_task
+        assert disposal_task is not None
+        await asyncio.wait({disposal_task})
+        repeated = asyncio.create_task(ctx.async_dispose())
+
+    with pytest.raises(ValueError, match="late cleanup failure"):
+        await repeated
+    with pytest.raises(ValueError, match="late cleanup failure"):
+        await ctx.async_dispose()
+
+
 async def test_async_dispose_marks_context_before_scheduling_cleanup() -> None:
     started = asyncio.Event()
     release = asyncio.Event()
@@ -269,6 +361,105 @@ async def test_early_async_effect_disposal_cannot_dispose_its_owner() -> None:
     await ctx.async_dispose()
 
 
+@pytest.mark.parametrize("dispose_ancestor", [False, True])
+async def test_async_early_cleanup_blocks_owner_and_ancestor_disposal(
+    dispose_ancestor: bool,
+) -> None:
+    schema = Schema({"value": Schema.leaf()})
+    root = Context({"value": 1}, schema=schema)
+    child = root.fork()
+    target = root if dispose_ancestor else child
+    events: list[object] = []
+
+    async def cleanup() -> None:
+        events.append("start")
+        with pytest.raises(RuntimeError, match="setup or cleanup"):
+            target.dispose()
+        with pytest.raises(RuntimeError, match="setup or cleanup"):
+            await target.async_dispose()
+        events.append(child.get("value"))
+
+    dispose_effect = child.async_effect(lambda: cleanup)
+    await dispose_effect()
+    assert events == ["start", 1]
+    root.dispose()
+
+
+@pytest.mark.parametrize("dispose_ancestor", [False, True])
+def test_sync_effect_setup_blocks_owner_and_ancestor_disposal(
+    dispose_ancestor: bool,
+) -> None:
+    schema = Schema({"value": Schema.leaf()})
+    root = Context({"value": 1}, schema=schema)
+    child = root.fork()
+    target = root if dispose_ancestor else child
+    events: list[str] = []
+
+    def setup():
+        events.append("acquire")
+        with pytest.raises(RuntimeError, match="setup or cleanup"):
+            target.dispose()
+        assert child.get("value") == 1
+        return lambda: events.append("release")
+
+    dispose_effect = child.effect(setup)
+    dispose_effect()
+    assert events == ["acquire", "release"]
+    root.dispose()
+
+
+@pytest.mark.parametrize("dispose_ancestor", [False, True])
+async def test_async_effect_setup_blocks_owner_and_ancestor_disposal(
+    dispose_ancestor: bool,
+) -> None:
+    schema = Schema({"value": Schema.leaf()})
+    root = Context({"value": 1}, schema=schema)
+    child = root.fork()
+    target = root if dispose_ancestor else child
+    events: list[str] = []
+
+    async def cleanup() -> None:
+        events.append("release")
+
+    def setup():
+        events.append("acquire")
+        with pytest.raises(RuntimeError, match="setup or cleanup"):
+            target.dispose()
+        assert child.get("value") == 1
+        return cleanup
+
+    dispose_effect = child.async_effect(setup)
+    await dispose_effect()
+    assert events == ["acquire", "release"]
+    root.dispose()
+
+
+@pytest.mark.parametrize("dispose_ancestor", [False, True])
+def test_sync_early_cleanup_blocks_owner_and_ancestor_disposal(
+    dispose_ancestor: bool,
+) -> None:
+    schema = Schema({"value": Schema.leaf()})
+    root = Context({"value": 1}, schema=schema)
+    child = root.fork()
+    target = root if dispose_ancestor else child
+    dispose_effect = None
+    events: list[object] = []
+
+    def cleanup() -> None:
+        assert dispose_effect is not None
+        events.append("start")
+        with pytest.raises(RuntimeError, match="setup or cleanup"):
+            target.dispose()
+        with pytest.raises(RuntimeError, match="cannot be re-entered"):
+            dispose_effect()
+        events.append(child.get("value"))
+
+    dispose_effect = child.effect(lambda: cleanup)
+    dispose_effect()
+    assert events == ["start", 1]
+    root.dispose()
+
+
 async def test_async_effect_disposal_cannot_await_itself() -> None:
     ctx = Context()
     dispose_effect = None
@@ -306,6 +497,50 @@ async def test_cancelling_a_dispose_waiter_does_not_cancel_cleanup() -> None:
     assert finished.is_set()
 
 
+async def test_async_cleanup_failure_does_not_skip_remaining_cleanup() -> None:
+    events: list[str] = []
+    ctx = Context()
+
+    async def cleanup(name: str) -> None:
+        events.append(name)
+
+    async def fail() -> None:
+        events.append("fail")
+        raise ValueError("cleanup failed")
+
+    ctx.async_effect(lambda: lambda: cleanup("first"))
+    ctx.async_effect(lambda: fail)
+    ctx.async_effect(lambda: lambda: cleanup("last"))
+
+    with pytest.raises(ValueError, match="cleanup failed"):
+        await ctx.async_dispose()
+    with pytest.raises(ValueError, match="cleanup failed"):
+        await ctx.async_dispose()
+    assert events == ["last", "fail", "first"]
+
+
+async def test_cancelled_async_cleanup_does_not_skip_remaining_cleanup() -> None:
+    events: list[str] = []
+    ctx = Context()
+
+    async def cleanup(name: str) -> None:
+        events.append(name)
+
+    async def cancel() -> None:
+        events.append("cancel")
+        raise asyncio.CancelledError
+
+    ctx.async_effect(lambda: lambda: cleanup("first"))
+    ctx.async_effect(lambda: cancel)
+    ctx.async_effect(lambda: lambda: cleanup("last"))
+
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.async_dispose()
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.async_dispose()
+    assert events == ["last", "cancel", "first"]
+
+
 def test_parent_disposal_blocks_new_effects_in_active_children() -> None:
     root = Context()
     child = root.fork()
@@ -339,3 +574,44 @@ def test_cleanup_failures_do_not_skip_remaining_cleanup_or_scope_release() -> No
     assert events == ["last", "fail", "first"]
     with pytest.raises(RuntimeError, match="disposed"):
         ctx.get("value")
+
+
+def test_failed_sync_context_disposal_replays_error_without_repeating_cleanup() -> None:
+    calls = 0
+    ctx = Context()
+
+    def cleanup() -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("cleanup failed")
+
+    ctx.effect(lambda: cleanup)
+    with pytest.raises(ValueError, match="cleanup failed"):
+        ctx.dispose()
+    with pytest.raises(ValueError, match="cleanup failed"):
+        ctx.dispose()
+    assert calls == 1
+
+
+def test_final_schema_removal_releases_an_owned_add_payload() -> None:
+    class Payload:
+        pass
+
+    ctx = Context()
+    remove_declaration = ctx.declare({"temporary": Schema.leaf()})
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    ctx.add("temporary", payload)
+    del payload
+
+    remove_declaration()
+    gc.collect()
+
+    assert payload_ref() is None
+    with pytest.raises(KeyError, match="temporary"):
+        ctx.schema.resolve("temporary")
+
+    remove_redeclaration = ctx.declare({"temporary": Schema.leaf()})
+    assert not ctx.exists("temporary")
+    remove_redeclaration()
+    ctx.dispose()

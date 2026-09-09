@@ -77,7 +77,7 @@ class _Effect:
 
 
 class _SyncEffect(_Effect):
-    __slots__ = ("_cleanup", "_disposed")
+    __slots__ = ("_cleanup", "_disposed", "_disposing", "_error")
     is_async = False
 
     def __init__(
@@ -88,13 +88,21 @@ class _SyncEffect(_Effect):
         super().__init__(owner)
         self._cleanup: Callable[[], None] | None = cleanup
         self._disposed = False
+        self._disposing = False
+        self._error: BaseException | None = None
 
     def dispose(self) -> None:
+        if self._disposing:
+            raise RuntimeError("Context effect disposal cannot be re-entered.")
         if self._disposed:
+            if self._error is not None:
+                raise self._error
             return
-        self._disposed = True
+        self._disposing = True
         cleanup = self._cleanup
         self._cleanup = None
+        owner = self.owner
+        guarded = owner._enter_sync_disposal_guard() if owner is not None else ()
         try:
             if cleanup is None:
                 return
@@ -105,8 +113,16 @@ class _SyncEffect(_Effect):
                     "A synchronous Context effect returned an awaitable; "
                     "use async_effect()."
                 )
+        except BaseException as error:
+            self._error = error
+            raise
         finally:
-            self._release()
+            try:
+                self._disposing = False
+                self._disposed = True
+                self._release()
+            finally:
+                Context._exit_sync_disposal_guard(guarded)
 
 
 class _AsyncEffect(_Effect):
@@ -671,7 +687,20 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         if self._local_value_entry(scope) is not None:
             raise ValueError("Context already has a local value.")
         entry = self._insert(scope, value, position="prepend")
-        return self._disposer(scope, entry)
+        binding_ref = weakref.ref(self)
+        identity = entry.identity
+        target: Scope | None = scope
+
+        def dispose() -> None:
+            nonlocal target
+            if target is None:
+                return
+            binding = binding_ref()
+            if binding is not None:
+                binding._remove(target, identity)
+            target = None
+
+        return dispose
 
     def delete_value(self, scope: Scope) -> None:
         current = self._local_value_entry(scope)
@@ -777,6 +806,8 @@ class Context(ContextElement):
     _scope_counts: dict[Scope, int] | None = field(init=False)
     _state: _ContextState = field(init=False)
     _dispose_task: asyncio.Task[None] | None = field(init=False)
+    _dispose_error: BaseException | None = field(init=False)
+    _sync_disposal_guard_depth: int = field(init=False)
     _sync_only: bool = field(init=False)
 
     @staticmethod
@@ -841,6 +872,8 @@ class Context(ContextElement):
         object.__setattr__(self, "_scope_counts", scope_counts)
         object.__setattr__(self, "_state", _ContextState.ACTIVE)
         object.__setattr__(self, "_dispose_task", None)
+        object.__setattr__(self, "_dispose_error", None)
+        object.__setattr__(self, "_sync_disposal_guard_depth", 0)
         object.__setattr__(self, "_sync_only", sync_only)
 
         self._acquire_scope()
@@ -876,6 +909,36 @@ class Context(ContextElement):
             if ancestor._state is _ContextState.DISPOSED:
                 raise RuntimeError("An ancestor Context has been disposed.")
             ancestor = ancestor.parent
+
+    def _enter_sync_disposal_guard(self) -> tuple[Context, ...]:
+        guarded: list[Context] = []
+        current: Context | None = self
+        while current is not None:
+            object.__setattr__(
+                current,
+                "_sync_disposal_guard_depth",
+                current._sync_disposal_guard_depth + 1,
+            )
+            guarded.append(current)
+            current = current.parent
+        return tuple(guarded)
+
+    @staticmethod
+    def _exit_sync_disposal_guard(guarded: tuple[Context, ...]) -> None:
+        for context in guarded:
+            object.__setattr__(
+                context,
+                "_sync_disposal_guard_depth",
+                context._sync_disposal_guard_depth - 1,
+            )
+
+    def _assert_disposal_allowed(self) -> None:
+        if self._sync_disposal_guard_depth or any(
+            owner is self for owner in _DISPOSAL_CHAIN.get()
+        ):
+            raise RuntimeError(
+                "Context disposal cannot be re-entered from effect setup or cleanup."
+            )
 
     def _acquire_scope(self) -> None:
         counts = cast(dict[Scope, int], self.root._scope_counts)
@@ -939,11 +1002,18 @@ class Context(ContextElement):
         self,
         setup: Callable[[], Callable[[], None]],
     ) -> Callable[[], None]:
-        """Run synchronous setup and own its cleanup until early or Context disposal."""
+        """Run synchronous setup and own its cleanup until Context disposal.
+
+        Setup and cleanup cannot dispose this Context or one of its ancestors.
+        """
         self._assert_mutable()
         if not callable(setup):
             raise TypeError("Context effect setup must be callable.")
-        cleanup = cast(Callable[[], Any], setup)()
+        guarded = self._enter_sync_disposal_guard()
+        try:
+            cleanup = cast(Callable[[], Any], setup)()
+        finally:
+            self._exit_sync_disposal_guard(guarded)
         if inspect.isawaitable(cleanup):
             _Effect._close_awaitable(cleanup)
             raise TypeError(
@@ -956,7 +1026,10 @@ class Context(ContextElement):
         self,
         setup: Callable[[], Callable[[], Awaitable[None]]],
     ) -> Callable[[], Awaitable[None]]:
-        """Run synchronous setup and own its asynchronous cleanup."""
+        """Run synchronous setup and own its asynchronous cleanup.
+
+        Setup and cleanup cannot dispose this Context or one of its ancestors.
+        """
         self._assert_mutable()
         if self._sync_only:
             raise RuntimeError(
@@ -964,7 +1037,11 @@ class Context(ContextElement):
             )
         if not callable(setup):
             raise TypeError("Context effect setup must be callable.")
-        cleanup = cast(Callable[[], Any], setup)()
+        guarded = self._enter_sync_disposal_guard()
+        try:
+            cleanup = cast(Callable[[], Any], setup)()
+        finally:
+            self._exit_sync_disposal_guard(guarded)
         if inspect.isawaitable(cleanup):
             _Effect._close_awaitable(cleanup)
             raise TypeError(
@@ -986,16 +1063,20 @@ class Context(ContextElement):
                     "Context owns asynchronous cleanup; use await async_dispose()."
                 )
 
-    def _finish_dispose(self) -> None:
+    def _finish_dispose(self, error: BaseException | None) -> None:
         self._owned.clear()
         self._release_scope()
         if self.parent is not None:
             self.parent._remove_child(self)
+        object.__setattr__(self, "_dispose_error", error)
         object.__setattr__(self, "_state", _ContextState.DISPOSED)
 
     def dispose(self) -> None:
-        """Dispose synchronous direct ownership in LIFO order, recursively."""
+        """Dispose synchronous ownership once and reproduce its terminal failure."""
+        self._assert_disposal_allowed()
         if self._state is _ContextState.DISPOSED:
+            if self._dispose_error is not None:
+                raise self._dispose_error
             return
         self._preflight_sync_dispose()
         object.__setattr__(self, "_state", _ContextState.DISPOSING)
@@ -1011,7 +1092,7 @@ class Context(ContextElement):
                     if first_error is None:
                         first_error = error
         finally:
-            self._finish_dispose()
+            self._finish_dispose(first_error)
         if first_error is not None:
             raise first_error
 
@@ -1032,25 +1113,24 @@ class Context(ContextElement):
                         first_error = error
         finally:
             try:
-                self._finish_dispose()
+                self._finish_dispose(first_error)
             finally:
                 _DISPOSAL_CHAIN.reset(token)
         if first_error is not None:
             raise first_error
 
     async def async_dispose(self) -> None:
-        """Dispose all direct ownership in LIFO order, recursively."""
-        if self._state is _ContextState.DISPOSED:
-            return
-        if any(owner is self for owner in _DISPOSAL_CHAIN.get()):
-            raise RuntimeError(
-                "Context disposal cannot be re-entered from its cleanup."
-            )
+        """Dispose all ownership once and reproduce its terminal failure."""
+        self._assert_disposal_allowed()
         task = self._dispose_task
         if task is not None:
             if task is asyncio.current_task():
                 raise RuntimeError("Context disposal cannot await itself.")
             await asyncio.shield(task)
+            return
+        if self._state is _ContextState.DISPOSED:
+            if self._dispose_error is not None:
+                raise self._dispose_error
             return
         if self._state is _ContextState.DISPOSING:
             raise RuntimeError("Synchronous Context disposal is already in progress.")

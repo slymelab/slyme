@@ -2,7 +2,7 @@
 
 `Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by Scope. Reads follow the bound Scope's C3 order by default, while writes change only that exact Scope.
 
-A Context tree and its mutable Schema and Compose objects are single-thread-owned. Synchronous workflows use them on that thread; asynchronous workflows use them on one event loop. Worker threads and processes should receive ordinary values and return results for Context mutation on the owner thread.
+A Context tree and its mutable Schema and Compose objects are single-thread-owned. Synchronous workflows use them on that thread; asynchronous workflows use them on one event loop. This is a usage requirement rather than a runtime thread-identity check. Worker threads and processes should receive ordinary values and return results for Context mutation on the owner thread.
 
 ## Ref and Schema {#ref}
 
@@ -243,17 +243,17 @@ finally:
     remove_schema()
 ```
 
-An inherited Scope value does not prevent adding a value at a more specific Scope. `add()` itself does not decide whether later replacement is allowed: `Schema.leaf(replaceable=False)` rejects `set()` while a normal value exists at the same Scope, whereas the default permits replacement. Deletion and child-Scope shadowing remain allowed. If another operation has already replaced or removed the exact entry created by `add()`, its disposer does nothing.
+An inherited Scope value does not prevent adding a value at a more specific Scope. `add()` itself does not decide whether later replacement is allowed: `Schema.leaf(replaceable=False)` rejects `set()` while a normal value exists at the same Scope, whereas the default permits replacement. Deletion and child-Scope shadowing remain allowed. If another operation has already replaced or removed the exact entry created by `add()`, its disposer does nothing. Removing the final Schema declaration for a path also releases its hidden bindings; an owned stale `add()` disposer does not retain the removed value.
 
 ## Effects and disposal
 
-`ctx.effect(setup)` runs synchronous setup immediately and owns the synchronous cleanup callable it returns; the method returns an exact synchronous early disposer. `ctx.async_effect(setup)` also runs setup synchronously, but owns an asynchronous cleanup callable and returns an early disposer that must be awaited.
+`ctx.effect(setup)` runs synchronous setup immediately and owns the synchronous cleanup callable it returns; the method returns an exact synchronous early disposer. `ctx.async_effect(setup)` also runs setup synchronously, but owns an asynchronous cleanup callable and returns an early disposer that must be awaited. Effect setup cannot dispose its owner Context or an ancestor before the returned cleanup has been registered. As with any resource-acquisition callback, setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
 
-A parent strongly owns its child Contexts. Each Context processes its directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` handles a wholly synchronous subtree. If any descendant owns asynchronous cleanup, it rejects the entire operation before teardown begins; use `await async_dispose()` to process both synchronous and asynchronous cleanup. Disposal continues after a cleanup failure, finishes releasing the subtree, and then raises the first failure. Both forms are idempotent, and a disposed Context rejects further Context data access, mutations, forks, effects, and registrations.
+A parent strongly owns its child Contexts. Each Context processes its directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` handles a wholly synchronous subtree. If any descendant owns asynchronous cleanup, it rejects the entire operation before teardown begins; use `await async_dispose()` to process both synchronous and asynchronous cleanup. Disposal continues after a cleanup failure, finishes releasing the subtree, and then raises the first failure. Idempotence means cleanup runs at most once; later calls to the same effect disposer or Context disposal method reproduce its terminal failure. A disposed Context rejects further Context data access, mutations, forks, effects, and registrations.
 
-Cleanup must not await disposal of its owning Context, an ancestor already being disposed, or its own async-effect disposer. These reentrant waits would depend on themselves, so Slyme rejects them with `RuntimeError`.
+Effect cleanup cannot dispose its owning Context, an ancestor, or itself while it is running. These reentrant operations could invalidate resources still used by that cleanup or depend on their own completion, so Slyme rejects them with `RuntimeError`.
 
-Disposing a Context stops it from keeping the Context-data layers in `ctx.scope.mro` active; it does not detach or destroy `ctx.scope`. A Context leaf value at a Scope remains available while another active Context in the same application root has that Scope in its MRO, and is cleared after the final viewer is disposed. Compose entries instead remain until their exact disposers run. Callers should therefore dispose child Contexts deterministically rather than rely on garbage collection.
+Disposing a Context stops it from keeping the Context-data layers in `ctx.scope.mro` active; it does not detach or destroy `ctx.scope`. A value installed by `set()` remains stored while another active Context in the same application root has that Scope in its MRO. A value installed by `add()` is additionally removed when its owning Context or exact disposer runs. Compose entries likewise remain until their exact disposers run. Data visibility never guarantees that an external resource inside a value is still open: its effect owner may have already closed it. Align resource ownership with every Context that may use it, and dispose child Contexts deterministically rather than relying on garbage collection.
 
 ## Compose
 

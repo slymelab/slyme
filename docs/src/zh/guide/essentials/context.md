@@ -2,7 +2,7 @@
 
 `Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按 Scope 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则只修改该 Scope。
 
-一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程。同步 workflow 在该线程使用它们；异步 workflow 则在一个事件循环中使用它们。worker 线程和进程应只接收普通值，并把结果返回 owner 线程后再修改 Context。
+一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程。同步 workflow 在该线程使用它们；异步 workflow 则在一个事件循环中使用它们。这是使用约束，而不是运行时线程身份检查。worker 线程和进程应只接收普通值，并把结果返回 owner 线程后再修改 Context。
 
 ## Ref 与 Schema {#ref}
 
@@ -230,17 +230,17 @@ finally:
     remove_schema()
 ```
 
-Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add()` 本身不决定之后能否替换：`Schema.leaf(replaceable=False)` 会在同一个 Scope 已有普通值时拒绝 `set()`，默认策略则允许替换。删除和 child Scope shadow 始终允许。如果 `add()` 创建的精确 entry 已被其他操作删除或替换，原 disposer 不会影响当前值。
+Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add()` 本身不决定之后能否替换：`Schema.leaf(replaceable=False)` 会在同一个 Scope 已有普通值时拒绝 `set()`，默认策略则允许替换。删除和 child Scope shadow 始终允许。如果 `add()` 创建的精确 entry 已被其他操作删除或替换，原 disposer 不会影响当前值。撤销某路径的最后一个 Schema 声明也会释放其隐藏 binding；仍由 Context 持有的旧 `add()` disposer 不会继续保留已移除的值。
 
 ## Effect 与 dispose
 
-`ctx.effect(setup)` 会立即同步执行 setup，并拥有其返回的同步 cleanup callable；该方法返回同步的精确提前 disposer。`ctx.async_effect(setup)` 同样同步执行 setup，但拥有其返回的异步 cleanup callable，并返回必须 await 的提前 disposer。
+`ctx.effect(setup)` 会立即同步执行 setup，并拥有其返回的同步 cleanup callable；该方法返回同步的精确提前 disposer。`ctx.async_effect(setup)` 同样同步执行 setup，但拥有其返回的异步 cleanup callable，并返回必须 await 的提前 disposer。在返回的 cleanup 登记完成前，effect setup 不得 dispose owner Context 或其 ancestor。与其他资源获取回调相同，如果 setup 在返回 cleanup 之前抛出异常，它仍须自行撤销部分完成的资源获取。
 
-parent 会强引用并拥有其子 Context。每个 Context 都按后进先出顺序处理自己直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 处理完全同步的子树；如果任一后代拥有异步 cleanup，它会在任何清理开始前拒绝整个操作，此时应使用 `await async_dispose()` 处理同步和异步 cleanup。某项 cleanup 失败不会跳过其余清理；子树释放完毕后会重新抛出第一个异常。两种 dispose 都是幂等的，已 dispose 的 Context 会拒绝后续 Context 数据访问、修改、fork、effect 与注册操作。
+parent 会强引用并拥有其子 Context。每个 Context 都按后进先出顺序处理自己直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 处理完全同步的子树；如果任一后代拥有异步 cleanup，它会在任何清理开始前拒绝整个操作，此时应使用 `await async_dispose()` 处理同步和异步 cleanup。某项 cleanup 失败不会跳过其余清理；子树释放完毕后会重新抛出第一个异常。幂等表示 cleanup 最多执行一次；后续再次调用同一个 effect disposer 或 Context dispose 方法时，会重现其最终失败。已 dispose 的 Context 会拒绝后续 Context 数据访问、修改、fork、effect 与注册操作。
 
-cleanup 不得等待其 owner Context、正在 dispose 的 ancestor，或自身 async effect disposer 的销毁。此类重入等待会依赖自身，因此 Slyme 会抛出 `RuntimeError`。
+effect cleanup 执行期间不得 dispose 其 owner Context、ancestor 或自身。这类重入操作可能让 cleanup 仍在使用的资源提前失效，或者依赖自身完成，因此 Slyme 会抛出 `RuntimeError`。
 
-dispose Context 后，它不再维持 `ctx.scope.mro` 中各 Context 数据层的活跃状态，但不会解除或销毁 `ctx.scope`。同一应用根内，只要仍有活跃 Context 的 MRO 包含某个 Scope，该 Scope 上的 Context leaf value 就会保持可见，并在最后一个观察者 dispose 后清除。Compose entry 则由各自的精确 disposer 管理。调用方因此应确定性地 dispose 子 Context，而不是依赖垃圾回收。
+dispose Context 后，它不再维持 `ctx.scope.mro` 中各 Context 数据层的活跃状态，但不会解除或销毁 `ctx.scope`。通过 `set()` 安装的值，只要同一应用根内仍有活跃 Context 的 MRO 包含该 Scope，就会继续存储；通过 `add()` 安装的值还会在 owner Context 或其精确 disposer 执行时移除。Compose entry 同样保留到各自的精确 disposer 执行。数据仍然可见并不保证值中的外部资源仍处于打开状态：拥有该资源的 effect 可能已经关闭它。资源所有权应覆盖每个可能使用它的 Context，并且调用方应确定性地 dispose 子 Context，而不是依赖垃圾回收。
 
 ## Compose
 

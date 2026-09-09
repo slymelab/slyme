@@ -17,9 +17,9 @@ Application code creates a `Context`, handles external inputs, calls the root No
 - `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.
 - `@builder` is a build-time factory that assembles reusable Node trees. It requires the outer result to be a `Node` or `AsyncNode` (`None` is reported as a missing return), but does not validate the nested object graph or perform runtime work.
 - `Context` has at most one lifetime parent and one bound Scope. Reads follow `ctx.scope.mro` by default, writes target `ctx.scope`, and `local=True` restricts reads to that exact Scope. Context CRUD never accepts a separate Scope.
-- A Context tree and its mutable Schema and Compose objects belong to one thread and one event loop. Offloaded thread or process work receives ordinary values and returns results for owner-thread Context mutation.
+- A Context tree and its mutable Schema and Compose objects belong to one thread and one event loop. This usage rule has no runtime thread-identity check. Offloaded thread or process work receives ordinary values and returns results for owner-thread Context mutation.
 - Context construction accepts a declared path-to-value mapping. Schema fixes each path's leaf or container role; runtime data stores only leaf bindings.
-- `Context.effect()` and `async_effect()` run synchronous setup and own its cleanup. Each Context processes directly owned effects and child Contexts in LIFO order, recursively; use `dispose()` for a wholly synchronous subtree and `await async_dispose()` when asynchronous cleanup may exist.
+- `Context.effect()` and `async_effect()` run synchronous setup and own its cleanup. Setup and cleanup cannot dispose their owner or an ancestor while running. Each Context processes directly owned effects and child Contexts in LIFO order, recursively; cleanup runs once and terminal failures are reproduced by later disposal calls. Use `dispose()` for a wholly synchronous subtree and `await async_dispose()` when asynchronous cleanup may exist.
 - `Context.add()` installs one binding at the bound Scope and owns its exact disposer. `Context.declare()` and `contribute()` likewise bind registration cleanup to the calling Context. `Schema.leaf(replaceable=False)` prevents later replacement through `set()` at the same Scope.
 - `Context.isolate()` creates an owned child with a child Scope that blocks selected inherited leaf values.
 - `Compose` stores ordered values by Scope and resolves those visible through Scope C3 lookup. Prefer `ctx.contribute()` for a lifecycle-owned registration; use `compose.add(scope, ...)` as the lower-level primitive.
@@ -32,7 +32,7 @@ A higher-order Node accepts child Nodes through named parameters containing eith
 
 Represent a single, stable child role with an individual named `Node` parameter. For a statically assembled extensible group, use a container such as `Sequence[Node]` for ordered execution or `Mapping[K, Node]` for keyed dispatch. Use `Compose` when independent owners must add and remove values by Scope at runtime. Keep independently meaningful roles or phases in separate named parameters. See [references/core-api.md](references/core-api.md) for examples.
 
-`Auto` Ref parameters read the supplied Context. Every Auto child Node receives an owned child Context with a distinct child Scope, and Slyme disposes that child before parent execution continues. Use a returned value for dataflow. Call children explicitly with a selected Context when their writes and effects must share its lifetime.
+`Auto` Ref parameters read the supplied Context. Every Auto child Node receives an owned child Context with a distinct child Scope, and Slyme disposes that child before parent execution continues. Use a returned value for self-contained dataflow; it must not depend on a resource owned by the disposed child. Call children explicitly with a selected Context when their writes and effects must share its lifetime. Context does not own arbitrary tasks that use it, so stop and await them before disposal.
 
 Reuse existing Nodes whenever possible. Extend behavior through composition before introducing new Nodes.
 

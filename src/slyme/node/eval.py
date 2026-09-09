@@ -22,7 +22,7 @@ from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.pytree import PyTreeDef
 from slyme.utils.registry import TypeRegistry
 
-from ._async import wait_uninterruptibly
+from ._async import finish_uninterruptibly, wait_uninterruptibly
 from .core import AsyncNode, Node
 
 __all__ = [
@@ -42,6 +42,14 @@ __all__ = [
 
 BatchEvaluatorFunc = Callable[[Context, Sequence[Any]], Sequence[Any]]
 AsyncBatchEvaluatorFunc = Callable[[Context, Sequence[Any]], Awaitable[Sequence[Any]]]
+
+
+class _AdditionalAutoFailures(Exception):
+    """Additional child failures observed while Auto evaluation was unwinding."""
+
+    def __init__(self, errors: tuple[BaseException, ...]) -> None:
+        self.errors = errors
+        super().__init__(f"{len(errors)} additional Auto child failures.")
 
 
 @dataclass(frozen=True)
@@ -200,11 +208,25 @@ def node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
 
 
 async def async_node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[Any]:
-    async def _dispose_child(child_ctx: Context) -> None:
-        cleanup = asyncio.create_task(child_ctx.async_dispose())
-        await wait_uninterruptibly(cleanup)
+    cleanup_failures: dict[int, BaseException] = {}
 
-    async def _evaluate_single(node: Any) -> Any:
+    async def _dispose_child(index: int, child_ctx: Context) -> None:
+        cleanup = asyncio.create_task(child_ctx.async_dispose())
+        try:
+            await wait_uninterruptibly(cleanup)
+        except asyncio.CancelledError as error:
+            if cleanup.cancelled():
+                cleanup_failures[index] = error
+            elif cleanup.done():
+                cleanup_error = cleanup.exception()
+                if cleanup_error is not None:
+                    cleanup_failures[index] = cleanup_error
+            raise
+        except BaseException as error:
+            cleanup_failures[index] = error
+            raise
+
+    async def _evaluate_single(index: int, node: Any) -> Any:
         child_ctx = ctx._fork_for_auto(synchronous=False)
         try:
             if isinstance(node, AsyncNode):
@@ -213,23 +235,67 @@ async def async_node_evaluator(ctx: Context, nodes: Sequence[Any]) -> Sequence[A
                 result = node(child_ctx)
         except BaseException as error:
             try:
-                await _dispose_child(child_ctx)
+                await _dispose_child(index, child_ctx)
             except BaseException as cleanup_error:
                 raise error from cleanup_error
             raise
         else:
-            await _dispose_child(child_ctx)
+            await _dispose_child(index, child_ctx)
             return result
 
-    tasks = tuple(asyncio.create_task(_evaluate_single(node)) for node in nodes)
+    tasks = tuple(
+        asyncio.create_task(_evaluate_single(index, node))
+        for index, node in enumerate(nodes)
+    )
     try:
         return await asyncio.gather(*tasks)
-    except BaseException:
+    except BaseException as error:
         for task in tasks:
             if not task.done():
                 task.cancel()
         pending = asyncio.gather(*tasks, return_exceptions=True)
-        await wait_uninterruptibly(pending)
+        await finish_uninterruptibly(pending)
+        outcomes = pending.result()
+        primary_index = next(
+            (
+                index
+                for index, task in enumerate(tasks)
+                if not task.cancelled() and task.exception() is error
+            ),
+            None,
+        )
+        additional: list[BaseException] = []
+        for index, outcome in enumerate(outcomes):
+            if index == primary_index or not isinstance(outcome, BaseException):
+                continue
+            if isinstance(outcome, asyncio.CancelledError):
+                failure = cleanup_failures.get(index)
+                if failure is not None:
+                    additional.append(failure)
+            else:
+                additional.append(outcome)
+
+        if isinstance(error, asyncio.CancelledError) and additional:
+            failures = tuple(
+                failure
+                for failure in additional
+                if not isinstance(failure, asyncio.CancelledError)
+            )
+            if len(failures) == 1:
+                raise failures[0] from error
+            if failures:
+                raise _AdditionalAutoFailures(failures) from error
+        elif additional:
+            causes = [] if error.__cause__ is None else [error.__cause__]
+            for failure in additional:
+                if all(failure is not current for current in causes):
+                    causes.append(failure)
+            cause: BaseException = (
+                causes[0]
+                if len(causes) == 1
+                else _AdditionalAutoFailures(tuple(causes))
+            )
+            raise error from cause
         raise
 
 

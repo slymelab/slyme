@@ -33,6 +33,14 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Preserved Context disposal failures after a cancelled waiter so every later
+  disposal call observes the same terminal result without repeating cleanup.
+- Rejected disposal of an effect's owner or ancestors during synchronous setup
+  and cleanup, preventing reentrant teardown from invalidating live cleanup.
+- Released Context-owned `add()` values when their final Schema declaration is
+  removed, without weakening public Compose ownership.
+- Preserved failures from cancelled Auto siblings and their cleanup during
+  evaluation failure and repeated cancellation.
 - Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
   they cannot bypass fixed runtime-arity and named build-parameter validation.
 - Prevented Context updates from changing Schema-owned leaf/container roles.
