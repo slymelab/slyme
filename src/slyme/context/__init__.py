@@ -13,12 +13,9 @@
 # limitations under the License.
 
 from .compose import Compose
-from .core import (
-    Context,
-    ContextKey,
-    Ref,
-    Schema,
-)
+from .core import Context, ContextKey
+from .ref import Ref
+from .schema import Schema
 from .scope import Scope
 
 __all__ = [

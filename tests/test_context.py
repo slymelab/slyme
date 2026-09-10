@@ -17,7 +17,26 @@ from slyme.context import (
     Scope,
 )
 from slyme.context.core import ContextPathError
+from slyme.context.ref import Ref as PathRef
+from slyme.context.schema import Schema as PathSchema
 from slyme.context.tree import CTX_EVAL_ENGINE
+
+
+def test_schema_module_preserves_public_ref_and_context_interoperation() -> None:
+    assert PathRef is Ref
+    assert PathSchema is Schema
+    schema = PathSchema()
+    remove = schema.declare({"value": PathSchema.leaf(int)})
+    ref = schema.resolve("value")
+    assert isinstance(ref, PathRef)
+    ctx = Context({ref: 1}, schema=schema)
+    assert ctx.get(ref) == 1
+    remove()
+    with pytest.raises(ContextPathError):
+        ctx.get(ref)
+    assert not ctx._data
+    ctx.dispose()
+
 
 R = Schema(
     {

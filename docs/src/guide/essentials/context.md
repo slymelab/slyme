@@ -255,6 +255,8 @@ Effect cleanup cannot dispose its owning Context, an ancestor, or itself while i
 
 Disposing a Context removes it from the viewer sets for every Scope in `ctx.scope.mro`; it does not detach or destroy `ctx.scope`. A value installed by `set()` remains stored while another active Context in the same application root can view its Context-binding identity. A value installed by `add()` is additionally removed when its owning Context or exact disposer runs. Compose entries likewise remain until their exact disposers run. Data visibility never guarantees that an external resource inside a value is still open: its effect owner may have already closed it. Align resource ownership with every Context that may use it, and dispose child Contexts deterministically rather than relying on garbage collection.
 
+Context bindings track the observed Scopes for each identity and remove its values when the last viewer leaves, without scanning unrelated Scope bindings. Reusing a retained Scope, directly or as an ancestor, restores its viewer registration and preserves its original identity binding; values already cleared are not restored.
+
 ## Compose
 
 `Compose` stores ordered values under Compose-local identities and resolves them through Scope C3 order. An unbound Scope receives a private identity on its first write. `compose.bind(scope_a, scope_b, identity=key)` binds several Scopes once to a shared identity; repeated binding to the same identity is idempotent, while rebinding fails. Binding is structural and has no disposer. Store a Compose object in Context when Nodes need to discover it through a Ref, then use `Context.contribute()` to attach contribution cleanup to a lifetime:

@@ -6,7 +6,7 @@ import weakref
 
 import pytest
 
-from slyme.context import Compose, Context, Schema
+from slyme.context import Compose, Context, Schema, Scope
 from slyme.context.core import ContextPathError
 
 
@@ -214,6 +214,124 @@ def test_bound_identity_keeps_add_owned_by_its_context() -> None:
     owner.dispose()
     assert not viewer.exists("value")
     viewer.dispose()
+    root.dispose()
+
+
+def test_identity_index_tracks_observed_scopes_even_without_values() -> None:
+    root = Context(schema=Schema({"value": Schema.leaf()}))
+    writer = root.fork(scope=root.scope.fork())
+    viewer = root.fork(scope=root.scope.fork())
+    identity = object()
+    writer.bind("value", identity=identity)
+    viewer.bind("value", identity=identity)
+    viewer.bind("value", identity=identity)
+    binding = next(iter(root._data.values()))
+
+    assert binding._identity_scopes == {identity: {writer.scope, viewer.scope}}
+    with pytest.raises(ValueError, match="cannot be rebound"):
+        writer.bind("value", identity=object())
+    assert binding._identity_scopes == {identity: {writer.scope, viewer.scope}}
+
+    writer.set("value", "first")
+    writer.delete("value")
+    assert not binding._buckets
+    assert binding._identity_scopes == {identity: {writer.scope, viewer.scope}}
+    writer.set("value", "second")
+    writer.dispose()
+    assert binding._identity_scopes == {identity: {viewer.scope}}
+    assert viewer.get("value") == "second"
+
+    viewer.dispose()
+    assert not binding._identity_scopes
+    assert not binding._buckets
+    assert binding._scope_identities[writer.scope] is identity
+    root.dispose()
+
+
+@pytest.mark.parametrize("descendant", [False, True])
+@pytest.mark.parametrize("reader_first", [False, True])
+def test_reused_scope_protects_identity_without_reading_or_binding_again(
+    descendant: bool,
+    reader_first: bool,
+) -> None:
+    root = Context(schema=Schema({"value": Schema.leaf()}))
+    saved_scope = root.scope.fork()
+    previous = root.fork(scope=saved_scope)
+    identity = object()
+    previous.bind("value", identity=identity)
+    previous.set("value", "old")
+    previous.dispose()
+    binding = next(iter(root._data.values()))
+    assert not binding._identity_scopes
+    assert not binding._buckets
+
+    reader_scope = saved_scope.fork() if descendant else saved_scope
+    if reader_first:
+        reader = root.fork(scope=reader_scope)
+    writer = root.fork(scope=root.scope.fork())
+    writer.bind("value", identity=identity)
+    writer.set("value", "new")
+    if not reader_first:
+        reader = root.fork(scope=reader_scope)
+
+    writer.dispose()
+    assert binding._identity_scopes == {identity: {saved_scope}}
+    assert reader.get("value") == "new"
+    reader.dispose()
+    assert not binding._identity_scopes
+    assert not binding._buckets
+    root.dispose()
+
+
+def test_identity_index_keeps_both_observed_parents_of_a_diamond_scope() -> None:
+    root = Context(schema=Schema({"value": Schema.leaf()}))
+    left = root.fork(scope=root.scope.fork())
+    right = root.fork(scope=root.scope.fork())
+    reader = root.fork(scope=Scope(parents=(left.scope, right.scope)))
+    identity = object()
+    left.bind("value", identity=identity)
+    right.bind("value", identity=identity)
+    left.set("value", "shared")
+    binding = next(iter(root._data.values()))
+
+    left.dispose()
+    right.dispose()
+    assert binding._identity_scopes == {identity: {left.scope, right.scope}}
+    assert reader.get("value") == "shared"
+    reader.dispose()
+    assert not binding._identity_scopes
+    assert not binding._buckets
+    root.dispose()
+
+
+def test_scope_release_does_not_scan_other_identity_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Context(schema=Schema({"value": Schema.leaf()}))
+    sessions = [root.fork(scope=root.scope.fork()) for _ in range(1000)]
+    for number, session in enumerate(sessions):
+        session.set("value", number)
+    binding = next(iter(root._data.values()))
+    scope_refs = [weakref.ref(session.scope) for session in sessions]
+    assert len(binding._identity_scopes) == 1000
+
+    def reject_scan():
+        pytest.fail("Scope release must not scan every Scope-to-identity binding.")
+
+    monkeypatch.setattr(binding._scope_identities, "items", reject_scan)
+    sessions[0].dispose()
+    assert len(binding._identity_scopes) == 999
+    assert sessions[-1].get("value") == 999
+    for session in sessions[1:]:
+        session.dispose()
+    assert not binding._identity_scopes
+    assert not binding._buckets
+
+    del session
+    sessions.clear()
+    gc.collect()
+    assert all(scope_ref() is None for scope_ref in scope_refs)
+    assert not binding._scope_identities
     root.dispose()
 
 
