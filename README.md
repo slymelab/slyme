@@ -35,12 +35,11 @@ pip install slyme
 
 ## Quick Start
 
-Here is a quick example using Slyme's core primitives (`@node`, `@wrapper`, and `@builder`):
+Here is a quick example using `@node`, `@wrapper`, and an ordinary function to assemble the graph:
 
 ```python
 from time import time
 from collections.abc import Callable
-from slyme.builder import builder
 from slyme.context import Context, Ref, Schema
 from slyme.node import node, wrapper, Auto, Node
 
@@ -89,8 +88,7 @@ def timing(
 
 
 # 4. Assemble the pipeline at Build-Time
-@builder
-def build_pipeline():
+def build_pipeline() -> Node[None]:
     return llm_api(
         responses=R.resolve("output.responses"),
         prompts=format_prompts(
@@ -113,6 +111,8 @@ if __name__ == "__main__":
     build_pipeline()(ctx)
     print(ctx.get(R.resolve("output.responses")))
 ```
+
+Typed APIs rely on their annotations for argument and callback types, including synchronous versus asynchronous callbacks and `Literal` options. Use a static type checker to validate these calls. Slyme checks dynamic Schema declarations, structural conflicts, and lifecycle constraints at runtime. Assemble reusable Node graphs with ordinary Python functions.
 
 ## Context lifetimes, Scope visibility, and Compose
 

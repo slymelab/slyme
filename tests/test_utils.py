@@ -166,8 +166,6 @@ def test_pytree_paths_iteration_and_leaf_override() -> None:
 
     leaves, _ = engine.flatten(tree, is_leaf=lambda value, _: isinstance(value, list))
     assert leaves == [[10, 20], 30]
-    with pytest.raises(TypeError, match="Invalid key_path"):
-        engine.get_element(tree, ("bad",))  # type: ignore[arg-type]
 
 
 def test_pytree_custom_handler_resolvers_and_inheritance() -> None:
@@ -196,8 +194,6 @@ def test_pytree_custom_handler_resolvers_and_inheritance() -> None:
         priority="pre",
     )
     assert engine.flatten(Box(3))[0] == [4]
-    with pytest.raises(ValueError, match="Invalid priority"):
-        engine.register_resolver(lambda _value, _aux: None, priority="bad")  # type: ignore[arg-type]
 
     class ChildBox(Box):
         pass
@@ -205,6 +201,12 @@ def test_pytree_custom_handler_resolvers_and_inheritance() -> None:
     exact_engine = PyTreeEngine(allow_inheritance=False, register_defaults=False)
     exact_engine.register(Box, flatten_box, unflatten_box)
     assert exact_engine.flatten(ChildBox(1))[0] == [ChildBox(1)]
+    exact_engine.register_resolver(
+        lambda value, _: override if isinstance(value, ChildBox) else None,
+        priority="post",
+    )
+    assert exact_engine.flatten(ChildBox(1))[0] == [2]
+    assert exact_engine.flatten(Box(1))[0] == [1]
 
 
 def test_pytree_definition_rejects_wrong_leaf_counts_and_keys() -> None:

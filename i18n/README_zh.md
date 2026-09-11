@@ -34,12 +34,11 @@ pip install slyme
 
 ## 快速开始
 
-以下示例展示了如何使用 Slyme 的核心原语（`@node`、`@wrapper` 和 `@builder`）构建简单的执行流水线：
+以下示例使用 `@node`、`@wrapper` 和组装图的普通函数构建简单的执行流水线：
 
 ```python
 from time import time
 from collections.abc import Callable
-from slyme.builder import builder
 from slyme.context import Context, Ref, Schema
 from slyme.node import node, wrapper, Auto, Node
 
@@ -88,8 +87,7 @@ def timing(
 
 
 # 4. 在构建时组装流水线
-@builder
-def build_pipeline():
+def build_pipeline() -> Node[None]:
     return llm_api(
         responses=R.resolve("output.responses"),
         prompts=format_prompts(
@@ -112,6 +110,8 @@ if __name__ == "__main__":
     build_pipeline()(ctx)
     print(ctx.get(R.resolve("output.responses")))
 ```
+
+类型化 API 通过类型注解约束参数和回调类型，包括同步／异步回调及 `Literal` 选项；请使用静态类型检查器检查这些调用。Slyme 在运行时检查动态 Schema 声明、结构冲突和生命周期约束。可复用的 Node 图通过普通 Python 函数组装。
 
 ## Context 生命周期、Scope 可见性与 Compose
 

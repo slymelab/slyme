@@ -47,19 +47,11 @@ class Compose(Generic[_T, _R]):
     __slots__ = ("_buckets", "_resolver", "_scope_identities", "__weakref__")
 
     def __init__(self, resolver: Callable[[tuple[_T, ...]], _R]) -> None:
-        if not callable(resolver):
-            raise TypeError("Compose resolver must be callable.")
         self._resolver = resolver
         self._scope_identities: weakref.WeakKeyDictionary[Scope, Hashable] = (
             weakref.WeakKeyDictionary()
         )
         self._buckets: dict[Hashable, dict[object, _ComposeEntry[_T]]] = {}
-
-    @staticmethod
-    def _validate_scope(scope: Scope) -> Scope:
-        if not isinstance(scope, Scope):
-            raise TypeError(f"Compose scope must be Scope, got {type(scope).__name__}.")
-        return scope
 
     @staticmethod
     def _validate_identity(identity: Hashable) -> Hashable:
@@ -73,24 +65,22 @@ class Compose(Generic[_T, _R]):
         """Bind Scopes once to one Compose-local storage identity."""
         if not scopes:
             raise ValueError("Compose.bind() requires at least one Scope.")
-        checked_scopes = tuple(self._validate_scope(scope) for scope in scopes)
         checked_identity = self._validate_identity(identity)
 
         conflicts = tuple(
             scope
-            for scope in checked_scopes
+            for scope in scopes
             if scope in self._scope_identities
             and self._scope_identities[scope] != checked_identity
         )
         if conflicts:
             raise ValueError("A Scope cannot be rebound to another Compose identity.")
 
-        for scope in checked_scopes:
+        for scope in scopes:
             if scope not in self._scope_identities:
                 self._scope_identities[scope] = checked_identity
 
     def _identity_for(self, scope: Scope, *, create: bool) -> Hashable:
-        scope = self._validate_scope(scope)
         try:
             return self._scope_identities[scope]
         except KeyError:
@@ -136,7 +126,6 @@ class Compose(Generic[_T, _R]):
         *,
         local: bool,
     ) -> tuple[_ComposeEntry[_T], ...]:
-        scope = self._validate_scope(scope)
         scopes = (scope,) if local else scope.mro
         identities: list[Hashable] = []
         seen: set[Hashable] = set()
@@ -179,10 +168,6 @@ class Compose(Generic[_T, _R]):
         metadata: Mapping[str, Any] | None = None,
         position: Literal["prepend", "append"] = "append",
     ) -> _ComposeEntry[_T]:
-        scope = self._validate_scope(scope)
-        if position not in ("prepend", "append"):
-            raise ValueError(f"Unknown Compose position: {position!r}.")
-
         identity = self._identity_for(scope, create=True)
         token = object()
         entry = _ComposeEntry(
@@ -248,7 +233,6 @@ class Compose(Generic[_T, _R]):
                 for entry in bucket.values()
             )
         else:
-            scope = self._validate_scope(scope)
             scoped = self._scoped_entries(scope, local=local)
 
         return tuple(

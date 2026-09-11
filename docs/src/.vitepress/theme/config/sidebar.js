@@ -13,7 +13,7 @@ const guideEn = [
     items: [
       { text: 'Context', link: '/guide/essentials/context' },
       { text: 'Node', link: '/guide/essentials/node' },
-      { text: 'Builder', link: '/guide/essentials/builder' },
+      { text: 'Graph Assembly', link: '/guide/essentials/graph-assembly' },
       { text: 'Lifecycle', link: '/guide/essentials/lifecycle' },
     ],
     collapsed: false,
@@ -55,7 +55,7 @@ const guideZh = [
     items: [
       { text: 'Context', link: '/zh/guide/essentials/context' },
       { text: 'Node', link: '/zh/guide/essentials/node' },
-      { text: 'Builder', link: '/zh/guide/essentials/builder' },
+      { text: '图的组装', link: '/zh/guide/essentials/graph-assembly' },
       { text: '生命周期', link: '/zh/guide/essentials/lifecycle' },
     ],
     collapsed: false,

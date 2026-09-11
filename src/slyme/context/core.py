@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping
@@ -49,21 +48,6 @@ class _Effect:
 
     def __init__(self, owner: Context) -> None:
         self.owner: Context | None = owner
-
-    @staticmethod
-    def _is_async_callable(callback: Callable[..., Any]) -> bool:
-        unwrapped = inspect.unwrap(callback)
-        if inspect.iscoroutinefunction(unwrapped):
-            return True
-        return callable(unwrapped) and inspect.iscoroutinefunction(
-            type(unwrapped).__call__
-        )
-
-    @staticmethod
-    def _close_awaitable(value: Awaitable[Any]) -> None:
-        close = getattr(value, "close", None)
-        if close is not None:
-            close()
 
     @staticmethod
     def _observe_task_result(task: asyncio.Task[Any]) -> None:
@@ -107,13 +91,7 @@ class _SyncEffect(_Effect):
         try:
             if cleanup is None:
                 return
-            result = cast(Callable[[], Any], cleanup)()
-            if inspect.isawaitable(result):
-                self._close_awaitable(result)
-                raise TypeError(
-                    "A synchronous Context effect returned an awaitable; "
-                    "use async_effect()."
-                )
+            cleanup()
         except BaseException as error:
             self._error = error
             raise
@@ -151,12 +129,7 @@ class _AsyncEffect(_Effect):
         try:
             if cleanup is None:
                 return
-            result = cleanup()
-            if not inspect.isawaitable(result):
-                raise TypeError(
-                    "An asynchronous Context effect did not return an awaitable."
-                )
-            await result
+            await cleanup()
         finally:
             try:
                 self._release()
@@ -414,11 +387,6 @@ class Context(ContextElement):
         scope: Scope | None = None,
     ) -> None:
         scope_viewers: dict[Scope, set[Context]] | None
-        if parent is not None and not isinstance(parent, Context):
-            raise TypeError("Context parent must be a Context object.")
-        if scope is not None and not isinstance(scope, Scope):
-            raise TypeError("Context scope must be a Scope object.")
-
         if parent is not None:
             parent._assert_mutable()
             if schema is not None:
@@ -433,14 +401,7 @@ class Context(ContextElement):
             scope_viewers = None
             sync_only = parent._sync_only
         else:
-            if schema is None:
-                root_schema = Schema()
-            elif isinstance(schema, Schema):
-                root_schema = schema
-            else:
-                raise TypeError(
-                    f"Context schema must be Schema, got {type(schema).__name__}."
-                )
+            root_schema = Schema() if schema is None else schema
             root_data = weakref.WeakKeyDictionary()
             application_root = self
             bound_scope = Scope() if scope is None else scope
@@ -465,10 +426,6 @@ class Context(ContextElement):
             parent._owned.append(self)
         try:
             if data is not None:
-                if not isinstance(data, Mapping):
-                    raise TypeError(
-                        f"Context data must be a mapping, got {type(data).__name__}."
-                    )
                 self.update(data)
         except BaseException:
             self._release_scope()
@@ -571,12 +528,6 @@ class Context(ContextElement):
         cleanup: Callable[[], None],
     ) -> Callable[[], None]:
         self._assert_mutable()
-        if not callable(cleanup):
-            raise TypeError("Context effect cleanup must be callable.")
-        if _Effect._is_async_callable(cleanup):
-            raise TypeError(
-                "Context.effect() requires synchronous cleanup; use async_effect()."
-            )
         effect = _SyncEffect(self, cleanup)
         self._owned.append(effect)
         return effect.dispose
@@ -586,8 +537,6 @@ class Context(ContextElement):
         cleanup: Callable[[], Awaitable[None]],
     ) -> Callable[[], Awaitable[None]]:
         self._assert_mutable()
-        if not callable(cleanup):
-            raise TypeError("Context effect cleanup must be callable.")
         effect = _AsyncEffect(self, cleanup)
         self._owned.append(effect)
         return effect.dispose
@@ -601,19 +550,11 @@ class Context(ContextElement):
         Setup and cleanup cannot dispose this Context or one of its ancestors.
         """
         self._assert_mutable()
-        if not callable(setup):
-            raise TypeError("Context effect setup must be callable.")
         guarded = self._enter_sync_disposal_guard()
         try:
-            cleanup = cast(Callable[[], Any], setup)()
+            cleanup = setup()
         finally:
             self._exit_sync_disposal_guard(guarded)
-        if inspect.isawaitable(cleanup):
-            _Effect._close_awaitable(cleanup)
-            raise TypeError(
-                "Context.effect() setup returned an awaitable; setup must be "
-                "synchronous."
-            )
         return self._adopt_sync_effect(cleanup)
 
     def async_effect(
@@ -629,19 +570,11 @@ class Context(ContextElement):
             raise RuntimeError(
                 "A synchronous evaluation Context cannot own asynchronous cleanup."
             )
-        if not callable(setup):
-            raise TypeError("Context effect setup must be callable.")
         guarded = self._enter_sync_disposal_guard()
         try:
-            cleanup = cast(Callable[[], Any], setup)()
+            cleanup = setup()
         finally:
             self._exit_sync_disposal_guard(guarded)
-        if inspect.isawaitable(cleanup):
-            _Effect._close_awaitable(cleanup)
-            raise TypeError(
-                "Context.async_effect() setup returned an awaitable; setup must be "
-                "synchronous."
-            )
         return self._adopt_async_effect(cleanup)
 
     def _preflight_sync_dispose(self) -> None:
@@ -758,18 +691,11 @@ class Context(ContextElement):
         role: _RefRole = "any",
     ) -> _RefEntry[Any]:
         self._assert_readable()
-        if isinstance(key, str):
-            path = key
-        elif isinstance(key, Ref):
-            path = key.path
-        else:
-            raise TypeError(
-                f"Context keys must be str or Ref, got {type(key).__name__}."
-            )
+        path = key if isinstance(key, str) else key.path
 
         try:
             node = self.schema._resolve_node(path)
-        except (KeyError, TypeError, ValueError) as error:
+        except (KeyError, ValueError) as error:
             if isinstance(key, Ref):
                 raise ContextPathError(
                     f"Ref path {path!r} is not declared by this Context."
@@ -1098,11 +1024,6 @@ class Context(ContextElement):
         """Add an owned value to the Compose stored at *ref*."""
         self._assert_mutable()
         target = self.scope if scope is None else scope
-        if not isinstance(target, Scope):
-            raise TypeError(
-                f"Context contribution scope must be Scope, got "
-                f"{type(target).__name__}."
-            )
         composition = self.get(ref)
         if not isinstance(composition, Compose):
             raise TypeError(
@@ -1161,10 +1082,6 @@ class ContextView(ContextElement):
             relative_parts = Ref._split_path(ref)
             return self._context._validate_ref(
                 ".".join((*self._parts, *relative_parts))
-            )
-        if not isinstance(ref, Ref):
-            raise TypeError(
-                f"ContextView keys must be str or Ref, got {type(ref).__name__}."
             )
         if ref.parts[: len(self._parts)] != self._parts:
             raise ContextPathError(

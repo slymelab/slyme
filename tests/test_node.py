@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-from slyme.builder import builder
 from slyme.context import Context, Ref, Schema
 from slyme.node import (
     UNDEFINED,
@@ -94,7 +93,7 @@ def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None
     assert instance(ctx) == (1, 2, 3, 4)
 
 
-def test_schema_integrates_with_auto_and_builder() -> None:
+def test_schema_integrates_with_auto_during_graph_assembly() -> None:
     schema = Schema({"input": {"value": Schema.leaf()}})
 
     @node
@@ -106,7 +105,6 @@ def test_schema_integrates_with_auto_and_builder() -> None:
     ctx.set(value_ref, 4)
     assert increment(value=value_ref)(ctx) == 5
 
-    @builder
     def misspelled() -> Node[int]:
         return increment(value=schema.resolve("input.vlaue"))
 
@@ -180,9 +178,6 @@ def test_decorator_validation_and_factory_behavior() -> None:
     assert overlapping.get("wrappers") == 3
     assert overlapping.wrappers == []
     assert overlapping(Context(schema=R)) == (1, 2, 3)
-
-    with pytest.raises(ValueError, match="mode must be"):
-        node(mode="invalid")(lambda ctx: None)  # type: ignore[call-overload]
 
     async def async_function(ctx: Context) -> None:
         return None
@@ -945,17 +940,6 @@ def test_sequential_nodes_share_context() -> None:
     assert ctx.get(R.resolve("value")) == 4
 
 
-def test_sync_sequential_rejects_non_sync_execution_entries() -> None:
-    @node
-    async def async_child(ctx: Context, /) -> None:
-        return None
-
-    with pytest.raises(TypeError, match="only accepts synchronous Nodes"):
-        sequential_exec(Context(schema=R), [async_child()])  # type: ignore[list-item]
-    with pytest.raises(TypeError, match="only accepts synchronous Nodes"):
-        sequential_exec(Context(schema=R), [object()])  # type: ignore[list-item]
-
-
 async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
     owner_thread = threading.get_ident()
     sync_thread: int | None = None
@@ -977,54 +961,34 @@ async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
     assert sync_thread == owner_thread
     await async_sequential(nodes=nodes)(ctx)
 
-    with pytest.raises(TypeError, match="only accepts Nodes and AsyncNodes"):
-        await async_sequential_exec(ctx, [object()])  # type: ignore[list-item]
 
-
-def test_builder_constructs_nodes_and_reports_missing_returns() -> None:
+async def test_plain_functions_assemble_independent_node_graphs() -> None:
     @node
     def leaf(ctx: Context, /, *, value: int = 1) -> int:
         return value
 
-    @builder
-    def build() -> Node[int]:
-        return leaf()
+    def build(*, value: int = 1) -> Node[int]:
+        return leaf(value=value)
 
-    assert isinstance(build(), Node)
-    assert build.__name__ == "build"
+    first = build()
+    second = build(value=2)
+    first.set("value", 3)
+    ctx = Context(schema=R)
+    assert first(ctx) == 3
+    assert second(ctx) == 2
+    assert build()(ctx) == 1
 
     @node
     async def async_leaf(ctx: Context, /) -> int:
         return 1
 
-    @builder
     def build_async() -> AsyncNode[int]:
         return async_leaf()
 
-    assert isinstance(build_async(), AsyncNode)
-
-    @builder()
-    def called_builder() -> Node[int]:
-        return leaf(value=2)
-
-    assert called_builder()(Context(schema=R)) == 2
-
-    @builder
-    def missing() -> Any:
-        return None
-
-    with pytest.raises(ValueError, match="returned None"):
-        missing()
-
-    @builder
-    def invalid() -> Any:
-        return "not a node"
-
-    with pytest.raises(TypeError, match="expected a Node or AsyncNode"):
-        invalid()
+    assert await build_async()(ctx) == 1
 
 
-def test_node_elements_can_nest_freely_but_wrapper_slots_match_mode() -> None:
+def test_node_elements_can_nest_freely() -> None:
     @wrapper
     def sync_wrapper(
         ctx: Context,
@@ -1035,17 +999,6 @@ def test_node_elements_can_nest_freely_but_wrapper_slots_match_mode() -> None:
         dependency: Any = None,
     ) -> Any:
         return call_next(ctx)
-
-    @wrapper
-    async def async_wrapper(
-        ctx: Context,
-        wrapped: AsyncNode[Any],
-        call_next: Callable[[Context], Awaitable[Any]],
-        /,
-        *,
-        dependency: Any = None,
-    ) -> Any:
-        return await call_next(ctx)
 
     @node
     def sync_node(ctx: Context, /, *, dependency: Any = None) -> None:
@@ -1064,18 +1017,10 @@ def test_node_elements_can_nest_freely_but_wrapper_slots_match_mode() -> None:
     )
     assert isinstance(nested_wrapper.get("dependency"), Node)
 
-    with pytest.raises(TypeError, match="synchronous Wrappers"):
-        sync_node().add_wrappers(async_wrapper())  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="AsyncWrappers"):
-        async_node().add_wrappers(sync_wrapper())  # type: ignore[arg-type]
 
-    invalid_sync = sync_node()
-    invalid_sync.wrappers.append(async_wrapper())  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="synchronous Wrappers"):
-        invalid_sync(Context(schema=R))
+async def test_wrappers_can_be_added_through_the_public_list() -> None:
+    events: list[str] = []
 
-
-async def test_async_wrapper_slot_is_revalidated_at_execution() -> None:
     @wrapper
     def sync_wrapper(
         ctx: Context,
@@ -1083,16 +1028,37 @@ async def test_async_wrapper_slot_is_revalidated_at_execution() -> None:
         call_next: Callable[[Context], Any],
         /,
     ) -> Any:
+        events.append("sync wrapper")
         return call_next(ctx)
 
-    @node
-    async def async_node(ctx: Context, /) -> None:
-        return None
+    @wrapper
+    async def async_wrapper(
+        ctx: Context,
+        wrapped: AsyncNode[Any],
+        call_next: Callable[[Context], Awaitable[Any]],
+        /,
+    ) -> Any:
+        events.append("async wrapper")
+        return await call_next(ctx)
 
-    invalid_async = async_node()
-    invalid_async.wrappers.append(sync_wrapper())  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="AsyncWrappers"):
-        await invalid_async(Context(schema=R))
+    @node
+    def sync_node(ctx: Context, /) -> int:
+        events.append("sync node")
+        return 1
+
+    @node
+    async def async_node(ctx: Context, /) -> int:
+        events.append("async node")
+        return 2
+
+    sync_instance = sync_node()
+    sync_instance.wrappers.append(sync_wrapper())
+    async_instance = async_node()
+    async_instance.wrappers.append(async_wrapper())
+    ctx = Context(schema=R)
+    assert sync_instance(ctx) == 1
+    assert await async_instance(ctx) == 2
+    assert events == ["sync wrapper", "sync node", "async wrapper", "async node"]
 
 
 def test_node_tree_round_trip() -> None:

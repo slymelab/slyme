@@ -59,8 +59,6 @@ def test_scope_rejects_an_inconsistent_c3_graph() -> None:
 def test_scope_validates_direct_parents_and_names() -> None:
     root = Scope("root")
 
-    with pytest.raises(TypeError, match="parents must be Scope"):
-        Scope(parents=(object(),))  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="duplicate direct parents"):
         Scope(parents=(root, root))
     with pytest.raises(TypeError, match="names must be hashable"):

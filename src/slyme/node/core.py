@@ -203,15 +203,11 @@ class Node(NodeElement, Generic[_R]):
             self.add_wrappers(*wrappers)
 
     def add_wrappers(self, *wrappers: "Wrapper[Any]") -> Self:
-        if any(not isinstance(item, Wrapper) for item in wrappers):
-            raise TypeError("Synchronous Nodes only accept synchronous Wrappers.")
         self.wrappers.extend(wrappers)
         return self
 
     def __call__(self, ctx: Context) -> _R:
         wrappers = tuple(self.wrappers)
-        if any(not isinstance(item, Wrapper) for item in wrappers):
-            raise TypeError("Synchronous Nodes only accept synchronous Wrappers.")
         try:
             kwargs = self._collect_params()
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
@@ -262,15 +258,11 @@ class AsyncNode(NodeElement, Generic[_R]):
             self.add_wrappers(*wrappers)
 
     def add_wrappers(self, *wrappers: "AsyncWrapper[Any]") -> Self:
-        if any(not isinstance(item, AsyncWrapper) for item in wrappers):
-            raise TypeError("Async Nodes only accept AsyncWrappers.")
         self.wrappers.extend(wrappers)
         return self
 
     async def __call__(self, ctx: Context) -> _R:
         wrappers = tuple(self.wrappers)
-        if any(not isinstance(item, AsyncWrapper) for item in wrappers):
-            raise TypeError("Async Nodes only accept AsyncWrappers.")
         try:
             kwargs = self._collect_params()
             with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
@@ -399,7 +391,7 @@ class _FactoryBase(Generic[_P, _E]):
         unwrapped = inspect.unwrap(func)
         if inspect.iscoroutinefunction(unwrapped):
             return True
-        return callable(unwrapped) and inspect.iscoroutinefunction(unwrapped.__call__)
+        return inspect.iscoroutinefunction(unwrapped.__call__)
 
     @classmethod
     def _resolve_execution_mode(
@@ -407,11 +399,6 @@ class _FactoryBase(Generic[_P, _E]):
         func: Callable[..., Any],
         mode: ExecutionMode | None,
     ) -> ExecutionMode:
-        if mode not in (None, "sync", "async"):
-            raise ValueError(
-                f"@{cls._decorator_name} mode must be 'sync', 'async', or None, "
-                f"got {mode!r}."
-            )
         detected_async = cls._is_async_callable(func)
         if mode is None:
             return "async" if detected_async else "sync"

@@ -171,8 +171,6 @@ def test_bind_is_atomic_idempotent_and_rejects_rebinding() -> None:
     assert values.resolve(left) == ("shared",)
     with pytest.raises(ValueError, match="at least one Scope"):
         values.bind(identity=first)
-    with pytest.raises(TypeError, match="must be Scope"):
-        values.bind(object(), identity=first)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="identities must be hashable"):
         values.bind(Scope(), identity=[])  # type: ignore[arg-type]
 
@@ -288,24 +286,6 @@ def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> No
     assert {entry["value"] for entry in values.entries()} == {"left", "right"}
     with pytest.raises(ValueError, match="requires a Scope"):
         values.entries(local=True)
-    with pytest.raises(ValueError, match="position"):
-        values.add(left, "bad", position="middle")  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize("operation", ["add", "values", "resolve", "entries"])
-def test_compose_rejects_contexts_in_place_of_scopes(operation: str) -> None:
-    values = Compose[str, tuple[str, ...]].collect()
-    context = Context()
-
-    with pytest.raises(TypeError, match="must be Scope"):
-        if operation == "add":
-            values.add(context, "bad")  # type: ignore[arg-type]
-        elif operation == "values":
-            values.values(context)  # type: ignore[arg-type]
-        elif operation == "resolve":
-            values.resolve(context)  # type: ignore[arg-type]
-        else:
-            values.entries(context)  # type: ignore[arg-type]
 
 
 def test_context_fork_shares_scope_unless_one_is_explicit() -> None:

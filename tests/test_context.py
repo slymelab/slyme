@@ -158,8 +158,6 @@ def test_schema_declaration_validation() -> None:
     assert not hasattr(context_module, "Refs")
     assert isinstance(Schema(), Schema)
     assert isinstance(Schema(None), Schema)
-    with pytest.raises(TypeError, match="declarations must be a mapping"):
-        Schema("bad")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="root.*empty-key"):
         Schema({"": Schema.container()})
     with pytest.raises(ValueError, match="without dots"):
@@ -174,8 +172,6 @@ def test_schema_declaration_validation() -> None:
         Schema({"bad": {"": Schema.leaf()}})
     with pytest.raises(TypeError, match=r"Schema\.container.*empty key"):
         Schema({"bad": Schema.container()})
-    with pytest.raises(TypeError, match="replaceable must be bool"):
-        Schema.leaf(replaceable=1)  # type: ignore[arg-type]
 
     resolved = Schema({"source": Schema.leaf()}).resolve("source")
     with pytest.raises(TypeError, match=r"mapping or Schema\.leaf"):
@@ -197,9 +193,6 @@ def test_schema_declaration_validation() -> None:
     )
     for path in ("declare", "from_refs", "class", "_private", "hyphen-name"):
         assert names.resolve(path).path == path
-
-    with pytest.raises(TypeError, match="mapping or Schema"):
-        names.declare(None)  # type: ignore[arg-type]
 
 
 def test_schema_declare_is_reversible_independent_and_atomic() -> None:
@@ -394,7 +387,7 @@ def test_schema_can_be_built_before_or_through_context() -> None:
         context_first.get("late.value")
 
 
-def test_context_rejects_undeclared_keys_and_invalid_parent_arguments() -> None:
+def test_context_requires_declared_keys_and_inherits_its_parent_schema() -> None:
     root = Context(schema=R)
 
     for operation in (
@@ -415,8 +408,6 @@ def test_context_rejects_undeclared_keys_and_invalid_parent_arguments() -> None:
     assert unrelated.root is unrelated
     assert unrelated.schema is root.schema
     assert not unrelated.exists("value")
-    with pytest.raises(TypeError, match="parent must be a Context"):
-        Context(parent=object())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="inherits its schema"):
         Context(parent=root, schema=R)
 
@@ -507,8 +498,6 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
 
 
 def test_context_constructor_requires_a_declared_path_mapping() -> None:
-    with pytest.raises(TypeError, match="must be a mapping"):
-        Context([])  # type: ignore[arg-type]
     with pytest.raises(ContextPathError, match="path"):
         Context({"path": 1})
     with pytest.raises(ContextPathError, match="value"):

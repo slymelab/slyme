@@ -8,7 +8,7 @@ PyTree 是一种嵌套结构：容器描述拓扑，未注册对象作为叶子�
 
 ## 对象 identity
 
-Slyme 不提供通用的 Node 图 clone。PyTree 重建无法决定哪些共享引用应继续作为别名、哪些 value 应被复制，以及循环应用图应如何处理。需要另一张图时，应重新调用对应的 Node factory 或 Builder，并由应用显式复制所需 value。
+Slyme 不提供通用的 Node 图 clone。PyTree 重建无法决定哪些共享引用应继续作为别名、哪些 value 应被复制，以及循环应用图应如何处理。需要另一张图时，应重新调用对应的 Node factory 或 组装函数，并由应用显式复制所需 value。
 
 Context 不会被注册为 PyTree container。它是最多拥有一个 parent、带 identity 的生命周期 owner，而不是自包含的值树；绑定的 Scope 承载独立的 C3 可见性图。需要显式物化时，`Context.flatten()` 会提供其可见的 Ref 到 value 映射。
 

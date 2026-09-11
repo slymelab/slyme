@@ -66,8 +66,6 @@ class Scope:
 
     def __post_init__(self) -> None:
         direct_parents = tuple(self.parents)
-        if any(not isinstance(parent, Scope) for parent in direct_parents):
-            raise TypeError("Scope parents must be Scope objects.")
         if any(
             left is right
             for index, left in enumerate(direct_parents)

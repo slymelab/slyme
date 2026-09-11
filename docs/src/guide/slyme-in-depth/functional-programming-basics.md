@@ -7,7 +7,7 @@ Slyme uses functional ideas selectively rather than requiring the entire runtime
 - Context data is mutable in place. Ordinary mutations return `None`; lifecycle-owned `add()`, `declare()`, and `contribute()` return exact early disposers.
 - Node and Wrapper calls pass their current static parameter containers directly.
 - The live composition graph remains mutable, so later calls can observe structural changes.
-- Structural isolation is explicit: call a Node factory or Builder again for another graph, and bind a forked Context to a child Scope for a live local data layer. A plain `Context.fork()` shares its parent's Scope.
+- Structural isolation is explicit: call a Node factory or assembly function again for another graph, and bind a forked Context to a child Scope for a live local data layer. A plain `Context.fork()` shares its parent's Scope.
 
 Purity remains an application choice. A value-producing Node can be pure; an I/O Node can perform side effects; a higher-order Node can coordinate children. Slyme models their composition and lifecycle without attempting to model the internal details of those Python operations.
 

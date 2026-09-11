@@ -36,13 +36,6 @@ class _RefLeafConfig(Generic[_T]):
     value_type: Any | None = None
     replaceable: bool = True
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.replaceable, bool):
-            raise TypeError(
-                "Schema.leaf() replaceable must be bool, "
-                f"got {type(self.replaceable).__name__}."
-            )
-
 
 @dataclass(frozen=True)
 class _RefContainerConfig:
@@ -316,11 +309,6 @@ class Schema:
     def __init__(self, declarations: Mapping[str, Any] | None = None) -> None:
         if declarations is None:
             declarations = {}
-        if not isinstance(declarations, Mapping):
-            raise TypeError(
-                "Schema declarations must be a mapping, "
-                f"got {type(declarations).__name__}."
-            )
         object.__setattr__(
             self,
             "_Schema__data",
@@ -374,13 +362,8 @@ class Schema:
                 declarations.__data,
                 declaration_id,
             )
-        elif isinstance(declarations, Mapping):
-            incoming = self._build(declarations, declaration_id)
         else:
-            raise TypeError(
-                "Schema declarations must be a mapping or Schema, "
-                f"got {type(declarations).__name__}."
-            )
+            incoming = self._build(declarations, declaration_id)
 
         self._validate_merge(self.__data, incoming)
         paths = tuple(path for path, _ in self._iter_entries(incoming))

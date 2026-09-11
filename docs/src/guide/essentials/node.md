@@ -77,7 +77,7 @@ Use `get(name)` to read, `set(name, value)` to replace, and `reset(name)` to res
 
 At call time, static parameter containers are passed directly to the user function. Mutating one therefore updates the live Node or Wrapper parameter. Auto parameters containing evaluator leaves are reconstructed with their resolved values.
 
-Call the Node factory or a Builder again when another independently configurable graph is required. Copy mutable application values explicitly according to their own semantics; Slyme does not guess which shared references should be duplicated.
+Call the Node factory or an assembly function again when another independently configurable graph is required. Copy mutable application values explicitly according to their own semantics; Slyme does not guess which shared references should be duplicated.
 
 ## Wrappers
 

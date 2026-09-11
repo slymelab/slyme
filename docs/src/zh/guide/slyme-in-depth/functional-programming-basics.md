@@ -7,7 +7,7 @@ Slyme 选择性采用函数式思想，而不要求整个运行时都不可变�
 - Context 数据原地可变；普通修改返回 `None`，由生命周期管理的 `add()`、`declare()` 和 `contribute()` 则返回精确的提前 disposer。
 - Node 和 Wrapper 调用会直接传递当前静态参数容器。
 - 动态组合图仍然可变，因此后续调用可以观察结构修改。
-- 结构隔离是显式的：需要另一张图时重新调用 Node factory 或 Builder，需要实时局部数据层时把 fork 出的 Context 绑定到 child Scope；普通 `Context.fork()` 会共享 parent 的 Scope。
+- 结构隔离是显式的：需要另一张图时重新调用 Node factory 或 组装函数，需要实时局部数据层时把 fork 出的 Context 绑定到 child Scope；普通 `Context.fork()` 会共享 parent 的 Scope。
 
 纯度仍由应用决定：产生值的 Node 可以是纯函数，I/O Node 可以执行副作用，高阶 Node 可以协调子 Node。Slyme 负责描述它们的组合与生命周期，而不试图建模这些 Python 操作的内部细节。
 

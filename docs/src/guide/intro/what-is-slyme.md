@@ -32,9 +32,9 @@ As mentioned earlier, [Node](/guide/essentials/node) is Slyme's basic execution 
 @node and @wrapper support both regular functions and `async def` functions.
 :::
 
-### Builder
+### Graph Assembly
 
-[@builder](/guide/essentials/builder) marks reusable functions that assemble Node structures. It requires the outer result to be a Node or AsyncNode without recursively validating its parameter graph. A @builder function can call other @builder functions, and its Node and Wrapper parameters may use arbitrary nested structures.
+[Ordinary Python functions](/guide/essentials/graph-assembly) assemble reusable Node graphs. They can call other assembly functions and return individual Nodes or structured collections. Node and Wrapper parameters may use arbitrary nested structures.
 
 ### Live Graph and Explicit Layers
 
@@ -42,4 +42,4 @@ Slyme keeps one mutable Node graph across assembly and execution (see [Lifecycle
 
 - **Between calls**: Users may assemble or modify Node parameters, wrappers, and composition structures.
 - **During a call**: The current Node passes static parameter containers directly, resolves dynamic values with the supplied Context, and executes. In-call mutations to static containers remain on the live Node.
-- **When isolation is needed**: Call the Node factory or Builder again for an independently configurable graph. Context `fork()` creates an owned lifetime child and shares its Scope by default; pass a child Scope for a separate data layer. `Context(context.flatten(), schema=context.schema)` explicitly materializes visible bindings into a new application root. Stored application objects remain shared.
+- **When isolation is needed**: Call the Node factory or assembly function again for an independently configurable graph. Context `fork()` creates an owned lifetime child and shares its Scope by default; pass a child Scope for a separate data layer. `Context(context.flatten(), schema=context.schema)` explicitly materializes visible bindings into a new application root. Stored application objects remain shared.

@@ -287,10 +287,8 @@ class PyTreeEngine:
         """
         if priority == "pre":
             self._pre_resolvers.append(resolver)
-        elif priority == "post":
-            self._post_resolvers.append(resolver)
         else:
-            raise ValueError(f"Invalid priority: {priority}. Must be 'pre' or 'post'.")
+            self._post_resolvers.append(resolver)
 
     def _register_defaults(self) -> None:
         """Register standard python containers."""
@@ -553,11 +551,7 @@ class PyTreeEngine:
         Retrieve an element from the tree using a specific key_path (Runtime KeyPath Resolution).
         """
         current = tree
-        for i, key in enumerate(key_path):
-            if not isinstance(key, PyTreeKey):
-                raise TypeError(
-                    f"Invalid key_path key at index {i}: expected PyTreeKey, got {type(key)}."
-                )
+        for key in key_path:
             current = key.resolve(current)
         return current
 

@@ -76,7 +76,7 @@ assert root(Context()) == 11
 
 调用时，静态参数容器会直接传给用户函数，因此对容器的修改会更新 Node 或 Wrapper 上的实时参数。包含 evaluator 叶子的 Auto 参数则会用解析结果重建。
 
-需要另一张可独立配置的图时，应重新调用 Node factory 或 Builder。可变应用值是否共享或复制由其自身语义决定；Slyme 不会猜测哪些引用需要复制。
+需要另一张可独立配置的图时，应重新调用 Node factory 或 组装函数。可变应用值是否共享或复制由其自身语义决定；Slyme 不会猜测哪些引用需要复制。
 
 ## Wrapper
 

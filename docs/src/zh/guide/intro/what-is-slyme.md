@@ -32,9 +32,9 @@ Slyme (发音为 /slaɪm/) 是一个高度可组合的函数式执行框架。�
 @node 和 @wrapper 同时支持普通函数与 `async def` 函数。
 :::
 
-### Builder
+### 图的组装
 
-[@builder](/zh/guide/essentials/builder) 用于标记可复用的 Node 组装函数。它要求最外层结果是 Node 或 AsyncNode，但不会递归校验其参数图。一个 @builder 函数可以调用其他 @builder 函数，Node 与 Wrapper 参数也可以使用任意嵌套结构。
+[普通 Python 函数](/zh/guide/essentials/graph-assembly) 用于组装可复用的 Node 图。它们可以调用其他组装函数，返回单个 Node 或结构化集合。Node 与 Wrapper 参数也可以使用任意嵌套结构。
 
 ### 动态图与显式分层
 
@@ -42,4 +42,4 @@ Slyme 在组装与执行期间始终使用同一个可变 Node 图（详见[生�
 
 - **调用之间**：用户可以组装或修改 Node 参数、wrapper 与组合结构。
 - **单次调用内**：当前 Node 直接传递静态参数容器，使用传入的 Context 解析动态值并执行；调用内对静态容器的修改会保留在实时 Node 上。
-- **需要隔离时**：重新调用 Node factory 或 Builder 可获得可独立配置的图；Context `fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 Scope，需要独立数据层时应传入 child Scope。`Context(context.flatten(), schema=context.schema)` 则显式把可见 binding 物化为新应用根。已存储的应用对象仍然共享。
+- **需要隔离时**：重新调用 Node factory 或 组装函数 可获得可独立配置的图；Context `fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 Scope，需要独立数据层时应传入 child Scope。`Context(context.flatten(), schema=context.schema)` 则显式把可见 binding 物化为新应用根。已存储的应用对象仍然共享。

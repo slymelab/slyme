@@ -51,6 +51,7 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `slyme.builder`; use ordinary Python functions to assemble Node graphs.
 - Removed `slyme.cli`, its argparse helpers, Context argument metadata, and
   general-purpose Ref metadata so the core model no longer embeds input-adapter
   configuration.
@@ -121,8 +122,6 @@ breaking changes when they are documented here.
   single-thread-owned. Asynchronous evaluation invokes synchronous child Nodes
   inline instead of moving live Context state into worker threads; applications
   explicitly offload ordinary value computation when needed.
-- Builder functions now require their outer result to be a `Node` or
-  `AsyncNode` without recursively validating the returned parameter graph.
 - Node and Wrapper construction now binds every declared parameter through one
   `Spec` build path. Missing required parameters remain `UNDEFINED` until the
   call boundary instead of being rejected or processed by a second kwargs path.

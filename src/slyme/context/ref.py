@@ -33,8 +33,6 @@ class Ref(Generic[_T]):
 
     @staticmethod
     def _split_path(path: str) -> tuple[str, ...]:
-        if not isinstance(path, str):
-            raise TypeError(f"Ref path must be str, got {type(path).__name__}.")
         if not path:
             raise ValueError("Ref path cannot be empty.")
         parts = tuple(path.split("."))

@@ -6,7 +6,6 @@ This example builds a small pipeline in which one Node derives prompts and anoth
 from collections.abc import Callable
 from time import monotonic
 
-from slyme.builder import builder
 from slyme.context import Context, Ref, Schema
 from slyme.node import Auto, Node, node, wrapper
 
@@ -47,7 +46,6 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
         print(f"{name}: {monotonic() - started:.4f}s")
 
 
-@builder
 def build() -> Node:
     formatter = format_prompts(articles=R.resolve("input.articles"))
     return call_llm(
@@ -73,7 +71,7 @@ The important pieces are:
 - `@node` creates both effectful and value-producing Nodes.
 - `Auto` resolves the formatter Node before invoking `call_llm`.
 - `@wrapper` surrounds a mounted Node with middleware behavior.
-- `@builder` requires the outer result to be a `Node` or `AsyncNode`: `None` raises a missing-return `ValueError`, any other wrong root raises `TypeError`, and the parameter graph is not recursively validated.
+- `build()` is an ordinary Python function that assembles and returns the Node graph.
 - Application code creates a Context, supplies external inputs, calls the Node, and reads outputs explicitly.
 
-Nodes remain mutable and static parameter containers stay live during calls; there is no Def/Exec or explicit prepare phase. Call the Builder again when another independently configurable graph is required.
+Nodes remain mutable and static parameter containers stay live during calls; there is no Def/Exec or explicit prepare phase. Call the assembly function again when another independently configurable graph is required.

@@ -38,8 +38,6 @@ def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None:
         None.
     """
     for node_ in nodes:
-        if not isinstance(node_, Node):
-            raise TypeError("sequential_exec only accepts synchronous Nodes.")
         node_(ctx)
 
 
@@ -74,10 +72,8 @@ async def async_sequential_exec(
     for node_ in nodes:
         if isinstance(node_, AsyncNode):
             await node_(ctx)
-        elif isinstance(node_, Node):
-            node_(ctx)
         else:
-            raise TypeError("async_sequential_exec only accepts Nodes and AsyncNodes.")
+            node_(ctx)
 
 
 @node

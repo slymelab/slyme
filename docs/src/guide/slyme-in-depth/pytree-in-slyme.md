@@ -8,7 +8,7 @@ A PyTree is a nested structure whose containers define topology and whose unregi
 
 ## Object identity
 
-Slyme does not expose a generic Node graph clone. PyTree reconstruction cannot decide which shared references should remain aliases, which values should be copied, or how cyclic application graphs should behave. Call the relevant Node factory or Builder again and copy application values explicitly when another graph is required.
+Slyme does not expose a generic Node graph clone. PyTree reconstruction cannot decide which shared references should remain aliases, which values should be copied, or how cyclic application graphs should behave. Call the relevant Node factory or assembly function again and copy application values explicitly when another graph is required.
 
 Context is not registered as a PyTree container. It is an identity-bearing lifetime owner with at most one parent, not a self-contained value tree. Its bound Scope carries the independent C3 visibility graph. `Context.flatten()` provides the visible Ref-to-value mapping when explicit materialization is needed.
 
