@@ -37,6 +37,8 @@ Call the relevant Node factory or assembly function again when another independe
 
 A Context owns its child Contexts and the cleanup registered through `effect()`, `async_effect()`, `add()`, and `declare()`. Each Context processes its direct ownership in last-in-first-out order, recursively. It does not automatically own arbitrary tasks that happen to use it: application code must stop and await those tasks before disposing their Context. `dispose()` handles a wholly synchronous subtree; `await async_dispose()` handles both synchronous and asynchronous cleanup. The returned registration disposers permit early cleanup without changing this ownership model.
 
+Synchronous disposal checks the entire subtree for asynchronous cleanup before releasing anything. Early cleanup remains owned until it finishes; removing it preserves the release order of the remaining registrations.
+
 ## Auto values
 
 Static parameter values and values retrieved from `Context` keep their normal Python mutability:

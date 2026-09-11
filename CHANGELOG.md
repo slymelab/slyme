@@ -35,6 +35,10 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Indexed Schema entries by complete path for direct Context lookups while
+  preserving tree-based traversal and exact declaration teardown.
+- Made ownership removal constant-time on average and synchronous disposal
+  preflight a single subtree traversal, preserving recursive LIFO cleanup.
 - Preserved Context disposal failures after a cancelled waiter so every later
   disposal call observes the same terminal result without repeating cleanup.
 - Rejected disposal of an effect's owner or ancestors during synchronous setup

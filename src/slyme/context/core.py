@@ -58,7 +58,7 @@ class _Effect:
         owner = self.owner
         self.owner = None
         if owner is not None:
-            owner._forget_effect(self)
+            owner._forget_owned(self)
 
 
 class _SyncEffect(_Effect):
@@ -367,7 +367,7 @@ class Context(ContextElement):
     _data: _ContextData = field(init=False)
     _root: Context = field(init=False)
     _schema: Schema | None = field(init=False)
-    _owned: list[Context | _Effect] = field(init=False)
+    _owned: dict[Context | _Effect, None] = field(init=False)
     _scope_viewers: dict[Scope, set[Context]] | None = field(init=False)
     _state: _ContextState = field(init=False)
     _dispose_task: asyncio.Task[None] | None = field(init=False)
@@ -421,7 +421,7 @@ class Context(ContextElement):
         object.__setattr__(self, "_data", root_data)
         object.__setattr__(self, "_root", application_root)
         object.__setattr__(self, "_schema", root_schema)
-        object.__setattr__(self, "_owned", [])
+        object.__setattr__(self, "_owned", {})
         object.__setattr__(self, "_scope_viewers", scope_viewers)
         object.__setattr__(self, "_state", _ContextState.ACTIVE)
         object.__setattr__(self, "_dispose_task", None)
@@ -431,7 +431,7 @@ class Context(ContextElement):
 
         self._acquire_scope()
         if parent is not None:
-            parent._owned.append(self)
+            parent._owned[self] = None
         try:
             if data is not None:
                 self.update(data)
@@ -537,13 +537,8 @@ class Context(ContextElement):
         if first_error is not None:
             raise first_error
 
-    def _remove_child(self, child: Context) -> None:
-        if child in self._owned:
-            self._owned.remove(child)
-
-    def _forget_effect(self, effect: _Effect) -> None:
-        if effect in self._owned:
-            self._owned.remove(effect)
+    def _forget_owned(self, owned: Context | _Effect) -> None:
+        self._owned.pop(owned, None)
 
     def _adopt_sync_effect(
         self,
@@ -551,7 +546,7 @@ class Context(ContextElement):
     ) -> Callable[[], None]:
         self._assert_mutable()
         effect = _SyncEffect(self, cleanup)
-        self._owned.append(effect)
+        self._owned[effect] = None
         return effect.dispose
 
     def _adopt_async_effect(
@@ -560,7 +555,7 @@ class Context(ContextElement):
     ) -> Callable[[], Awaitable[None]]:
         self._assert_mutable()
         effect = _AsyncEffect(self, cleanup)
-        self._owned.append(effect)
+        self._owned[effect] = None
         return effect.dispose
 
     def effect(
@@ -620,7 +615,7 @@ class Context(ContextElement):
             if error is None:
                 error = release_error
         if self.parent is not None:
-            self.parent._remove_child(self)
+            self.parent._forget_owned(self)
         object.__setattr__(self, "_dispose_error", error)
         object.__setattr__(self, "_state", _ContextState.DISPOSED)
         return error
@@ -633,13 +628,24 @@ class Context(ContextElement):
                 raise self._dispose_error
             return
         self._preflight_sync_dispose()
+        self._dispose_sync()
+
+    def _dispose_sync(self) -> None:
+        """Release a preflighted subtree without repeating descendant scans."""
+        self._assert_disposal_allowed()
+        if self._state is _ContextState.DISPOSED:
+            if self._dispose_error is not None:
+                raise self._dispose_error
+            return
+        if self._state is _ContextState.DISPOSING:
+            raise RuntimeError("Context disposal is already in progress.")
         object.__setattr__(self, "_state", _ContextState.DISPOSING)
         first_error: BaseException | None = None
         try:
             for owned in reversed(tuple(self._owned)):
                 try:
                     if isinstance(owned, Context):
-                        owned.dispose()
+                        owned._dispose_sync()
                     else:
                         cast(_SyncEffect, owned).dispose()
                 except BaseException as error:
@@ -721,7 +727,7 @@ class Context(ContextElement):
         path = key if isinstance(key, str) else key.path
 
         try:
-            node = self.schema._resolve_node(path)
+            entry = self.schema._resolve_entry(path)
         except (KeyError, ValueError) as error:
             if isinstance(key, Ref):
                 raise ContextPathError(
@@ -730,12 +736,10 @@ class Context(ContextElement):
             raise ContextPathError(str(error)) from error
 
         kind: Literal["leaf", "container"]
-        if isinstance(node, _RefEntry):
+        if isinstance(entry.config, _RefLeafConfig):
             kind = "leaf"
-            entry = node
         else:
             kind = "container"
-            entry = Schema._container_entry(node)
         if role != "any" and role != kind:
             raise ContextPathError(
                 f"Ref path {path!r} is declared as a {kind}, not a {role}."

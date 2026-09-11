@@ -850,7 +850,7 @@ async def test_async_auto_preserves_cancelled_sibling_cleanup_failure() -> None:
         isinstance(error, RuntimeError) and str(error) == "sibling cleanup failed"
         for error in errors
     )
-    assert ctx._owned == []
+    assert not ctx._owned
 
 
 async def test_repeated_auto_cancellation_finishes_child_cleanup() -> None:
@@ -885,7 +885,7 @@ async def test_repeated_auto_cancellation_finishes_child_cleanup() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cleanup_finished.is_set()
-    assert ctx._owned == []
+    assert not ctx._owned
 
 
 async def test_repeated_auto_cancellation_preserves_cleanup_failure() -> None:
@@ -922,7 +922,7 @@ async def test_repeated_auto_cancellation_preserves_cleanup_failure() -> None:
     assert str(caught.value.exception) == "cleanup failed"
     assert caught.value.__cause__ is caught.value.exception
     assert isinstance(caught.value.exception.__cause__, asyncio.CancelledError)
-    assert ctx._owned == []
+    assert not ctx._owned
 
 
 def test_sequential_nodes_share_context() -> None:

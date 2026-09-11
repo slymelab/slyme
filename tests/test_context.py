@@ -399,6 +399,9 @@ def test_failed_schema_registration_rolls_back_only_its_claims(
     assert schema._child_names(()) == ("stable",)
     assert schema._resolve_entry("stable").declarations is stable
     assert stable == original_claims
+    for path in ("temporary", "group", "group.value", "group.nested.value"):
+        with pytest.raises(KeyError):
+            schema.resolve(path)
     remove = schema.declare({"group": {"value": Schema.leaf()}})
     remove()
     assert schema._child_names(()) == ("stable",)

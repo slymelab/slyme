@@ -51,6 +51,92 @@ def test_context_effect_can_be_disposed_early_exactly_once() -> None:
     assert calls == 1
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_mixed_ownership_preserves_lifo_after_arbitrary_early_release(
+    asynchronous: bool,
+) -> None:
+    events: list[str] = []
+    root = Context()
+    root.effect(lambda: lambda: events.append("first"))
+    early_child = root.fork()
+    early_child.effect(lambda: lambda: events.append("early-child"))
+    early_effect = root.effect(lambda: lambda: events.append("early-effect"))
+    child = root.fork()
+    child.effect(lambda: lambda: events.append("child"))
+    root.effect(lambda: lambda: events.append("last"))
+
+    early_effect()
+    early_child.dispose()
+    assert events == ["early-effect", "early-child"]
+    if asynchronous:
+        await root.async_dispose()
+    else:
+        root.dispose()
+    assert events == ["early-effect", "early-child", "last", "child", "first"]
+    assert not root._owned
+
+
+def test_sync_disposal_preflights_each_descendant_once() -> None:
+    checked: list[Context] = []
+
+    class TrackedContext(Context):
+        def _preflight_sync_dispose(self) -> None:
+            checked.append(self)
+            super()._preflight_sync_dispose()
+
+    root = TrackedContext()
+    left = root.fork()
+    grandchild = left.fork()
+    right = root.fork()
+    root.dispose()
+    assert checked == [root, left, grandchild, right]
+
+
+def test_sync_disposal_snapshot_handles_sibling_cleanup_and_failure() -> None:
+    events: list[str] = []
+    root = Context()
+    child = root.fork()
+    failure = ValueError("child cleanup failed")
+
+    def cleanup() -> None:
+        events.append("child")
+        raise failure
+
+    child.effect(lambda: cleanup)
+    root.effect(lambda: lambda: events.append("middle"))
+    root.effect(lambda: child.dispose)
+
+    with pytest.raises(ValueError) as caught:
+        root.dispose()
+    assert caught.value is failure
+    assert events == ["child", "middle"]
+    assert not root._owned
+
+
+async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None:
+    root = Context()
+    child = root.fork()
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def cleanup() -> None:
+        started.set()
+        await finish.wait()
+
+    release = child.async_effect(lambda: cleanup)
+    effect = next(iter(child._owned))
+    early = asyncio.create_task(release())
+    await started.wait()
+    assert effect in child._owned
+    disposing = asyncio.create_task(root.async_dispose())
+    await asyncio.sleep(0)
+    assert child in root._owned
+    assert not disposing.done()
+    finish.set()
+    await asyncio.gather(early, disposing)
+    assert not child._owned and not root._owned
+
+
 def test_failed_sync_effect_disposal_replays_error_without_repeating_cleanup() -> None:
     calls = 0
     ctx = Context()
@@ -211,7 +297,7 @@ def test_context_registers_and_releases_every_scope_in_its_mro() -> None:
     assert all(child in viewers[scope] for scope in child_scope.mro)
     child.dispose()
     assert viewers == before
-    assert root._owned == [owner]
+    assert tuple(root._owned) == (owner,)
     root.dispose()
 
 
@@ -373,7 +459,7 @@ def test_failed_binding_restore_rolls_back_new_scope_viewers(monkeypatch) -> Non
     assert viewers == before
     assert binding._identity_scopes[identity] == {writer.scope}
     assert writer.get("value") == "live"
-    assert root._owned == [writer]
+    assert tuple(root._owned) == (writer,)
     root.dispose()
 
 

@@ -37,6 +37,8 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 Context 会拥有其子 Context，以及通过 `effect()`、`async_effect()`、`add()` 和 `declare()` 注册的 cleanup。每个 Context 都按后进先出顺序处理自己的直接归属项，并递归销毁子级。Context 不会自动拥有仅仅使用它的任意 task；应用必须先停止并等待这些 task，再 dispose 它们使用的 Context。`dispose()` 处理完全同步的子树，`await async_dispose()` 同时处理同步与异步 cleanup。注册操作返回的 disposer 可用于提前清理，但不会改变生命周期归属模型。
 
+同步释放会在清理任何资源前，检查整棵子树是否包含异步 cleanup。提前清理的登记项在完成前仍由 Context 持有；移除它不会改变其余登记项的释放顺序。
+
 ## Auto 值
 
 静态参数值和从 `Context` 取得的值都保持普通 Python 可变语义：

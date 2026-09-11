@@ -6,6 +6,8 @@ A Context tree and its mutable Schema and Compose objects are single-thread-owne
 
 ## Ref and Schema {#ref}
 
+Schema maintains a complete-path index and a structural tree referencing the same entries. Context leaf reads and writes use the path index; container traversal uses the tree. Declaration and final withdrawal update both indexes, so reusing a removed path creates a new definition without restoring its old values.
+
 `Ref` is an immutable path value identifying a Context dependency. A Schema
 records the paths available to an application, and `resolve()` returns their
 canonical Refs:

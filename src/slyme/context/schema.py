@@ -62,10 +62,11 @@ _SchemaNode = _RefEntry[Any] | _SchemaContainer
 
 
 class Schema:
-    """Mutable tree of independently reversible Context path declarations."""
+    """Reversible path declarations with shared entries in flat and tree indexes."""
 
-    __slots__ = ("__data", "__weakref__")
+    __slots__ = ("__data", "__entries", "__weakref__")
     __data: _SchemaContainer
+    __entries: dict[str, _RefEntry[Any]]
 
     @staticmethod
     def leaf(
@@ -211,6 +212,16 @@ class Schema:
                 path_parts,
             )
 
+    def _install_entry(
+        self,
+        container: _SchemaContainer,
+        name: str,
+        incoming: _RefEntry[Any],
+    ) -> _RefEntry[Any]:
+        entry = cast(_RefEntry[Any], container.setdefault(name, incoming))
+        self.__entries[entry.ref.path] = entry
+        return entry
+
     def _commit_merge(
         self,
         current: _SchemaContainer,
@@ -220,7 +231,7 @@ class Schema:
     ) -> None:
         for name, incoming_node in incoming.items():
             if isinstance(incoming_node, _RefEntry):
-                entry = cast(_RefEntry[Any], current.setdefault(name, incoming_node))
+                entry = self._install_entry(current, name, incoming_node)
                 entry.declarations.add(declaration_id)
                 entries.append(weakref.ref(entry))
                 continue
@@ -259,14 +270,18 @@ class Schema:
             raise first_error
 
     def _remove_entry(self, entry: _RefEntry[Any]) -> None:
+        if self.__entries.get(entry.ref.path) is not entry:
+            return
         try:
             parent = cast(_SchemaContainer, self._node_at(entry.ref.parts[:-1]))
         except KeyError:
             # A failed declaration can discard a newly created container first.
+            del self.__entries[entry.ref.path]
             return
         name = entry.ref.parts[-1]
         node = parent.get(name)
         if node is None:
+            del self.__entries[entry.ref.path]
             return
         current = node if isinstance(node, _RefEntry) else self._container_entry(node)
         if current is not entry:
@@ -277,9 +292,11 @@ class Schema:
                 f"{entry.ref.path!r}."
             )
         del parent[name]
+        del self.__entries[entry.ref.path]
 
     def __init__(self, declarations: Mapping[str, Any] | None = None) -> None:
         object.__setattr__(self, "_Schema__data", {})
+        object.__setattr__(self, "_Schema__entries", {})
         if declarations is not None:
             self.declare(declarations)
 
@@ -294,7 +311,7 @@ class Schema:
             "through the callable returned by declare()."
         )
 
-    def _resolve_node(self, path: str) -> _SchemaNode:
+    def _path_error(self, path: str) -> KeyError:
         parts = Ref._split_path(path)
         node: _SchemaNode = self.__data
         for index, part in enumerate(parts):
@@ -305,15 +322,17 @@ class Schema:
                 suggestion = difflib.get_close_matches(part, candidates, n=1)
                 detail = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
                 parent = ".".join(parts[:index]) or "<root>"
-                raise KeyError(f"Schema path {parent!r} has no entry {part!r}.{detail}")
+                return KeyError(
+                    f"Schema path {parent!r} has no entry {part!r}.{detail}"
+                )
             node = cast(_SchemaNode, node[part])
-        return node
+        return KeyError(path)
 
     def _resolve_entry(self, path: str) -> _RefEntry[Any]:
-        node = self._resolve_node(path)
-        if isinstance(node, _RefEntry):
-            return node
-        return self._container_entry(node)
+        try:
+            return self.__entries[path]
+        except KeyError:
+            raise self._path_error(path) from None
 
     def resolve(self, path: str) -> Ref[Any]:
         """Return the immutable Ref declared at *path*."""
