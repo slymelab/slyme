@@ -163,6 +163,8 @@ plugin; `ctx.schema` is the application-wide union. `Schema.declare()` returns a
 caller-managed disposer. `ctx.declare()` additionally makes that declaration an
 effect owned by `ctx`, while preserving the same exact early disposer.
 
+Each declared leaf and ancestor container has a Retainer for its independent declaration owners. The disposer releases child paths before parents and removes a definition only after its last owner leaves. Cleanup continues after a failure and subsequent calls reproduce the first failure. Pending and successfully released disposers do not keep the Schema or its old definitions alive; failure tracebacks can retain cleanup state.
+
 `set`, `update`, and the update side of `mutate` accept only paths declared as leaves. `keys` and `to_dict(ref)` accept only paths declared as containers. `get`, `exists`, `delete`, and the drop side of `mutate` accept either role. Batch mutations validate every path before applying changes, so a conflict produces no partial writes.
 
 Schema fixes every actively declared path as exactly one leaf or container for the application. Context data cannot change that role: deleting a value does not turn its path into a container, and deleting a container's local values does not make its path writable as a leaf. Applications may extend the Schema with new paths, but a definition cannot change while any matching declaration remains active. Context stores only flat leaf bindings. Container access traverses Schema first and then reads the corresponding bindings.
@@ -256,6 +258,8 @@ Effect cleanup cannot dispose its owning Context, an ancestor, or itself while i
 Disposing a Context removes it from the viewer sets for every Scope in `ctx.scope.mro`; it does not detach or destroy `ctx.scope`. A value installed by `set()` remains stored while another active Context in the same application root can view its Context-binding identity. A value installed by `add()` is additionally removed when its owning Context or exact disposer runs. Compose entries likewise remain until their exact disposers run. Data visibility never guarantees that an external resource inside a value is still open: its effect owner may have already closed it. Align resource ownership with every Context that may use it, and dispose child Contexts deterministically rather than relying on garbage collection.
 
 Context bindings track the observed Scopes for each identity and remove its values when the last viewer leaves, without scanning unrelated Scope bindings. Reusing a retained Scope, directly or as an ancestor, restores its viewer registration and preserves its original identity binding; values already cleared are not restored.
+
+Scope viewers and binding identities use Retainers whose callbacks own the membership sets. Each release removes its saved handle as well as its membership. The final viewer's release removes the Scope from its index and releases that Scope in each binding; the final bound Scope's release removes the identity and its data. Cleanup continues across bindings and Scopes after a failure, and Context disposal reproduces its first failure on subsequent calls. A Scope reacquired during value finalization keeps the data still visible to its new viewers.
 
 ## Compose
 

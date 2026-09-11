@@ -86,6 +86,11 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Scope viewers, Context-binding identities, and Schema declarations use
+  Retainer-managed ownership sets with exact release handles. Release callbacks
+  remove their handles and cascade from Scope viewers into binding identities
+  and data. Cleanup continues after failures. Reusing a Scope or identity starts
+  a new holding period without restoring cleared values.
 - Raised the minimum supported Python version from 3.9 to 3.10, following the
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
 - Renamed `RefFactory` to `Schema` and aligned Context construction and

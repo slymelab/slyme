@@ -309,6 +309,110 @@ def test_schema_path_can_be_redeclared_with_a_new_structure_after_disposal() -> 
         schema.resolve("entry")
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_schema_retainers_share_claims_and_close_in_child_first_order(reverse) -> None:
+    schema = Schema()
+    declaration = {"group": {"value": Schema.leaf()}}
+    first = schema.declare(declaration)
+    parent = schema._resolve_entry("group").declarations
+    leaf = schema._resolve_entry("group.value").declarations
+    second = schema.declare(declaration)
+    assert schema._resolve_entry("group").declarations is parent
+    assert schema._resolve_entry("group.value").declarations is leaf
+
+    early, last = (second, first) if reverse else (first, second)
+    early()
+    assert not parent.closed
+    assert not leaf.closed
+    assert schema.resolve("group.value").path == "group.value"
+    last()
+    assert parent.closed
+    assert leaf.closed
+
+    remove_new = schema.declare({"group": Schema.leaf()})
+    current = schema._resolve_entry("group").declarations
+    first()
+    second()
+    assert current is not parent
+    assert not current.closed
+    assert schema.resolve("group").path == "group"
+    remove_new()
+
+
+def test_schema_disposer_does_not_keep_the_schema_or_entries_alive() -> None:
+    schema = Schema()
+    remove = schema.declare({"group": {"value": Schema.leaf()}})
+    entry_ref = weakref.ref(schema._resolve_entry("group.value"))
+    schema_ref = weakref.ref(schema)
+    retainer = schema._resolve_entry("group.value").declarations
+    del schema
+    gc.collect()
+    assert schema_ref() is None
+    assert entry_ref() is None
+    remove()
+    remove()
+    assert retainer.closed
+
+
+@pytest.mark.parametrize("failure_path", ["group", "group.value", "group.nested.value"])
+def test_failed_schema_registration_rolls_back_only_its_claims(
+    monkeypatch: pytest.MonkeyPatch, failure_path: str
+) -> None:
+    schema = Schema({"stable": Schema.leaf()})
+    original = Schema._declaration_retainer
+    stable = schema._resolve_entry("stable").declarations
+
+    def fail(self, entry):
+        if entry.ref.path == failure_path:
+            raise ValueError("registration failed")
+        return original(self, entry)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Schema, "_declaration_retainer", fail)
+        with pytest.raises(ValueError, match="registration failed"):
+            schema.declare(
+                {
+                    "stable": Schema.leaf(),
+                    "temporary": Schema.leaf(),
+                    "group": {
+                        "value": Schema.leaf(),
+                        "nested": {"value": Schema.leaf()},
+                    },
+                }
+            )
+    assert schema._child_names(()) == ("stable",)
+    assert schema._resolve_entry("stable").declarations is stable
+    assert not stable.closed
+    remove = schema.declare({"group": {"value": Schema.leaf()}})
+    remove()
+    assert schema._child_names(()) == ("stable",)
+
+
+def test_schema_disposal_continues_after_one_retainer_cleanup_fails(monkeypatch):
+    schema = Schema()
+    remove = schema.declare({"left": Schema.leaf(), "right": Schema.leaf()})
+    left = schema._resolve_entry("left").declarations
+    right = schema._resolve_entry("right").declarations
+    original = Schema._remove_entry
+    calls = []
+    failure = ValueError("cleanup failed")
+
+    def cleanup(self, entry):
+        calls.append(entry.ref.path)
+        original(self, entry)
+        if entry.ref.path == "right":
+            raise failure
+
+    monkeypatch.setattr(Schema, "_remove_entry", cleanup)
+    for _ in range(2):
+        with pytest.raises(ValueError) as caught:
+            remove()
+        assert caught.value is failure
+    assert calls == ["right", "left"]
+    assert left.closed and right.closed
+    assert schema._child_names(()) == ()
+
+
 def test_schema_disposal_prevents_old_context_values_from_reappearing() -> None:
     schema = Schema()
     remove_old = schema.declare({"plugin": {"value": Schema.leaf(replaceable=False)}})

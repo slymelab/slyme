@@ -136,6 +136,8 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
+Scope viewers, shared Context-binding identities, and Schema declarations use `Retainer` to own individual registrations and clean up after their final owner leaves. Membership sets stay inside callbacks rather than alongside separate counts. Release callbacks remove saved handles and index entries, with Scope cleanup cascading into binding and identity cleanup. A later registration can reuse the Scope or identity, but cleared data does not return.
+
 ## Core Advantages
 
 **Native Python Development Experience:** Eliminates heavy object-oriented boilerplate code. You only need to master basic Python functions and native data structures (dictionaries, lists, tuples) to get started quickly.

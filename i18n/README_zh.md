@@ -135,6 +135,8 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
+Scope viewer、共享的 Context-binding identity 和 Schema 声明使用 `Retainer` 管理独立登记，并在最后一个持有者退出后清理。成员集合保存在回调闭包中，不再同时维护独立计数。释放回调负责移除保存的句柄和索引项，Scope 清理会连带触发 binding 和 identity 清理。后续登记可以复用 Scope 或 identity，但不会恢复已清除的数据。
+
 ## 核心优势
 
 **原生 Python 开发体验：** 消除了繁重的面向对象样板代码。您只需掌握基本的 Python 函数和原生数据结构（字典、列表、元组）即可快速上手。

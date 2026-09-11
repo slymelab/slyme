@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, TypeVar, cast, overload
 
+from ..utils.retainer import Retainer
 from .compose import Compose
 from .ref import Ref
 from .schema import Schema, _RefEntry, _RefLeafConfig
@@ -168,7 +169,7 @@ class ContextPathError(KeyError):
 class _ContextBinding(Compose[Any | _Blocked, Any]):
     """Private one-value composition backing one Context leaf."""
 
-    __slots__ = ("_identity_scopes",)
+    __slots__ = ("_identity_scopes", "_scope_releases")
 
     def __init__(self) -> None:
         def resolve(values: tuple[Any | _Blocked, ...]) -> Any:
@@ -177,16 +178,51 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
             return values[0]
 
         super().__init__(resolve)
-        self._identity_scopes: dict[Hashable, set[Scope]] = {}
+        self._identity_scopes: dict[Hashable, Retainer[[Scope]]] = {}
+        self._scope_releases: dict[Scope, Callable[[], None]] = {}
+
+    def _retain_scope(self, scope: Scope, identity: Hashable) -> None:
+        if scope in self._scope_releases:
+            return
+        retainer = self._identity_scopes.get(identity)
+        if retainer is None:
+            scopes: set[Scope] = set()
+            binding_ref = weakref.ref(self)
+
+            def acquire(scope: Scope) -> Callable[[], None]:
+                scopes.add(scope)
+
+                def undo() -> None:
+                    scopes.remove(scope)
+                    binding = binding_ref()
+                    if binding is not None:
+                        del binding._scope_releases[scope]
+
+                return undo
+
+            def cleanup() -> None:
+                binding = binding_ref()
+                if binding is not None:
+                    del binding._identity_scopes[identity]
+                    binding._buckets.pop(identity, None)
+
+            retainer = Retainer(
+                acquire,
+                should_cleanup=lambda: not scopes,
+                cleanup=cleanup,
+            )
+            self._identity_scopes[identity] = retainer
+        self._scope_releases[scope] = retainer.acquire(scope)
 
     def bind(self, *scopes: Scope, identity: Hashable) -> None:
         super().bind(*scopes, identity=identity)
-        self._identity_scopes.setdefault(identity, set()).update(scopes)
+        for scope in scopes:
+            self._retain_scope(scope, identity)
 
     def _identity_for(self, scope: Scope, *, create: bool) -> Hashable:
         identity = super()._identity_for(scope, create=create)
         if create:
-            self._identity_scopes.setdefault(identity, set()).add(scope)
+            self._retain_scope(scope, identity)
         return identity
 
     def acquire_scopes(self, scopes: Iterable[Scope]) -> None:
@@ -196,7 +232,7 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
                 identity = self._identity_for(scope, create=False)
             except LookupError:
                 continue
-            self._identity_scopes.setdefault(identity, set()).add(scope)
+            self._retain_scope(scope, identity)
 
     def _local_value_entry(self, scope: Scope) -> Any | None:
         try:
@@ -266,18 +302,11 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
             return
         self._insert(scope, _BLOCKED, position="append")
 
-    def release_scopes(self, expired: Iterable[Scope]) -> None:
-        """Remove identities after their last bound Scope loses its viewers."""
-        for scope in expired:
-            try:
-                identity = self._identity_for(scope, create=False)
-            except LookupError:
-                continue
-            scopes = self._identity_scopes[identity]
-            scopes.remove(scope)
-            if not scopes:
-                del self._identity_scopes[identity]
-                self._buckets.pop(identity, None)
+    def release_scope(self, scope: Scope) -> None:
+        """Release one Scope and remove its identity if no bound Scope remains."""
+        release = self._scope_releases.get(scope)
+        if release is not None:
+            release()
 
 
 _ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]
@@ -360,7 +389,8 @@ class Context(ContextElement):
     _root: Context = field(init=False)
     _schema: Schema | None = field(init=False)
     _owned: list[Context | _Effect] = field(init=False)
-    _scope_viewers: dict[Scope, set[Context]] | None = field(init=False)
+    _scope_viewers: dict[Scope, Retainer[[Context]]] | None = field(init=False)
+    _scope_releases: dict[Scope, Callable[[], None]] = field(init=False)
     _state: _ContextState = field(init=False)
     _dispose_task: asyncio.Task[None] | None = field(init=False)
     _dispose_error: BaseException | None = field(init=False)
@@ -386,7 +416,7 @@ class Context(ContextElement):
         parent: Context | None = None,
         scope: Scope | None = None,
     ) -> None:
-        scope_viewers: dict[Scope, set[Context]] | None
+        scope_viewers: dict[Scope, Retainer[[Context]]] | None
         if parent is not None:
             parent._assert_mutable()
             if schema is not None:
@@ -415,6 +445,7 @@ class Context(ContextElement):
         object.__setattr__(self, "_schema", root_schema)
         object.__setattr__(self, "_owned", [])
         object.__setattr__(self, "_scope_viewers", scope_viewers)
+        object.__setattr__(self, "_scope_releases", {})
         object.__setattr__(self, "_state", _ContextState.ACTIVE)
         object.__setattr__(self, "_dispose_task", None)
         object.__setattr__(self, "_dispose_error", None)
@@ -427,11 +458,8 @@ class Context(ContextElement):
         try:
             if data is not None:
                 self.update(data)
-        except BaseException:
-            self._release_scope()
-            if parent is not None:
-                parent._remove_child(self)
-            object.__setattr__(self, "_state", _ContextState.DISPOSED)
+        except BaseException as error:
+            self._finish_dispose(error)
             raise
 
     def _assert_readable(self) -> None:
@@ -481,39 +509,85 @@ class Context(ContextElement):
                 "Context disposal cannot be re-entered from effect setup or cleanup."
             )
 
+    @staticmethod
+    def _scope_retainer(
+        viewers: dict[Scope, Retainer[[Context]]],
+        data: _ContextData,
+        scope: Scope,
+    ) -> Retainer[[Context]]:
+        contexts: set[Context] = set()
+
+        def acquire(context: Context) -> Callable[[], None]:
+            contexts.add(context)
+
+            def undo() -> None:
+                contexts.remove(context)
+                del context._scope_releases[scope]
+
+            return undo
+
+        def cleanup() -> None:
+            del viewers[scope]
+            first_error: BaseException | None = None
+            for binding in tuple(data.values()):
+                # Value finalizers may register new viewers for this Scope.
+                if scope in viewers:
+                    break
+                try:
+                    binding.release_scope(scope)
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+            if not viewers:
+                data.clear()
+            if first_error is not None:
+                raise first_error
+
+        return Retainer(
+            acquire,
+            should_cleanup=lambda: not contexts,
+            cleanup=cleanup,
+        )
+
     def _acquire_scope(self) -> None:
-        viewers = cast(dict[Scope, set[Context]], self.root._scope_viewers)
-        if any(self in viewers.get(scope, ()) for scope in self.scope.mro):
+        if self._scope_releases:
             raise RuntimeError("Context is already registered as a Scope viewer.")
-        acquired = [scope for scope in self.scope.mro if scope not in viewers]
-        for scope in self.scope.mro:
-            viewers.setdefault(scope, set()).add(self)
-        if acquired:
-            for binding in tuple(self._data.values()):
-                binding.acquire_scopes(acquired)
+        viewers = cast(dict[Scope, Retainer[[Context]]], self.root._scope_viewers)
+        acquired: list[Scope] = []
+        try:
+            for scope in self.scope.mro:
+                retainer = viewers.get(scope)
+                if retainer is None:
+                    retainer = self._scope_retainer(viewers, self._data, scope)
+                    release = retainer.acquire(self)
+                    viewers[scope] = retainer
+                    acquired.append(scope)
+                else:
+                    release = retainer.acquire(self)
+                self._scope_releases[scope] = release
+            if acquired:
+                for binding in tuple(self._data.values()):
+                    binding.acquire_scopes(acquired)
+        except BaseException as error:
+            if self._scope_releases:
+                try:
+                    self._release_scope()
+                except BaseException as rollback_error:
+                    raise error from rollback_error
+            raise
 
     def _release_scope(self) -> None:
-        viewers = cast(dict[Scope, set[Context]], self.root._scope_viewers)
-        if any(
-            (registered := viewers.get(scope)) is None or self not in registered
-            for scope in self.scope.mro
-        ):
+        if not self._scope_releases:
             raise RuntimeError("Context is not registered as a Scope viewer.")
-
-        expired: list[Scope] = []
-        for scope in self.scope.mro:
-            registered = viewers[scope]
-            registered.remove(self)
-            if not registered:
-                viewers.pop(scope)
-                expired.append(scope)
-
-        if not expired:
-            return
-        for binding in tuple(self._data.values()):
-            binding.release_scopes(expired)
-        if not viewers:
-            self._data.clear()
+        first_error: BaseException | None = None
+        for release in tuple(self._scope_releases.values()):
+            try:
+                release()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def _remove_child(self, child: Context) -> None:
         if child in self._owned:
@@ -590,13 +664,18 @@ class Context(ContextElement):
                     "Context owns asynchronous cleanup; use await async_dispose()."
                 )
 
-    def _finish_dispose(self, error: BaseException | None) -> None:
+    def _finish_dispose(self, error: BaseException | None) -> BaseException | None:
         self._owned.clear()
-        self._release_scope()
+        try:
+            self._release_scope()
+        except BaseException as release_error:
+            if error is None:
+                error = release_error
         if self.parent is not None:
             self.parent._remove_child(self)
         object.__setattr__(self, "_dispose_error", error)
         object.__setattr__(self, "_state", _ContextState.DISPOSED)
+        return error
 
     def dispose(self) -> None:
         """Dispose synchronous ownership once and reproduce its terminal failure."""
@@ -619,7 +698,7 @@ class Context(ContextElement):
                     if first_error is None:
                         first_error = error
         finally:
-            self._finish_dispose(first_error)
+            first_error = self._finish_dispose(first_error)
         if first_error is not None:
             raise first_error
 
@@ -640,7 +719,7 @@ class Context(ContextElement):
                         first_error = error
         finally:
             try:
-                self._finish_dispose(first_error)
+                first_error = self._finish_dispose(first_error)
             finally:
                 _DISPOSAL_CHAIN.reset(token)
         if first_error is not None:

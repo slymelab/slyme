@@ -150,6 +150,8 @@ fragment 仍用于声明和导出该插件拥有的路径；`ctx.schema` 是整�
 `Schema.declare()` 返回由调用方管理的 disposer；`ctx.declare()` 还会把该声明作为
 `ctx` 拥有的 effect，同时保留同一个精确的提前 disposer。
 
+每个声明的 leaf 及其祖先 container 都通过一个 Retainer 管理独立声明者。disposer 先释放子路径，再释放 parent，仅在最后一个声明者退出后删除定义。某项 cleanup 失败不会阻止其余清理，后续调用会重现第一个失败。尚未调用或已成功释放的 disposer 不会使 Schema 或其旧定义继续存活；失败的 traceback 则可能保留清理现场。
+
 `set`、`update` 和 `mutate` 的 update 部分只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `mutate` 的 drop 部分接受任一角色。批量修改会先校验全部路径；发生冲突时不会产生部分写入。
 
 Schema 将应用内的每个有效路径固定为 leaf 或 container 之一，Context 数据不能改变这个角色：删除 value 不会让对应路径变成 container，删除 container 的局部值也不会让对应路径可以写入 leaf value。只要任一匹配声明仍然有效，该路径的角色和替换策略就不能改变。Context 只保存平铺的 leaf binding；访问 container 时先遍历 Schema，再读取相应的 binding。
@@ -243,6 +245,8 @@ effect cleanup 执行期间不得 dispose 其 owner Context、ancestor 或自身
 dispose Context 后，它会从 `ctx.scope.mro` 中每个 Scope 的 viewer 集合移除，但不会解除或销毁 `ctx.scope`。通过 `set()` 安装的值，只要同一应用根内仍有活跃 Context 能看到对应的 Context-binding identity，就会继续存储；通过 `add()` 安装的值还会在 owner Context 或其精确 disposer 执行时移除。Compose entry 同样保留到各自的精确 disposer 执行。数据仍然可见并不保证值中的外部资源仍处于打开状态：拥有该资源的 effect 可能已经关闭它。资源所有权应覆盖每个可能使用它的 Context，并且调用方应确定性地 dispose 子 Context，而不是依赖垃圾回收。
 
 Context binding 按 identity 记录仍被观察的 Scope，最后一个 viewer 退出时会清除其值，无须扫描无关的 Scope 绑定。直接复用仍被持有的 Scope，或将它作为祖先使用，都会重新登记 viewer 并保留原有 identity 绑定；已经清除的值不会恢复。
+
+Scope viewer 和 binding identity 的成员集合由 Retainer 的回调闭包持有。每次 release 同时移除成员及其保存的释放句柄。最后一个 viewer 退出时，从索引移除 Scope，并释放各个 binding 中对应的 Scope；最后一个绑定的 Scope 退出时，移除 identity 及其数据。某项清理失败不会阻止其余 binding 和 Scope 的清理，后续调用 Context dispose 会重现第一个失败。如果某个 Scope 在值的析构期间重新获得 viewer，后续清理会保留新 viewer 仍可见的数据。
 
 ## Compose
 

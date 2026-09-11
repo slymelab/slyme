@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import difflib
 import weakref
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
+from ..utils.retainer import Retainer
 from .ref import Ref
 
 __all__ = ["Schema"]
@@ -55,7 +56,7 @@ class _RefEntry(Generic[_T]):
 
     ref: Ref[_T]
     config: _RefConfig
-    declarations: set[object]
+    declarations: Retainer[[object]] = field(init=False, repr=False)
 
 
 _SchemaNode = _RefEntry[Any] | _SchemaContainer
@@ -86,10 +87,9 @@ class Schema:
         value: Any,
         path: str,
         active_mappings: set[int],
-        declaration_id: object,
     ) -> _SchemaNode:
         if isinstance(value, _RefLeafConfig):
-            return _RefEntry(Ref(path), value, {declaration_id})
+            return _RefEntry(Ref(path), value)
         if isinstance(value, _RefContainerConfig):
             raise TypeError(
                 f"Invalid Schema declaration at {path!r}: Schema.container() is "
@@ -117,11 +117,7 @@ class Schema:
                 container_config = current
 
             result: _SchemaContainer = {
-                _REF_ENTRY_KEY: _RefEntry(
-                    Ref(path),
-                    container_config,
-                    {declaration_id},
-                )
+                _REF_ENTRY_KEY: _RefEntry(Ref(path), container_config)
             }
             for raw_name, child in value.items():
                 if raw_name == _REF_ENTRY_KEY:
@@ -132,17 +128,13 @@ class Schema:
                     child,
                     child_path,
                     active_mappings,
-                    declaration_id,
                 )
             return result
         finally:
             active_mappings.remove(mapping_id)
 
     @staticmethod
-    def _build(
-        declarations: Mapping[str, Any],
-        declaration_id: object,
-    ) -> _SchemaContainer:
+    def _build(declarations: Mapping[str, Any]) -> _SchemaContainer:
         if _REF_ENTRY_KEY in declarations:
             raise ValueError(
                 "The root Schema declaration cannot define an empty-key "
@@ -157,7 +149,6 @@ class Schema:
                 value,
                 name,
                 active_mappings,
-                declaration_id,
             )
         return result
 
@@ -166,45 +157,17 @@ class Schema:
         return cast(_RefEntry[Any], container[_REF_ENTRY_KEY])
 
     @staticmethod
-    def _iter_entries(
-        container: _SchemaContainer,
-        prefix: tuple[str, ...] = (),
-    ) -> Iterable[tuple[tuple[str, ...], _RefEntry[Any]]]:
-        for name, node in container.items():
-            if name == _REF_ENTRY_KEY:
-                continue
-            parts = (*prefix, name)
-            if isinstance(node, _RefEntry):
-                yield parts, node
-                continue
-            child = cast(_SchemaContainer, node)
-            yield parts, Schema._container_entry(child)
-            yield from Schema._iter_entries(child, parts)
-
-    @staticmethod
-    def _copy_declaration(
-        source: _SchemaContainer,
-        declaration_id: object,
-    ) -> _SchemaContainer:
+    def _copy_declaration(source: _SchemaContainer) -> _SchemaContainer:
         result: _SchemaContainer = {}
         for name, node in source.items():
             if name == _REF_ENTRY_KEY:
                 entry = cast(_RefEntry[Any], node)
-                result[name] = _RefEntry(
-                    Ref(entry.ref.path),
-                    entry.config,
-                    {declaration_id},
-                )
+                result[name] = _RefEntry(Ref(entry.ref.path), entry.config)
             elif isinstance(node, _RefEntry):
-                result[name] = _RefEntry(
-                    Ref(node.ref.path),
-                    node.config,
-                    {declaration_id},
-                )
+                result[name] = _RefEntry(Ref(node.ref.path), node.config)
             else:
                 result[name] = Schema._copy_declaration(
                     cast(_SchemaContainer, node),
-                    declaration_id,
                 )
         return result
 
@@ -249,71 +212,84 @@ class Schema:
                 path_parts,
             )
 
-    @staticmethod
     def _commit_merge(
+        self,
         current: _SchemaContainer,
         incoming: _SchemaContainer,
+        declaration_id: object,
+        releases: list[Callable[[], None]],
     ) -> None:
         for name, incoming_node in incoming.items():
-            if name not in current:
-                current[name] = incoming_node
-                continue
-            current_node = current[name]
             if isinstance(incoming_node, _RefEntry):
-                cast(_RefEntry[Any], current_node).declarations.update(
-                    incoming_node.declarations
+                if name not in current:
+                    incoming_node.declarations = self._declaration_retainer(
+                        incoming_node
+                    )
+                    release = incoming_node.declarations.acquire(declaration_id)
+                    current[name] = incoming_node
+                else:
+                    entry = cast(_RefEntry[Any], current[name])
+                    release = entry.declarations.acquire(declaration_id)
+                releases.append(release)
+                continue
+            new_container = name not in current
+            try:
+                self._commit_merge(
+                    current.setdefault(name, {}),
+                    cast(_SchemaContainer, incoming_node),
+                    declaration_id,
+                    releases,
                 )
-                continue
-            Schema._commit_merge(
-                cast(_SchemaContainer, current_node),
-                cast(_SchemaContainer, incoming_node),
-            )
+            except BaseException:
+                if new_container:
+                    del current[name]
+                raise
 
-    @staticmethod
-    def _remove_declaration(
-        root: _SchemaContainer,
-        paths: tuple[tuple[str, ...], ...],
-        declaration_id: object,
-    ) -> None:
-        for parts in sorted(paths, key=len, reverse=True):
-            parent = root
-            missing_parent = False
-            for part in parts[:-1]:
-                node = parent.get(part)
-                if not isinstance(node, dict):
-                    missing_parent = True
-                    break
-                parent = cast(_SchemaContainer, node)
-            if missing_parent:
-                continue
+    def _declaration_retainer(self, entry: _RefEntry[Any]) -> Retainer[[object]]:
+        declarations: set[object] = set()
+        schema_ref = weakref.ref(self)
+        entry_ref = weakref.ref(entry)
 
-            name = parts[-1]
-            node = parent.get(name)
-            if node is None:
-                continue
-            entry = (
-                node
-                if isinstance(node, _RefEntry)
-                else Schema._container_entry(cast(_SchemaContainer, node))
+        def acquire(declaration_id: object) -> Callable[[], None]:
+            declarations.add(declaration_id)
+            return lambda: declarations.remove(declaration_id)
+
+        def cleanup() -> None:
+            schema = schema_ref()
+            entry = entry_ref()
+            if schema is not None and entry is not None:
+                schema._remove_entry(entry)
+
+        return Retainer(
+            acquire,
+            should_cleanup=lambda: not declarations,
+            cleanup=cleanup,
+        )
+
+    def _remove_entry(self, entry: _RefEntry[Any]) -> None:
+        try:
+            parent = cast(_SchemaContainer, self._node_at(entry.ref.parts[:-1]))
+        except KeyError:
+            # A failed declaration can discard a newly created container first.
+            return
+        name = entry.ref.parts[-1]
+        node = parent.get(name)
+        if node is None:
+            return
+        current = node if isinstance(node, _RefEntry) else self._container_entry(node)
+        if current is not entry:
+            return
+        if isinstance(node, dict) and any(key for key in node if key):
+            raise RuntimeError(
+                "Schema declaration ownership invariant was violated at "
+                f"{entry.ref.path!r}."
             )
-            entry.declarations.discard(declaration_id)
-            if entry.declarations:
-                continue
-            if isinstance(node, dict) and any(key for key in node if key):
-                raise RuntimeError(
-                    "Schema declaration ownership invariant was violated at "
-                    f"{'.'.join(parts)!r}."
-                )
-            del parent[name]
+        del parent[name]
 
     def __init__(self, declarations: Mapping[str, Any] | None = None) -> None:
-        if declarations is None:
-            declarations = {}
-        object.__setattr__(
-            self,
-            "_Schema__data",
-            self._build(declarations, object()),
-        )
+        object.__setattr__(self, "_Schema__data", {})
+        if declarations is not None:
+            self.declare(declarations)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError(
@@ -355,36 +331,42 @@ class Schema:
         self,
         declarations: Schema | Mapping[str, Any],
     ) -> Callable[[], None]:
-        """Add one atomic declaration and return its idempotent disposer."""
+        """Add one atomic declaration and return its idempotent disposer.
+
+        Disposal releases children before parents, continues after failures, and
+        reproduces the first failure on subsequent calls. The disposer does not
+        own this Schema or its entries; failure tracebacks can retain cleanup
+        state.
+        """
         declaration_id = object()
         if isinstance(declarations, Schema):
-            incoming = self._copy_declaration(
-                declarations.__data,
-                declaration_id,
-            )
+            incoming = self._copy_declaration(declarations.__data)
         else:
-            incoming = self._build(declarations, declaration_id)
+            incoming = self._build(declarations)
 
         self._validate_merge(self.__data, incoming)
-        paths = tuple(path for path, _ in self._iter_entries(incoming))
-        self._commit_merge(self.__data, incoming)
-
-        schema_ref = weakref.ref(self)
-        disposed = False
+        releases: list[Callable[[], None]] = []
 
         def dispose() -> None:
-            nonlocal disposed
-            if disposed:
-                return
-            disposed = True
-            schema = schema_ref()
-            if schema is not None:
-                schema._remove_declaration(
-                    schema.__data,
-                    paths,
-                    declaration_id,
-                )
+            first_error: BaseException | None = None
+            for release in reversed(releases):
+                try:
+                    release()
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+            if first_error is not None:
+                raise first_error
+            releases.clear()
 
+        try:
+            self._commit_merge(self.__data, incoming, declaration_id, releases)
+        except BaseException as error:
+            try:
+                dispose()
+            except BaseException as cleanup_error:
+                raise error from cleanup_error
+            raise
         return dispose
 
     def _node_at(self, parts: tuple[str, ...]) -> _SchemaNode:
