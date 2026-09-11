@@ -1,6 +1,6 @@
 # 图的组装
 
-使用普通 Python 函数组装和复用 Node 图。函数可以返回 `Node`、`AsyncNode` 或图元素的集合，不需要专门的组装装饰器。
+使用普通 Python 函数组装和复用 Node 图。函数可以返回 `Node` 或图元素的集合，不需要专门的组装装饰器。
 
 ## 基础用法
 
@@ -66,4 +66,4 @@ def custom_pipeline(new_path: str) -> Node[None]:
 
 每次调用 `base_pipeline()` 都会创建新的 Node 和列表，修改其中一条流水线不会改变另一条。传入多个图的应用值仍然共享，除非显式复制。
 
-组装函数和参数结构都可以自由嵌套。执行 API 仍有明确的类型约定：Wrapper 模式必须与其 Node 匹配，`sequential` 接受同步 Node，`async_sequential` 接受同步或异步 Node。
+组装函数和参数结构可以自由嵌套。Node 与 Wrapper 调用返回直接值或 awaitable，`sequential` 对两者都保持步骤顺序。

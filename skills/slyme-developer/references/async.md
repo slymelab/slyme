@@ -1,10 +1,10 @@
 # Async API
 
-The unified `@node` and `@wrapper` decorators detect `async def`. Live parameter, Context lifetime, and Scope visibility semantics are identical to synchronous Nodes.
+Node and Wrapper share one immediate-or-awaitable completion protocol. Actual returned values, not whether the function uses `async def`, determine execution. A synchronous parent can receive an asynchronous Auto result.
 
 ```python
-from slyme.context import Context, Ref
-from slyme.node import AsyncNode, Auto, node, wrapper
+from slyme.node import Auto, Node, node, wrapper
+from slyme.utils.awaitable import resolve
 
 
 @node
@@ -13,16 +13,20 @@ async def fetch(ctx, *, key: Auto[str]) -> str:
 
 
 @wrapper
-async def trace(ctx, wrapped: AsyncNode, call_next, *, name: str):
+async def trace(ctx, wrapped: Node, call_next, *, name: str):
     print(name, "start")
     try:
-        return await call_next(ctx)
+        return await resolve(call_next(ctx))
     finally:
         print(name, "end")
 ```
 
-Use `await node(ctx)` for execution. Application code owns Context construction, external inputs, and output reads. `async_sequential` builds a declarative mixed sequence; `async_sequential_exec` executes synchronous children inline and awaits asynchronous children. Do not perform blocking I/O directly inside an async function.
+Use `await resolve(graph(ctx))` for either immediate or awaitable results. A forwarding synchronous wrapper may return `call_next(ctx)` unchanged, but synchronous statements after that call do not wait for it. No wrapper automatically rewrites user `try/finally`. Ordinary awaitables returned as execution results are awaited; wrap one in a container when it is data.
 
-During asynchronous Auto evaluation, asynchronous child Nodes may overlap at suspension points. Synchronous child Nodes execute inline on the event-loop thread and finish before their evaluation task yields. Each child receives an owned Context with a distinct child Scope, and Slyme finishes `async_dispose()` before propagating cancellation or entering the parent function. Values returned by a child must not depend on resources owned by that child Context. The primary child failure remains primary, while sibling and cleanup failures are attached through its cause. Mutable leaf objects and external side effects remain shared. A Context tree and its mutable Schema and Compose objects are single-thread-owned; explicitly offloaded work must operate on ordinary values and return results for owner-thread mutation. Synchronous Auto evaluation runs children in evaluation order and rejects `async_effect()` before setup. Use `async_sequential_exec(ctx, children)` when ordered steps should share one Context and its lifetime.
+Async continuations are lazy until awaited or scheduled; a synchronous prefix may already have run. `resolve` neither starts an event loop nor offloads work. Use `asyncio.run(resolve(graph(ctx)))` only at a synchronous application entry point, and await within an existing loop. Do not block the event-loop thread; offloaded workers receive ordinary values and return results for owner-thread Context mutation.
 
-Cancelling a direct `async_dispose()` waiter leaves cleanup running and may return before it finishes. Await the same method again, or keep another waiter, to observe its retained success or failure before shutdown. Context does not own unrelated tasks that use it; stop and await them before disposal.
+Auto runs synchronous children inline. After the first awaitable child or cleanup, it schedules the pending child and remaining siblings concurrently when awaited, retaining result order. Each child has an owned Context and distinct Scope. Child cleanup finishes before parent execution or cancellation propagation, including repeated cancellation. Returned values must not depend on child-owned resources. Sibling and cleanup failures remain attached to the primary exception; cleanup failure during cancellation remains observable. `sequential_exec(ctx, children)` instead waits for each step and shares the supplied Context; `sequential(nodes=children)` builds that ordering as a Node.
+
+`ctx.effect(setup)` registers ownership before invoking setup. Await `resolve(ctx.effect(setup))` when setup may be asynchronous to obtain the early disposer. Cancelling that waiter does not cancel already scheduled setup; owner disposal waits for it and releases the acquired resource. Setup must undo partial acquisition if it fails.
+
+Use `await resolve(ctx.dispose())` to finish mixed cleanup. Calling `dispose()` marks the Context as disposing and runs synchronous cleanup immediately; async cleanup is scheduled when awaited. A direct waiter's cancellation does not cancel scheduled cleanup but may return before completion. Await disposal again before shutdown to observe its retained result. Context does not own arbitrary Node tasks: stop and await them before disposal.

@@ -1,6 +1,6 @@
 # Graph Assembly
 
-Use ordinary Python functions to assemble and reuse Node graphs. A function can return a `Node`, an `AsyncNode`, or a collection of graph elements; no assembly decorator is required.
+Use ordinary Python functions to assemble and reuse Node graphs. A function can return a `Node` or a collection of graph elements; no assembly decorator is required.
 
 ## Basic Usage
 
@@ -66,4 +66,4 @@ def custom_pipeline(new_path: str) -> Node[None]:
 
 Each call to `base_pipeline()` creates fresh Nodes and a fresh list; modifications in one pipeline do not change another. Application values passed into multiple graphs remain shared unless explicitly copied.
 
-Assembly functions and parameter structures may nest freely. Execution APIs retain their declared types: wrapper modes must match their Node, `sequential` accepts synchronous Nodes, and `async_sequential` accepts synchronous or asynchronous Nodes.
+Assembly functions and parameter structures may nest freely. Node and Wrapper calls return immediate values or awaitables; `sequential` preserves step order for both.

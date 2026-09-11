@@ -100,7 +100,27 @@ jobs:
         run: |
           uv venv --python 3.13 .venv-smoke
           uv pip install --python .venv-smoke/bin/python dist/*.whl
-          .venv-smoke/bin/python -c "import slyme; from slyme.context import Compose, Context, Ref; ref = Ref('value'); ctx = Context({ref: 1}); assert ctx.flatten() == {ref: 1}; assert Compose.collect().resolve(ctx) == (); print(slyme.__version__)"
+          .venv-smoke/bin/python - <<'PY'
+          import asyncio
+          import slyme
+          from slyme.context import Compose, Context, Schema
+          from slyme.node import node
+          from slyme.utils.awaitable import resolve
+
+          schema = Schema({"value": Schema.leaf()})
+          ref = schema.resolve("value")
+          ctx = Context({ref: 1}, schema=schema)
+          assert ctx.flatten() == {ref: 1}
+          assert Compose.collect().resolve(ctx.scope) == ()
+
+          @node
+          async def value(ctx):
+              return ctx.get(ref)
+
+          assert asyncio.run(resolve(value()(ctx))) == 1
+          assert ctx.dispose() is None
+          print(slyme.__version__)
+          PY
       - name: Upload distributions
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

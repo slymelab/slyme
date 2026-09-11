@@ -47,7 +47,7 @@ A Node function has exactly one non-keyword-only runtime parameter. All build pa
 
 An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned child Context with a distinct `ctx.scope.fork()`. Slyme disposes that child, including its effects, before parent execution continues. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe its writes.
 
-`set()`, `update()`, `delete()`, and other ordinary Context mutations modify data in place and return `None`. `add()` and `declare()` return exact early disposers and are also removed automatically with their owning Context. A Node may return any value.
+`set()`, `update()`, `delete()`, and other ordinary Context mutations modify data in place and return `None`. `add()` and `declare()` return exact early disposers and are also removed automatically with their owning Context. A Node returns an immediate value or an awaitable completion.
 
 ## Context lifetime, Scope visibility, and Compose
 
@@ -81,7 +81,9 @@ Create an application root with `Context(data, schema=R, scope=optional_scope)`.
 
 ## Effects and disposal
 
-`ctx.effect(setup)` runs synchronous setup immediately; setup returns synchronous cleanup and the method returns an idempotent synchronous early disposer. `ctx.async_effect(setup)` also runs setup synchronously, but setup returns asynchronous cleanup and its early disposer must be awaited. Setup and cleanup cannot dispose their owner Context or an ancestor while running. Each Context disposes directly owned child Contexts and effects in LIFO order, recursively; cleanup continues after failures and then raises the first failure. `ctx.dispose()` first rejects a subtree containing asynchronous cleanup without partially tearing it down; use `await ctx.async_dispose()` for mixed cleanup. Idempotence means cleanup runs once and later disposal calls reproduce the same terminal failure. A disposed Context rejects further data and lifecycle operations.
+`ctx.effect(setup)` owns one setup and its cleanup. A synchronous setup runs immediately and returns an early disposer. If setup returns an awaitable, `effect()` returns an awaitable resolving to that disposer; use `await resolve(ctx.effect(setup))` when either form is possible. Async setup is owned before it starts: owner disposal waits for it and then runs its cleanup, even if its caller never awaited registration. Await setup before using the resource it acquires. Setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
+
+A parent strongly owns its child Contexts. Each Context processes directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` runs synchronous cleanup immediately and returns `None` when complete, or an awaitable for the unfinished asynchronous cleanup. Use `await resolve(ctx.dispose())` for either case, importing `resolve` from `slyme.utils.awaitable`. An async continuation is not scheduled until awaited; merely discarding it leaves disposal unfinished. Once scheduled, its task survives waiter cancellation. Early effect disposers follow the same completion protocol. Cleanup continues after failure, then raises the first failure; repeated calls share the completion and reproduce its terminal failure without repeating cleanup. A disposed Context rejects further data and lifecycle operations.
 
 Effect setup and cleanup cannot dispose their owner Context or an ancestor while running, and cleanup cannot re-enter its own disposer; Slyme rejects these operations with `RuntimeError`.
 
@@ -99,7 +101,7 @@ def trace(ctx, wrapped: Node, call_next, *, name: str):
         print(name, "end")
 ```
 
-A Wrapper has exactly three non-keyword-only runtime parameters. Attach it only through `node.add_wrappers(...)`.
+A Wrapper has exactly three non-keyword-only runtime parameters. Attach it through `node.add_wrappers(...)`. This example and the `execute` function above assume synchronous children. For mixed children, use `async def` and `await resolve(...)` before inspecting results, executing following statements, or leaving `try/finally`; see [async.md](async.md).
 
 ## Assembly and execution
 

@@ -41,6 +41,25 @@ The caller owns Context construction, external input handling, and output extrac
 
 There is no Def/Exec conversion or `prepare()` step. Each call binds and resolves the current parameters and wrappers.
 
+## Synchronous and asynchronous composition
+
+A Node returns `T | Awaitable[T]` according to the actual Auto, Wrapper, user-function, and temporary Context cleanup results. Purely synchronous calls return directly. A regular `def` can return an awaitable without declaring a mode; a synchronous parent can consume async Auto inputs after they complete.
+
+```python
+from slyme.utils.awaitable import resolve
+
+
+async def execute(ctx):
+    try:
+        return await resolve(task(ctx))
+    finally:
+        await resolve(ctx.dispose())
+```
+
+`resolve()` awaits only the outer execution result, not values inside containers. Async continuations run when awaited or scheduled, although their synchronous prefix may already have run. Synchronous applications can use `asyncio.run(resolve(task(ctx)))` at their entry point; await within an existing loop instead of nesting loops. Slyme never automatically offloads blocking functions to threads.
+
+Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await resolve(child(ctx))` when the child may be asynchronous. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
+
 ## Parameters and Auto
 
 Every build parameter has a `Spec`. `Auto[T]` is shorthand for enabling automatic evaluation:
@@ -99,12 +118,12 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrappers use onion ordering and read their live parameters when invoked.
+Wrappers use onion ordering and read their live parameters when invoked. The example above is synchronous-only: when `call_next(ctx)` returns an awaitable, its following statements run before that completion. A forwarding wrapper may return it unchanged; a wrapper that needs the final result, async exceptions, or completion-time cleanup must use `async def` and `await resolve(call_next(ctx))`. Slyme does not rewrite a wrapper's `try/finally`.
 
 ## Composition structure
 
-Node and Wrapper parameters may contain arbitrary values and nested PyTrees, including other Nodes or Wrappers. Slyme does not impose a global legality check on that object graph. Only an object's active execution role is constrained: wrapper modes must match their Node, `sequential` accepts only synchronous Nodes, and `async_sequential` accepts synchronous or asynchronous Nodes.
+Node and Wrapper parameters may contain arbitrary values and nested PyTrees, including other Nodes or Wrappers. Slyme imposes no global legality check on the object graph. Both use the same immediate-or-awaitable execution protocol.
 
 ## Sequential composition
 
-Use `sequential(nodes=[...])` for a declarative synchronous sequence and `async_sequential(nodes=[...])` for mixed asynchronous execution. Their corresponding `*_exec` helpers execute an existing iterable with the same Context; unlike Auto child evaluation, these helpers intentionally share local writes between steps.
+Use `sequential(nodes=[...])` for a declarative sequence or `sequential_exec(ctx, nodes)` for an existing iterable. Both wait for each completion before starting the next Node and remain synchronous when every step is synchronous. They share the supplied Context, so later steps observe earlier local writes, unlike Auto child evaluation.

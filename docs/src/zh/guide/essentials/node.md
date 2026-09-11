@@ -40,6 +40,25 @@ Context 创建、外部输入处理和输出提取均由调用方负责。Node �
 
 现在没有 Def/Exec 转换和 `prepare()` 阶段。每次调用都会绑定并解析当前参数与 wrapper。
 
+## 同步与异步组合
+
+Node 的返回类型是 `T | Awaitable[T]`，取决于实际执行的 Auto、Wrapper、用户函数及临时 Context 清理。纯同步调用直接返回；普通 `def` 也可以返回 awaitable，不需要声明执行模式。同步父函数可以等待异步 Auto 注入后再运行。
+
+```python
+from slyme.utils.awaitable import resolve
+
+
+async def execute(ctx):
+    try:
+        return await resolve(task(ctx))
+    finally:
+        await resolve(ctx.dispose())
+```
+
+`resolve()` 只等待外层执行结果，不递归等待容器中的数据。异步 continuation 在被等待或调度前不会执行；同步前缀可能已运行。同步应用可以在应用入口使用 `asyncio.run(resolve(task(ctx)))`，已有事件循环内应 await，不创建嵌套事件循环。框架不会把阻塞函数自动放入线程。
+
+用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。需要支持异步 child 时，改用 `async def` 和 `await resolve(child(ctx))`。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
+
 ## 参数与 Auto
 
 每个构建参数都有一个 `Spec`。`Auto[T]` 是启用自动求值的简写：
@@ -98,12 +117,12 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrapper 按洋葱模型组合，并在调用时读取实时参数。
+Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适用于同步执行：`call_next(ctx)` 返回 awaitable 时，后续语句会在异步完成前运行。仅转发结果的 Wrapper 可以直接返回它；需要最终结果、异步异常或完成后清理的 Wrapper 应使用 `async def` 与 `await resolve(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
 ## 组合结构
 
-Node 与 Wrapper 参数可以保存任意值和嵌套 PyTree，包括其他 Node 或 Wrapper。Slyme 不会对整张对象图施加统一的合法性检查，只有对象实际参与执行时的角色受到约束：Wrapper 模式必须与其 Node 匹配，`sequential` 只接受同步 Node，`async_sequential` 则接受同步或异步 Node。
+Node 与 Wrapper 参数可以保存任意值和嵌套 PyTree，包括其他 Node 或 Wrapper。Slyme 不对整张对象图施加统一的合法性检查；两者采用相同的直接结果或 awaitable 执行协议。
 
 ## 顺序组合
 
-同步声明式顺序组合使用 `sequential(nodes=[...])`，混合异步执行使用 `async_sequential(nodes=[...])`。对应的 `*_exec` helper 会让已有 iterable 使用同一个 Context 执行；与 Auto 子 Node 不同，这些 helper 会有意让各步骤共享局部写入。
+声明式顺序组合使用 `sequential(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部同步时直接返回。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。

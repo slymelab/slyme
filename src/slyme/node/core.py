@@ -25,7 +25,7 @@ from typing import (
     Any,
     Concatenate,
     Generic,
-    Literal,
+    NoReturn,
     ParamSpec,
     Protocol,
     TypeVar,
@@ -36,6 +36,7 @@ from typing import (
 from typing_extensions import Self
 
 from slyme.context import Context
+from slyme.utils.awaitable import _chain, _guard
 from slyme.utils.exception import enrich_exception
 
 from .exception import (
@@ -52,32 +53,28 @@ from .signature import (
 )
 
 __all__ = [
-    "ExecutionMode",
     "node",
     "wrapper",
     "NodeElement",
     "Node",
     "Wrapper",
-    "AsyncNode",
-    "AsyncWrapper",
     "NODE_ENGINE",
 ]
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _E = TypeVar("_E", bound="NodeElement")
-ExecutionMode = Literal["sync", "async"]
 
-NodeFunc = Callable[Concatenate[Context, _P], _R]
+NodeFunc = Callable[Concatenate[Context, _P], _R | Awaitable[_R]]
 WrapperFunc = Callable[
-    Concatenate[Context, "Node[Any]", Callable[[Context], Any], _P], _R
+    Concatenate[Context, "Node[Any]", Callable[[Context], Any], _P], _R | Awaitable[_R]
 ]
 AsyncNodeFunc = Callable[Concatenate[Context, _P], Awaitable[_R]]
 AsyncWrapperFunc = Callable[
     Concatenate[
         Context,
-        "AsyncNode[Any]",
-        Callable[[Context], Awaitable[Any]],
+        "Node[Any]",
+        Callable[[Context], Any | Awaitable[Any]],
         _P,
     ],
     Awaitable[_R],
@@ -184,7 +181,7 @@ class NodeElement:
 
 
 class Node(NodeElement, Generic[_R]):
-    """Mutable synchronous Node."""
+    """A mutable graph element returning a result or an awaitable completion."""
 
     __slots__ = ("wrappers",)
 
@@ -198,105 +195,50 @@ class Node(NodeElement, Generic[_R]):
         params: Mapping[str, Any],
     ):
         super().__init__(func=func, specs=specs, params=params)
-        self.wrappers: list[Wrapper[Any]] = []
-        if wrappers:
-            self.add_wrappers(*wrappers)
+        self.wrappers: list[Wrapper[Any]] = list(wrappers or ())
 
     def add_wrappers(self, *wrappers: "Wrapper[Any]") -> Self:
         self.wrappers.extend(wrappers)
         return self
 
-    def __call__(self, ctx: Context) -> _R:
+    def _raise_error(self, error: Exception) -> NoReturn:
+        if isinstance(error, NodeTerminate):
+            if error.source_node is None:
+                error.source_node = self
+            raise error
+        if isinstance(error, NodeException):
+            raise error
+        raise NodeExceptionRecord(exception_node=self, exception=error) from error
+
+    def __call__(self, ctx: Context) -> _R | Awaitable[_R]:
+        return _guard(partial(self._call, ctx), self._raise_error)
+
+    def _call(self, ctx: Context) -> _R | Awaitable[_R]:
         wrappers = tuple(self.wrappers)
-        try:
-            kwargs = self._collect_params()
-            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                self._validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
-            if not eval_kwargs:
-                chain: Callable[[Context], _R] = partial(self._func, **raw_kwargs)
-            else:
-                eval_plan = prepare_eval_plan(eval_kwargs)
+        kwargs = self._collect_params()
+        with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+            self._validate_ready(kwargs)
+        raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
+        if not eval_kwargs:
+            chain: Callable[[Context], _R | Awaitable[_R]] = partial(
+                self._func, **raw_kwargs
+            )
+        else:
+            eval_plan = prepare_eval_plan(eval_kwargs)
 
-                def chain(call_ctx: Context) -> _R:
-                    return self._func(
-                        call_ctx,
-                        **raw_kwargs,
-                        **execute_eval_plan(call_ctx, eval_plan),
-                    )
-
-            for wrapper_obj in reversed(wrappers):
-                chain = partial(wrapper_obj, wrapped=self, call_next=chain)
-            return chain(ctx)
-        except NodeTerminate as e:
-            if e.source_node is None:
-                e.source_node = self
-            raise
-        except NodeException:
-            raise
-        except Exception as e:
-            raise NodeExceptionRecord(exception_node=self, exception=e) from e
-
-
-class AsyncNode(NodeElement, Generic[_R]):
-    """Mutable asynchronous Node."""
-
-    __slots__ = ("wrappers",)
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: AsyncNodeFunc,
-        specs: Mapping[str, Spec],
-        wrappers: Iterable["AsyncWrapper[Any]"] | None = None,
-        params: Mapping[str, Any],
-    ):
-        super().__init__(func=func, specs=specs, params=params)
-        self.wrappers: list[AsyncWrapper[Any]] = []
-        if wrappers:
-            self.add_wrappers(*wrappers)
-
-    def add_wrappers(self, *wrappers: "AsyncWrapper[Any]") -> Self:
-        self.wrappers.extend(wrappers)
-        return self
-
-    async def __call__(self, ctx: Context) -> _R:
-        wrappers = tuple(self.wrappers)
-        try:
-            kwargs = self._collect_params()
-            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                self._validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
-            if not eval_kwargs:
-                chain: Callable[[Context], Awaitable[_R]] = partial(
-                    self._func, **raw_kwargs
+            def chain(call_ctx: Context) -> _R | Awaitable[_R]:
+                return _chain(
+                    execute_eval_plan(call_ctx, eval_plan),
+                    lambda evaluated: self._func(call_ctx, **raw_kwargs, **evaluated),
                 )
-            else:
-                eval_plan = prepare_eval_plan(eval_kwargs)
 
-                async def chain(call_ctx: Context) -> _R:
-                    return await self._func(
-                        call_ctx,
-                        **raw_kwargs,
-                        **await async_execute_eval_plan(call_ctx, eval_plan),
-                    )
-
-            for wrapper_obj in reversed(wrappers):
-                chain = partial(wrapper_obj, wrapped=self, call_next=chain)
-            return await chain(ctx)
-        except NodeTerminate as e:
-            if e.source_node is None:
-                e.source_node = self
-            raise
-        except NodeException:
-            raise
-        except Exception as e:
-            raise NodeExceptionRecord(exception_node=self, exception=e) from e
+        for wrapper_obj in reversed(wrappers):
+            chain = partial(wrapper_obj, wrapped=self, call_next=chain)
+        return chain(ctx)
 
 
 class Wrapper(NodeElement, Generic[_R]):
-    """Mutable synchronous Wrapper."""
+    """Wrap a Node call; await its completion before result-dependent work."""
 
     __slots__ = ()
 
@@ -310,104 +252,51 @@ class Wrapper(NodeElement, Generic[_R]):
     ):
         super().__init__(func=func, specs=specs, params=params)
 
+    def _raise_error(self, wrapped: Node[Any], error: Exception) -> NoReturn:
+        if isinstance(error, NodeException):
+            raise error
+        raise WrapperExceptionRecord(
+            exception_node=self, wrapped_node=wrapped, exception=error
+        ) from error
+
     def __call__(
         self,
         ctx: Context,
         wrapped: Node[Any],
-        call_next: Callable[[Context], Any],
-    ) -> _R:
-        try:
-            kwargs = self._collect_params()
-            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                self._validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
-            if eval_kwargs:
-                raw_kwargs.update(
-                    execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs))
-                )
-            return self._func(ctx, wrapped, call_next, **raw_kwargs)
-        except NodeException:
-            raise
-        except Exception as e:
-            raise WrapperExceptionRecord(
-                exception_node=self, wrapped_node=wrapped, exception=e
-            ) from e
+        call_next: Callable[[Context], Any | Awaitable[Any]],
+    ) -> _R | Awaitable[_R]:
+        return _guard(
+            partial(self._call, ctx, wrapped, call_next),
+            partial(self._raise_error, wrapped),
+        )
 
-
-class AsyncWrapper(NodeElement, Generic[_R]):
-    """Mutable asynchronous Wrapper."""
-
-    __slots__ = ()
-
-    def __init__(
-        self,
-        /,
-        *,
-        func: AsyncWrapperFunc,
-        specs: Mapping[str, Spec],
-        params: Mapping[str, Any],
-    ):
-        super().__init__(func=func, specs=specs, params=params)
-
-    async def __call__(
+    def _call(
         self,
         ctx: Context,
-        wrapped: AsyncNode[Any],
-        call_next: Callable[[Context], Awaitable[Any]],
-    ) -> _R:
-        try:
-            kwargs = self._collect_params()
-            with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
-                self._validate_ready(kwargs)
-            raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
-            if eval_kwargs:
-                raw_kwargs.update(
-                    await async_execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs))
-                )
-            return await self._func(ctx, wrapped, call_next, **raw_kwargs)
-        except NodeException:
-            raise
-        except Exception as e:
-            raise WrapperExceptionRecord(
-                exception_node=self, wrapped_node=wrapped, exception=e
-            ) from e
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any | Awaitable[Any]],
+    ) -> _R | Awaitable[_R]:
+        kwargs = self._collect_params()
+        with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+            self._validate_ready(kwargs)
+        raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
+        if not eval_kwargs:
+            return self._func(ctx, wrapped, call_next, **raw_kwargs)
+        return _chain(
+            execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs)),
+            lambda evaluated: self._func(
+                ctx, wrapped, call_next, **raw_kwargs, **evaluated
+            ),
+        )
 
 
 # Functional Factory & Decorators
 class _FactoryBase(Generic[_P, _E]):
-    """Shared implementation for mode-aware graph element factories."""
+    """Construct graph elements from a decorated function's signature."""
 
     _decorator_name: str
     _runtime_count: int
-    _element_types: Mapping[ExecutionMode, type[NodeElement]]
-
-    @staticmethod
-    def _is_async_callable(func: Callable[..., Any]) -> bool:
-        """Return whether *func* is declared with ``async def``.
-
-        Return annotations are intentionally ignored. A synchronous function that
-        returns an Awaitable must opt in with ``mode="async"``.
-        """
-        unwrapped = inspect.unwrap(func)
-        if inspect.iscoroutinefunction(unwrapped):
-            return True
-        return inspect.iscoroutinefunction(unwrapped.__call__)
-
-    @classmethod
-    def _resolve_execution_mode(
-        cls,
-        func: Callable[..., Any],
-        mode: ExecutionMode | None,
-    ) -> ExecutionMode:
-        detected_async = cls._is_async_callable(func)
-        if mode is None:
-            return "async" if detected_async else "sync"
-        if mode == "sync" and detected_async:
-            raise TypeError(
-                f"@{cls._decorator_name}(mode='sync') cannot decorate an async "
-                "function."
-            )
-        return mode
+    _element_type: type[NodeElement]
 
     @classmethod
     def _decorate(
@@ -415,10 +304,8 @@ class _FactoryBase(Generic[_P, _E]):
         func: Callable[..., Any],
         /,
         *,
-        mode: ExecutionMode | None,
         resolve_type_hints: bool,
     ) -> Self:
-        resolved_mode = cls._resolve_execution_mode(func, mode)
         analysis = analyze_signature(func, resolve_type_hints=resolve_type_hints)
         if len(analysis.runtime_params) != cls._runtime_count:
             raise TypeError(
@@ -428,30 +315,22 @@ class _FactoryBase(Generic[_P, _E]):
                 f"but found {len(analysis.runtime_params)}. "
                 "All build arguments must be keyword-only."
             )
-        return cls(
-            func,
-            analysis.specs,
-            analysis.public_signature,
-            mode=resolved_mode,
-        )
+        return cls(func, analysis.specs, analysis.public_signature)
 
     def __init__(
         self,
         func: Callable,
         specs: Mapping[str, Spec],
         signature: inspect.Signature,
-        *,
-        mode: ExecutionMode,
     ):
         update_wrapper(self, func)
         self._func = func
         self._specs = specs
         self.__signature__ = signature
-        self.mode = mode
 
     @property
     def element_type(self) -> type[_E]:
-        return cast(type[_E], self._element_types[self.mode])
+        return cast(type[_E], self._element_type)
 
     @property
     def func(self) -> Callable:
@@ -465,173 +344,104 @@ class _FactoryBase(Generic[_P, _E]):
 
 
 class NodeFactory(_FactoryBase[_P, _E]):
-    """Build a Node or AsyncNode according to ``mode``."""
+    """Build a Node without selecting a synchronous or asynchronous mode."""
 
     _decorator_name = "node"
     _runtime_count = 1
-    _element_types: Mapping[ExecutionMode, type[NodeElement]] = {
-        "sync": Node,
-        "async": AsyncNode,
-    }
+    _element_type = Node
 
 
 class WrapperFactory(_FactoryBase[_P, _E]):
-    """Build a Wrapper or AsyncWrapper according to ``mode``."""
+    """Build a Wrapper without selecting an execution mode."""
 
     _decorator_name = "wrapper"
     _runtime_count = 3
-    _element_types: Mapping[ExecutionMode, type[NodeElement]] = {
-        "sync": Wrapper,
-        "async": AsyncWrapper,
-    }
+    _element_type = Wrapper
 
 
-class _AutoNodeDecorator(Protocol):
+class _NodeDecorator(Protocol):
+    @overload
+    def __call__(self, func: AsyncNodeFunc[_P, _R], /) -> NodeFactory[_P, Node[_R]]: ...
     @overload
     def __call__(self, func: NodeFunc[_P, _R], /) -> NodeFactory[_P, Node[_R]]: ...
+
+
+class _WrapperDecorator(Protocol):
     @overload
     def __call__(
-        self, func: AsyncNodeFunc[_P, _R], /
-    ) -> NodeFactory[_P, AsyncNode[_R]]: ...
-
-
-class _AutoWrapperDecorator(Protocol):
+        self, func: AsyncWrapperFunc[_P, _R], /
+    ) -> WrapperFactory[_P, Wrapper[_R]]: ...
     @overload
     def __call__(
         self, func: WrapperFunc[_P, _R], /
     ) -> WrapperFactory[_P, Wrapper[_R]]: ...
-    @overload
-    def __call__(
-        self, func: AsyncWrapperFunc[_P, _R], /
-    ) -> WrapperFactory[_P, AsyncWrapper[_R]]: ...
 
 
-@overload
-def node(
-    func: NodeFunc[_P, _R],
-    /,
-    *,
-    mode: Literal["sync"] | None = None,
-    resolve_type_hints: bool = True,
-) -> NodeFactory[_P, Node[_R]]: ...
 @overload
 def node(
     func: AsyncNodeFunc[_P, _R],
     /,
     *,
-    mode: Literal["async"] | None = None,
     resolve_type_hints: bool = True,
-) -> NodeFactory[_P, AsyncNode[_R]]: ...
+) -> NodeFactory[_P, Node[_R]]: ...
+@overload
+def node(
+    func: NodeFunc[_P, _R],
+    /,
+    *,
+    resolve_type_hints: bool = True,
+) -> NodeFactory[_P, Node[_R]]: ...
 @overload
 def node(
     func: _Missing = _MISSING,
     /,
     *,
-    mode: Literal["sync"],
     resolve_type_hints: bool = True,
-) -> Callable[[NodeFunc[_P, _R]], NodeFactory[_P, Node[_R]]]: ...
-@overload
-def node(
-    func: _Missing = _MISSING,
-    /,
-    *,
-    mode: Literal["async"],
-    resolve_type_hints: bool = True,
-) -> Callable[[AsyncNodeFunc[_P, _R]], NodeFactory[_P, AsyncNode[_R]]]: ...
-@overload
-def node(
-    func: _Missing = _MISSING,
-    /,
-    *,
-    mode: None = None,
-    resolve_type_hints: bool = True,
-) -> _AutoNodeDecorator: ...
+) -> _NodeDecorator: ...
 def node(
     func: Callable[..., Any] | _Missing = _MISSING,
     /,
     *,
-    mode: ExecutionMode | None = None,
     resolve_type_hints: bool = True,
 ) -> Any:
-    """Create a synchronous or asynchronous Node factory.
-
-    With ``mode=None``, ``async def`` callables are detected by inspection; all
-    other callables are synchronous. Use ``mode="async"`` for a regular
-    function that returns an Awaitable.
-    """
+    """Create a Node factory; execution follows actual returned values."""
     if func is _MISSING:
-        return partial(
-            NodeFactory._decorate,
-            mode=mode,
-            resolve_type_hints=resolve_type_hints,
-        )
-    return NodeFactory._decorate(
-        func,
-        mode=mode,
-        resolve_type_hints=resolve_type_hints,
-    )
+        return partial(NodeFactory._decorate, resolve_type_hints=resolve_type_hints)
+    return NodeFactory._decorate(func, resolve_type_hints=resolve_type_hints)
 
 
-@overload
-def wrapper(
-    func: WrapperFunc[_P, _R],
-    /,
-    *,
-    mode: Literal["sync"] | None = None,
-    resolve_type_hints: bool = True,
-) -> WrapperFactory[_P, Wrapper[_R]]: ...
 @overload
 def wrapper(
     func: AsyncWrapperFunc[_P, _R],
     /,
     *,
-    mode: Literal["async"] | None = None,
     resolve_type_hints: bool = True,
-) -> WrapperFactory[_P, AsyncWrapper[_R]]: ...
+) -> WrapperFactory[_P, Wrapper[_R]]: ...
+@overload
+def wrapper(
+    func: WrapperFunc[_P, _R],
+    /,
+    *,
+    resolve_type_hints: bool = True,
+) -> WrapperFactory[_P, Wrapper[_R]]: ...
 @overload
 def wrapper(
     func: _Missing = _MISSING,
     /,
     *,
-    mode: Literal["sync"],
     resolve_type_hints: bool = True,
-) -> Callable[[WrapperFunc[_P, _R]], WrapperFactory[_P, Wrapper[_R]]]: ...
-@overload
-def wrapper(
-    func: _Missing = _MISSING,
-    /,
-    *,
-    mode: Literal["async"],
-    resolve_type_hints: bool = True,
-) -> Callable[[AsyncWrapperFunc[_P, _R]], WrapperFactory[_P, AsyncWrapper[_R]]]: ...
-@overload
-def wrapper(
-    func: _Missing = _MISSING,
-    /,
-    *,
-    mode: None = None,
-    resolve_type_hints: bool = True,
-) -> _AutoWrapperDecorator: ...
+) -> _WrapperDecorator: ...
 def wrapper(
     func: Callable[..., Any] | _Missing = _MISSING,
     /,
     *,
-    mode: ExecutionMode | None = None,
     resolve_type_hints: bool = True,
 ) -> Any:
-    """Create a synchronous or asynchronous Wrapper factory."""
+    """Create a Wrapper factory for immediate or awaitable execution."""
     if func is _MISSING:
-        return partial(
-            WrapperFactory._decorate,
-            mode=mode,
-            resolve_type_hints=resolve_type_hints,
-        )
-    return WrapperFactory._decorate(
-        func,
-        mode=mode,
-        resolve_type_hints=resolve_type_hints,
-    )
+        return partial(WrapperFactory._decorate, resolve_type_hints=resolve_type_hints)
+    return WrapperFactory._decorate(func, resolve_type_hints=resolve_type_hints)
 
 
-from .eval import async_execute_eval_plan, execute_eval_plan, prepare_eval_plan
+from .eval import execute_eval_plan, prepare_eval_plan
 from .tree import NODE_ENGINE

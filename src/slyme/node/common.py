@@ -12,82 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Iterable, Sequence
+from inspect import isawaitable
+from typing import Any
 
 from slyme.context import Context
+from slyme.utils.awaitable import resolve
 
-from .core import AsyncNode, Node, node
+from .core import Node, node
 
-__all__ = [
-    "sequential_exec",
-    "sequential",
-    "async_sequential_exec",
-    "async_sequential",
-]
+__all__ = ["sequential_exec", "sequential"]
 
 
-def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None:
-    """
-    Sequentially execute nodes against the same mutable context.
+def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None | Awaitable[None]:
+    """Execute nodes in order, waiting for each completion before the next."""
+    iterator = iter(nodes)
 
-    Args:
-        ctx (Context): The initial context to pass through the nodes.
-        nodes (Iterable[Node]): An iterable of nodes to execute.
+    async def continue_async(pending: Awaitable[Any]) -> None:
+        await pending
+        for item in iterator:
+            await resolve(item(ctx))
 
-    Returns:
-        None.
-    """
-    for node_ in nodes:
-        node_(ctx)
+    for item in iterator:
+        result = item(ctx)
+        if isawaitable(result):
+            return continue_async(result)
+    return None
 
 
 @node
-def sequential(ctx: Context, /, *, nodes: Sequence[Node]) -> None:
-    """
-    Sequentially execute nodes against the same mutable context.
-
-    Args:
-        ctx (Context): The initial context to pass through the nodes.
-        nodes (Sequence[Node]): A sequence of nodes to execute.
-
-    Returns:
-        None.
-    """
-    sequential_exec(ctx, nodes)
-
-
-async def async_sequential_exec(
-    ctx: Context, nodes: Iterable[Node | AsyncNode]
-) -> None:
-    """
-    Sequentially execute nodes against the same mutable context.
-
-    Args:
-        ctx (Context): The initial context to pass through the nodes.
-        nodes (Iterable[Node | AsyncNode]): An iterable of nodes to execute.
-
-    Returns:
-        None.
-    """
-    for node_ in nodes:
-        if isinstance(node_, AsyncNode):
-            await node_(ctx)
-        else:
-            node_(ctx)
-
-
-@node
-async def async_sequential(
-    ctx: Context, /, *, nodes: Sequence[Node | AsyncNode]
-) -> None:
-    """
-    Sequentially execute nodes against the same mutable context.
-
-    Args:
-        ctx (Context): The initial context to pass through the nodes.
-        nodes (Sequence[Node | AsyncNode]): A sequence of nodes to execute.
-
-    Returns:
-        None.
-    """
-    await async_sequential_exec(ctx, nodes)
+def sequential(ctx: Context, /, *, nodes: Sequence[Node]) -> None | Awaitable[None]:
+    """Execute nodes in order against the same mutable Context."""
+    return sequential_exec(ctx, nodes)

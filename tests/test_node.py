@@ -12,13 +12,9 @@ import pytest
 from slyme.context import Context, Ref, Schema
 from slyme.node import (
     UNDEFINED,
-    AsyncNode,
     Auto,
     Node,
     Wrapper,
-    async_eval_tree,
-    async_sequential,
-    async_sequential_exec,
     eval_tree,
     node,
     sequential,
@@ -29,7 +25,6 @@ from slyme.node import (
 from slyme.node.eval import (
     EvaluationPlan,
     EvaluatorDef,
-    async_execute_eval_plan,
     contains_eval_type,
     execute_eval_plan,
     prepare_eval_plan,
@@ -41,6 +36,7 @@ from slyme.node.exception import (
 )
 from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
+from slyme.utils.awaitable import resolve
 
 R = Schema(
     {
@@ -179,18 +175,11 @@ def test_decorator_validation_and_factory_behavior() -> None:
     assert overlapping.wrappers == []
     assert overlapping(Context(schema=R)) == (1, 2, 3)
 
-    async def async_function(ctx: Context) -> None:
-        return None
-
-    with pytest.raises(TypeError, match="cannot decorate an async"):
-        node(mode="sync")(async_function)
-
     @node
     async def detected(ctx: Context, /) -> int:
         return 1
 
-    assert detected.mode == "async"
-    assert detected.element_type is AsyncNode
+    assert detected.element_type is Node
     assert detected.func.__name__ == "detected"
 
 
@@ -314,7 +303,7 @@ async def test_async_node_and_wrapper_calls_use_live_parameters() -> None:
     @wrapper
     async def record(
         ctx: Context,
-        wrapped: AsyncNode[Any],
+        wrapped: Node[Any],
         call_next: Callable[[Context], Awaitable[Any]],
         /,
         *,
@@ -441,7 +430,7 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
     @wrapper
     async def async_trace(
         ctx: Context,
-        wrapped: AsyncNode[Any],
+        wrapped: Node[Any],
         call_next: Callable[[Context], Awaitable[Any]],
         /,
         *,
@@ -474,17 +463,16 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
     assert events[0] == "before:trace"
     assert set(events[1:3]) == {"sync", "async"}
     assert events[-1] == "after"
-    assert await async_eval_tree(ctx, {"x": R.resolve("input.value")}) == {"x": 3}
+    assert await resolve(eval_tree(ctx, {"x": R.resolve("input.value")})) == {"x": 3}
 
 
-async def test_sync_evaluation_rejects_async_node() -> None:
+async def test_evaluation_promotes_async_node() -> None:
     @node
     async def async_child(ctx: Context, /) -> int:
         return 1
 
     child = async_child()
-    with pytest.raises(RuntimeError, match="Cannot evaluate AsyncNode"):
-        eval_tree(Context(schema=R), child)
+    assert await resolve(eval_tree(Context(schema=R), child)) == 1
 
 
 def test_evaluator_result_count_is_validated() -> None:
@@ -493,10 +481,7 @@ def test_evaluator_result_count_is_validated() -> None:
         return None
 
     base = prepare_eval_plan(identity())
-    evaluator = EvaluatorDef(
-        sync_func=lambda _ctx, _values: [],
-        async_func=lambda _ctx, _values: _empty_async(),
-    )
+    evaluator = EvaluatorDef(lambda _ctx, _values: [])
     bad_plan = EvaluationPlan(
         tree_def=base.tree_def,
         batches=((evaluator, (0,), (identity(),)),),
@@ -517,10 +502,7 @@ async def test_async_evaluator_result_count_is_validated() -> None:
         return None
 
     base = prepare_eval_plan(identity())
-    evaluator = EvaluatorDef(
-        sync_func=lambda _ctx, _values: [],
-        async_func=lambda _ctx, _values: _empty_async(),
-    )
+    evaluator = EvaluatorDef(lambda _ctx, _values: _empty_async())
     bad_plan = EvaluationPlan(
         tree_def=base.tree_def,
         batches=((evaluator, (0,), (identity(),)),),
@@ -528,7 +510,7 @@ async def test_async_evaluator_result_count_is_validated() -> None:
         num_leaves=1,
     )
     with pytest.raises(ValueError, match="expected 1"):
-        await async_execute_eval_plan(Context(schema=R), bad_plan)
+        await resolve(execute_eval_plan(Context(schema=R), bad_plan))
 
 
 def test_auto_nodes_receive_isolated_child_contexts() -> None:
@@ -647,33 +629,32 @@ def test_sync_auto_disposes_child_effects_before_parent_execution() -> None:
     assert parent(value=child())(Context(schema=R)) == 1
 
 
-def test_sync_auto_rejects_async_cleanup_before_setup() -> None:
-    setup_called = False
+async def test_sync_auto_promotes_async_cleanup_before_parent_execution() -> None:
+    events: list[str] = []
 
     @node
-    def child(ctx: Context, /) -> None:
-        nonlocal setup_called
+    def child(ctx: Context, /) -> int:
+        async def cleanup() -> None:
+            await asyncio.sleep(0)
+            events.append("cleanup")
 
-        def setup():
-            nonlocal setup_called
-            setup_called = True
-
-            async def cleanup() -> None:
-                pass
-
-            return cleanup
-
-        ctx.async_effect(setup)
+        ctx.effect(lambda: cleanup)
+        events.append("child")
+        return 1
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[None]) -> None:
+    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        assert events == ["child", "cleanup"]
+        events.append("parent")
         return value
 
-    with pytest.raises(NodeExceptionRecord) as caught:
-        parent(value=child())(Context(schema=R))
-    assert isinstance(caught.value.exception, RuntimeError)
-    assert "synchronous evaluation" in str(caught.value.exception)
-    assert not setup_called
+    ctx = Context(schema=R)
+    pending = parent(value=child())(ctx)
+    assert inspect.isawaitable(pending)
+    assert events == ["child"]
+    assert await resolve(pending) == 1
+    assert events == ["child", "cleanup", "parent"]
+    assert not ctx._owned
 
 
 async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None:
@@ -685,7 +666,7 @@ async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None
             await asyncio.sleep(0)
             events.append("cleanup")
 
-        ctx.async_effect(lambda: cleanup)
+        ctx.effect(lambda: cleanup)
         events.append("child")
         return 1
 
@@ -756,7 +737,7 @@ async def test_async_auto_preserves_node_failure_when_cleanup_also_fails() -> No
 
     @node
     async def child(ctx: Context, /) -> int:
-        ctx.async_effect(lambda: fail_cleanup)
+        ctx.effect(lambda: fail_cleanup)
         raise ValueError("node failed")
 
     @node
@@ -781,7 +762,7 @@ async def test_async_auto_failure_disposes_cancelled_siblings() -> None:
         async def cleanup() -> None:
             cleaned.set()
 
-        ctx.async_effect(lambda: cleanup)
+        ctx.effect(lambda: cleanup)
         started.set()
         await asyncio.Event().wait()
         return 1
@@ -814,7 +795,7 @@ async def test_async_auto_preserves_cancelled_sibling_cleanup_failure() -> None:
             await release_cleanup.wait()
             raise RuntimeError("sibling cleanup failed")
 
-        ctx.async_effect(lambda: cleanup)
+        ctx.effect(lambda: cleanup)
         started.set()
         await asyncio.Event().wait()
         return 1
@@ -865,7 +846,7 @@ async def test_repeated_auto_cancellation_finishes_child_cleanup() -> None:
             await release_cleanup.wait()
             cleanup_finished.set()
 
-        ctx.async_effect(lambda: cleanup)
+        ctx.effect(lambda: cleanup)
         return 1
 
     @node
@@ -899,7 +880,7 @@ async def test_repeated_auto_cancellation_preserves_cleanup_failure() -> None:
             await release_cleanup.wait()
             raise RuntimeError("cleanup failed")
 
-        ctx.async_effect(lambda: cleanup)
+        ctx.effect(lambda: cleanup)
         return 1
 
     @node
@@ -956,10 +937,10 @@ async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
 
     ctx = Context(schema=R)
     nodes = [sync_step(), async_step()]
-    await async_sequential_exec(ctx, nodes)
+    await resolve(sequential_exec(ctx, nodes))
     assert ctx.get(R.resolve("sync")) and ctx.get(R.resolve("async_value"))
     assert sync_thread == owner_thread
-    await async_sequential(nodes=nodes)(ctx)
+    await resolve(sequential(nodes=nodes)(ctx))
 
 
 async def test_plain_functions_assemble_independent_node_graphs() -> None:
@@ -982,7 +963,7 @@ async def test_plain_functions_assemble_independent_node_graphs() -> None:
     async def async_leaf(ctx: Context, /) -> int:
         return 1
 
-    def build_async() -> AsyncNode[int]:
+    def build_async() -> Node[int]:
         return async_leaf()
 
     assert await build_async()(ctx) == 1
@@ -1034,7 +1015,7 @@ async def test_wrappers_can_be_added_through_the_public_list() -> None:
     @wrapper
     async def async_wrapper(
         ctx: Context,
-        wrapped: AsyncNode[Any],
+        wrapped: Node[Any],
         call_next: Callable[[Context], Awaitable[Any]],
         /,
     ) -> Any:

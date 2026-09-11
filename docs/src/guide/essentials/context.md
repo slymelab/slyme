@@ -175,7 +175,7 @@ A user mapping remains an atomic leaf. A deeper Ref belongs to a Schema-defined 
 
 ```python
 ctx.set(R.resolve("settings"), {"theme": "dark"})  # one mapping-valued leaf
-ctx.set(R.resolve("user.name"), "Ada")              # a structural branch and leaf
+ctx.set(R.resolve("user.name"), "Ada")  # a structural branch and leaf
 ```
 
 Every read operation accepts `local=True` to inspect only `ctx.scope`. The default is the effective view across `ctx.scope.mro`. Context CRUD never accepts a separate Scope argument; use a Context bound to the target Scope when data must be read or written elsewhere.
@@ -251,9 +251,9 @@ An inherited Scope value does not prevent adding a value at a more specific Scop
 
 ## Effects and disposal
 
-`ctx.effect(setup)` runs synchronous setup immediately and owns the synchronous cleanup callable it returns; the method returns an exact synchronous early disposer. `ctx.async_effect(setup)` also runs setup synchronously, but owns an asynchronous cleanup callable and returns an early disposer that must be awaited. Effect setup cannot dispose its owner Context or an ancestor before the returned cleanup has been registered. As with any resource-acquisition callback, setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
+`ctx.effect(setup)` owns one setup and its cleanup. A synchronous setup runs immediately and returns an early disposer. If setup returns an awaitable, `effect()` returns an awaitable resolving to that disposer; use `await resolve(ctx.effect(setup))` when either form is possible. Async setup is owned before it starts: owner disposal waits for it and then runs its cleanup, even if its caller never awaited registration. Await setup before using the resource it acquires. Setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
 
-A parent strongly owns its child Contexts. Each Context processes its directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` handles a wholly synchronous subtree. If any descendant owns asynchronous cleanup, it rejects the entire operation before teardown begins; use `await async_dispose()` to process both synchronous and asynchronous cleanup. Disposal continues after a cleanup failure, finishes releasing the subtree, and then raises the first failure. Idempotence means cleanup runs at most once; later calls to the same effect disposer or Context disposal method reproduce its terminal failure. A disposed Context rejects further Context data access, mutations, forks, effects, and registrations.
+A parent strongly owns its child Contexts. Each Context processes directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` runs synchronous cleanup immediately and returns `None` when complete, or an awaitable for the unfinished asynchronous cleanup. Use `await resolve(ctx.dispose())` for either case, importing `resolve` from `slyme.utils.awaitable`. An async continuation is not scheduled until awaited; merely discarding it leaves disposal unfinished. Once scheduled, its task survives waiter cancellation. Early effect disposers follow the same completion protocol. Cleanup continues after failure, then raises the first failure; repeated calls share the completion and reproduce its terminal failure without repeating cleanup. A disposed Context rejects further data and lifecycle operations.
 
 Effect cleanup cannot dispose its owning Context, an ancestor, or itself while it is running. These reentrant operations could invalidate resources still used by that cleanup or depend on their own completion, so Slyme rejects them with `RuntimeError`.
 
@@ -317,9 +317,7 @@ nested_path = Context(
 )
 
 assert mapping_leaf.to_dict() == nested_path.to_dict()
-assert mapping_leaf.flatten() == {
-    leaf_schema.resolve("settings"): {"theme": "dark"}
-}
+assert mapping_leaf.flatten() == {leaf_schema.resolve("settings"): {"theme": "dark"}}
 assert nested_path.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 

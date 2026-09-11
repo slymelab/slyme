@@ -10,6 +10,13 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Added `slyme.utils.awaitable.resolve()` to await an immediate or asynchronous
+  result without starting a loop or offloading synchronous work.
+- Unified Node, Auto, and Wrapper execution around actual returned values;
+  async dependencies and child cleanup can promote a synchronous parent call.
+- Unified Context setup and cleanup through `effect()` and `dispose()`, including
+  owned asynchronous setup and cancellation-safe repeatable cleanup completion.
+
 - Added a pytest-based unit and integration suite with asynchronous tests,
   property-based checks, branch coverage enforcement, and Python 3.10–3.14 CI.
 - Added locked development dependency groups, Ruff and mypy quality gates,
@@ -38,7 +45,7 @@ breaking changes when they are documented here.
 - Indexed Schema entries by complete path for direct Context lookups while
   preserving tree-based traversal and exact declaration teardown.
 - Made ownership removal constant-time on average and synchronous disposal
-  preflight a single subtree traversal, preserving recursive LIFO cleanup.
+  a single subtree traversal, preserving recursive LIFO cleanup.
 - Preserved Context disposal failures after a cancelled waiter so every later
   disposal call observes the same terminal result without repeating cleanup.
 - Rejected disposal of an effect's owner or ancestors during synchronous setup
@@ -55,6 +62,9 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed execution-mode decorators and separate async Node, Wrapper, evaluator,
+  sequence, and Context lifecycle APIs. Use the unified APIs and `resolve()`
+  when immediate and awaitable results are both possible.
 - Removed `Context.bind()` and `Context.contribute()`. Use
   `Context.isolate(..., identity=...)` for shared isolated leaf storage and
   `ctx.effect(lambda: compose.add(scope, value))` for owned contributions.
@@ -71,7 +81,7 @@ breaking changes when they are documented here.
 - Removed the Def/Exec split and recursive `Node.prepare()` compilation model;
   Node and Wrapper objects are now directly callable.
 - Removed the legacy asynchronous decorator aliases; use `@node` and
-  `@wrapper`, which detect `async def` directly.
+  `@wrapper`, which compose immediate and awaitable results.
 - Removed positional Scope injection from Node factories.
 - Removed Context hooks and the asynchronous mirrors of locally synchronous
   Context operations.
@@ -81,7 +91,7 @@ breaking changes when they are documented here.
   are not retained, and `flatten()` returns Ref-keyed leaf mappings.
 - Removed `Context.diff()`, `ContextDiff`, and `DIFF_MISSING`.
 - Removed whole-graph Node structure validation. Node and Wrapper parameters
-  may contain arbitrary nested values; mounted wrappers still match Node mode.
+  may contain arbitrary nested values.
 - Removed `Ref.key_path` and its `CallKey`, `KeyPathExpr`, and `P` helpers.
 - Removed the global open-path `R` and reference deletion; applications now
   declare Context paths through `Schema`.
@@ -105,9 +115,8 @@ breaking changes when they are documented here.
 - Node and Wrapper build parameters now use explicit `get()`, `set()`, and
   `reset()` methods. Parameter names may overlap framework API names without
   changing attribute behavior.
-- Node and Wrapper construction now uses separate mode-aware factories while
-  synchronous and asynchronous decorators share the same signature-analysis
-  path.
+- Node and Wrapper factories share signature analysis and construct the same
+  graph element types for immediate and asynchronous functions.
 - Node and Wrapper calls now pass their current static parameter containers
   directly to user functions instead of creating an implicit frozen snapshot.
 - Context construction now accepts a Ref-to-value mapping and keyword-only

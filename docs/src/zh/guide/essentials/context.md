@@ -162,7 +162,7 @@ Schema 将应用内的每个有效路径固定为 leaf 或 container 之一，Co
 
 ```python
 ctx.set(R.resolve("settings"), {"theme": "dark"})  # 一个以 mapping 为值的 leaf
-ctx.set(R.resolve("user.name"), "Ada")              # 一个结构 branch 和 leaf
+ctx.set(R.resolve("user.name"), "Ada")  # 一个结构 branch 和 leaf
 ```
 
 所有读取操作都接受 `local=True`，用于只检查 `ctx.scope`；默认读取 `ctx.scope.mro` 上的有效视图。Context CRUD 不接受单独的 Scope 参数；需要在其他 Scope 读写数据时，应使用绑定到目标 Scope 的 Context。
@@ -238,9 +238,9 @@ Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add
 
 ## Effect 与 dispose
 
-`ctx.effect(setup)` 会立即同步执行 setup，并拥有其返回的同步 cleanup callable；该方法返回同步的精确提前 disposer。`ctx.async_effect(setup)` 同样同步执行 setup，但拥有其返回的异步 cleanup callable，并返回必须 await 的提前 disposer。在返回的 cleanup 登记完成前，effect setup 不得 dispose owner Context 或其 ancestor。与其他资源获取回调相同，如果 setup 在返回 cleanup 之前抛出异常，它仍须自行撤销部分完成的资源获取。
+`ctx.effect(setup)` 管理一次 setup 及其 cleanup。同步 setup 立即运行，并返回提前 disposer；如果 setup 返回 awaitable，`effect()` 则返回一个解析为 disposer 的 awaitable。两种情况统一使用 `await resolve(ctx.effect(setup))`。异步 setup 在启动前就已登记归属：即使调用者没有等待注册，owner 释放时也会等待 setup，再执行其 cleanup。使用取得的资源前必须等待 setup；如果 setup 在返回 cleanup 前失败，部分资源的回滚仍由 setup 自己负责。
 
-parent 会强引用并拥有其子 Context。每个 Context 都按后进先出顺序处理自己直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 处理完全同步的子树；如果任一后代拥有异步 cleanup，它会在任何清理开始前拒绝整个操作，此时应使用 `await async_dispose()` 处理同步和异步 cleanup。某项 cleanup 失败不会跳过其余清理；子树释放完毕后会重新抛出第一个异常。幂等表示 cleanup 最多执行一次；后续再次调用同一个 effect disposer 或 Context dispose 方法时，会重现其最终失败。已 dispose 的 Context 会拒绝后续 Context 数据访问、修改、fork、effect 与注册操作。
+parent 会强引用并拥有子 Context。每个 Context 按后进先出顺序处理直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await resolve(ctx.dispose())`，其中 `resolve` 从 `slyme.utils.awaitable` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出第一个失败；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
 
 effect cleanup 执行期间不得 dispose 其 owner Context、ancestor 或自身。这类重入操作可能让 cleanup 仍在使用的资源提前失效，或者依赖自身完成，因此 Slyme 会抛出 `RuntimeError`。
 
@@ -304,9 +304,7 @@ nested_path = Context(
 )
 
 assert mapping_leaf.to_dict() == nested_path.to_dict()
-assert mapping_leaf.flatten() == {
-    leaf_schema.resolve("settings"): {"theme": "dark"}
-}
+assert mapping_leaf.flatten() == {leaf_schema.resolve("settings"): {"theme": "dark"}}
 assert nested_path.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 
