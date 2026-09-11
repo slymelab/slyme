@@ -69,7 +69,7 @@ def test_failed_sync_effect_disposal_replays_error_without_repeating_cleanup() -
     ctx.dispose()
 
 
-def test_context_owns_add_declare_and_contribute() -> None:
+def test_context_owns_bindings_declarations_and_compose_effects() -> None:
     schema = Schema(
         {
             "hooks": Schema.leaf(replaceable=False),
@@ -81,8 +81,8 @@ def test_context_owns_add_declare_and_contribute() -> None:
     ctx.add("hooks", hooks)
     remove_plugin = ctx.declare({"plugin": {"value": Schema.leaf()}})
     ctx.set("plugin.value", 1)
-    ctx.contribute("hooks", "first", metadata={"owner": "test"})
-    ctx.contribute("hooks", "zeroth", position="prepend")
+    ctx.effect(lambda: hooks.add(ctx.scope, "first", metadata={"owner": "test"}))
+    ctx.effect(lambda: hooks.add(ctx.scope, "zeroth", position="prepend"))
 
     assert hooks.resolve(ctx.scope) == ("zeroth", "first")
     assert hooks.entries(ctx.scope)[1]["metadata"] == {"owner": "test"}
@@ -97,23 +97,24 @@ def test_context_owns_add_declare_and_contribute() -> None:
     assert hooks.resolve(ctx.scope) == ()
 
 
-def test_context_contribute_can_target_an_explicit_scope() -> None:
+def test_compose_effect_keeps_its_target_when_the_context_leaf_is_replaced() -> None:
     schema = Schema({"hooks": Schema.leaf()})
     ctx = Context(schema=schema)
     hooks = Compose[str, tuple[str, ...]].collect()
     ctx.add("hooks", hooks)
     other = ctx.scope.fork()
 
-    dispose = ctx.contribute("hooks", "other", scope=other)
+    dispose = ctx.effect(lambda: ctx.get("hooks").add(other, "other"))
     assert hooks.resolve(ctx.scope) == ()
     assert hooks.resolve(other) == ("other",)
+    replacement = Compose[str, tuple[str, ...]].collect()
+    ctx.set("hooks", replacement)
+    ctx.effect(lambda: ctx.get("hooks").add(other, "replacement"))
     dispose()
     assert hooks.resolve(other) == ()
-
-    ctx.set("hooks", object())
-    with pytest.raises(TypeError, match="does not hold Compose"):
-        ctx.contribute("hooks", "invalid")
+    assert replacement.resolve(other) == ("replacement",)
     ctx.dispose()
+    assert replacement.resolve(other) == ()
 
 
 def test_scope_data_survives_until_its_last_context_viewer_is_disposed() -> None:
@@ -175,13 +176,9 @@ def test_bound_identity_data_survives_until_its_last_viewer_is_disposed() -> Non
 
     schema = Schema({"value": Schema.leaf()})
     root = Context(schema=schema)
-    left_scope = root.scope.fork()
-    right_scope = root.scope.fork()
-    writer = root.fork(scope=left_scope)
-    reader = root.fork(scope=right_scope)
     identity = object()
-    writer.bind("value", identity=identity)
-    reader.bind("value", identity=identity)
+    writer = root.isolate("value", identity=identity)
+    reader = root.isolate("value", identity=identity)
     payload = Payload()
     payload_ref = weakref.ref(payload)
     writer.set("value", payload)
@@ -193,8 +190,7 @@ def test_bound_identity_data_survives_until_its_last_viewer_is_disposed() -> Non
     gc.collect()
 
     assert payload_ref() is None
-    late_reader = root.fork(scope=right_scope)
-    late_reader.bind("value", identity=identity)
+    late_reader = root.fork(scope=reader.scope)
     assert not late_reader.exists("value")
     late_reader.dispose()
     root.dispose()
@@ -203,11 +199,9 @@ def test_bound_identity_data_survives_until_its_last_viewer_is_disposed() -> Non
 def test_bound_identity_keeps_add_owned_by_its_context() -> None:
     schema = Schema({"value": Schema.leaf()})
     root = Context(schema=schema)
-    owner = root.fork(scope=root.scope.fork())
-    viewer = root.fork(scope=root.scope.fork())
     identity = object()
-    owner.bind("value", identity=identity)
-    viewer.bind("value", identity=identity)
+    owner = root.isolate("value", identity=identity)
+    viewer = root.isolate("value", identity=identity)
     owner.add("value", "temporary")
 
     assert viewer.get("value") == "temporary"
@@ -217,24 +211,19 @@ def test_bound_identity_keeps_add_owned_by_its_context() -> None:
     root.dispose()
 
 
-def test_identity_index_tracks_observed_scopes_even_without_values() -> None:
+def test_identity_index_tracks_isolated_scopes_after_value_deletion() -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
-    writer = root.fork(scope=root.scope.fork())
-    viewer = root.fork(scope=root.scope.fork())
     identity = object()
-    writer.bind("value", identity=identity)
-    viewer.bind("value", identity=identity)
-    viewer.bind("value", identity=identity)
+    writer = root.isolate("value", identity=identity)
+    viewer = root.isolate("value", identity=identity)
     binding = next(iter(root._data.values()))
 
-    assert binding._identity_scopes == {identity: {writer.scope, viewer.scope}}
-    with pytest.raises(ValueError, match="cannot be rebound"):
-        writer.bind("value", identity=object())
     assert binding._identity_scopes == {identity: {writer.scope, viewer.scope}}
 
     writer.set("value", "first")
     writer.delete("value")
-    assert not binding._buckets
+    assert not writer.exists("value")
+    assert not viewer.exists("value")
     assert binding._identity_scopes == {identity: {writer.scope, viewer.scope}}
     writer.set("value", "second")
     writer.dispose()
@@ -255,10 +244,9 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
     reader_first: bool,
 ) -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
-    saved_scope = root.scope.fork()
-    previous = root.fork(scope=saved_scope)
     identity = object()
-    previous.bind("value", identity=identity)
+    previous = root.isolate("value", identity=identity)
+    saved_scope = previous.scope
     previous.set("value", "old")
     previous.dispose()
     binding = next(iter(root._data.values()))
@@ -268,8 +256,7 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
     reader_scope = saved_scope.fork() if descendant else saved_scope
     if reader_first:
         reader = root.fork(scope=reader_scope)
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity=identity)
+    writer = root.isolate("value", identity=identity)
     writer.set("value", "new")
     if not reader_first:
         reader = root.fork(scope=reader_scope)
@@ -285,12 +272,10 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
 
 def test_identity_index_keeps_both_observed_parents_of_a_diamond_scope() -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
-    left = root.fork(scope=root.scope.fork())
-    right = root.fork(scope=root.scope.fork())
-    reader = root.fork(scope=Scope(parents=(left.scope, right.scope)))
     identity = object()
-    left.bind("value", identity=identity)
-    right.bind("value", identity=identity)
+    left = root.isolate("value", identity=identity)
+    right = root.isolate("value", identity=identity)
+    reader = root.fork(scope=Scope(parents=(left.scope, right.scope)))
     left.set("value", "shared")
     binding = next(iter(root._data.values()))
 

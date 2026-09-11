@@ -35,7 +35,7 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；需要把当前可见 binding 物化为新应用根时使用 `Context(context.flatten(), schema=context.schema)`。这些操作都不会复制应用值。
 
-Context 会拥有其子 Context，以及通过 `effect()`、`async_effect()`、`add()`、`declare()` 和 `contribute()` 注册的 cleanup。每个 Context 都按后进先出顺序处理自己的直接归属项，并递归销毁子级。Context 不会自动拥有仅仅使用它的任意 task；应用必须先停止并等待这些 task，再 dispose 它们使用的 Context。`dispose()` 处理完全同步的子树，`await async_dispose()` 同时处理同步与异步 cleanup。注册操作返回的 disposer 可用于提前清理，但不会改变生命周期归属模型。
+Context 会拥有其子 Context，以及通过 `effect()`、`async_effect()`、`add()` 和 `declare()` 注册的 cleanup。每个 Context 都按后进先出顺序处理自己的直接归属项，并递归销毁子级。Context 不会自动拥有仅仅使用它的任意 task；应用必须先停止并等待这些 task，再 dispose 它们使用的 Context。`dispose()` 处理完全同步的子树，`await async_dispose()` 同时处理同步与异步 cleanup。注册操作返回的 disposer 可用于提前清理，但不会改变生命周期归属模型。
 
 ## Auto 值
 

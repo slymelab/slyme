@@ -349,7 +349,7 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
     assert isolated.resolve(child.scope) == ("isolated-tool",)
 
 
-def test_context_contribution_uses_bound_or_explicit_scope_and_is_owned() -> None:
+def test_context_effect_owns_contributions_to_explicit_scopes() -> None:
     hooks_ref = R.resolve("hooks")
     root = Context(schema=R)
     hooks = Compose[str, tuple[str, ...]].collect()
@@ -357,22 +357,26 @@ def test_context_contribution_uses_bound_or_explicit_scope_and_is_owned() -> Non
     child = root.fork(scope=root.scope.fork(name="child"))
     external = Scope("external")
 
-    remove_bound = child.contribute(
-        hooks_ref,
-        "bound",
-        metadata={"source": "child"},
-        position="prepend",
+    remove_bound = child.effect(
+        lambda: child.get(hooks_ref).add(
+            child.scope,
+            "bound",
+            metadata={"source": "child"},
+            position="prepend",
+        )
     )
-    child.contribute(hooks_ref, "external", scope=external)
+    child.effect(lambda: child.get(hooks_ref).add(external, "external"))
 
     assert hooks.resolve(child.scope) == ("bound",)
     assert hooks.resolve(external) == ("external",)
     assert hooks.entries(child.scope)[0]["metadata"] == {"source": "child"}
 
     remove_bound()
+    remove_bound()
     assert hooks.resolve(child.scope) == ()
     child.dispose()
     assert hooks.resolve(external) == ()
+    root.dispose()
 
 
 def test_flattened_context_shares_compose_but_not_scope_identity() -> None:

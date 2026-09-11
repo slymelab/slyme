@@ -984,13 +984,6 @@ class Context(ContextElement):
         """Set one local binding."""
         self.mutate(updates={ref: value})
 
-    def bind(self, ref: ContextKey, *, identity: Hashable) -> None:
-        """Bind this Context's Scope to one identity for a Context leaf."""
-        self._assert_mutable()
-        entry = self._validate_entry(ref, role="leaf")
-        Compose._validate_identity(identity)
-        self._binding(entry, create=True).bind(self.scope, identity=identity)
-
     def add(self, ref: ContextKey, value: _T) -> Callable[[], None]:
         """Add one local binding owned by this Context."""
         self._assert_mutable()
@@ -1006,35 +999,6 @@ class Context(ContextElement):
             raise ContextPathError(
                 f"Cannot add existing local path {entry.ref.path!r}."
             ) from error
-        try:
-            return self._adopt_sync_effect(cleanup)
-        except BaseException:
-            cleanup()
-            raise
-
-    def contribute(
-        self,
-        ref: ContextKey,
-        value: _T,
-        *,
-        scope: Scope | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        position: Literal["prepend", "append"] = "append",
-    ) -> Callable[[], None]:
-        """Add an owned value to the Compose stored at *ref*."""
-        self._assert_mutable()
-        target = self.scope if scope is None else scope
-        composition = self.get(ref)
-        if not isinstance(composition, Compose):
-            raise TypeError(
-                f"Context path {self._validate_ref(ref).path!r} does not hold Compose."
-            )
-        cleanup = composition.add(
-            target,
-            value,
-            metadata=metadata,
-            position=position,
-        )
         try:
             return self._adopt_sync_effect(cleanup)
         except BaseException:

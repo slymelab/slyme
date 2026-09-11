@@ -246,7 +246,7 @@ Context binding 按 identity 记录仍被观察的 Scope，最后一个 viewer �
 
 ## Compose
 
-`Compose` 在 Compose 局部 identity 下保存有序值，并根据 Scope C3 顺序解析。尚未绑定的 Scope 会在第一次写入时获得私有 identity。`compose.bind(scope_a, scope_b, identity=key)` 可将多个 Scope 一次性绑定到共享 identity；重复绑定到相同 identity 是幂等操作，改绑则会失败。绑定属于不可撤销的结构信息。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.contribute()` 将 contribution 的清理绑定到生命周期：
+`Compose` 在 Compose 局部 identity 下保存有序值，并根据 Scope C3 顺序解析。尚未绑定的 Scope 会在第一次写入时获得私有 identity。`compose.bind(scope_a, scope_b, identity=key)` 可将多个 Scope 一次性绑定到共享 identity；重复绑定到相同 identity 是幂等操作，改绑则会失败。绑定属于不可撤销的结构信息。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.effect()` 管理 `Compose.add()` 返回的 disposer：
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -256,10 +256,12 @@ root = Context(schema=R)
 tools = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("tools"), tools)
 
-root.contribute(R.resolve("tools"), "read")
+root.effect(lambda: tools.add(root.scope, "read"))
 agent = root.fork(scope=root.scope.fork(name="agent"))
-remove_agent = agent.contribute(
-    R.resolve("tools"), "shell", metadata={"plugin": "shell"}
+remove_agent = agent.effect(
+    lambda: agent.get(R.resolve("tools")).add(
+        agent.scope, "shell", metadata={"plugin": "shell"}
+    )
 )
 
 assert agent.get(R.resolve("tools")) is tools
@@ -269,13 +271,11 @@ agent.dispose()
 root.dispose()
 ```
 
-`ctx.contribute(ref, value, scope=target)` 会通过 `ctx.scope` 查找 Compose；`scope` 只选择 contribution 的保存位置，默认为 `ctx.scope`。即使目标 Scope 位于其他位置，调用该方法的 Context 仍拥有 contribution 的生命周期。`compose.add(scope, value)` 是底层原语，适用于调用方自行管理其 disposer 的情况。
+`ctx.effect(lambda: ctx.get(ref).add(target_scope, value))` 会通过 `ctx.scope` 查找 Compose，并显式选择 contribution 的目标 `target_scope`。即使目标 Scope 位于其他位置，该 Context 仍拥有 cleanup。即使 Context leaf 后来被替换为另一个 Compose，返回的 disposer 仍会移除原来的 entry。直接调用 `compose.add(scope, value)` 时，调用方须自行管理 disposer。
 
 `Compose.one()` 选择第一个可见值，`Compose.collect()` 将所有可见值组成 tuple，`Compose.merge()` 合并 mapping，并为每个 key 保留第一个可见值。向 `Compose(...)` 传入同步 resolver 可以定义其他结果规则。在同一个 Scope 内，`position="prepend"` 将 entry 放在现有 entry 之前；默认值是 `"append"`。
 
 `values(scope, local=True)` 可在不执行 resolver 的情况下检查该 Scope identity 下的 entry，`resolve(scope, local=True)` 则对同一组值应用 resolver。多个 Scope 共享 identity 时，这一局部集合包含从所有这些 Scope 贡献的 entry；C3 查找只会访问共享 identity 一次。`entries(scope)` 返回不可变记录，包括每项的 id、贡献 Scope、identity、value 与 metadata；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
-
-`ctx.bind(ref, identity=key)` 对保存单个 Context leaf 的私有 Compose 执行对应的一次性绑定，并且始终使用 `ctx.scope`。对绑定不同 Scope 的多个 Context 调用该方法，只会共享指定 Ref 的存储。这与对作为 leaf value 保存的 Compose 对象调用 `bind()` 是两件独立的操作。
 
 绑定到 child Scope 的 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
 

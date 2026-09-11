@@ -23,7 +23,7 @@ breaking changes when they are documented here.
   otherwise unrelated visibility roots, and unique visible-name lookup.
 - Added single-parent Context lifetime trees with synchronous and asynchronous
   effects, recursive owner-local LIFO disposal, and explicit Scope binding.
-- Added lifecycle-owned `Context.add()`, `declare()`, and `contribute()`
+- Added lifecycle-owned `Context.add()` and `declare()`
   operations, each with an exact disposer for optional early cleanup.
 - Added `Context.flatten()` for exact visible Ref-to-value leaf mappings.
 - Added `Compose` for ordered, reversible values resolved through a Scope's C3
@@ -50,6 +50,10 @@ breaking changes when they are documented here.
   to flat per-entry bindings, retaining no-partial-write behavior.
 
 ### Removed
+
+- Removed `Context.bind()` and `Context.contribute()`. Use
+  `Context.isolate(..., identity=...)` for shared isolated leaf storage and
+  `ctx.effect(lambda: compose.add(scope, value))` for owned contributions.
 
 - Removed `slyme.builder`; use ordinary Python functions to assemble Node graphs.
 - Removed `slyme.cli`, its argparse helpers, Context argument metadata, and

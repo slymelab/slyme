@@ -4,7 +4,7 @@ Slyme 选择性采用函数式思想，而不要求整个运行时都不可变�
 
 - Node 用户函数显式接收运行时 `Context` 与构建参数。
 - Node 可以返回任意值，包括供高阶执行使用的临时控制信息。
-- Context 数据原地可变；普通修改返回 `None`，由生命周期管理的 `add()`、`declare()` 和 `contribute()` 则返回精确的提前 disposer。
+- Context 数据原地可变；普通修改返回 `None`，由生命周期管理的 `add()` 和 `declare()` 则返回精确的提前 disposer。
 - Node 和 Wrapper 调用会直接传递当前静态参数容器。
 - 动态组合图仍然可变，因此后续调用可以观察结构修改。
 - 结构隔离是显式的：需要另一张图时重新调用 Node factory 或 组装函数，需要实时局部数据层时把 fork 出的 Context 绑定到 child Scope；普通 `Context.fork()` 会共享 parent 的 Scope。

@@ -47,7 +47,7 @@ A Node function has exactly one non-keyword-only runtime parameter. All build pa
 
 An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned child Context with a distinct `ctx.scope.fork()`. Slyme disposes that child, including its effects, before parent execution continues. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe its writes.
 
-`set()`, `update()`, `delete()`, and other ordinary Context mutations modify data in place and return `None`. `add()`, `declare()`, and `contribute()` return exact early disposers and are also removed automatically with their owning Context. A Node may return any value.
+`set()`, `update()`, `delete()`, and other ordinary Context mutations modify data in place and return `None`. `add()` and `declare()` return exact early disposers and are also removed automatically with their owning Context. A Node may return any value.
 
 ## Context lifetime, Scope visibility, and Compose
 
@@ -60,9 +60,11 @@ remove_request = agent_ctx.add(R.resolve("request.id"), "request-1")
 
 tools = Compose[str, tuple[str, ...]].collect()
 root_ctx.add(R.resolve("tools"), tools)
-root_ctx.contribute(R.resolve("tools"), "read")
-remove_agent = agent_ctx.contribute(
-    R.resolve("tools"), "shell", metadata={"plugin": "shell"}
+root_ctx.effect(lambda: tools.add(root_ctx.scope, "read"))
+remove_agent = agent_ctx.effect(
+    lambda: agent_ctx.get(R.resolve("tools")).add(
+        agent_ctx.scope, "shell", metadata={"plugin": "shell"}
+    )
 )
 
 assert tools.resolve(agent_ctx.scope) == ("shell", "read")
@@ -73,7 +75,7 @@ agent_ctx.dispose()
 root_ctx.dispose()
 ```
 
-Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's Compose-local identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data, and `ctx.bind(ref, identity=key)` can make different Scopes share one selected Context leaf. Independent Context roots keep separate data even when bound to the same Scope. `Context.add()` rejects an existing value at the bound identity. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
+Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's Compose-local identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data. `ctx.isolate(ref, identity=key)` creates an owned child that blocks inherited values for that leaf; calls with the same identity share the selected isolated storage. Independent Context roots keep separate data even when bound to the same Scope. `Context.add()` rejects an existing value at the bound identity. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
 
 Create an application root with `Context(data, schema=R, scope=optional_scope)`. Every path must belong to its Schema declaration tree. A child has one `parent`, inherits `ctx.schema`, and is owned by that parent until disposal. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(name="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree and holds their shared Schema reference. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
 
@@ -83,7 +85,7 @@ Create an application root with `Context(data, schema=R, scope=optional_scope)`.
 
 Effect setup and cleanup cannot dispose their owner Context or an ancestor while running, and cleanup cannot re-enter its own disposer; Slyme rejects these operations with `RuntimeError`.
 
-Use `ctx.contribute(ref, value, scope=target)` when a Compose stored at `ref` should receive a lifecycle-owned contribution. The Compose is looked up through `ctx.scope`; `scope` only selects the contribution's target and defaults to `ctx.scope`. Direct `compose.add(scope, value)` remains available when the caller will manage its returned disposer itself. `compose.bind(scope_a, scope_b, identity=key)` gives those Scopes one shared bucket in that Compose only. Binding is permanent for each live Scope and has no disposer; contributions remain independently reversible.
+Use `ctx.effect(lambda: ctx.get(ref).add(target_scope, value))` when a Compose stored at `ref` should receive a lifecycle-owned contribution. `ctx.get(ref)` selects the Compose through the Context's bound Scope; `target_scope` explicitly selects where to store the contribution. The calling Context owns cleanup regardless of the target Scope. Direct `compose.add(scope, value)` remains available when the caller will manage its returned disposer itself. `compose.bind(scope_a, scope_b, identity=key)` gives those Scopes one shared bucket in that Compose only. Binding is permanent for each live Scope and has no disposer; contributions remain independently reversible.
 
 ## Wrappers
 

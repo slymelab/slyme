@@ -797,7 +797,6 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
         Context.update,
         Context.drop,
         Context.set,
-        Context.bind,
         Context.add,
         Context.update_tree,
         Context.delete,
@@ -806,17 +805,13 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
     for operation in operations:
         assert "scope" not in inspect.signature(operation).parameters
     assert "scope" in inspect.signature(Context.fork).parameters
-    assert "scope" in inspect.signature(Context.contribute).parameters
 
 
-def test_context_bind_shares_only_the_selected_leaf() -> None:
+def test_context_isolate_shares_only_the_selected_leaf() -> None:
     root = Context(schema=R)
-    left = root.fork(scope=root.scope.fork(name="left"))
-    right = root.fork(scope=root.scope.fork(name="right"))
     identity = object()
-
-    left.bind(R.resolve("value"), identity=identity)
-    right.bind(R.resolve("value"), identity=identity)
+    left = root.isolate(R.resolve("value"), identity=identity)
+    right = root.isolate(R.resolve("value"), identity=identity)
     left.set(R.resolve("value"), "shared")
     left.set(R.resolve("runtime.value"), "left-only")
 
@@ -827,17 +822,13 @@ def test_context_bind_shares_only_the_selected_leaf() -> None:
     root.dispose()
 
 
-def test_context_bind_validates_the_leaf_and_precedes_writes() -> None:
-    ctx = Context(schema=R)
-
-    with pytest.raises(ContextPathError, match="container.*not a leaf"):
-        ctx.bind(R.resolve("group"), identity=object())
+def test_context_isolate_validates_identity_before_creating_a_child() -> None:
+    ctx = Context({R.resolve("value"): 1}, schema=R)
     with pytest.raises(TypeError, match="identities must be hashable"):
-        ctx.bind(R.resolve("value"), identity=[])  # type: ignore[arg-type]
-
-    ctx.set(R.resolve("value"), 1)
-    with pytest.raises(ValueError, match="rebound"):
-        ctx.bind(R.resolve("value"), identity=object())
+        ctx.isolate(R.resolve("value"), identity=[])  # type: ignore[arg-type]
+    assert not ctx._owned
+    assert ctx.get(R.resolve("value")) == 1
+    ctx.dispose()
 
 
 def test_context_read_operations_can_select_local_or_effective_data() -> None:

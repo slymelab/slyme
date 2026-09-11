@@ -259,7 +259,7 @@ Context bindings track the observed Scopes for each identity and remove its valu
 
 ## Compose
 
-`Compose` stores ordered values under Compose-local identities and resolves them through Scope C3 order. An unbound Scope receives a private identity on its first write. `compose.bind(scope_a, scope_b, identity=key)` binds several Scopes once to a shared identity; repeated binding to the same identity is idempotent, while rebinding fails. Binding is structural and has no disposer. Store a Compose object in Context when Nodes need to discover it through a Ref, then use `Context.contribute()` to attach contribution cleanup to a lifetime:
+`Compose` stores ordered values under Compose-local identities and resolves them through Scope C3 order. An unbound Scope receives a private identity on its first write. `compose.bind(scope_a, scope_b, identity=key)` binds several Scopes once to a shared identity; repeated binding to the same identity is idempotent, while rebinding fails. Binding is structural and has no disposer. Store a Compose object in Context when Nodes need to discover it through a Ref, then use `Context.effect()` to own the disposer returned by `Compose.add()`:
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -269,10 +269,12 @@ root = Context(schema=R)
 tools = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("tools"), tools)
 
-root.contribute(R.resolve("tools"), "read")
+root.effect(lambda: tools.add(root.scope, "read"))
 agent = root.fork(scope=root.scope.fork(name="agent"))
-remove_agent = agent.contribute(
-    R.resolve("tools"), "shell", metadata={"plugin": "shell"}
+remove_agent = agent.effect(
+    lambda: agent.get(R.resolve("tools")).add(
+        agent.scope, "shell", metadata={"plugin": "shell"}
+    )
 )
 
 assert agent.get(R.resolve("tools")) is tools
@@ -282,13 +284,11 @@ agent.dispose()
 root.dispose()
 ```
 
-`ctx.contribute(ref, value, scope=target)` looks up the Compose through `ctx.scope`; `scope` only chooses where the contribution is stored and defaults to `ctx.scope`. The calling Context owns the contribution even when its target Scope is elsewhere. `compose.add(scope, value)` is the lower-level primitive for callers that will manage its disposer themselves.
+`ctx.effect(lambda: ctx.get(ref).add(target_scope, value))` looks up the Compose through `ctx.scope` and explicitly selects `target_scope` for the contribution. The Context owns cleanup even when the target Scope is elsewhere. The returned disposer removes the original entry, even if the Context leaf is later replaced with another Compose. Direct `compose.add(scope, value)` leaves disposer management to the caller.
 
 `Compose.one()` selects the first visible value, `Compose.collect()` returns all visible values as a tuple, and `Compose.merge()` combines mappings while preserving the first visible value for each key. Passing a synchronous resolver to `Compose(...)` defines another result rule. Within one Scope, `position="prepend"` places an entry before existing entries; the default is `"append"`.
 
 `values(scope, local=True)` inspects the entries under that Scope's identity without resolving them, while `resolve(scope, local=True)` applies the resolver to the same set. If several Scopes share an identity, this local set includes entries contributed through all of them. C3 lookup visits a shared identity only once. `entries(scope)` returns immutable records with each entry's id, contributing Scope, identity, value, and metadata; omitting the Scope inspects every current entry. Compose retains those entries until their exact disposer runs, so lifecycle-owned contributions are the preferred cleanup mechanism.
-
-`ctx.bind(ref, identity=key)` performs the corresponding one-time binding for the private Compose that stores one Context leaf, and always targets `ctx.scope`. Calling it on Contexts with different Scopes makes only that Ref share storage. This is separate from calling `bind()` on a Compose object stored as the leaf value.
 
 A Context bound to a child Scope can replace an inherited Compose object at its Ref with a new Compose object to create an independent set. Compose remains an ordinary Context leaf.
 
