@@ -163,7 +163,7 @@ plugin; `ctx.schema` is the application-wide union. `Schema.declare()` returns a
 caller-managed disposer. `ctx.declare()` additionally makes that declaration an
 effect owned by `ctx`, while preserving the same exact early disposer.
 
-Each declared leaf and ancestor container has a Retainer for its independent declaration owners. The disposer releases child paths before parents and removes a definition only after its last owner leaves. Cleanup continues after a failure and subsequent calls reproduce the first failure. Pending and successfully released disposers do not keep the Schema or its old definitions alive; failure tracebacks can retain cleanup state.
+Each declared leaf and ancestor container stores the unique IDs of its declaration owners in a set. Each declare call returns one disposer, which releases child paths before parents and removes a definition only after its last owner leaves. Cleanup continues after a failure and subsequent calls reproduce the first failure. Pending and successfully released disposers do not keep the Schema or its old definitions alive; failure tracebacks can retain cleanup state.
 
 `set`, `update`, and the update side of `mutate` accept only paths declared as leaves. `keys` and `to_dict(ref)` accept only paths declared as containers. `get`, `exists`, `delete`, and the drop side of `mutate` accept either role. Batch mutations validate every path before applying changes, so a conflict produces no partial writes.
 
@@ -259,7 +259,7 @@ Disposing a Context removes it from the viewer sets for every Scope in `ctx.scop
 
 Context bindings track the observed Scopes for each identity and remove its values when the last viewer leaves, without scanning unrelated Scope bindings. Reusing a retained Scope, directly or as an ancestor, restores its viewer registration and preserves its original identity binding; values already cleared are not restored.
 
-Scope viewers and binding identities use Retainers whose callbacks own the membership sets. Each release removes its saved handle as well as its membership. The final viewer's release removes the Scope from its index and releases that Scope in each binding; the final bound Scope's release removes the identity and its data. Cleanup continues across bindings and Scopes after a failure, and Context disposal reproduces its first failure on subsequent calls. A Scope reacquired during value finalization keeps the data still visible to its new viewers.
+Scope viewers and binding identities store their owners directly in sets. Context disposal removes its viewer registrations and releases each unobserved Scope in the bindings; the final bound Scope's release removes the identity and its data. These internal registrations do not allocate per-member disposal callbacks. Cleanup continues across bindings and Scopes after a failure, and Context disposal reproduces its first failure on subsequent calls. A Scope reacquired during value finalization keeps the data still visible to its new viewers.
 
 ## Compose
 
@@ -294,7 +294,7 @@ root.dispose()
 
 `values(scope, local=True)` inspects the entries under that Scope's identity without resolving them, while `resolve(scope, local=True)` applies the resolver to the same set. If several Scopes share an identity, this local set includes entries contributed through all of them. C3 lookup visits a shared identity only once. `entries(scope)` returns immutable records with each entry's id, contributing Scope, identity, value, and metadata; omitting the Scope inspects every current entry. Compose retains those entries until their exact disposer runs, so lifecycle-owned contributions are the preferred cleanup mechanism.
 
-Each identity's bucket uses a Retainer to release individual entries and remove the bucket after its last entry leaves. The ordered entry mapping is the ownership record; no separate count is maintained. Reusing an emptied identity creates a new bucket, and old disposers cannot remove its entries. A disposer retains its Compose until called; repeated calls reproduce a release failure without retrying cleanup. Context bindings also release bucket entries when their final Scope viewer leaves.
+Each identity's bucket is an ordered entry mapping. Removing an entry by its unique token also removes its bucket if empty; no separate count or per-entry internal release callback is maintained. Reusing an emptied identity creates a new bucket, and old disposers cannot remove its entries. A disposer retains its Compose until called; repeated calls reproduce a release failure without retrying cleanup. Context bindings clear their bucket directly when their final Scope viewer leaves.
 
 A Context bound to a child Scope can replace an inherited Compose object at its Ref with a new Compose object to create an independent set. Compose remains an ordinary Context leaf.
 

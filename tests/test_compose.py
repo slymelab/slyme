@@ -272,7 +272,7 @@ def test_compose_disposer_does_not_retain_an_already_removed_value() -> None:
     dispose()
 
 
-def test_bucket_retainer_closes_after_the_last_shared_identity_entry_leaves() -> None:
+def test_bucket_is_removed_after_the_last_shared_identity_entry_leaves() -> None:
     values = Compose[str, tuple[str, ...]].collect()
     left = Scope()
     right = Scope()
@@ -285,11 +285,10 @@ def test_bucket_retainer_closes_after_the_last_shared_identity_entry_leaves() ->
     assert values.values(left) == ("right", "left")
 
     remove_left()
-    assert not bucket.retainer.closed
-    assert len(bucket.entries) == 1
+    assert values._buckets[identity] is bucket
+    assert len(bucket) == 1
     remove_right()
-    assert bucket.retainer.closed
-    assert not bucket.entries
+    assert not bucket
     assert not values._buckets
 
     remove_new = values.add(left, "new")
@@ -337,7 +336,7 @@ def test_value_finalizer_can_add_to_the_same_identity(keep_other_entry: bool) ->
         assert values.values(scope) == ("new", "other")
         remove_other()
     else:
-        assert bucket.retainer.closed
+        assert not bucket
         assert values._buckets[identity] is not bucket
     assert values.values(scope) == ("new",)
     remove_new[0]()
@@ -350,23 +349,20 @@ def test_bucket_cleanup_failure_is_replayed_without_removing_a_new_bucket(
     values = Compose[str, tuple[str, ...]].collect()
     scope = Scope()
     remove = values.add(scope, "old")
-    identity = values.entries(scope)[0]["identity"]
-    retainer = values._buckets[identity].retainer
-    cleanup = retainer._cleanup
-    assert cleanup is not None
+    original = Compose._remove
     error = ValueError("cleanup failed")
     calls = []
 
-    def fail():
+    def fail(self, identity, token):
         calls.append("cleanup")
-        cleanup()
+        original(self, identity, token)
         raise error
 
-    monkeypatch.setattr(retainer, "_cleanup", fail)
-    with pytest.raises(ValueError) as raised:
-        remove()
+    with monkeypatch.context() as patch:
+        patch.setattr(Compose, "_remove", fail)
+        with pytest.raises(ValueError) as raised:
+            remove()
     assert raised.value is error
-    assert retainer.closed
     assert not values._buckets
 
     remove_new = values.add(scope, "new")
@@ -378,51 +374,47 @@ def test_bucket_cleanup_failure_is_replayed_without_removing_a_new_bucket(
     remove_new()
 
 
-def test_clear_bucket_finishes_other_releases_after_a_failure(monkeypatch) -> None:
-    values = Compose[str, tuple[str, ...]].collect()
+def test_clear_bucket_preserves_entries_added_by_old_value_finalizers() -> None:
+    values = Compose[object, tuple[object, ...]].collect()
     scope = Scope()
-    remove_first = values.add(scope, "first")
+    remove_new = []
+
+    class Value:
+        def __del__(self):
+            remove_new.append(values.add(scope, "new"))
+
+    remove_first = values.add(scope, Value())
     remove_second = values.add(scope, "second")
     identity = values.entries(scope)[0]["identity"]
     bucket = values._buckets[identity]
-    error = ValueError("condition failed")
-
-    def condition():
-        if bucket.entries:
-            raise error
-        return True
-
-    monkeypatch.setattr(bucket.retainer, "_should_cleanup", condition)
-    with pytest.raises(ValueError) as raised:
-        values._clear_bucket(identity)
-    assert raised.value is error
-    assert not bucket.entries
-    assert bucket.retainer.closed
-    assert not values._buckets
-    with pytest.raises(ValueError) as repeated:
-        remove_first()
-    assert repeated.value is error
+    values._clear_bucket(identity)
+    assert not bucket
+    assert values._buckets[identity] is not bucket
+    remove_first()
     remove_second()
+    assert len(remove_new) == 1
+    assert values.values(scope) == ("new",)
+    remove_new[0]()
+    assert not values._buckets
 
 
-def test_context_identity_cleanup_releases_all_bucket_registrations() -> None:
+def test_context_identity_cleanup_clears_bucket_and_preserves_new_tokens() -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
     identity = object()
     child = root.isolate("value", identity=identity)
     child.set("value", "old")
     binding = next(iter(root._data.values()))
     bucket = binding._buckets[identity]
-    releases = tuple(entry.release for entry in bucket.entries.values())
-    assert len(releases) == 2  # The value and its inheritance barrier.
+    tokens = tuple(bucket)
+    assert len(tokens) == 2  # The value and its inheritance barrier.
 
     child.dispose()
-    assert bucket.retainer.closed
-    assert not bucket.entries
+    assert not bucket
     assert not binding._buckets
     replacement = root.isolate("value", identity=identity)
     replacement.set("value", "new")
-    for release in releases:
-        release()
+    for token in tokens:
+        binding._remove(identity, token)
     assert replacement.get("value") == "new"
     root.dispose()
     assert not binding._buckets

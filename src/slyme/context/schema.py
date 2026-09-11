@@ -22,7 +22,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
-from ..utils.retainer import Retainer
 from .ref import Ref
 
 __all__ = ["Schema"]
@@ -56,7 +55,7 @@ class _RefEntry(Generic[_T]):
 
     ref: Ref[_T]
     config: _RefConfig
-    declarations: Retainer[[object]] = field(init=False, repr=False)
+    declarations: set[object] = field(default_factory=set, repr=False)
 
 
 _SchemaNode = _RefEntry[Any] | _SchemaContainer
@@ -217,20 +216,13 @@ class Schema:
         current: _SchemaContainer,
         incoming: _SchemaContainer,
         declaration_id: object,
-        releases: list[Callable[[], None]],
+        entries: list[weakref.ReferenceType[_RefEntry[Any]]],
     ) -> None:
         for name, incoming_node in incoming.items():
             if isinstance(incoming_node, _RefEntry):
-                if name not in current:
-                    incoming_node.declarations = self._declaration_retainer(
-                        incoming_node
-                    )
-                    release = incoming_node.declarations.acquire(declaration_id)
-                    current[name] = incoming_node
-                else:
-                    entry = cast(_RefEntry[Any], current[name])
-                    release = entry.declarations.acquire(declaration_id)
-                releases.append(release)
+                entry = cast(_RefEntry[Any], current.setdefault(name, incoming_node))
+                entry.declarations.add(declaration_id)
+                entries.append(weakref.ref(entry))
                 continue
             new_container = name not in current
             try:
@@ -238,33 +230,33 @@ class Schema:
                     current.setdefault(name, {}),
                     cast(_SchemaContainer, incoming_node),
                     declaration_id,
-                    releases,
+                    entries,
                 )
             except BaseException:
                 if new_container:
                     del current[name]
                 raise
 
-    def _declaration_retainer(self, entry: _RefEntry[Any]) -> Retainer[[object]]:
-        declarations: set[object] = set()
-        schema_ref = weakref.ref(self)
-        entry_ref = weakref.ref(entry)
-
-        def acquire(declaration_id: object) -> Callable[[], None]:
-            declarations.add(declaration_id)
-            return lambda: declarations.remove(declaration_id)
-
-        def cleanup() -> None:
-            schema = schema_ref()
+    @staticmethod
+    def _release_declaration(
+        schema: Schema | None,
+        declaration_id: object,
+        entries: list[weakref.ReferenceType[_RefEntry[Any]]],
+    ) -> None:
+        first_error: BaseException | None = None
+        for entry_ref in reversed(entries):
             entry = entry_ref()
-            if schema is not None and entry is not None:
-                schema._remove_entry(entry)
-
-        return Retainer(
-            acquire,
-            should_cleanup=lambda: not declarations,
-            cleanup=cleanup,
-        )
+            if entry is None:
+                continue
+            try:
+                entry.declarations.remove(declaration_id)
+                if not entry.declarations and schema is not None:
+                    schema._remove_entry(entry)
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def _remove_entry(self, entry: _RefEntry[Any]) -> None:
         try:
@@ -345,27 +337,32 @@ class Schema:
             incoming = self._build(declarations)
 
         self._validate_merge(self.__data, incoming)
-        releases: list[Callable[[], None]] = []
+        entries: list[weakref.ReferenceType[_RefEntry[Any]]] = []
+        pending: list[weakref.ReferenceType[_RefEntry[Any]]] | None = entries
+        schema_ref = weakref.ref(self)
+        error: BaseException | None = None
 
         def dispose() -> None:
-            first_error: BaseException | None = None
-            for release in reversed(releases):
-                try:
-                    release()
-                except BaseException as error:
-                    if first_error is None:
-                        first_error = error
-            if first_error is not None:
-                raise first_error
-            releases.clear()
+            nonlocal pending, error
+            if pending is None:
+                if error is not None:
+                    raise error
+                return
+            current = pending
+            pending = None
+            try:
+                Schema._release_declaration(schema_ref(), declaration_id, current)
+            except BaseException as failure:
+                error = failure
+                raise
 
         try:
-            self._commit_merge(self.__data, incoming, declaration_id, releases)
-        except BaseException as error:
+            self._commit_merge(self.__data, incoming, declaration_id, entries)
+        except BaseException as registration_error:
             try:
                 dispose()
             except BaseException as cleanup_error:
-                raise error from cleanup_error
+                raise registration_error from cleanup_error
             raise
         return dispose
 

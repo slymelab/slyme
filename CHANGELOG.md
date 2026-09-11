@@ -86,14 +86,11 @@ breaking changes when they are documented here.
 
 ### Changed
 
-- Compose buckets use Retainer-managed entry releases and remove themselves
-  when empty. Context-binding identity cleanup releases bucket entries through
-  the same mechanism; prepend and append preserve the bucket's ordered mapping.
-- Scope viewers, Context-binding identities, and Schema declarations use
-  Retainer-managed ownership sets with exact release handles. Release callbacks
-  remove their handles and cascade from Scope viewers into binding identities
-  and data. Cleanup continues after failures. Reusing a Scope or identity starts
-  a new holding period without restoring cleared values.
+- Scope viewers, Context-binding identities, and Schema declarations use direct
+  ownership sets managed by internal registration and cleanup methods. Compose
+  entries use unique tokens and ordered buckets, without per-entry internal
+  release callbacks. Cleanup preserves failure replay and reentrant identity
+  reuse; cleared values do not return when a Scope or identity is reused.
 - Raised the minimum supported Python version from 3.9 to 3.10, following the
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
 - Renamed `RefFactory` to `Schema` and aligned Context construction and

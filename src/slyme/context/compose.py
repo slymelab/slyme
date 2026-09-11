@@ -20,10 +20,9 @@ import types
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
 
-from ..utils.retainer import Retainer
 from .scope import Scope
 
 __all__ = ["Compose"]
@@ -41,13 +40,6 @@ class _ComposeEntry(Generic[_T]):
     identity: Hashable
     value: _T
     metadata: Mapping[str, Any]
-    release: Callable[[], None] = field(init=False, repr=False, compare=False)
-
-
-@dataclass(frozen=True)
-class _ComposeBucket(Generic[_T]):
-    entries: OrderedDict[object, _ComposeEntry[_T]]
-    retainer: Retainer[[_ComposeEntry[_T], Literal["prepend", "append"]]]
 
 
 class Compose(Generic[_T, _R]):
@@ -60,34 +52,7 @@ class Compose(Generic[_T, _R]):
         self._scope_identities: weakref.WeakKeyDictionary[Scope, Hashable] = (
             weakref.WeakKeyDictionary()
         )
-        self._buckets: dict[Hashable, _ComposeBucket[_T]] = {}
-
-    def _create_bucket(self, identity: Hashable) -> _ComposeBucket[_T]:
-        entries: OrderedDict[object, _ComposeEntry[_T]] = OrderedDict()
-        compose_ref = weakref.ref(self)
-
-        def acquire(
-            entry: _ComposeEntry[_T], position: Literal["prepend", "append"]
-        ) -> Callable[[], None]:
-            entries[entry.token] = entry
-            if position == "prepend":
-                entries.move_to_end(entry.token, last=False)
-
-            def undo() -> None:
-                # Keep the value alive until Retainer leaves its cleanup callback.
-                entries.pop(entry.token)
-
-            return undo
-
-        def cleanup() -> None:
-            compose = compose_ref()
-            if compose is not None:
-                del compose._buckets[identity]
-
-        return _ComposeBucket(
-            entries,
-            Retainer(acquire, should_cleanup=lambda: not entries, cleanup=cleanup),
-        )
+        self._buckets: dict[Hashable, OrderedDict[object, _ComposeEntry[_T]]] = {}
 
     @staticmethod
     def _validate_identity(identity: Hashable) -> Hashable:
@@ -177,7 +142,7 @@ class Compose(Generic[_T, _R]):
             entry
             for identity in identities
             if (bucket := self._buckets.get(identity)) is not None
-            for entry in bucket.entries.values()
+            for entry in bucket.values()
         )
 
     def add(
@@ -220,46 +185,50 @@ class Compose(Generic[_T, _R]):
         )
         bucket = self._buckets.get(identity)
         if bucket is None:
-            bucket = self._create_bucket(identity)
+            bucket = OrderedDict()
             self._buckets[identity] = bucket
-        object.__setattr__(entry, "release", bucket.retainer.acquire(entry, position))
+        bucket[token] = entry
+        if position == "prepend":
+            bucket.move_to_end(token, last=False)
         return entry
 
     def _remove(self, identity: Hashable, token: object) -> None:
         current = self._buckets.get(identity)
         if current is None:
             return
-        entry = current.entries.get(token)
-        if entry is not None:
-            entry.release()
+        # Detach an empty bucket before dropping the value: its finalizer may add.
+        entry = current.pop(token, None)
+        if not current:
+            del self._buckets[identity]
+        del entry
 
     def _clear_bucket(self, identity: Hashable) -> None:
-        bucket = self._buckets.get(identity)
-        if bucket is None:
-            return
-        first_error: BaseException | None = None
-        for entry in tuple(bucket.entries.values()):
-            try:
-                entry.release()
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
-        if first_error is not None:
-            raise first_error
+        bucket = self._buckets.pop(identity, None)
+        if bucket is not None:
+            bucket.clear()
 
     def _disposer(
         self,
         entry: _ComposeEntry[_T],
     ) -> Callable[[], None]:
         compose: Compose[_T, _R] | None = self
-        release = entry.release
+        identity = entry.identity
+        token = entry.token
+        error: BaseException | None = None
 
         def dispose() -> None:
-            nonlocal compose
+            nonlocal compose, error
+            if compose is None:
+                if error is not None:
+                    raise error
+                return
+            current = compose
+            compose = None
             try:
-                release()
-            finally:
-                compose = None
+                current._remove(identity, token)
+            except BaseException as failure:
+                error = failure
+                raise
 
         return dispose
 
@@ -284,7 +253,7 @@ class Compose(Generic[_T, _R]):
             scoped = tuple(
                 entry
                 for bucket in tuple(self._buckets.values())
-                for entry in bucket.entries.values()
+                for entry in bucket.values()
             )
         else:
             scoped = self._scoped_entries(scope, local=local)
@@ -303,4 +272,4 @@ class Compose(Generic[_T, _R]):
         )
 
     def __len__(self) -> int:
-        return sum(len(bucket.entries) for bucket in self._buckets.values())
+        return sum(len(bucket) for bucket in self._buckets.values())

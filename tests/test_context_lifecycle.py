@@ -140,7 +140,7 @@ def test_scope_data_survives_until_its_last_context_viewer_is_disposed() -> None
     root.dispose()
 
 
-def test_scope_viewer_retainers_close_after_the_last_context_leaves() -> None:
+def test_scope_viewer_sets_clear_after_the_last_context_leaves() -> None:
     root = Context()
     child_scope = root.scope.fork()
     child = root.fork(scope=child_scope)
@@ -148,18 +148,18 @@ def test_scope_viewer_retainers_close_after_the_last_context_leaves() -> None:
     viewers = root._scope_viewers
     assert viewers is not None
 
-    root_retainer = viewers[root.scope]
-    child_retainer = viewers[child_scope]
-    assert not root_retainer.closed
-    assert not child_retainer.closed
+    root_viewers = viewers[root.scope]
+    child_viewers = viewers[child_scope]
+    assert root_viewers == {root, child, sibling}
+    assert child_viewers == {child}
     child.dispose()
-    assert child_retainer.closed
+    assert not child_viewers
     assert child_scope not in viewers
-    assert viewers[root.scope] is root_retainer
+    assert viewers[root.scope] is root_viewers
     sibling.dispose()
-    assert not root_retainer.closed
+    assert root_viewers == {root}
     root.dispose()
-    assert root_retainer.closed
+    assert not root_viewers
     assert viewers == {}
 
 
@@ -175,56 +175,47 @@ def test_scope_viewer_registration_rejects_unbalanced_operations() -> None:
     ctx.dispose()
 
 
-def test_reused_scope_gets_a_new_retainer_and_ignores_old_releases() -> None:
+def test_reused_scope_does_not_restore_data_or_repeat_old_context_disposal() -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
     scope = root.scope.fork()
     first = root.fork(scope=scope)
     viewers = root._scope_viewers
     assert viewers is not None
     old = viewers[scope]
-    releases = tuple(first._scope_releases.values())
     first.set("value", "old")
     first.dispose()
-    assert old.closed
+    assert not old
     assert scope not in viewers
 
     second = root.fork(scope=scope)
     assert viewers[scope] is not old
     assert not second.exists("value")
     second.set("value", "new")
-    for release in releases:
-        release()
-    assert not viewers[scope].closed
+    first.dispose()
+    assert viewers[scope] == {second}
     assert second.get("value") == "new"
     root.dispose()
     assert not viewers
 
 
-def test_failed_scope_acquisition_releases_its_completed_registrations(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_context_registers_and_releases_every_scope_in_its_mro() -> None:
     root = Context()
     parent_scope = root.scope.fork()
     owner = root.fork(scope=parent_scope)
     viewers = root._scope_viewers
     assert viewers is not None
-    before = dict(viewers)
+    before = {scope: set(contexts) for scope, contexts in viewers.items()}
     child_scope = parent_scope.fork()
 
-    def fail(context):
-        raise ValueError("acquire failed")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(viewers[parent_scope], "_acquire", fail)
-        with pytest.raises(ValueError, match="acquire failed"):
-            root.fork(scope=child_scope)
+    child = root.fork(scope=child_scope)
+    assert all(child in viewers[scope] for scope in child_scope.mro)
+    child.dispose()
     assert viewers == before
-    assert all(not retainer.closed for retainer in viewers.values())
     assert root._owned == [owner]
     root.dispose()
 
 
-def test_scope_retainer_release_cleans_its_indexes_and_binding_data() -> None:
+def test_context_disposal_cleans_scope_indexes_and_binding_data() -> None:
     class Payload:
         pass
 
@@ -235,43 +226,36 @@ def test_scope_retainer_release_cleans_its_indexes_and_binding_data() -> None:
     child.set("value", payload)
     del payload
     binding = next(iter(root._data.values()))
-    identity_retainer = next(iter(binding._identity_scopes.values()))
+    identity_scopes = next(iter(binding._identity_scopes.values()))
     viewers = root._scope_viewers
     assert viewers is not None
-    scope_retainer = viewers[child.scope]
-    release = child._scope_releases[child.scope]
+    scope_viewers = viewers[child.scope]
 
-    release()
-    release()
-    assert scope_retainer.closed
-    assert identity_retainer.closed
+    child.dispose()
+    child.dispose()
+    assert not scope_viewers
+    assert not identity_scopes
     assert child.scope not in viewers
-    assert set(child._scope_releases) == {root.scope}
-    assert not binding._scope_releases
+    assert viewers[root.scope] == {root}
     assert not binding._identity_scopes
     assert not binding._buckets
     gc.collect()
     assert payload_ref() is None
     root.dispose()
     assert not root._data
-    assert not child._scope_releases
 
 
-def test_binding_retainer_release_removes_its_handle_before_identity_reuse() -> None:
+def test_binding_scope_release_is_idempotent() -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
     child = root.isolate("value", identity="shared")
     child.set("value", "old")
     binding = next(iter(root._data.values()))
-    release = binding._scope_releases[child.scope]
-
-    release()
-    assert not binding._scope_releases
+    binding.release_scope(child.scope)
+    binding.release_scope(child.scope)
     assert not binding._identity_scopes
     assert not binding._buckets
     child.set("value", "new")
-    replacement = binding._scope_releases[child.scope]
-    release()
-    assert binding._scope_releases[child.scope] is replacement
+    assert binding._identity_scopes["shared"] == {child.scope}
     assert child.get("value") == "new"
     root.dispose()
 
@@ -352,12 +336,10 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
         for scope in (child.scope, parent_scope)
         for binding in bindings
     ]
-    assert not child._scope_releases
     assert not root._owned
     assert root._scope_viewers is not None
     assert set(root._scope_viewers) == {root.scope}
     for binding in bindings:
-        assert not binding._scope_releases
         assert not binding._identity_scopes
         assert not binding._buckets
     with pytest.raises(RuntimeError, match="disposed"):
@@ -377,7 +359,7 @@ def test_failed_binding_restore_rolls_back_new_scope_viewers(monkeypatch) -> Non
     binding = next(iter(root._data.values()))
     viewers = root._scope_viewers
     assert viewers is not None
-    before = dict(viewers)
+    before = {scope: set(contexts) for scope, contexts in viewers.items()}
     original = type(binding).acquire_scopes
 
     def fail(self, scopes):
@@ -389,7 +371,7 @@ def test_failed_binding_restore_rolls_back_new_scope_viewers(monkeypatch) -> Non
         with pytest.raises(ValueError, match="restore failed"):
             root.fork(scope=scope)
     assert viewers == before
-    assert set(binding._scope_releases) == {writer.scope}
+    assert binding._identity_scopes[identity] == {writer.scope}
     assert writer.get("value") == "live"
     assert root._owned == [writer]
     root.dispose()
@@ -429,17 +411,15 @@ def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
 
     writer.set("value", Payload())
     binding = next(iter(root._data.values()))
-    old_retainer = binding._identity_scopes["shared"]
-    old_release = binding._scope_releases[scope]
+    old_scopes = binding._identity_scopes["shared"]
     writer.dispose()
     assert len(readers) == 1
-    assert old_retainer.closed
-    assert binding._identity_scopes["shared"] is not old_retainer
-    assert not binding._identity_scopes["shared"].closed
-    old_release()
+    assert not old_scopes
+    assert binding._identity_scopes["shared"] is not old_scopes
+    assert binding._identity_scopes["shared"] == {scope}
+    writer.dispose()
     assert readers[0].get("value") == "new"
     root.dispose()
-    assert not binding._scope_releases
     assert not binding._identity_scopes
     assert not binding._buckets
 
@@ -525,53 +505,48 @@ def test_identity_index_tracks_isolated_scopes_after_value_deletion() -> None:
     viewer = root.isolate("value", identity=identity)
     binding = next(iter(root._data.values()))
 
-    retainer = binding._identity_scopes[identity]
-    assert not retainer.closed
+    scopes = binding._identity_scopes[identity]
+    assert scopes == {writer.scope, viewer.scope}
 
     writer.set("value", "first")
     writer.delete("value")
     assert not writer.exists("value")
     assert not viewer.exists("value")
-    assert binding._identity_scopes[identity] is retainer
+    assert binding._identity_scopes[identity] is scopes
     writer.set("value", "second")
     writer.dispose()
-    assert not retainer.closed
-    assert set(binding._scope_releases) == {viewer.scope}
+    assert scopes == {viewer.scope}
     assert viewer.get("value") == "second"
 
     viewer.dispose()
-    assert retainer.closed
+    assert not scopes
     assert not binding._identity_scopes
-    assert not binding._scope_releases
     assert not binding._buckets
     assert binding._scope_identities[writer.scope] is identity
     root.dispose()
 
 
-def test_identity_reuse_replaces_the_retainer_without_reviving_old_data() -> None:
+def test_identity_reuse_starts_new_ownership_without_reviving_old_data() -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
     identity = object()
     first = root.isolate("value", identity=identity)
     first.set("value", "old")
     binding = next(iter(root._data.values()))
     old = binding._identity_scopes[identity]
-    release = binding._scope_releases[first.scope]
     first.dispose()
-    assert old.closed
-    assert not binding._scope_releases
+    assert not old
 
     second = root.isolate("value", identity=identity)
     assert binding._identity_scopes[identity] is not old
     assert not second.exists("value")
     second.set("value", "new")
-    release()
+    first.dispose()
     assert second.get("value") == "new"
     root.dispose()
     assert not binding._identity_scopes
-    assert not binding._scope_releases
 
 
-def test_schema_disposal_releases_binding_with_a_retainer_still_referenced() -> None:
+def test_schema_disposal_releases_binding_with_its_scope_set_still_referenced() -> None:
     class Payload:
         pass
 
@@ -582,7 +557,7 @@ def test_schema_disposal_releases_binding_with_a_retainer_still_referenced() -> 
     root.add("value", payload)
     binding = next(iter(root._data.values()))
     binding_ref = weakref.ref(binding)
-    retainer = next(iter(binding._identity_scopes.values()))
+    scopes = next(iter(binding._identity_scopes.values()))
     del binding, payload
 
     remove_schema()
@@ -590,7 +565,7 @@ def test_schema_disposal_releases_binding_with_a_retainer_still_referenced() -> 
     assert not root._data
     assert binding_ref() is None
     assert payload_ref() is None
-    assert not retainer.closed
+    assert scopes == {root.scope}
     root.dispose()
 
 
@@ -619,8 +594,7 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
         reader = root.fork(scope=reader_scope)
 
     writer.dispose()
-    assert not binding._identity_scopes[identity].closed
-    assert set(binding._scope_releases) == {saved_scope}
+    assert binding._identity_scopes[identity] == {saved_scope}
     assert reader.get("value") == "new"
     reader.dispose()
     assert not binding._identity_scopes
@@ -639,8 +613,7 @@ def test_identity_index_keeps_both_observed_parents_of_a_diamond_scope() -> None
 
     left.dispose()
     right.dispose()
-    assert not binding._identity_scopes[identity].closed
-    assert set(binding._scope_releases) == {left.scope, right.scope}
+    assert binding._identity_scopes[identity] == {left.scope, right.scope}
     assert reader.get("value") == "shared"
     reader.dispose()
     assert not binding._identity_scopes

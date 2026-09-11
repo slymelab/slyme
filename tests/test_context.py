@@ -310,7 +310,7 @@ def test_schema_path_can_be_redeclared_with_a_new_structure_after_disposal() -> 
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_schema_retainers_share_claims_and_close_in_child_first_order(reverse) -> None:
+def test_schema_claims_release_definitions_in_child_first_order(reverse) -> None:
     schema = Schema()
     declaration = {"group": {"value": Schema.leaf()}}
     first = schema.declare(declaration)
@@ -319,22 +319,22 @@ def test_schema_retainers_share_claims_and_close_in_child_first_order(reverse) -
     second = schema.declare(declaration)
     assert schema._resolve_entry("group").declarations is parent
     assert schema._resolve_entry("group.value").declarations is leaf
+    assert len(parent) == len(leaf) == 2
+    assert parent == leaf
 
     early, last = (second, first) if reverse else (first, second)
     early()
-    assert not parent.closed
-    assert not leaf.closed
+    assert len(parent) == len(leaf) == 1
     assert schema.resolve("group.value").path == "group.value"
     last()
-    assert parent.closed
-    assert leaf.closed
+    assert not parent and not leaf
 
     remove_new = schema.declare({"group": Schema.leaf()})
     current = schema._resolve_entry("group").declarations
     first()
     second()
     assert current is not parent
-    assert not current.closed
+    assert len(current) == 1
     assert schema.resolve("group").path == "group"
     remove_new()
 
@@ -344,14 +344,26 @@ def test_schema_disposer_does_not_keep_the_schema_or_entries_alive() -> None:
     remove = schema.declare({"group": {"value": Schema.leaf()}})
     entry_ref = weakref.ref(schema._resolve_entry("group.value"))
     schema_ref = weakref.ref(schema)
-    retainer = schema._resolve_entry("group.value").declarations
     del schema
     gc.collect()
     assert schema_ref() is None
     assert entry_ref() is None
     remove()
     remove()
-    assert retainer.closed
+
+
+def test_schema_disposal_releases_claims_on_a_retained_entry_without_owning_schema():
+    schema = Schema()
+    remove = schema.declare({"value": Schema.leaf()})
+    entry = schema._resolve_entry("value")
+    schema_ref = weakref.ref(schema)
+    del schema
+    gc.collect()
+    assert schema_ref() is None
+    assert len(entry.declarations) == 1
+    remove()
+    remove()
+    assert not entry.declarations
 
 
 @pytest.mark.parametrize("failure_path", ["group", "group.value", "group.nested.value"])
@@ -359,16 +371,20 @@ def test_failed_schema_registration_rolls_back_only_its_claims(
     monkeypatch: pytest.MonkeyPatch, failure_path: str
 ) -> None:
     schema = Schema({"stable": Schema.leaf()})
-    original = Schema._declaration_retainer
+    original = Schema._commit_merge
     stable = schema._resolve_entry("stable").declarations
+    original_claims = set(stable)
 
-    def fail(self, entry):
-        if entry.ref.path == failure_path:
+    def fail(self, current, incoming, declaration_id, entries):
+        original(self, current, incoming, declaration_id, entries)
+        if any(
+            (entry := entry_ref()) is not None and entry.ref.path == failure_path
+            for entry_ref in entries
+        ):
             raise ValueError("registration failed")
-        return original(self, entry)
 
     with monkeypatch.context() as patch:
-        patch.setattr(Schema, "_declaration_retainer", fail)
+        patch.setattr(Schema, "_commit_merge", fail)
         with pytest.raises(ValueError, match="registration failed"):
             schema.declare(
                 {
@@ -382,13 +398,13 @@ def test_failed_schema_registration_rolls_back_only_its_claims(
             )
     assert schema._child_names(()) == ("stable",)
     assert schema._resolve_entry("stable").declarations is stable
-    assert not stable.closed
+    assert stable == original_claims
     remove = schema.declare({"group": {"value": Schema.leaf()}})
     remove()
     assert schema._child_names(()) == ("stable",)
 
 
-def test_schema_disposal_continues_after_one_retainer_cleanup_fails(monkeypatch):
+def test_schema_disposal_continues_after_one_definition_cleanup_fails(monkeypatch):
     schema = Schema()
     remove = schema.declare({"left": Schema.leaf(), "right": Schema.leaf()})
     left = schema._resolve_entry("left").declarations
@@ -409,7 +425,7 @@ def test_schema_disposal_continues_after_one_retainer_cleanup_fails(monkeypatch)
             remove()
         assert caught.value is failure
     assert calls == ["right", "left"]
-    assert left.closed and right.closed
+    assert not left and not right
     assert schema._child_names(()) == ()
 
 

@@ -150,7 +150,7 @@ fragment 仍用于声明和导出该插件拥有的路径；`ctx.schema` 是整�
 `Schema.declare()` 返回由调用方管理的 disposer；`ctx.declare()` 还会把该声明作为
 `ctx` 拥有的 effect，同时保留同一个精确的提前 disposer。
 
-每个声明的 leaf 及其祖先 container 都通过一个 Retainer 管理独立声明者。disposer 先释放子路径，再释放 parent，仅在最后一个声明者退出后删除定义。某项 cleanup 失败不会阻止其余清理，后续调用会重现第一个失败。尚未调用或已成功释放的 disposer 不会使 Schema 或其旧定义继续存活；失败的 traceback 则可能保留清理现场。
+每个声明的 leaf 及其祖先 container 都使用集合保存声明者的唯一 ID。每次 declare 返回一个 disposer，先释放子路径，再释放 parent，仅在最后一个声明者退出后删除定义。某项 cleanup 失败不会阻止其余清理，后续调用会重现第一个失败。尚未调用或已成功释放的 disposer 不会使 Schema 或其旧定义继续存活；失败的 traceback 则可能保留清理现场。
 
 `set`、`update` 和 `mutate` 的 update 部分只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `mutate` 的 drop 部分接受任一角色。批量修改会先校验全部路径；发生冲突时不会产生部分写入。
 
@@ -246,7 +246,7 @@ dispose Context 后，它会从 `ctx.scope.mro` 中每个 Scope 的 viewer 集�
 
 Context binding 按 identity 记录仍被观察的 Scope，最后一个 viewer 退出时会清除其值，无须扫描无关的 Scope 绑定。直接复用仍被持有的 Scope，或将它作为祖先使用，都会重新登记 viewer 并保留原有 identity 绑定；已经清除的值不会恢复。
 
-Scope viewer 和 binding identity 的成员集合由 Retainer 的回调闭包持有。每次 release 同时移除成员及其保存的释放句柄。最后一个 viewer 退出时，从索引移除 Scope，并释放各个 binding 中对应的 Scope；最后一个绑定的 Scope 退出时，移除 identity 及其数据。某项清理失败不会阻止其余 binding 和 Scope 的清理，后续调用 Context dispose 会重现第一个失败。如果某个 Scope 在值的析构期间重新获得 viewer，后续清理会保留新 viewer 仍可见的数据。
+Scope viewer 和 binding identity 直接使用集合记录持有者。Context dispose 会移除自己的 viewer 登记，再释放各个 binding 中不再被观察的 Scope；最后一个绑定的 Scope 退出时，移除 identity 及其数据。这些内部登记不为每个成员分配撤销回调。某项清理失败不会阻止其余 binding 和 Scope 的清理，后续调用 Context dispose 会重现第一个失败。如果某个 Scope 在值的析构期间重新获得 viewer，后续清理会保留新 viewer 仍可见的数据。
 
 ## Compose
 
@@ -281,7 +281,7 @@ root.dispose()
 
 `values(scope, local=True)` 可在不执行 resolver 的情况下检查该 Scope identity 下的 entry，`resolve(scope, local=True)` 则对同一组值应用 resolver。多个 Scope 共享 identity 时，这一局部集合包含从所有这些 Scope 贡献的 entry；C3 查找只会访问共享 identity 一次。`entries(scope)` 返回不可变记录，包括每项的 id、贡献 Scope、identity、value 与 metadata；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
 
-每个 identity 的 bucket 使用 Retainer 管理各条 entry 的撤销，并在最后一条 entry 退出后移除 bucket。有序 entry 字典本身就是持有记录，不另行维护计数。复用已清空的 identity 会创建新 bucket，旧 disposer 不会误删新 entry。disposer 在调用前保留其 Compose；后续重复调用会重现释放失败，而不会重试 cleanup。Context binding 的最后一个 Scope viewer 退出时，也会释放对应的 bucket entry。
+每个 identity 的 bucket 就是有序 entry 字典。按唯一 token 删除 entry 后，如果 bucket 为空就将其移除；不另行维护计数，也不为每条 entry 分配内部 release 回调。复用已清空的 identity 会创建新 bucket，旧 disposer 不会误删新 entry。disposer 在调用前保留其 Compose；后续重复调用会重现释放失败，而不会重试 cleanup。Context binding 的最后一个 Scope viewer 退出时，直接清空对应的 bucket。
 
 绑定到 child Scope 的 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
 
