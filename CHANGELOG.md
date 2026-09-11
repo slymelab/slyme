@@ -86,6 +86,9 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Compose buckets use Retainer-managed entry releases and remove themselves
+  when empty. Context-binding identity cleanup releases bucket entries through
+  the same mechanism; prepend and append preserve the bucket's ordered mapping.
 - Scope viewers, Context-binding identities, and Schema declarations use
   Retainer-managed ownership sets with exact release handles. Release callbacks
   remove their handles and cascade from Scope viewers into binding identities

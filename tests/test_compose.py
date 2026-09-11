@@ -272,6 +272,162 @@ def test_compose_disposer_does_not_retain_an_already_removed_value() -> None:
     dispose()
 
 
+def test_bucket_retainer_closes_after_the_last_shared_identity_entry_leaves() -> None:
+    values = Compose[str, tuple[str, ...]].collect()
+    left = Scope()
+    right = Scope()
+    identity = object()
+    values.bind(left, right, identity=identity)
+    remove_left = values.add(left, "left")
+    bucket = values._buckets[identity]
+    remove_right = values.add(right, "right", position="prepend")
+    assert values._buckets[identity] is bucket
+    assert values.values(left) == ("right", "left")
+
+    remove_left()
+    assert not bucket.retainer.closed
+    assert len(bucket.entries) == 1
+    remove_right()
+    assert bucket.retainer.closed
+    assert not bucket.entries
+    assert not values._buckets
+
+    remove_new = values.add(left, "new")
+    assert values._buckets[identity] is not bucket
+    remove_left()
+    remove_right()
+    assert values.values(right) == ("new",)
+    remove_new()
+    assert not values._buckets
+
+
+def test_compose_disposer_owns_compose_until_release() -> None:
+    values = Compose[str, tuple[str, ...]].collect()
+    compose_ref = weakref.ref(values)
+    remove = values.add(Scope(), "value")
+    del values
+    gc.collect()
+    assert compose_ref() is not None
+    remove()
+    gc.collect()
+    assert compose_ref() is None
+    remove()
+
+
+@pytest.mark.parametrize("keep_other_entry", [False, True])
+def test_value_finalizer_can_add_to_the_same_identity(keep_other_entry: bool) -> None:
+    values = Compose[object, tuple[object, ...]].collect()
+    scope = Scope()
+    identity = object()
+    values.bind(scope, identity=identity)
+    remove_new = []
+
+    class Value:
+        def __del__(self):
+            remove_new.append(values.add(scope, "new", position="prepend"))
+
+    remove = values.add(scope, Value())
+    bucket = values._buckets[identity]
+    if keep_other_entry:
+        remove_other = values.add(scope, "other")
+    remove()
+    assert len(remove_new) == 1
+    if keep_other_entry:
+        assert values._buckets[identity] is bucket
+        assert values.values(scope) == ("new", "other")
+        remove_other()
+    else:
+        assert bucket.retainer.closed
+        assert values._buckets[identity] is not bucket
+    assert values.values(scope) == ("new",)
+    remove_new[0]()
+    assert not values._buckets
+
+
+def test_bucket_cleanup_failure_is_replayed_without_removing_a_new_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = Compose[str, tuple[str, ...]].collect()
+    scope = Scope()
+    remove = values.add(scope, "old")
+    identity = values.entries(scope)[0]["identity"]
+    retainer = values._buckets[identity].retainer
+    cleanup = retainer._cleanup
+    assert cleanup is not None
+    error = ValueError("cleanup failed")
+    calls = []
+
+    def fail():
+        calls.append("cleanup")
+        cleanup()
+        raise error
+
+    monkeypatch.setattr(retainer, "_cleanup", fail)
+    with pytest.raises(ValueError) as raised:
+        remove()
+    assert raised.value is error
+    assert retainer.closed
+    assert not values._buckets
+
+    remove_new = values.add(scope, "new")
+    with pytest.raises(ValueError) as repeated:
+        remove()
+    assert repeated.value is error
+    assert calls == ["cleanup"]
+    assert values.values(scope) == ("new",)
+    remove_new()
+
+
+def test_clear_bucket_finishes_other_releases_after_a_failure(monkeypatch) -> None:
+    values = Compose[str, tuple[str, ...]].collect()
+    scope = Scope()
+    remove_first = values.add(scope, "first")
+    remove_second = values.add(scope, "second")
+    identity = values.entries(scope)[0]["identity"]
+    bucket = values._buckets[identity]
+    error = ValueError("condition failed")
+
+    def condition():
+        if bucket.entries:
+            raise error
+        return True
+
+    monkeypatch.setattr(bucket.retainer, "_should_cleanup", condition)
+    with pytest.raises(ValueError) as raised:
+        values._clear_bucket(identity)
+    assert raised.value is error
+    assert not bucket.entries
+    assert bucket.retainer.closed
+    assert not values._buckets
+    with pytest.raises(ValueError) as repeated:
+        remove_first()
+    assert repeated.value is error
+    remove_second()
+
+
+def test_context_identity_cleanup_releases_all_bucket_registrations() -> None:
+    root = Context(schema=Schema({"value": Schema.leaf()}))
+    identity = object()
+    child = root.isolate("value", identity=identity)
+    child.set("value", "old")
+    binding = next(iter(root._data.values()))
+    bucket = binding._buckets[identity]
+    releases = tuple(entry.release for entry in bucket.entries.values())
+    assert len(releases) == 2  # The value and its inheritance barrier.
+
+    child.dispose()
+    assert bucket.retainer.closed
+    assert not bucket.entries
+    assert not binding._buckets
+    replacement = root.isolate("value", identity=identity)
+    replacement.set("value", "new")
+    for release in releases:
+        release()
+    assert replacement.get("value") == "new"
+    root.dispose()
+    assert not binding._buckets
+
+
 def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> None:
     left = Scope("left")
     right = Scope("right")

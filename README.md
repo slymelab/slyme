@@ -136,7 +136,7 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
-Scope viewers, shared Context-binding identities, and Schema declarations use `Retainer` to own individual registrations and clean up after their final owner leaves. Membership sets stay inside callbacks rather than alongside separate counts. Release callbacks remove saved handles and index entries, with Scope cleanup cascading into binding and identity cleanup. A later registration can reuse the Scope or identity, but cleared data does not return.
+Scope viewers, shared Context-binding identities, Schema declarations, and Compose buckets use `Retainer` to own individual registrations and clean up after their final owner leaves. Membership collections determine cleanup without separate counts. Release callbacks remove saved handles and index entries, with Scope cleanup cascading into binding identities and their bucket entries. A later registration can reuse the Scope or identity, but cleared data does not return.
 
 ## Core Advantages
 

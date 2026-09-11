@@ -135,7 +135,7 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
-Scope viewer、共享的 Context-binding identity 和 Schema 声明使用 `Retainer` 管理独立登记，并在最后一个持有者退出后清理。成员集合保存在回调闭包中，不再同时维护独立计数。释放回调负责移除保存的句柄和索引项，Scope 清理会连带触发 binding 和 identity 清理。后续登记可以复用 Scope 或 identity，但不会恢复已清除的数据。
+Scope viewer、共享的 Context-binding identity、Schema 声明和 Compose bucket 使用 `Retainer` 管理独立登记，并在最后一个持有者退出后清理。成员容器本身决定是否清理，不另行维护计数。释放回调负责移除保存的句柄和索引项，Scope 清理会连带触发 binding identity 及其 bucket entry 的清理。后续登记可以复用 Scope 或 identity，但不会恢复已清除的数据。
 
 ## 核心优势
 

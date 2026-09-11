@@ -204,7 +204,7 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
                 binding = binding_ref()
                 if binding is not None:
                     del binding._identity_scopes[identity]
-                    binding._buckets.pop(identity, None)
+                    binding._clear_bucket(identity)
 
             retainer = Retainer(
                 acquire,
@@ -239,12 +239,11 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
             identity = self._identity_for(scope, create=False)
         except LookupError:
             return None
+        bucket = self._buckets.get(identity)
+        if bucket is None:
+            return None
         return next(
-            (
-                entry
-                for entry in self._buckets.get(identity, {}).values()
-                if entry.value is not _BLOCKED
-            ),
+            (entry for entry in bucket.entries.values() if entry.value is not _BLOCKED),
             None,
         )
 
@@ -295,9 +294,9 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
 
     def block(self, scope: Scope) -> None:
         identity = self._identity_for(scope, create=True)
-        if any(
-            entry.value is _BLOCKED
-            for entry in self._buckets.get(identity, {}).values()
+        bucket = self._buckets.get(identity)
+        if bucket is not None and any(
+            entry.value is _BLOCKED for entry in bucket.entries.values()
         ):
             return
         self._insert(scope, _BLOCKED, position="append")
