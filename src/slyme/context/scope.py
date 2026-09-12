@@ -36,6 +36,8 @@ class Scope:
 
     @staticmethod
     def _merge_mro(parents: tuple[Scope, ...]) -> tuple[Scope, ...]:
+        if len(parents) == 1:
+            return parents[0].mro
         pending = [list(parent.mro) for parent in parents]
         pending.append(list(parents))
         result: list[Scope] = []

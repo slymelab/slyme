@@ -35,6 +35,22 @@ def test_scope_can_mix_unrelated_visibility_roots() -> None:
     assert agent.mro == (agent, application, shared_feature)
 
 
+def test_single_parent_forks_preserve_the_parents_complete_c3_order() -> None:
+    root = Scope("root")
+    left = root.fork(name="left")
+    right = root.fork(name="right")
+    parent = Scope(parents=(left, right))
+    lineage = [parent, left, right, root]
+
+    for _ in range(64):
+        child = parent.fork()
+        lineage.insert(0, child)
+        assert child.parents == (parent,)
+        assert child.mro == tuple(lineage)
+        assert parent.mro == tuple(lineage[1:])
+        parent = child
+
+
 def test_scope_fork_is_explicitly_single_parent() -> None:
     root = Scope("root")
     other = Scope("other")

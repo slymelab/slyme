@@ -4,6 +4,8 @@
 
 Context bindings and Compose share identity-binding and complete C3 traversal rules through private Compose static methods. Each Context binding stores one current value and its undo token per identity, with inheritance barriers recorded separately. Compose stores ordered contributions with metadata; Context bindings do not inherit its contribution storage or APIs.
 
+Identity scans visit the complete Scope MRO, skip unbound Scopes, and include each shared identity only once. Reads do not create bindings or cache their results, so later registrations and removals are visible on the next read.
+
 A Context tree and its mutable Schema and Compose objects are single-thread-owned. Synchronous workflows use them on that thread; asynchronous workflows use them on one event loop. This is a usage requirement rather than a runtime thread-identity check. Worker threads and processes should receive ordinary values and return results for Context mutation on the owner thread.
 
 ## Ref and Schema {#ref}
@@ -219,6 +221,8 @@ assert agent.to_dict() == {
 
 Context parentage and Scope ancestry are independent. The parent determines lifetime ownership and the application root that holds Schema and data; the Scope determines lookup. `scope.fork()` always creates a single-parent child. Multiple parents require explicit `Scope(parents=(...))` construction and a consistent C3 linearization; those parents may come from otherwise unrelated Scope roots. Separate Context roots never share Context data, even when they use the same Scope object.
 
+A single-parent Scope prepends itself to its parent's existing MRO, even when the parent itself uses multiple inheritance. Its construction is linear in the length of that MRO.
+
 Deleting a local value normally reveals the next value in the Scope MRO.
 
 `isolate()` creates an owned child with a child Scope and blocks selected leaf values from crossing into it. The private barrier participates in Scope C3 lookup, so a later Scope parent cannot bypass it. A value written in the isolated child appears normally, and deleting that value exposes the barrier again rather than an ancestor's value. Passing the same `identity=` to multiple calls makes those isolated children share the selected leaf storage while keeping it separate from the parent:
@@ -258,6 +262,8 @@ An inherited Scope value does not prevent adding a value at a more specific Scop
 `ctx.effect(setup)` owns one setup and its cleanup. A synchronous setup runs immediately and returns an early disposer. If setup returns an awaitable, `effect()` returns an awaitable resolving to that disposer; use `await resolve(ctx.effect(setup))` when either form is possible. Async setup is owned before it starts: owner disposal waits for it and then runs its cleanup, even if its caller never awaited registration. Await setup before using the resource it acquires. Setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
 
 A parent strongly owns its child Contexts. Each Context processes directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` runs synchronous cleanup immediately and returns `None` when complete, or an awaitable for the unfinished asynchronous cleanup. Use `await resolve(ctx.dispose())` for either case, importing `resolve` from `slyme.utils.awaitable`. An async continuation is not scheduled until awaited; merely discarding it leaves disposal unfinished. Once scheduled, its task survives waiter cancellation. Early effect disposers follow the same completion protocol. Cleanup continues after failure, then raises the first failure; repeated calls share the completion and reproduce its terminal failure without repeating cleanup. A disposed Context rejects further data and lifecycle operations.
+
+Before running any cleanup, `dispose()` synchronously forbids mutations throughout its owned Context subtree, including new effects and child Contexts. Mutation checks inspect only the receiving Context's state, independent of lifetime depth. Each Context remains readable until its own release. A child awaiting its turn may still be disposed early; cleanup already in progress keeps its shared completion. Contexts outside the ownership subtree remain mutable even when they share or inherit its Scopes. This does not cancel running Node tasks or freeze the objects stored in Context values.
 
 `await ctx.adispose()` is the always-awaitable alternative to `await resolve(ctx.dispose())`. Calling `adispose()` immediately executes the same synchronous cleanup and may raise its errors before returning. Await its result to finish disposal; cancellation isolation and repeatable failure results are unchanged.
 

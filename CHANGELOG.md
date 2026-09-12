@@ -45,6 +45,12 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Reused a single parent Scope's C3 order directly when constructing a child,
+  making single-parent construction linear in the ancestor count.
+- Replaced exception-driven missing-identity scans with direct lookups, retaining
+  full C3 traversal, shared-identity deduplication, and immediate binding visibility.
+- Made Context mutation checks constant-time by closing the ownership subtree
+  before cleanup, preserving readable cleanup and recursive LIFO disposal.
 - Separated Context binding storage from Compose inheritance, sharing identity
   operations through Compose static methods while storing values and barriers
   directly without ordered contribution buckets or metadata wrappers.
@@ -58,8 +64,8 @@ breaking changes when they are documented here.
   and Wrapper calls do not allocate exception context managers or messages.
 - Indexed Schema entries by complete path for direct Context lookups while
   preserving tree-based traversal and exact declaration teardown.
-- Made ownership removal constant-time on average and synchronous disposal
-  a single subtree traversal, preserving recursive LIFO cleanup.
+- Made ownership removal constant-time on average and synchronous ownership
+  traversal linear-time, preserving recursive LIFO cleanup.
 - Preserved Context disposal failures after a cancelled waiter so every later
   disposal call observes the same terminal result without repeating cleanup.
 - Rejected disposal of an effect's owner or ancestors during synchronous setup

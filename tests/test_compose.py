@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import weakref
+from collections.abc import Hashable
 from types import MappingProxyType
 
 import pytest
@@ -224,6 +225,33 @@ def test_c3_lookup_visits_a_shared_identity_only_once() -> None:
     values.add(root, "root")
 
     assert values.resolve(child) == ("left", "right", "root")
+
+
+@pytest.mark.parametrize("identity", [None, False, 0, "", ()])
+def test_sparse_c3_reads_preserve_falsey_identities_and_see_new_bindings(
+    identity: Hashable,
+) -> None:
+    root = Scope()
+    left = root.fork()
+    right = root.fork()
+    unbound = Scope(parents=(left, right))
+    child = unbound.fork()
+    values = Compose[str, tuple[str, ...]].collect()
+
+    assert values.resolve(child) == ()
+    values.bind(left, right, identity=identity)
+    remove = values.add(left, "shared")
+    assert values.resolve(child) == ("shared",)
+    values.add(root, "root")
+    identities_before = dict(values._scope_identities)
+    assert values.resolve(child) == ("shared", "root")
+    assert values.values(child, local=True) == ()
+    assert dict(values._scope_identities) == identities_before
+
+    remove()
+    assert values.resolve(child) == ("root",)
+    values.add(right, "new")
+    assert values.resolve(child) == ("new", "root")
 
 
 def test_compose_retains_scope_and_value_until_exact_disposal() -> None:

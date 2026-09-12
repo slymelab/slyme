@@ -4,6 +4,8 @@
 
 Context binding 与 Compose 通过 Compose 的私有静态方法共享 identity 绑定和完整 C3 遍历规则。每个 Context binding 按 identity 保存一个当前值及其撤销 token，并单独记录继承 barrier。Compose 保存带 metadata 的有序 contribution；Context binding 不继承其贡献存储或 API。
 
+查找 identity 时会遍历完整的 Scope MRO，跳过未绑定的 Scope，并且每个共享 identity 只包含一次。读取不会创建绑定或缓存结果，因此下一次读取会看到后续的注册和移除。
+
 一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程。同步 workflow 在该线程使用它们；异步 workflow 则在一个事件循环中使用它们。这是使用约束，而不是运行时线程身份检查。worker 线程和进程应只接收普通值，并把结果返回 owner 线程后再修改 Context。
 
 ## Ref 与 Schema {#ref}
@@ -206,6 +208,8 @@ assert agent.to_dict() == {
 
 Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周期归属，以及保存 Schema 和数据的应用根；Scope 决定查找顺序。`scope.fork()` 始终创建单 parent 子级；多 parent 必须显式使用 `Scope(parents=(...))` 构造，并满足一致的 C3 线性化，这些 parent 可以来自彼此无关的 Scope 根。即使复用同一个 Scope 对象，不同 Context 根也不会共享 Context 数据。
 
+单 parent Scope 直接在 parent 已有的 MRO 前加入自身，即使 parent 本身使用多继承也成立。构造成本与该 MRO 的长度呈线性关系。
+
 删除局部值通常会让 Scope MRO 中的下一个值重新可见。
 
 `isolate()` 创建带有 child Scope、由当前 Context 管理的子 Context，并阻止指定 leaf 的祖先值穿透。私有阻断标记会参与 Scope C3 查找，后续 Scope parent 无法绕过它。写入隔离后的子 Context 时值正常可见；删除该值后会重新看到阻断状态，而不是祖先值。多次调用时传入相同的 `identity=`，可以让这些隔离子级共享指定 leaf 的存储，同时仍与 parent 分离：
@@ -245,6 +249,8 @@ Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add
 `ctx.effect(setup)` 管理一次 setup 及其 cleanup。同步 setup 立即运行，并返回提前 disposer；如果 setup 返回 awaitable，`effect()` 则返回一个解析为 disposer 的 awaitable。两种情况统一使用 `await resolve(ctx.effect(setup))`。异步 setup 在启动前就已登记归属：即使调用者没有等待注册，owner 释放时也会等待 setup，再执行其 cleanup。使用取得的资源前必须等待 setup；如果 setup 在返回 cleanup 前失败，部分资源的回滚仍由 setup 自己负责。
 
 parent 会强引用并拥有子 Context。每个 Context 按后进先出顺序处理直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await resolve(ctx.dispose())`，其中 `resolve` 从 `slyme.utils.awaitable` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出第一个失败；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
+
+`dispose()` 会在执行任何 cleanup 前，同步禁止整棵所属 Context 子树的修改，包括新增 effect 和子 Context。修改检查只读取接收调用的 Context 自身状态，不受生命周期深度影响。每个 Context 在自身释放完成前仍可读取。尚未轮到清理的子 Context 仍可提前 dispose；已经开始的清理保留原来的共享完成结果。所属子树之外的 Context 即使共享或继承其 Scope，仍可修改。这不会取消正在运行的 Node task，也不会冻结 Context 值中存储的对象。
 
 `await ctx.adispose()` 是 `await resolve(ctx.dispose())` 的始终可等待的替代写法。调用 `adispose()` 会立即执行相同的同步清理，也可能在返回前抛出同步错误。等待返回值即可完成释放；取消隔离和失败结果重放的语义不变。
 

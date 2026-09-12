@@ -1253,6 +1253,175 @@ def test_parent_disposal_blocks_new_effects_in_active_children() -> None:
         child.fork()
 
 
+def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
+    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    events: list[str] = []
+    root.effect(lambda: lambda: events.append("first"))
+    child = root.fork()
+    child.effect(lambda: lambda: events.append("child"))
+    grandchild = child.fork()
+    grandchild.effect(lambda: lambda: events.append("grandchild"))
+    sibling = root.fork(scope=root.scope.fork())
+    sibling.effect(lambda: lambda: events.append("sibling"))
+
+    def assert_mutations_blocked(ctx: Context) -> None:
+        assert ctx.get("value") == 1
+        for operation in (
+            lambda: ctx.set("value", 2),
+            lambda: ctx.delete("value"),
+            lambda: ctx.update({"value": 2}),
+            lambda: ctx.drop(["value"]),
+            lambda: ctx.add("value", 2),
+            lambda: ctx.declare({"other": Schema.leaf()}),
+            lambda: ctx.effect(lambda: lambda: None),
+            lambda: ctx.fork(),
+            lambda: Context(parent=ctx),
+            lambda: ctx.isolate("value"),
+        ):
+            with pytest.raises(RuntimeError, match="being disposed"):
+                operation()
+
+    def cleanup() -> None:
+        events.append("last")
+        for ctx in (root, child, grandchild, sibling):
+            assert_mutations_blocked(ctx)
+
+    root.effect(lambda: cleanup)
+    root.dispose()
+    assert events == ["last", "sibling", "grandchild", "child", "first"]
+
+
+async def test_closing_child_can_dispose_while_parent_cleanup_waits() -> None:
+    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    child = root.fork()
+    grandchild = child.fork()
+    events: list[str] = []
+    child.effect(lambda: lambda: events.append("child"))
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def cleanup() -> None:
+        events.append("parent:start")
+        started.set()
+        await finish.wait()
+        events.append("parent:finish")
+
+    root.effect(lambda: cleanup)
+    pending = root.dispose()
+    assert not started.is_set()
+    for ctx in (child, grandchild):
+        assert ctx.get("value") == 1
+        with pytest.raises(RuntimeError, match="being disposed"):
+            ctx.set("value", 2)
+
+    waiter = asyncio.create_task(resolve(pending))
+    await started.wait()
+    child.dispose()
+    assert root.dispose() is pending
+    with pytest.raises(RuntimeError, match="disposed"):
+        grandchild.get("value")
+    finish.set()
+    await waiter
+    assert events == ["parent:start", "child", "parent:finish"]
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -> None:
+    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    child = root.fork()
+    grandchild = child.fork()
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    calls = 0
+    failure = ValueError("child cleanup failed")
+
+    async def cleanup() -> None:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await finish.wait()
+        if fail:
+            raise failure
+
+    child.effect(lambda: cleanup)
+    child_pending = child.dispose()
+    child_waiter = asyncio.create_task(resolve(child_pending))
+    await started.wait()
+    root_pending = root.dispose()
+    assert child.dispose() is child_pending
+    assert root.dispose() is root_pending
+    assert grandchild.get("value") == 1
+    with pytest.raises(RuntimeError, match="being disposed"):
+        grandchild.set("value", 2)
+    finish.set()
+    results = await asyncio.gather(
+        child_waiter, resolve(root_pending), return_exceptions=True
+    )
+    assert results == ([failure, failure] if fail else [None, None])
+    assert calls == 1
+    assert not root._owned and not child._owned
+    if fail:
+        with pytest.raises(ValueError) as caught:
+            await root.adispose()
+        assert caught.value is failure
+
+
+@pytest.mark.parametrize("inherit_scope", [False, True])
+def test_dispose_does_not_close_contexts_that_only_share_visibility(
+    inherit_scope: bool,
+) -> None:
+    root = Context(schema=Schema({"value": Schema.leaf()}))
+    owner = root.fork(scope=root.scope.fork())
+    owner.set("value", 1)
+    child = owner.fork()
+    viewer = root.fork(
+        scope=owner.scope.fork() if inherit_scope else owner.scope,
+    )
+
+    def cleanup() -> None:
+        with pytest.raises(RuntimeError, match="being disposed"):
+            child.set("value", 2)
+        assert viewer.get("value") == 1
+        viewer.set("value", 3)
+
+    owner.effect(lambda: cleanup)
+    owner.dispose()
+    assert viewer.get("value") == 3
+    viewer.fork()
+    root.dispose()
+
+
+async def test_cancelled_dispose_waiter_does_not_reopen_descendants() -> None:
+    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    child = root.fork()
+    grandchild = child.fork()
+    cleaned: list[str] = []
+    child.effect(lambda: lambda: cleaned.append("child"))
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def cleanup() -> None:
+        started.set()
+        await finish.wait()
+        raise ValueError("parent cleanup failed")
+
+    root.effect(lambda: cleanup)
+    waiter = asyncio.ensure_future(root.adispose())
+    await started.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert grandchild.get("value") == 1
+    with pytest.raises(RuntimeError, match="being disposed"):
+        grandchild.fork()
+    finish.set()
+    with pytest.raises(ValueError, match="parent cleanup failed"):
+        await root.adispose()
+    assert cleaned == ["child"]
+    with pytest.raises(RuntimeError, match="disposed"):
+        grandchild.get("value")
+
+
 def test_cleanup_failures_do_not_skip_remaining_cleanup_or_scope_release() -> None:
     schema = Schema({"value": Schema.leaf()})
     ctx = Context({"value": object()}, schema=schema)

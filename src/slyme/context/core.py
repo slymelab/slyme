@@ -209,6 +209,7 @@ class _Effect:
 
 class _ContextState(Enum):
     ACTIVE = "active"
+    CLOSING = "closing"
     DISPOSING = "disposing"
     DISPOSED = "disposed"
 
@@ -524,17 +525,25 @@ class Context(ContextElement):
             raise RuntimeError("Context has been disposed.")
 
     def _assert_mutable(self) -> None:
-        if self._state is _ContextState.DISPOSING:
-            raise RuntimeError("Context is being disposed.")
+        if self._state is _ContextState.ACTIVE:
+            return
         if self._state is _ContextState.DISPOSED:
             raise RuntimeError("Context has been disposed.")
-        ancestor = self.parent
-        while ancestor is not None:
-            if ancestor._state is _ContextState.DISPOSING:
-                raise RuntimeError("An ancestor Context is being disposed.")
-            if ancestor._state is _ContextState.DISPOSED:
-                raise RuntimeError("An ancestor Context has been disposed.")
-            ancestor = ancestor.parent
+        if self._state is _ContextState.CLOSING:
+            raise RuntimeError("An ancestor Context is being disposed.")
+        raise RuntimeError("Context is being disposed.")
+
+    def _close_subtree(self) -> None:
+        """Forbid mutations throughout the ownership subtree before cleanup."""
+        if self._state is not _ContextState.ACTIVE:
+            return
+        pending = [self]
+        while pending:
+            context = pending.pop()
+            object.__setattr__(context, "_state", _ContextState.CLOSING)
+            for child in context._owned:
+                if isinstance(child, Context) and child._state is _ContextState.ACTIVE:
+                    pending.append(child)
 
     def _enter_sync_disposal_guard(self) -> tuple[Context, ...]:
         guarded: list[Context] = []
@@ -680,6 +689,8 @@ class Context(ContextElement):
         Synchronous cleanup runs immediately. Await asynchronous completion;
         once awaited, waiter cancellation does not cancel cleanup. Repeated
         calls share that completion and reproduce its terminal failure.
+        Mutations in the entire ownership subtree are forbidden before the
+        first cleanup; each Context remains readable until its own release.
         """
         self._assert_disposal_allowed()
         if self._dispose_pending is not None:
@@ -690,6 +701,7 @@ class Context(ContextElement):
             return None
         if self._state is _ContextState.DISPOSING:
             raise RuntimeError("Context disposal is already in progress.")
+        self._close_subtree()
         object.__setattr__(self, "_state", _ContextState.DISPOSING)
         owned = iter(reversed(tuple(self._owned)))
         first_error: BaseException | None = None

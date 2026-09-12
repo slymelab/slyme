@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gc
 import weakref
-from collections.abc import Hashable, MutableMapping
+from collections.abc import Hashable
 
 import pytest
 
@@ -103,23 +103,23 @@ def test_context_resolve_uses_the_shared_complete_c3_identity_walk(
     root = Context({"value": "root"}, schema=Schema({"value": Schema.leaf()}))
     left = root.isolate("value", identity="shared")
     right = root.isolate("value", identity="shared")
-    child = root.fork(scope=Scope(parents=(left.scope, right.scope)))
+    unbound = Scope(parents=(left.scope, right.scope))
+    child = root.fork(scope=unbound.fork())
     child.set("value", "child")
     binding = next(iter(root._data.values()))
     seen: list[Scope] = []
-    original = Compose._identity_for
+    original = binding._scope_identities.get
+    identities_before = dict(binding._scope_identities)
 
-    def record(
-        identities: MutableMapping[Scope, Hashable], scope: Scope, *, create: bool
-    ) -> Hashable:
-        if identities is binding._scope_identities:
-            seen.append(scope)
-        return original(identities, scope, create=create)
+    def record(scope: Scope, default: Hashable = None) -> Hashable:
+        seen.append(scope)
+        return original(scope, default)
 
     with monkeypatch.context() as patch:
-        patch.setattr(Compose, "_identity_for", staticmethod(record))
+        patch.setattr(binding._scope_identities, "get", record)
         assert child.get("value") == "child"
         assert tuple(seen) == child.scope.mro
+    assert dict(binding._scope_identities) == identities_before
     assert Compose._scoped_identities(
         binding._scope_identities, child.scope, local=False
     ) == [

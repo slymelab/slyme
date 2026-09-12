@@ -149,6 +149,8 @@ root.dispose()
 
 Scope viewers, shared Context-binding identities, and Schema declarations track their owners directly in sets. Internal registration and cleanup methods remove empty ownership records and their data; Compose removes entries by unique token and drops empty buckets. Only operations exposed for explicit undo return disposers. A later registration can reuse the Scope or identity, but cleared data does not return.
 
+Disposal forbids mutations throughout the owned Context subtree before any cleanup runs. Each Context remains readable until its own release; Contexts outside that subtree are unaffected even when they share a Scope.
+
 A weak Scope-to-binding index limits viewer registration and release to the
 affected Context leaves, without scanning unrelated application fields or
 retaining withdrawn Schema values.

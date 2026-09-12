@@ -141,6 +141,8 @@ root.dispose()
 
 Scope viewer、共享的 Context-binding identity 和 Schema 声明直接使用集合记录持有者。内部登记和清理方法负责移除空的持有记录及其数据；Compose 按唯一 token 移除 entry，并删除空 bucket。只有向调用方提供显式撤销能力的操作才返回 disposer。后续登记可以复用 Scope 或 identity，但不会恢复已清除的数据。
 
+释放开始时，会在执行任何 cleanup 前禁止整棵所属 Context 子树的修改。每个 Context 在自身释放完成前仍可读取；子树之外的 Context 即使共享 Scope，也不受影响。
+
 ## 核心优势
 
 **原生 Python 开发体验：** 消除了繁重的面向对象样板代码。您只需掌握基本的 Python 函数和原生数据结构（字典、列表、元组）即可快速上手。

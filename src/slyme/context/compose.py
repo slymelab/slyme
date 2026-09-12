@@ -31,6 +31,7 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 _K = TypeVar("_K", bound=Hashable)
 _V = TypeVar("_V")
+_UNBOUND = object()
 
 
 @dataclass(frozen=True)
@@ -146,13 +147,8 @@ class Compose(Generic[_T, _R]):
         identities: list[Hashable] = []
         seen: set[Hashable] = set()
         for current in scopes:
-            try:
-                identity = Compose._identity_for(
-                    scope_identities, current, create=False
-                )
-            except LookupError:
-                continue
-            if identity not in seen:
+            identity = scope_identities.get(current, _UNBOUND)
+            if identity is not _UNBOUND and identity not in seen:
                 seen.add(identity)
                 identities.append(identity)
         return identities
