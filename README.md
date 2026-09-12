@@ -23,6 +23,11 @@ Slyme (pronounced /slaɪm/) is a highly composable functional execution framewor
 
 Whether you are building complex LLM pipelines, executing DAGs, or creating generic data-processing flows, Slyme provides a structural, functional, and deeply Pythonic foundation.
 
+`Auto` evaluates registered leaves and reconstructs PyTree containers on each
+invocation, including containers holding only ordinary values. Ordinary leaves
+and evaluator results retain their identities; non-Auto parameters pass through
+unchanged. `eval_tree(ctx, tree)` exposes the same evaluation behavior directly.
+
 ## Installation
 
 Slyme requires **Python 3.10+**. You can install it directly via pip:

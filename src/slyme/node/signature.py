@@ -75,16 +75,12 @@ class Spec:
             return UNDEFINED
         return result
 
-    def should_eval(self, value: Any) -> bool:
+    def should_eval(self) -> bool:
         if self.auto_eval is _MISSING:
             raise ValueError(
                 "`auto_eval` should not be `_MISSING` when `should_eval` is called."
             )
-        if not self.auto_eval:
-            return False
-        from slyme.node.eval import contains_eval_type
-
-        return contains_eval_type(value)
+        return self.auto_eval
 
 
 def spec(

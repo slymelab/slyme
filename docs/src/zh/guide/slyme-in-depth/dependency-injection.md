@@ -13,15 +13,17 @@ Slyme 通过关键字绑定构建参数，并可结合运行时 `Context` 对参
 每次调用时，Slyme 会：
 
 1. 读取对象的当前参数；
-2. 区分静态值与需要 Auto 求值的值；
-3. 为动态值生成 `EvaluationPlan`；
+2. 根据声明的 `auto_eval` 标记区分参数；
+3. 按 PyTree 规则展开 Auto 参数；
 4. 按 evaluator 类型批处理叶子；
-5. 使用传入的 Context 解析并调用用户函数，同时直接传递静态容器。
+5. 使用传入的 Context 解析、重建 Auto 容器并调用用户函数，同时直接传递非 Auto 值。
 
 `Ref` evaluator 会批量读取 Context 的有效值；`Node` evaluator 会调用产生值的子 Node，并为每个子 Node 提供由父 Context 管理、绑定到独立 child Scope 的 Context。同步 tree 求值会按求值顺序运行子 Node。异步 tree 求值把 child 求值调度为 task：异步 child 可以在暂停点交错执行，而每个同步 child 都会在事件循环线程内持续运行至返回。两种模式下的 Scope 局部写入都保持隔离。其他 realization 类型可以通过 `EVALUATOR_REGISTRY` 扩展，而不需要让 Slyme 理解其内部执行机制。
 
-求值计划刻意只在单次调用中存在，从而避免动态 Node 图在调用之间变化时所需的缓存失效追踪。
+`eval_tree(ctx, tree)` 在一次调用内完成遍历、批量求值和重建。普通叶子与 evaluator 返回值保持原对象 identity，返回值不会递归求值。即使没有叶子需要求值，Auto 容器也会重建。
 
 ## 求值时机
 
-Auto 值在其所属 Node 或 Wrapper 进入时解析一次。Auto 子 Node 可以返回派生值，但父级继续执行前，Slyme 会 dispose 其 Context 与注册的 effect。同步 Auto 求值会在 setup 前拒绝异步 cleanup，异步求值则会等待 cleanup，取消时也不例外。如果高阶 Node 显式地使用自己的 Context 调用子 Node，应在调用结束后通过 Ref 重新读取值，而不是依赖更早的 Auto 结果。
+每次 Node 或 Wrapper 调用会对参数绑定取浅快照，在其用户函数被调用前遍历和求值 Auto 参数。Wrapper 多次调用 `call_next` 时，每次都会重新遍历，观察 Auto 容器的原地变化和当前 Context 值；替换 Node 参数绑定则影响下一次 Node 调用。短路返回的 Wrapper 不会遍历或求值被包装 Node 的 Auto 参数。
+
+Auto 子 Node 可以返回派生值，但父级继续执行前，Slyme 会 dispose 其 Context 与注册的 effect。异步 child 执行或 cleanup 会使外层调用返回 awaitable，取消时也会等待 child cleanup。如果高阶 Node 显式地使用自己的 Context 调用子 Node，应在调用结束后通过 Ref 重新读取值，而不是依赖更早的 Auto 结果。

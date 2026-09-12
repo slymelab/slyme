@@ -21,7 +21,6 @@ from typing import Any, NoReturn
 from slyme.context import Context, Ref
 from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.awaitable import resolve
-from slyme.utils.pytree import PyTreeDef
 from slyme.utils.registry import TypeRegistry
 
 from ._async import finish_uninterruptibly, wait_uninterruptibly
@@ -29,10 +28,6 @@ from .core import Node
 
 __all__ = [
     "eval_tree",
-    "prepare_eval_plan",
-    "execute_eval_plan",
-    "contains_eval_type",
-    "EvaluationPlan",
     "EVALUATOR_REGISTRY",
     "BatchEvaluatorFunc",
     "EvaluatorDef",
@@ -60,26 +55,15 @@ class EvaluatorDef:
 EVALUATOR_REGISTRY = TypeRegistry[Any, EvaluatorDef]("evaluator")
 
 
-@dataclass(frozen=True)
-class EvaluationPlan:
-    tree_def: PyTreeDef
-    # batches: list of (evaluator, indices, values)
-    batches: tuple[tuple[EvaluatorDef, tuple[int, ...], tuple[Any, ...]], ...]
-    pass_through: tuple[tuple[int, Any], ...]
-    num_leaves: int
+def eval_tree(ctx: Context, tree: Any) -> Any:
+    """Evaluate registered leaves and reconstruct every PyTree container.
 
-
-def prepare_eval_plan(tree: Any) -> EvaluationPlan:
+    Ordinary leaves and evaluator results retain their identities. Results are
+    not recursively evaluated. Return an awaitable only for asynchronous work.
+    """
     leaves, tree_def = CTX_EVAL_ENGINE.flatten(tree)
-    num_leaves = len(leaves)
-
-    # Group by evaluator
-    # evaluator -> (indices, values)
     eval_groups: dict[EvaluatorDef, tuple[list[int], list[Any]]] = {}
-    pass_through_list = []
-
     for i, leaf in enumerate(leaves):
-        # Lookup batch evaluator
         evaluator = EVALUATOR_REGISTRY.lookup(type(leaf), default=None)
         if evaluator is not None:
             if evaluator not in eval_groups:
@@ -87,31 +71,10 @@ def prepare_eval_plan(tree: Any) -> EvaluationPlan:
             indices, values = eval_groups[evaluator]
             indices.append(i)
             values.append(leaf)
-        else:
-            pass_through_list.append((i, leaf))
-
-    # Convert dict to tuple of tuples for immutability
-    batches_list = []
-    for evaluator, (indices, values) in eval_groups.items():
-        batches_list.append((evaluator, tuple(indices), tuple(values)))
-
-    return EvaluationPlan(
-        tree_def=tree_def,
-        batches=tuple(batches_list),
-        pass_through=tuple(pass_through_list),
-        num_leaves=num_leaves,
-    )
-
-
-def execute_eval_plan(ctx: Context, plan: EvaluationPlan) -> Any:
-    """Evaluate a prepared tree, returning an awaitable only when necessary."""
-    results = [None] * plan.num_leaves
-    for i, val in plan.pass_through:
-        results[i] = val
-    batches = iter(plan.batches)
+    batches = iter(eval_groups.items())
 
     def store(
-        evaluator: EvaluatorDef, indices: tuple[int, ...], values: Sequence[Any]
+        evaluator: EvaluatorDef, indices: list[int], values: Sequence[Any]
     ) -> None:
         if len(values) != len(indices):
             raise ValueError(
@@ -119,40 +82,27 @@ def execute_eval_plan(ctx: Context, plan: EvaluationPlan) -> Any:
                 f"expected {len(indices)}."
             )
         for index, value in zip(indices, values, strict=True):
-            results[index] = value
+            leaves[index] = value
 
-    async def continue_async(
-        evaluator: EvaluatorDef,
-        indices: tuple[int, ...],
-        pending: Awaitable[Sequence[Any]],
-    ) -> Any:
-        store(evaluator, indices, await pending)
-        for evaluator, indices, values in batches:
-            store(evaluator, indices, await resolve(evaluator.func(ctx, values)))
-        return CTX_EVAL_ENGINE.unflatten(plan.tree_def, results)
-
-    for evaluator, indices, values in batches:
+    for evaluator, (indices, values) in batches:
         batch_results = evaluator.func(ctx, values)
         if isawaitable(batch_results):
+
+            async def continue_async(
+                evaluator: EvaluatorDef,
+                indices: list[int],
+                pending: Awaitable[Sequence[Any]],
+            ) -> Any:
+                store(evaluator, indices, await pending)
+                for evaluator, (indices, values) in batches:
+                    store(
+                        evaluator, indices, await resolve(evaluator.func(ctx, values))
+                    )
+                return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
+
             return continue_async(evaluator, indices, batch_results)
         store(evaluator, indices, batch_results)
-    return CTX_EVAL_ENGINE.unflatten(plan.tree_def, results)
-
-
-def eval_tree(ctx: Context, tree: Any) -> Any:
-    """Evaluate Ref and Node leaves using the same completion protocol as Node."""
-    return execute_eval_plan(ctx, prepare_eval_plan(tree))
-
-
-def contains_eval_type(tree: Any) -> bool:
-    """
-    Check if the tree contains any nodes that require evaluation based on the registry.
-    """
-    # Optimized iteration without full flattening
-    for leaf in CTX_EVAL_ENGINE.iter(tree):
-        if EVALUATOR_REGISTRY.lookup(type(leaf), default=None) is not None:
-            return True
-    return False
+    return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
 
 
 # --- Evaluator Implementations ---

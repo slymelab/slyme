@@ -22,6 +22,8 @@ Slyme（发音为 /slaɪm/）是一个高度可组合的函数式执行框架。
 
 无论是构建复杂的 LLM 流水线、执行 DAG，还是创建通用的数据处理流程，Slyme 都提供了结构化、函数式且深度符合 Python 习惯的基础。
 
+`Auto` 会在每次调用时求值已注册叶子并重建 PyTree 容器，包括只有普通值的容器。普通叶子和 evaluator 返回值保持原对象 identity；非 Auto 参数直接传递。`eval_tree(ctx, tree)` 提供相同的求值行为。
+
 ## 安装
 
 Slyme 需要 **Python 3.10+**。您可以通过 pip 直接安装：

@@ -22,13 +22,7 @@ from slyme.node import (
     spec,
     wrapper,
 )
-from slyme.node.eval import (
-    EvaluationPlan,
-    EvaluatorDef,
-    contains_eval_type,
-    execute_eval_plan,
-    prepare_eval_plan,
-)
+from slyme.node.eval import EvaluatorDef
 from slyme.node.exception import (
     NodeExceptionRecord,
     NodeTerminate,
@@ -37,6 +31,7 @@ from slyme.node.exception import (
 from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
 from slyme.utils.awaitable import resolve
+from slyme.utils.registry import TypeRegistry
 
 R = Schema(
     {
@@ -220,7 +215,9 @@ def test_spec_validation_and_missing_parameters() -> None:
     with pytest.raises(ValueError, match="cannot be set at the same time"):
         Spec(default=1, default_factory=lambda: 2)
     with pytest.raises(ValueError, match="auto_eval"):
-        Spec().should_eval(1)
+        Spec().should_eval()
+    assert Spec(auto_eval=True).should_eval()
+    assert not Spec(auto_eval=False).should_eval()
 
     @node
     def required(ctx: Context, /, *, value: int) -> int:
@@ -359,10 +356,8 @@ def test_auto_evaluation_for_refs_nodes_and_nested_containers() -> None:
             "constant": [1, 2],
         }
     )
-    assert contains_eval_type(graph.get("payload"))
     assert graph(ctx) == {"raw": 4, "computed": 5, "constant": [1, 2]}
     assert calls == ["child"]
-    assert not contains_eval_type({"plain": [1, 2]})
     assert eval_tree(ctx, [R.resolve("input.base"), 9]) == [4, 9]
 
 
@@ -565,42 +560,28 @@ async def test_evaluation_promotes_async_node() -> None:
     assert await resolve(eval_tree(Context(schema=R), child)) == 1
 
 
-def test_evaluator_result_count_is_validated() -> None:
-    @node
-    def identity(ctx: Context, /) -> None:
-        return None
-
-    base = prepare_eval_plan(identity())
+def test_evaluator_result_count_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = TypeRegistry[Any, EvaluatorDef]("test_evaluator")
     evaluator = EvaluatorDef(lambda _ctx, _values: [])
-    bad_plan = EvaluationPlan(
-        tree_def=base.tree_def,
-        batches=((evaluator, (0,), (identity(),)),),
-        pass_through=(),
-        num_leaves=1,
-    )
+    registry.register(evaluator, key=int)
+    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     with pytest.raises(ValueError, match="expected 1"):
-        execute_eval_plan(Context(schema=R), bad_plan)
+        eval_tree(Context(schema=R), [1])
 
 
 async def _empty_async() -> list[Any]:
     return []
 
 
-async def test_async_evaluator_result_count_is_validated() -> None:
-    @node
-    async def identity(ctx: Context, /) -> None:
-        return None
-
-    base = prepare_eval_plan(identity())
+async def test_async_evaluator_result_count_is_validated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = TypeRegistry[Any, EvaluatorDef]("test_evaluator")
     evaluator = EvaluatorDef(lambda _ctx, _values: _empty_async())
-    bad_plan = EvaluationPlan(
-        tree_def=base.tree_def,
-        batches=((evaluator, (0,), (identity(),)),),
-        pass_through=(),
-        num_leaves=1,
-    )
+    registry.register(evaluator, key=int)
+    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     with pytest.raises(ValueError, match="expected 1"):
-        await resolve(execute_eval_plan(Context(schema=R), bad_plan))
+        await resolve(eval_tree(Context(schema=R), [1]))
 
 
 def test_auto_nodes_receive_isolated_child_contexts() -> None:

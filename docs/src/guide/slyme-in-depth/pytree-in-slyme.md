@@ -14,4 +14,4 @@ Context is not registered as a PyTree container. It is an identity-bearing lifet
 
 ## Auto evaluation
 
-Auto evaluation uses `CTX_EVAL_ENGINE` to find registered leaves while treating Context itself as opaque. Ref values read the current Context. Each child Node evaluates in an owned child Context with a distinct child Scope; Slyme disposes that Context before reconstructing the dynamic Auto tree from returned values. Ordinary leaves pass through unchanged.
+Auto evaluation uses `CTX_EVAL_ENGINE` to find registered leaves while treating Context itself as opaque. Ref values read the current Context. Each child Node evaluates in an owned child Context with a distinct child Scope; Slyme disposes that Context before reconstructing the Auto tree from returned values. All traversed containers are reconstructed according to their PyTree handlers, including subtrees with no evaluatable leaves. Ordinary leaves and evaluator results pass through unchanged.

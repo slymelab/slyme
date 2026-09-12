@@ -122,11 +122,11 @@ class NodeElement:
         specs: Mapping[str, Spec],
         params: Mapping[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Split parameters into static values and dynamic evaluators."""
+        """Split parameters by their declared Auto evaluation flag."""
         raw_params = {}
         eval_params = {}
         for name, value in params.items():
-            if specs[name].should_eval(value):
+            if specs[name].should_eval():
                 eval_params[name] = value
             else:
                 raw_params[name] = value
@@ -138,10 +138,6 @@ class NodeElement:
         undefined = [name for name, value in params.items() if value is UNDEFINED]
         if undefined:
             raise ValueError(f"Missing required parameter(s): {undefined}.")
-
-    def _collect_params(self) -> dict[str, Any]:
-        """Return a mutable call-time snapshot of this element's parameters."""
-        return dict(self.params)
 
     @property
     def func(self) -> Callable:
@@ -226,7 +222,7 @@ class Node(NodeElement, Generic[_R]):
 
     def _call(self, ctx: Context) -> _R | Awaitable[_R]:
         wrappers = tuple(self.wrappers)
-        kwargs = self._collect_params()
+        kwargs = self._params.copy()
         try:
             self._validate_ready(kwargs)
         except Exception as error:
@@ -238,11 +234,10 @@ class Node(NodeElement, Generic[_R]):
                 self._func, **raw_kwargs
             )
         else:
-            eval_plan = prepare_eval_plan(eval_kwargs)
 
             def chain(call_ctx: Context) -> _R | Awaitable[_R]:
                 return _chain(
-                    execute_eval_plan(call_ctx, eval_plan),
+                    eval_tree(call_ctx, eval_kwargs),
                     lambda evaluated: self._func(call_ctx, **raw_kwargs, **evaluated),
                 )
 
@@ -290,7 +285,7 @@ class Wrapper(NodeElement, Generic[_R]):
         wrapped: Node[Any],
         call_next: Callable[[Context], Any | Awaitable[Any]],
     ) -> _R | Awaitable[_R]:
-        kwargs = self._collect_params()
+        kwargs = self._params.copy()
         try:
             self._validate_ready(kwargs)
         except Exception as error:
@@ -300,7 +295,7 @@ class Wrapper(NodeElement, Generic[_R]):
         if not eval_kwargs:
             return self._func(ctx, wrapped, call_next, **raw_kwargs)
         return _chain(
-            execute_eval_plan(ctx, prepare_eval_plan(eval_kwargs)),
+            eval_tree(ctx, eval_kwargs),
             lambda evaluated: self._func(
                 ctx, wrapped, call_next, **raw_kwargs, **evaluated
             ),
@@ -463,5 +458,5 @@ def wrapper(
     return WrapperFactory._decorate(func, resolve_type_hints=resolve_type_hints)
 
 
-from .eval import execute_eval_plan, prepare_eval_plan
+from .eval import eval_tree
 from .tree import NODE_ENGINE

@@ -66,6 +66,9 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `contains_eval_type()`, `EvaluationPlan`, `prepare_eval_plan()`, and
+  `execute_eval_plan()`. `eval_tree()` handles traversal, batched evaluation,
+  and reconstruction directly without an intermediate evaluation plan.
 - Removed execution-mode decorators and separate async Node, Wrapper, evaluator,
   sequence, and Context lifecycle APIs. Use the unified APIs and `resolve()`
   when immediate and awaitable results are both possible.
@@ -123,6 +126,9 @@ breaking changes when they are documented here.
   graph element types for immediate and asynchronous functions.
 - Node and Wrapper calls now pass their current static parameter containers
   directly to user functions instead of creating an implicit frozen snapshot.
+- Auto parameters always reconstruct PyTree containers, including ordinary-only
+  subtrees, while preserving ordinary leaf identities. Each Wrapper `call_next`
+  invocation evaluates the current Auto containers without a content pre-scan.
 - Context construction now accepts a Ref-to-value mapping and keyword-only
   `schema`, `parent`, or `scope`. Every Context access rejects undeclared paths.
   Schema is the only source of container structure; an application root stores

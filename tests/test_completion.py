@@ -7,15 +7,11 @@ from collections.abc import Awaitable, Callable
 import pytest
 
 from slyme.context import Context
-from slyme.node import Auto, Node, node, sequential_exec, wrapper
-from slyme.node.eval import (
-    EvaluationPlan,
-    EvaluatorDef,
-    execute_eval_plan,
-    prepare_eval_plan,
-)
+from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
+from slyme.node.eval import EvaluatorDef
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.awaitable import resolve
+from slyme.utils.registry import TypeRegistry
 
 
 async def test_resolve_preserves_values_and_only_awaits_outer_completion() -> None:
@@ -153,30 +149,27 @@ async def test_awaited_failures_keep_node_and_wrapper_attribution(
     ctx.dispose()
 
 
-async def test_evaluation_continues_remaining_batches_after_await() -> None:
+async def test_evaluation_continues_remaining_batches_after_await(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[str] = []
-    base = prepare_eval_plan([None, None, None])
+    registry = TypeRegistry[object, EvaluatorDef]("test_evaluator")
 
     async def asynchronous(ctx, values):
         calls.append("async")
         await asyncio.sleep(0)
-        return values
+        return [value + 1 for value in values]
 
     def synchronous(ctx, values):
         calls.append("sync")
-        return values
+        return [value.upper() for value in values]
 
-    plan = EvaluationPlan(
-        base.tree_def,
-        (
-            (EvaluatorDef(asynchronous), (0,), (1,)),
-            (EvaluatorDef(synchronous), (2,), (3,)),
-        ),
-        ((1, 2),),
-        3,
-    )
+    registry.register(EvaluatorDef(asynchronous), key=int)
+    registry.register(EvaluatorDef(synchronous), key=str)
+    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
-    assert await resolve(execute_eval_plan(ctx, plan)) == [1, 2, 3]
+    marker = object()
+    assert await resolve(eval_tree(ctx, [1, marker, "x", 2])) == [2, marker, "X", 3]
     assert calls == ["async", "sync"]
     ctx.dispose()
 

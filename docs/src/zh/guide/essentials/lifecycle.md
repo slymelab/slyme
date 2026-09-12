@@ -35,10 +35,10 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 1. 读取并校验对象的当前参数；
 2. 分离静态值与需要 Auto 求值的值；
-3. 临时生成求值计划与 wrapper chain；
+3. 构建 wrapper chain，在每次用户函数调用前求值 Auto 参数；
 4. 将静态参数容器直接传给用户函数。
 
-调用过程不再创建隐式冻结快照。在 Node 或 Wrapper 内修改静态 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。包含 `Ref` 或子 Node 的 Auto 结构仍会用求值结果重建，因为求值本身会生成结果树。
+参数绑定使用浅快照，不做深拷贝。在 Node 或 Wrapper 内修改非 Auto 的 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。每个 Auto 参数都会按 PyTree 规则遍历并重建容器，无论其中是否包含可求值叶子。普通叶子和 evaluator 返回值仍然共享。
 
 需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；需要把当前可见 binding 物化为新应用根时使用 `Context(context.flatten(), schema=context.schema)`。这些操作都不会复制应用值。
 

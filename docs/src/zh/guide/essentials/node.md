@@ -92,7 +92,7 @@ assert root(Context()) == 11
 
 使用 `get(name)` 读取参数，使用 `set(name, value)` 替换参数，使用 `reset(name)` 恢复声明的默认值或 `UNDEFINED`。只读 `params` mapping 暴露全部当前参数。参数名可以与 `func`、`get`、`wrappers` 等框架 API 重合，因为参数不会投影为对象属性。
 
-调用时，静态参数容器会直接传给用户函数，因此对容器的修改会更新 Node 或 Wrapper 上的实时参数。包含 evaluator 叶子的 Auto 参数则会用解析结果重建。
+调用时，非 Auto 参数会直接传给用户函数，因此对其容器的修改会更新 Node 或 Wrapper 上的实时参数。每个 Auto 参数都会按 PyTree 规则遍历并重建容器，包括只有普通值的子树。普通叶子与 evaluator 返回值保持原对象 identity；这不是深拷贝。
 
 需要另一张可独立配置的图时，应重新调用 Node factory 或 组装函数。可变应用值是否共享或复制由其自身语义决定；Slyme 不会猜测哪些引用需要复制。
 

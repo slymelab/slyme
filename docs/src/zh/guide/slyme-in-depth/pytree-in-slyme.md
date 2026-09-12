@@ -14,4 +14,4 @@ Context 不会被注册为 PyTree container。它是最多拥有一个 parent、
 
 ## Auto 求值
 
-Auto 使用 `CTX_EVAL_ENGINE` 查找已注册 leaf，并把 Context 本身视为不透明对象。Ref 读取当前 Context；每个子 Node 在由父级管理、绑定到独立 child Scope 的 Context 中求值。Slyme dispose 该 Context 后，再使用返回值重建动态 Auto tree。普通 leaf 保持不变。
+Auto 使用 `CTX_EVAL_ENGINE` 查找已注册 leaf，并把 Context 本身视为不透明对象。Ref 读取当前 Context；每个子 Node 在由父级管理、绑定到独立 child Scope 的 Context 中求值。Slyme dispose 该 Context 后，再使用返回值重建 Auto tree。所有遍历到的容器都按其 PyTree handler 重建，包括没有可求值叶子的子树。普通 leaf 与 evaluator 返回值保持不变。
