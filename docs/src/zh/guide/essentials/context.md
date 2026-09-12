@@ -154,7 +154,9 @@ fragment 仍用于声明和导出该插件拥有的路径；`ctx.schema` 是整�
 
 每个声明的 leaf 及其祖先 container 都使用集合保存声明者的唯一 ID。每次 declare 返回一个 disposer，先释放子路径，再释放 parent，仅在最后一个声明者退出后删除定义。某项 cleanup 失败不会阻止其余清理，后续调用会重现第一个失败。尚未调用或已成功释放的 disposer 不会使 Schema 或其旧定义继续存活；失败的 traceback 则可能保留清理现场。
 
-`set`、`update` 和 `mutate` 的 update 部分只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `mutate` 的 drop 部分接受任一角色。批量修改会先校验全部路径；发生冲突时不会产生部分写入。
+`set` 和 `update` 只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `drop` 接受任一角色。删除 container 会移除其后代的本地值，不会删除 Schema 声明或继承值。
+
+`update` 会在写入前校验全部路径和替换策略；`drop` 会在删除前消费并校验全部输入路径，收集其后代叶子。预检失败时 binding 保持不变。实际应用修改时发生的错误或重入副作用不会触发回滚。先删除再更新是两次独立调用，不构成组合事务。
 
 Schema 将应用内的每个有效路径固定为 leaf 或 container 之一，Context 数据不能改变这个角色：删除 value 不会让对应路径变成 container，删除 container 的局部值也不会让对应路径可以写入 leaf value。只要任一匹配声明仍然有效，该路径的角色和替换策略就不能改变。Context 只保存平铺的 leaf binding；访问 container 时先遍历 Schema，再读取相应的 binding。
 
@@ -291,7 +293,7 @@ root.dispose()
 
 ## 结构化操作与投影
 
-Context 接受 Ref PyTree 进行批量读写。`extract` 会保持请求的 Python 结构，`update_tree` 则从结构一致的 value tree 写入各个路径。
+Context 接受 Ref PyTree 进行批量读写。`extract` 会将输入展开一次、校验全部 Ref、读取对应值，再重建一次请求结构；叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
 
 `keys()`、`ContextView` 和 `to_dict()` 会先遍历 Schema 结构，再读取平铺的 leaf 单元。因此空 container 的声明角色保持稳定，但不会出现在有效数据视图中。`to_dict()` 将可见 Context leaf 投影为嵌套的普通字典，适合展示或序列化；在不同 Schema 之间，该投影无法区分以 mapping 为值的 leaf 与内容相同的嵌套 Context 路径。`flatten()` 则返回准确的 `dict[Ref, Any]` 可见 leaf 映射：
 

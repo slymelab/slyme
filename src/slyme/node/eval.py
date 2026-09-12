@@ -108,7 +108,7 @@ def eval_tree(ctx: Context, tree: Any) -> Any:
 # --- Evaluator Implementations ---
 # Ref
 def ref_evaluator(ctx: Context, refs: Sequence[Ref]) -> Sequence[Any]:
-    return ctx.extract(refs)
+    return [ctx.get(ref) for ref in refs]
 
 
 EVALUATOR_REGISTRY.register(EvaluatorDef(ref_evaluator), key=Ref)

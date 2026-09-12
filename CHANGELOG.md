@@ -44,6 +44,10 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Made Context `set()` and `delete()` direct single-path operations while
+  retaining whole-batch preflight checks for `update()` and `drop()`.
+- Reduced Context `extract()` to one input flatten and one result unflatten;
+  Auto Ref evaluation reads the flat Ref batch directly through `Context.get()`.
 - Moved exception context enrichment into failure handlers so successful Node
   and Wrapper calls do not allocate exception context managers or messages.
 - Indexed Schema entries by complete path for direct Context lookups while
@@ -61,11 +65,14 @@ breaking changes when they are documented here.
 - Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
   they cannot bypass fixed runtime-arity and named build-parameter validation.
 - Prevented Context updates from changing Schema-owned leaf/container roles.
-- Context mutations now validate the complete transaction before applying it
-  to flat per-entry bindings, retaining no-partial-write behavior.
+- Context batch writes and deletions validate inputs before applying changes
+  to flat per-entry bindings. Preflight failures leave bindings unchanged;
+  failures during application do not trigger rollback.
 
 ### Removed
 
+- Removed `Context.mutate()`. Use separate `drop()` and `update()` calls for
+  deletion followed by assignment; the two calls are not one transaction.
 - Removed `contains_eval_type()`, `EvaluationPlan`, `prepare_eval_plan()`, and
   `execute_eval_plan()`. `eval_tree()` handles traversal, batched evaluation,
   and reconstruction directly without an intermediate evaluation plan.

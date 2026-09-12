@@ -18,7 +18,7 @@ Slyme 通过关键字绑定构建参数，并可结合运行时 `Context` 对参
 4. 按 evaluator 类型批处理叶子；
 5. 使用传入的 Context 解析、重建 Auto 容器并调用用户函数，同时直接传递非 Auto 值。
 
-`Ref` evaluator 会批量读取 Context 的有效值；`Node` evaluator 会调用产生值的子 Node，并为每个子 Node 提供由父 Context 管理、绑定到独立 child Scope 的 Context。同步 tree 求值会按求值顺序运行子 Node。异步 tree 求值把 child 求值调度为 task：异步 child 可以在暂停点交错执行，而每个同步 child 都会在事件循环线程内持续运行至返回。两种模式下的 Scope 局部写入都保持隔离。其他 realization 类型可以通过 `EVALUATOR_REGISTRY` 扩展，而不需要让 Slyme 理解其内部执行机制。
+`Ref` evaluator 会按批次内的顺序为每个 Ref 调用 `ctx.get(ref)`，保留 leaf identity 和 container view；`Node` evaluator 会调用产生值的子 Node，并为每个子 Node 提供由父 Context 管理、绑定到独立 child Scope 的 Context。同步 tree 求值会按求值顺序运行子 Node。异步 tree 求值把 child 求值调度为 task：异步 child 可以在暂停点交错执行，而每个同步 child 都会在事件循环线程内持续运行至返回。两种模式下的 Scope 局部写入都保持隔离。其他 realization 类型可以通过 `EVALUATOR_REGISTRY` 扩展，而不需要让 Slyme 理解其内部执行机制。
 
 `eval_tree(ctx, tree)` 在一次调用内完成遍历、批量求值和重建。普通叶子与 evaluator 返回值保持原对象 identity，返回值不会递归求值。即使没有叶子需要求值，Auto 容器也会重建。
 

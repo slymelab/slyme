@@ -872,8 +872,8 @@ class Context(ContextElement):
 
     def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
         self._assert_readable()
-        entry_tree = CTX_EVAL_ENGINE.map(self._validate_entry, ref_tree)
-        entries, treedef = CTX_EVAL_ENGINE.flatten(entry_tree)
+        refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
+        entries = [self._validate_entry(ref) for ref in refs]
         values = [self._entry_value(entry, local=local) for entry in entries]
         return CTX_EVAL_ENGINE.unflatten(treedef, values)
 
@@ -949,86 +949,83 @@ class Context(ContextElement):
     ) -> dict[str, Any]:
         return self._snapshot_tree(ref, local=local)
 
-    # --- Unified Modification Interface ---
-    def mutate(
-        self,
-        *,
-        updates: Mapping[ContextKey, Any] | None = None,
-        drops: Iterable[ContextKey] | None = None,
-    ) -> None:
-        """
-        Validate all local updates and drops before applying them.
+    # --- Write Operations ---
+    def _set_entry(self, entry: _RefEntry[Any], value: Any) -> None:
+        config = cast(_RefLeafConfig[Any], entry.config)
+        try:
+            self._binding(entry, create=True).set_value(
+                self.scope, value, replaceable=config.replaceable
+            )
+        except ValueError as error:
+            raise ContextPathError(
+                f"Cannot replace non-replaceable local path {entry.ref.path!r}; "
+                "delete it or use a Context bound to a child Scope."
+            ) from error
 
-        Args:
-            updates: A mapping of References to new values.
-            drops: An iterable of References to remove.
+    def _delete_leaf(self, entry: _RefEntry[Any]) -> None:
+        binding = self._binding(entry, create=False)
+        if binding is not None:
+            binding.delete_value(self.scope)
 
-        Validation failures leave existing bindings unchanged.
+    def set(self, ref: ContextKey, value: _T) -> None:
+        """Set one local binding."""
+        self._assert_mutable()
+        entry = self._validate_entry(ref, role="leaf")
+        self._set_entry(entry, value)
+
+    def delete(self, ref: ContextKey) -> None:
+        """Delete a local leaf value or the local values under a container."""
+        self._assert_mutable()
+        entry = self._validate_entry(ref)
+        if isinstance(entry.config, _RefLeafConfig):
+            self._delete_leaf(entry)
+        else:
+            for leaf in tuple(self.schema._leaf_entries(entry.ref.parts)):
+                self._delete_leaf(leaf)
+
+    def update(self, updates: Mapping[ContextKey, Any]) -> None:
+        """Set local bindings after validating every path and replacement policy.
+
+        Preflight failures leave bindings unchanged. Failures during application
+        of the writes do not trigger rollback.
         """
         self._assert_mutable()
-        if not updates and not drops:
-            return None
-
-        normalized_updates: dict[_RefEntry[Any], Any] = (
-            {self._validate_entry(k, role="leaf"): v for k, v in updates.items()}
-            if updates
-            else {}
-        )
-        normalized_drops: set[_RefEntry[Any]] = (
-            {self._validate_entry(ref) for ref in drops} if drops else set()
-        )
-        dropped_leaves: set[_RefEntry[Any]] = set()
-        for entry in normalized_drops:
-            if isinstance(entry.config, _RefLeafConfig):
-                dropped_leaves.add(entry)
-            else:
-                dropped_leaves.update(self.schema._leaf_entries(entry.ref.parts))
-
-        for entry in normalized_updates:
-            binding = self._binding(entry, create=False)
+        entries = {
+            self._validate_entry(ref, role="leaf"): value
+            for ref, value in updates.items()
+        }
+        for entry in entries:
             config = cast(_RefLeafConfig[Any], entry.config)
+            if config.replaceable:
+                continue
+            binding = self._binding(entry, create=False)
             if (
-                entry not in dropped_leaves
-                and binding is not None
-                and binding.has_value(self.scope, local=True)
-                and not config.replaceable
+                binding is not None
+                and binding._local_value_entry(self.scope) is not None
             ):
                 raise ContextPathError(
                     f"Cannot replace non-replaceable local path {entry.ref.path!r}; "
                     "delete it or use a Context bound to a child Scope."
                 )
-
-        for entry in dropped_leaves:
-            binding = self._binding(entry, create=False)
-            if binding is not None:
-                binding.delete_value(self.scope)
-        for entry, value in normalized_updates.items():
-            config = cast(_RefLeafConfig[Any], entry.config)
-            try:
-                self._binding(entry, create=True).set_value(
-                    self.scope,
-                    value,
-                    replaceable=config.replaceable or entry in dropped_leaves,
-                )
-            except ValueError as error:
-                raise ContextPathError(
-                    f"Cannot replace non-replaceable local path "
-                    f"{entry.ref.path!r}; delete it or use a Context bound to "
-                    "a child Scope."
-                ) from error
-
-    # --- Convenience Interfaces ---
-    def update(self, updates: Mapping[ContextKey, Any]) -> None:
-        """Set several local bindings atomically."""
-        self.mutate(updates=updates)
+        for entry, value in entries.items():
+            self._set_entry(entry, value)
 
     def drop(self, refs: Iterable[ContextKey]) -> None:
-        """Delete several local paths atomically."""
-        self.mutate(drops=refs)
+        """Delete local paths after validating all inputs and collecting leaves.
 
-    def set(self, ref: ContextKey, value: _T) -> None:
-        """Set one local binding."""
-        self.mutate(updates={ref: value})
+        Preflight failures leave bindings unchanged. Failures during application
+        of the deletions do not trigger rollback.
+        """
+        self._assert_mutable()
+        entries = {self._validate_entry(ref) for ref in refs}
+        leaves: set[_RefEntry[Any]] = set()
+        for entry in entries:
+            if isinstance(entry.config, _RefLeafConfig):
+                leaves.add(entry)
+            else:
+                leaves.update(self.schema._leaf_entries(entry.ref.parts))
+        for entry in leaves:
+            self._delete_leaf(entry)
 
     def add(self, ref: ContextKey, value: _T) -> Callable[[], None]:
         """Add one local binding owned by this Context."""
@@ -1068,12 +1065,7 @@ class Context(ContextElement):
             self._validate_ref(ref): CTX_EVAL_ENGINE.get_element(value_tree, path)
             for path, ref in CTX_EVAL_ENGINE.iter_with_key_path(ref_tree)
         }
-        self.mutate(updates=updates)
-
-    def delete(self, ref: ContextKey) -> None:
-        """Delete one local path."""
-        ref = self._validate_ref(ref)
-        self.mutate(drops=[ref])
+        self.update(updates)
 
 
 @dataclass(frozen=True, repr=False)

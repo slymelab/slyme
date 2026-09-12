@@ -902,6 +902,9 @@ def test_disposed_context_rejects_data_and_lifecycle_operations() -> None:
         lambda: ctx.get("value"),
         lambda: ctx.extract({}),
         lambda: ctx.set("value", 2),
+        lambda: ctx.delete("value"),
+        lambda: ctx.update({}),
+        lambda: ctx.drop([]),
         lambda: ctx.fork(),
         lambda: ctx.effect(lambda: lambda: None),
     ):
@@ -918,6 +921,8 @@ def test_cleanup_can_read_context_but_cannot_start_new_mutation() -> None:
         observed.append(ctx.get("value"))
         with pytest.raises(RuntimeError, match="being disposed"):
             ctx.set("value", 2)
+        with pytest.raises(RuntimeError, match="being disposed"):
+            ctx.delete("value")
 
     ctx.effect(lambda: cleanup)
     ctx.dispose()

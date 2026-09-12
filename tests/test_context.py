@@ -664,7 +664,7 @@ def test_context_path_errors_do_not_partially_mutate() -> None:
         ctx.get(R.resolve("absent"))
 
 
-def test_context_mutation_drop_then_update_semantics() -> None:
+def test_context_drop_and_update_are_separate_operations() -> None:
     ctx = Context(schema=R)
     ctx.update(
         {
@@ -674,17 +674,17 @@ def test_context_mutation_drop_then_update_semantics() -> None:
         }
     )
 
-    ctx.mutate(updates={R.resolve("a.new"): 4}, drops=[R.resolve("a")])
+    ctx.drop([R.resolve("a")])
+    ctx.update({R.resolve("a.new"): 4})
     assert ctx.to_dict() == {"a": {"new": 4}, "other": 3}
 
-    ctx.mutate(
-        updates={R.resolve("other"): 5},
-        drops=[R.resolve("a"), R.resolve("a.new")],
-    )
+    ctx.drop([R.resolve("a"), R.resolve("a.new")])
+    ctx.update({R.resolve("other"): 5})
     assert ctx.to_dict() == {"other": 5}
 
     before = ctx.to_dict()
-    assert ctx.mutate() is None
+    assert ctx.update({}) is None
+    assert ctx.drop([]) is None
     assert ctx.to_dict() == before
 
 
@@ -916,7 +916,6 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
         Context.keys,
         Context.to_dict,
         Context.flatten,
-        Context.mutate,
         Context.update,
         Context.drop,
         Context.set,
