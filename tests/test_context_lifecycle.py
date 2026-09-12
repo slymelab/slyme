@@ -387,7 +387,8 @@ def test_context_disposal_cleans_scope_indexes_and_binding_data() -> None:
     assert child.scope not in viewers
     assert viewers[root.scope] == {root}
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
     gc.collect()
     assert payload_ref() is None
     root.dispose()
@@ -402,7 +403,8 @@ def test_binding_scope_release_is_idempotent() -> None:
     binding.release_scope(child.scope)
     binding.release_scope(child.scope)
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
     child.set("value", "new")
     assert binding._identity_scopes["shared"] == {child.scope}
     assert child.get("value") == "new"
@@ -486,7 +488,8 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
     assert set(root._scope_viewers) == {root.scope}
     for binding in bindings:
         assert not binding._identity_scopes
-        assert not binding._buckets
+        assert not binding._values
+        assert not binding._blocked
     with pytest.raises(RuntimeError, match="disposed"):
         child.get("first")
     root.dispose()
@@ -566,7 +569,8 @@ def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
     assert readers[0].get("value") == "new"
     root.dispose()
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
 
 
 def test_failed_scope_acquisition_preserves_error_when_rollback_also_fails(
@@ -668,7 +672,8 @@ def test_identity_index_tracks_isolated_scopes_after_value_deletion() -> None:
     viewer.dispose()
     assert not scopes
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
     assert binding._scope_identities[writer.scope] is identity
     root.dispose()
 
@@ -730,7 +735,8 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
     previous.dispose()
     binding = next(iter(root._data.values()))
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
 
     reader_scope = saved_scope.fork() if descendant else saved_scope
     if reader_first:
@@ -745,7 +751,8 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
     assert reader.get("value") == "new"
     reader.dispose()
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
     root.dispose()
 
 
@@ -764,7 +771,8 @@ def test_identity_index_keeps_both_observed_parents_of_a_diamond_scope() -> None
     assert reader.get("value") == "shared"
     reader.dispose()
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
     root.dispose()
 
 
@@ -789,7 +797,8 @@ def test_scope_release_does_not_scan_other_identity_bindings(
     for session in sessions[1:]:
         session.dispose()
     assert not binding._identity_scopes
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
 
     del session
     sessions.clear()

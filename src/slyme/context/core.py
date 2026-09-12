@@ -223,18 +223,24 @@ class ContextPathError(KeyError):
     pass
 
 
-class _ContextBinding(Compose[Any | _Blocked, Any]):
-    """Private one-value composition backing one Context leaf."""
+class _ContextBinding:
+    """One current value and an optional inheritance barrier per identity."""
 
-    __slots__ = ("_identity_scopes", "_scope_bindings")
+    __slots__ = (
+        "_values",
+        "_blocked",
+        "_scope_identities",
+        "_identity_scopes",
+        "_scope_bindings",
+        "__weakref__",
+    )
 
     def __init__(self, scope_bindings: _ScopeBindings) -> None:
-        def resolve(values: tuple[Any | _Blocked, ...]) -> Any:
-            if not values or values[0] is _BLOCKED:
-                raise LookupError("Context value is not visible.")
-            return values[0]
-
-        super().__init__(resolve)
+        self._values: dict[Hashable, tuple[object, Any]] = {}
+        self._blocked: set[Hashable] = set()
+        self._scope_identities: weakref.WeakKeyDictionary[Scope, Hashable] = (
+            weakref.WeakKeyDictionary()
+        )
         self._identity_scopes: dict[Hashable, set[Scope]] = {}
         self._scope_bindings = scope_bindings
 
@@ -252,12 +258,12 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         bindings[self] = None
 
     def bind(self, *scopes: Scope, identity: Hashable) -> None:
-        super().bind(*scopes, identity=identity)
+        Compose._bind_identities(self._scope_identities, scopes, identity=identity)
         for scope in scopes:
             self._retain_scope(scope, identity)
 
     def _identity_for(self, scope: Scope, *, create: bool) -> Hashable:
-        identity = super()._identity_for(scope, create=create)
+        identity = Compose._identity_for(self._scope_identities, scope, create=create)
         if create:
             self._retain_scope(scope, identity)
         return identity
@@ -266,18 +272,26 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         """Restore an indexed binding when a Scope gains its first live viewer."""
         self._retain_scope(scope, self._identity_for(scope, create=False))
 
-    def _local_value_entry(self, scope: Scope) -> Any | None:
+    def _local_value_entry(self, scope: Scope) -> tuple[object, Any] | None:
         try:
             identity = self._identity_for(scope, create=False)
         except LookupError:
             return None
-        bucket = self._buckets.get(identity)
-        if bucket is None:
-            return None
-        return next(
-            (entry for entry in bucket.values() if entry.value is not _BLOCKED),
-            None,
-        )
+        return self._values.get(identity)
+
+    def resolve(self, scope: Scope, *, local: bool = False) -> Any:
+        values: list[Any] = []
+        for identity in Compose._scoped_identities(
+            self._scope_identities, scope, local=local
+        ):
+            entry = self._values.get(identity)
+            if entry is not None:
+                values.append(entry[1])
+            elif identity in self._blocked:
+                values.append(_BLOCKED)
+        if not values or values[0] is _BLOCKED:
+            raise LookupError("Context value is not visible.")
+        return values[0]
 
     def has_value(self, scope: Scope, *, local: bool = False) -> bool:
         try:
@@ -294,19 +308,18 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         replaceable: bool,
     ) -> None:
         current = self._local_value_entry(scope)
-        if current is not None:
-            if not replaceable:
-                raise ValueError("Context local value is not replaceable.")
-            self._remove(current.identity, current.token)
-        self._insert(scope, value, position="prepend")
+        if current is not None and not replaceable:
+            raise ValueError("Context local value is not replaceable.")
+        identity = self._identity_for(scope, create=True)
+        self._values[identity] = (object(), value)
 
     def add_value(self, scope: Scope, value: Any) -> Callable[[], None]:
         if self._local_value_entry(scope) is not None:
             raise ValueError("Context already has a local value.")
-        entry = self._insert(scope, value, position="prepend")
+        identity = self._identity_for(scope, create=True)
+        token = object()
+        self._values[identity] = (token, value)
         binding_ref: weakref.ReferenceType[_ContextBinding] | None = weakref.ref(self)
-        identity = entry.identity
-        token = entry.token
 
         def dispose() -> None:
             nonlocal binding_ref
@@ -320,18 +333,19 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         return dispose
 
     def delete_value(self, scope: Scope) -> None:
-        current = self._local_value_entry(scope)
-        if current is not None:
-            self._remove(current.identity, current.token)
+        try:
+            identity = self._identity_for(scope, create=False)
+        except LookupError:
+            return
+        self._values.pop(identity, None)
+
+    def _remove(self, identity: Hashable, token: object) -> None:
+        current = self._values.get(identity)
+        if current is not None and current[0] is token:
+            del self._values[identity]
 
     def block(self, scope: Scope) -> None:
-        identity = self._identity_for(scope, create=True)
-        bucket = self._buckets.get(identity)
-        if bucket is not None and any(
-            entry.value is _BLOCKED for entry in bucket.values()
-        ):
-            return
-        self._insert(scope, _BLOCKED, position="append")
+        self._blocked.add(self._identity_for(scope, create=True))
 
     def release_scope(self, scope: Scope) -> None:
         """Release one Scope and remove its identity if no bound Scope remains."""
@@ -345,7 +359,9 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
         scopes.discard(scope)
         if not scopes:
             del self._identity_scopes[identity]
-            self._clear_bucket(identity)
+            # Remove the barrier before value finalizers can reuse this identity.
+            self._blocked.discard(identity)
+            self._values.pop(identity, None)
 
 
 _ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]

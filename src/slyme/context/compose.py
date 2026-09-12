@@ -19,7 +19,7 @@ from __future__ import annotations
 import types
 import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
 
@@ -64,31 +64,45 @@ class Compose(Generic[_T, _R]):
 
     def bind(self, *scopes: Scope, identity: Hashable) -> None:
         """Bind Scopes once to one Compose-local storage identity."""
+        Compose._bind_identities(self._scope_identities, scopes, identity=identity)
+
+    @staticmethod
+    def _bind_identities(
+        scope_identities: MutableMapping[Scope, Hashable],
+        scopes: tuple[Scope, ...],
+        *,
+        identity: Hashable,
+    ) -> None:
         if not scopes:
             raise ValueError("Compose.bind() requires at least one Scope.")
-        checked_identity = self._validate_identity(identity)
+        checked_identity = Compose._validate_identity(identity)
 
         conflicts = tuple(
             scope
             for scope in scopes
-            if scope in self._scope_identities
-            and self._scope_identities[scope] != checked_identity
+            if scope in scope_identities and scope_identities[scope] != checked_identity
         )
         if conflicts:
             raise ValueError("A Scope cannot be rebound to another Compose identity.")
 
         for scope in scopes:
-            if scope not in self._scope_identities:
-                self._scope_identities[scope] = checked_identity
+            if scope not in scope_identities:
+                scope_identities[scope] = checked_identity
 
-    def _identity_for(self, scope: Scope, *, create: bool) -> Hashable:
+    @staticmethod
+    def _identity_for(
+        scope_identities: MutableMapping[Scope, Hashable],
+        scope: Scope,
+        *,
+        create: bool,
+    ) -> Hashable:
         try:
-            return self._scope_identities[scope]
+            return scope_identities[scope]
         except KeyError:
             if not create:
-                raise LookupError("Scope is not bound to this Compose.") from None
+                raise LookupError("Scope has no bound storage identity.") from None
         identity = object()
-        self._scope_identities[scope] = identity
+        scope_identities[scope] = identity
         return identity
 
     @classmethod
@@ -121,26 +135,39 @@ class Compose(Generic[_T, _R]):
 
         return Compose(resolve)
 
+    @staticmethod
+    def _scoped_identities(
+        scope_identities: MutableMapping[Scope, Hashable],
+        scope: Scope,
+        *,
+        local: bool,
+    ) -> list[Hashable]:
+        scopes = (scope,) if local else scope.mro
+        identities: list[Hashable] = []
+        seen: set[Hashable] = set()
+        for current in scopes:
+            try:
+                identity = Compose._identity_for(
+                    scope_identities, current, create=False
+                )
+            except LookupError:
+                continue
+            if identity not in seen:
+                seen.add(identity)
+                identities.append(identity)
+        return identities
+
     def _scoped_entries(
         self,
         scope: Scope,
         *,
         local: bool,
     ) -> tuple[_ComposeEntry[_T], ...]:
-        scopes = (scope,) if local else scope.mro
-        identities: list[Hashable] = []
-        seen: set[Hashable] = set()
-        for current in scopes:
-            try:
-                identity = self._identity_for(current, create=False)
-            except LookupError:
-                continue
-            if identity not in seen:
-                seen.add(identity)
-                identities.append(identity)
         return tuple(
             entry
-            for identity in identities
+            for identity in Compose._scoped_identities(
+                self._scope_identities, scope, local=local
+            )
             if (bucket := self._buckets.get(identity)) is not None
             for entry in bucket.values()
         )
@@ -174,7 +201,7 @@ class Compose(Generic[_T, _R]):
         metadata: Mapping[str, Any] | None = None,
         position: Literal["prepend", "append"] = "append",
     ) -> _ComposeEntry[_T]:
-        identity = self._identity_for(scope, create=True)
+        identity = Compose._identity_for(self._scope_identities, scope, create=True)
         token = object()
         entry = _ComposeEntry(
             token,

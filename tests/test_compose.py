@@ -398,26 +398,25 @@ def test_clear_bucket_preserves_entries_added_by_old_value_finalizers() -> None:
     assert not values._buckets
 
 
-def test_context_identity_cleanup_clears_bucket_and_preserves_new_tokens() -> None:
+def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> None:
     root = Context(schema=Schema({"value": Schema.leaf()}))
     identity = object()
     child = root.isolate("value", identity=identity)
     child.set("value", "old")
     binding = next(iter(root._data.values()))
-    bucket = binding._buckets[identity]
-    tokens = tuple(bucket)
-    assert len(tokens) == 2  # The value and its inheritance barrier.
+    token = binding._values[identity][0]
+    assert identity in binding._blocked
 
     child.dispose()
-    assert not bucket
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
     replacement = root.isolate("value", identity=identity)
     replacement.set("value", "new")
-    for token in tokens:
-        binding._remove(identity, token)
+    binding._remove(identity, token)
     assert replacement.get("value") == "new"
     root.dispose()
-    assert not binding._buckets
+    assert not binding._values
+    assert not binding._blocked
 
 
 def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> None:

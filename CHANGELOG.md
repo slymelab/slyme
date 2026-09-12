@@ -38,12 +38,16 @@ breaking changes when they are documented here.
 - Added `Compose` for ordered, reversible values resolved through a Scope's C3
   hierarchy, including first-value, collection, mapping, and custom rules.
 - Added immutable Compose-local identity bindings so selected Scopes can share
-  one contribution or Context-leaf bucket without changing other Scope lookup.
+  contribution storage without changing other Scope lookup; Context leaves
+  support the same identity-sharing rules through `isolate(identity=...)`.
 - Added Schema-owned `replaceable` policies and `Context.isolate()` for owned
   child Contexts that block selected inherited Scope values.
 
 ### Fixed
 
+- Separated Context binding storage from Compose inheritance, sharing identity
+  operations through Compose static methods while storing values and barriers
+  directly without ordered contribution buckets or metadata wrappers.
 - Indexed Context bindings by Scope so viewer registration and release visit
   only related leaves, preserving Scope reuse without retaining removed values.
 - Made Context `set()` and `delete()` direct single-path operations while

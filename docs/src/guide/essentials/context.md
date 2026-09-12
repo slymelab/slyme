@@ -1,6 +1,8 @@
 # Context
 
-`Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by Compose-local identities bound to Scopes. Reads follow the bound Scope's C3 order by default, while writes change the identity bound to that exact Scope.
+`Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by leaf-local identities bound to Scopes. Reads follow the bound Scope's C3 order by default, while writes change the identity bound to that exact Scope.
+
+Context bindings and Compose share identity-binding and complete C3 traversal rules through private Compose static methods. Each Context binding stores one current value and its undo token per identity, with inheritance barriers recorded separately. Compose stores ordered contributions with metadata; Context bindings do not inherit its contribution storage or APIs.
 
 A Context tree and its mutable Schema and Compose objects are single-thread-owned. Synchronous workflows use them on that thread; asynchronous workflows use them on one event loop. This is a usage requirement rather than a runtime thread-identity check. Worker threads and processes should receive ordinary values and return results for Context mutation on the owner thread.
 
@@ -302,7 +304,7 @@ root.dispose()
 
 `values(scope, local=True)` inspects the entries under that Scope's identity without resolving them, while `resolve(scope, local=True)` applies the resolver to the same set. If several Scopes share an identity, this local set includes entries contributed through all of them. C3 lookup visits a shared identity only once. `entries(scope)` returns immutable records with each entry's id, contributing Scope, identity, value, and metadata; omitting the Scope inspects every current entry. Compose retains those entries until their exact disposer runs, so lifecycle-owned contributions are the preferred cleanup mechanism.
 
-Each identity's bucket is an ordered entry mapping. Removing an entry by its unique token also removes its bucket if empty; no separate count or per-entry internal release callback is maintained. Reusing an emptied identity creates a new bucket, and old disposers cannot remove its entries. A disposer retains its Compose until called; repeated calls reproduce a release failure without retrying cleanup. Context bindings clear their bucket directly when their final Scope viewer leaves.
+Each Compose identity's bucket is an ordered entry mapping. Removing an entry by its unique token also removes its bucket if empty; no separate count or per-entry internal release callback is maintained. Reusing an emptied identity creates a new bucket, and old disposers cannot remove its entries. A disposer retains its Compose until called; repeated calls reproduce a release failure without retrying cleanup. Context bindings clear the value and barrier for an identity when its final bound Scope is no longer observed.
 
 A Context bound to a child Scope can replace an inherited Compose object at its Ref with a new Compose object to create an independent set. Compose remains an ordinary Context leaf.
 

@@ -1,6 +1,8 @@
 # Context
 
-`Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按绑定到 Scope 的 Compose 局部 identity 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则修改绑定到该 Scope 的 identity。
+`Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按绑定到 Scope 的叶子局部 identity 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则修改绑定到该 Scope 的 identity。
+
+Context binding 与 Compose 通过 Compose 的私有静态方法共享 identity 绑定和完整 C3 遍历规则。每个 Context binding 按 identity 保存一个当前值及其撤销 token，并单独记录继承 barrier。Compose 保存带 metadata 的有序 contribution；Context binding 不继承其贡献存储或 API。
 
 一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程。同步 workflow 在该线程使用它们；异步 workflow 则在一个事件循环中使用它们。这是使用约束，而不是运行时线程身份检查。worker 线程和进程应只接收普通值，并把结果返回 owner 线程后再修改 Context。
 
@@ -289,7 +291,7 @@ root.dispose()
 
 `values(scope, local=True)` 可在不执行 resolver 的情况下检查该 Scope identity 下的 entry，`resolve(scope, local=True)` 则对同一组值应用 resolver。多个 Scope 共享 identity 时，这一局部集合包含从所有这些 Scope 贡献的 entry；C3 查找只会访问共享 identity 一次。`entries(scope)` 返回不可变记录，包括每项的 id、贡献 Scope、identity、value 与 metadata；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
 
-每个 identity 的 bucket 就是有序 entry 字典。按唯一 token 删除 entry 后，如果 bucket 为空就将其移除；不另行维护计数，也不为每条 entry 分配内部 release 回调。复用已清空的 identity 会创建新 bucket，旧 disposer 不会误删新 entry。disposer 在调用前保留其 Compose；后续重复调用会重现释放失败，而不会重试 cleanup。Context binding 的最后一个 Scope viewer 退出时，直接清空对应的 bucket。
+每个 Compose identity 的 bucket 就是有序 entry 字典。按唯一 token 删除 entry 后，如果 bucket 为空就将其移除；不另行维护计数，也不为每条 entry 分配内部 release 回调。复用已清空的 identity 会创建新 bucket，旧 disposer 不会误删新 entry。disposer 在调用前保留其 Compose；后续重复调用会重现释放失败，而不会重试 cleanup。Context binding 的某个 identity 最后一个绑定 Scope 不再被观察时，会清除该 identity 的值和 barrier。
 
 绑定到 child Scope 的 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
 
