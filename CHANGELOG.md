@@ -44,6 +44,8 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Indexed Context bindings by Scope so viewer registration and release visit
+  only related leaves, preserving Scope reuse without retaining removed values.
 - Made Context `set()` and `delete()` direct single-path operations while
   retaining whole-batch preflight checks for `update()` and `drop()`.
 - Reduced Context `extract()` to one input flatten and one result unflatten;

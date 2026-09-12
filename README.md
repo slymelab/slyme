@@ -149,6 +149,10 @@ root.dispose()
 
 Scope viewers, shared Context-binding identities, and Schema declarations track their owners directly in sets. Internal registration and cleanup methods remove empty ownership records and their data; Compose removes entries by unique token and drops empty buckets. Only operations exposed for explicit undo return disposers. A later registration can reuse the Scope or identity, but cleared data does not return.
 
+A weak Scope-to-binding index limits viewer registration and release to the
+affected Context leaves, without scanning unrelated application fields or
+retaining withdrawn Schema values.
+
 ## Core Advantages
 
 **Native Python Development Experience:** Eliminates heavy object-oriented boilerplate code. You only need to master basic Python functions and native data structures (dictionaries, lists, tuples) to get started quickly.

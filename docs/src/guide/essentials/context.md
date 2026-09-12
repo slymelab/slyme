@@ -265,6 +265,8 @@ Disposing a Context removes it from the viewer sets for every Scope in `ctx.scop
 
 Context bindings track the observed Scopes for each identity and remove its values when the last viewer leaves, without scanning unrelated Scope bindings. Reusing a retained Scope, directly or as an ancestor, restores its viewer registration and preserves its original identity binding; values already cleared are not restored.
 
+Each application indexes Scopes to their previously bound Context leaves. Viewer registration and release visit only those bindings, not every application field. The index weakly references both Scopes and bindings, so it supports saved Scope reuse without keeping withdrawn Schema values or unused Scopes alive. Ordinary inherited reads do not add index entries.
+
 Scope viewers and binding identities store their owners directly in sets. Context disposal removes its viewer registrations and releases each unobserved Scope in the bindings; the final bound Scope's release removes the identity and its data. These internal registrations do not allocate per-member disposal callbacks. Cleanup continues across bindings and Scopes after a failure, and Context disposal reproduces its first failure on subsequent calls. A Scope reacquired during value finalization keeps the data still visible to its new viewers.
 
 ## Compose

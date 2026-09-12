@@ -226,9 +226,9 @@ class ContextPathError(KeyError):
 class _ContextBinding(Compose[Any | _Blocked, Any]):
     """Private one-value composition backing one Context leaf."""
 
-    __slots__ = ("_identity_scopes",)
+    __slots__ = ("_identity_scopes", "_scope_bindings")
 
-    def __init__(self) -> None:
+    def __init__(self, scope_bindings: _ScopeBindings) -> None:
         def resolve(values: tuple[Any | _Blocked, ...]) -> Any:
             if not values or values[0] is _BLOCKED:
                 raise LookupError("Context value is not visible.")
@@ -236,13 +236,20 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
 
         super().__init__(resolve)
         self._identity_scopes: dict[Hashable, set[Scope]] = {}
+        self._scope_bindings = scope_bindings
 
     def _retain_scope(self, scope: Scope, identity: Hashable) -> None:
         scopes = self._identity_scopes.get(identity)
         if scopes is None:
             self._identity_scopes[identity] = {scope}
         else:
+            if scope in scopes:
+                return
             scopes.add(scope)
+        bindings = self._scope_bindings.get(scope)
+        if bindings is None:
+            bindings = self._scope_bindings[scope] = weakref.WeakKeyDictionary()
+        bindings[self] = None
 
     def bind(self, *scopes: Scope, identity: Hashable) -> None:
         super().bind(*scopes, identity=identity)
@@ -255,14 +262,9 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
             self._retain_scope(scope, identity)
         return identity
 
-    def acquire_scopes(self, scopes: Iterable[Scope]) -> None:
-        """Restore known bindings when a Scope gains its first live viewer."""
-        for scope in scopes:
-            try:
-                identity = self._identity_for(scope, create=False)
-            except LookupError:
-                continue
-            self._retain_scope(scope, identity)
+    def acquire_scope(self, scope: Scope) -> None:
+        """Restore an indexed binding when a Scope gains its first live viewer."""
+        self._retain_scope(scope, self._identity_for(scope, create=False))
 
     def _local_value_entry(self, scope: Scope) -> Any | None:
         try:
@@ -347,6 +349,10 @@ class _ContextBinding(Compose[Any | _Blocked, Any]):
 
 
 _ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]
+# Saved Scopes can regain viewers without retaining withdrawn Schema bindings.
+_ScopeBindings = weakref.WeakKeyDictionary[
+    Scope, weakref.WeakKeyDictionary[_ContextBinding, None]
+]
 _Tree = dict[str, Any]
 
 
@@ -427,6 +433,7 @@ class Context(ContextElement):
     _schema: Schema | None = field(init=False)
     _owned: dict[Context | _Effect, None] = field(init=False)
     _scope_viewers: dict[Scope, set[Context]] | None = field(init=False)
+    _scope_bindings: _ScopeBindings = field(init=False)
     _state: _ContextState = field(init=False)
     _dispose_pending: _Completion[None] | None = field(init=False)
     _dispose_error: BaseException | None = field(init=False)
@@ -464,12 +471,14 @@ class Context(ContextElement):
             root_data = application_root._data
             bound_scope = parent.scope if scope is None else scope
             scope_viewers = None
+            scope_bindings = application_root._scope_bindings
         else:
             root_schema = Schema() if schema is None else schema
             root_data = weakref.WeakKeyDictionary()
             application_root = self
             bound_scope = Scope() if scope is None else scope
             scope_viewers = {}
+            scope_bindings = weakref.WeakKeyDictionary()
 
         object.__setattr__(self, "parent", parent)
         object.__setattr__(self, "scope", bound_scope)
@@ -478,6 +487,7 @@ class Context(ContextElement):
         object.__setattr__(self, "_schema", root_schema)
         object.__setattr__(self, "_owned", {})
         object.__setattr__(self, "_scope_viewers", scope_viewers)
+        object.__setattr__(self, "_scope_bindings", scope_bindings)
         object.__setattr__(self, "_state", _ContextState.ACTIVE)
         object.__setattr__(self, "_dispose_pending", None)
         object.__setattr__(self, "_dispose_error", None)
@@ -552,9 +562,9 @@ class Context(ContextElement):
                 acquired.append(scope)
             contexts.add(self)
         try:
-            if acquired:
-                for binding in tuple(self._data.values()):
-                    binding.acquire_scopes(acquired)
+            for scope in acquired:
+                for binding in tuple(self._scope_bindings.get(scope, ())):
+                    binding.acquire_scope(scope)
         except BaseException as error:
             try:
                 self._release_scope()
@@ -575,9 +585,8 @@ class Context(ContextElement):
                 expired.append(scope)
 
         first_error: BaseException | None = None
-        bindings = tuple(self._data.values()) if expired else ()
         for scope in expired:
-            for binding in bindings:
+            for binding in tuple(self._scope_bindings.get(scope, ())):
                 # Value finalizers may register new viewers for this Scope.
                 if scope in viewers:
                     break
@@ -588,6 +597,7 @@ class Context(ContextElement):
                         first_error = error
         if not viewers:
             self._data.clear()
+            self._scope_bindings.clear()
         if first_error is not None:
             raise first_error
 
@@ -829,7 +839,7 @@ class Context(ContextElement):
     ) -> _ContextBinding | None:
         binding = self._data.get(entry)
         if binding is None and create:
-            binding = _ContextBinding()
+            binding = _ContextBinding(self._scope_bindings)
             self._data[entry] = binding
         return binding
 

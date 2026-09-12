@@ -409,7 +409,7 @@ def test_binding_scope_release_is_idempotent() -> None:
     root.dispose()
 
 
-def test_scope_release_notifies_each_binding_for_each_expired_scope(
+def test_scope_release_only_notifies_bindings_used_by_that_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = Context(schema=Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
@@ -429,11 +429,7 @@ def test_scope_release_notifies_each_binding_for_each_expired_scope(
     with monkeypatch.context() as patch:
         patch.setattr(type(bindings[0]), "release_scope", record)
         child.dispose()
-    assert calls == [
-        (binding, scope)
-        for scope in (child_scope, parent_scope)
-        for binding in bindings
-    ]
+    assert calls == [(binding, child_scope) for binding in bindings]
     root.dispose()
 
 
@@ -509,14 +505,14 @@ def test_failed_binding_restore_rolls_back_new_scope_viewers(monkeypatch) -> Non
     viewers = root._scope_viewers
     assert viewers is not None
     before = {scope: set(contexts) for scope, contexts in viewers.items()}
-    original = type(binding).acquire_scopes
+    original = type(binding).acquire_scope
 
-    def fail(self, scopes):
-        original(self, scopes)
+    def fail(self, scope):
+        original(self, scope)
         raise ValueError("restore failed")
 
     with monkeypatch.context() as patch:
-        patch.setattr(type(binding), "acquire_scopes", fail)
+        patch.setattr(type(binding), "acquire_scope", fail)
         with pytest.raises(ValueError, match="restore failed"):
             root.fork(scope=scope)
     assert viewers == before
@@ -579,12 +575,14 @@ def test_failed_scope_acquisition_preserves_error_when_rollback_also_fails(
     root = Context(schema=Schema({"value": Schema.leaf()}))
     root.set("value", "live")
     binding = next(iter(root._data.values()))
-    child_scope = root.scope.fork()
+    previous = root.isolate("value")
+    child_scope = previous.scope
+    previous.dispose()
     acquisition_error = ValueError("restore failed")
     cleanup_error = ValueError("cleanup failed")
     original = type(binding).release_scope
 
-    def fail_restore(self, scopes):
+    def fail_restore(self, scope):
         raise acquisition_error
 
     def fail_release(self, scope):
@@ -593,7 +591,7 @@ def test_failed_scope_acquisition_preserves_error_when_rollback_also_fails(
             raise cleanup_error
 
     with monkeypatch.context() as patch:
-        patch.setattr(type(binding), "acquire_scopes", fail_restore)
+        patch.setattr(type(binding), "acquire_scope", fail_restore)
         patch.setattr(type(binding), "release_scope", fail_release)
         with pytest.raises(ValueError) as raised:
             root.fork(scope=child_scope)

@@ -252,6 +252,8 @@ dispose Context 后，它会从 `ctx.scope.mro` 中每个 Scope 的 viewer 集�
 
 Context binding 按 identity 记录仍被观察的 Scope，最后一个 viewer 退出时会清除其值，无须扫描无关的 Scope 绑定。直接复用仍被持有的 Scope，或将它作为祖先使用，都会重新登记 viewer 并保留原有 identity 绑定；已经清除的值不会恢复。
 
+每个应用维护 Scope 到其曾绑定的 Context 叶子的索引。viewer 的登记和释放只访问这些 binding，不遍历应用的所有字段。索引对 Scope 和 binding 均使用弱引用，既支持复用保存的 Scope，又不会让已撤销 Schema 的值或无人使用的 Scope 继续存活。普通继承读取不会增加索引条目。
+
 Scope viewer 和 binding identity 直接使用集合记录持有者。Context dispose 会移除自己的 viewer 登记，再释放各个 binding 中不再被观察的 Scope；最后一个绑定的 Scope 退出时，移除 identity 及其数据。这些内部登记不为每个成员分配撤销回调。某项清理失败不会阻止其余 binding 和 Scope 的清理，后续调用 Context dispose 会重现第一个失败。如果某个 Scope 在值的析构期间重新获得 viewer，后续清理会保留新 viewer 仍可见的数据。
 
 ## Compose
