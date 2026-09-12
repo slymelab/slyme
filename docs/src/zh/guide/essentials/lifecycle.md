@@ -64,4 +64,4 @@ Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context �
 
 直接等待 `await resolve(ctx.dispose())` 的调用者取消时，已调度的清理不会取消，但该调用者可能先退出。应用退出前应再次等待同一次释放，观察保留的结果。Auto 则会先等子 Context 清理结束，再传播取消，包括清理期间的重复取消。
 
-Context 创建、外部输入校验和输出提取由应用代码负责。核心执行只有一个入口：直接调用 `node(ctx)`。
+Context 创建、外部输入校验和输出提取由应用代码负责。使用 `node(ctx)` 执行图，或者通过 `await node.acall(ctx)` 获得始终可等待的结果。`await ctx.adispose()` 同样只适配释放的返回值，不改变执行与所有权规则。

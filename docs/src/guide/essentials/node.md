@@ -46,19 +46,18 @@ There is no Def/Exec conversion or `prepare()` step. Each call binds and resolve
 A Node returns `T | Awaitable[T]` according to the actual Auto, Wrapper, user-function, and temporary Context cleanup results. Purely synchronous calls return directly. A regular `def` can return an awaitable without declaring a mode; a synchronous parent can consume async Auto inputs after they complete.
 
 ```python
-from slyme.utils.awaitable import resolve
-
-
 async def execute(ctx):
     try:
-        return await resolve(task(ctx))
+        return await task.acall(ctx)
     finally:
-        await resolve(ctx.dispose())
+        await ctx.adispose()
 ```
+
+`task.acall(ctx)` and `ctx.adispose()` always return awaitables. They delegate to the ordinary call and disposal methods through `resolve()` from `slyme.utils.awaitable`; synchronous work and errors still occur immediately when called. They do not create tasks or schedule asynchronous work.
 
 `resolve()` awaits only the outer execution result, not values inside containers. Async continuations run when awaited or scheduled, although their synchronous prefix may already have run. Synchronous applications can use `asyncio.run(resolve(task(ctx)))` at their entry point; await within an existing loop instead of nesting loops. Slyme never automatically offloads blocking functions to threads.
 
-Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await resolve(child(ctx))` when the child may be asynchronous. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
+Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await child.acall(ctx)` when the child may be asynchronous. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
 
 ## Parameters and Auto
 

@@ -242,6 +242,8 @@ Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add
 
 parent 会强引用并拥有子 Context。每个 Context 按后进先出顺序处理直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await resolve(ctx.dispose())`，其中 `resolve` 从 `slyme.utils.awaitable` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出第一个失败；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
 
+`await ctx.adispose()` 是 `await resolve(ctx.dispose())` 的始终可等待的替代写法。调用 `adispose()` 会立即执行相同的同步清理，也可能在返回前抛出同步错误。等待返回值即可完成释放；取消隔离和失败结果重放的语义不变。
+
 effect cleanup 执行期间不得 dispose 其 owner Context、ancestor 或自身。这类重入操作可能让 cleanup 仍在使用的资源提前失效，或者依赖自身完成，因此 Slyme 会抛出 `RuntimeError`。
 
 dispose Context 后，它会从 `ctx.scope.mro` 中每个 Scope 的 viewer 集合移除，但不会解除或销毁 `ctx.scope`。通过 `set()` 安装的值，只要同一应用根内仍有活跃 Context 能看到对应的 Context-binding identity，就会继续存储；通过 `add()` 安装的值还会在 owner Context 或其精确 disposer 执行时移除。Compose entry 同样保留到各自的精确 disposer 执行。数据仍然可见并不保证值中的外部资源仍处于打开状态：拥有该资源的 effect 可能已经关闭它。资源所有权应覆盖每个可能使用它的 Context，并且调用方应确定性地 dispose 子 Context，而不是依赖垃圾回收。

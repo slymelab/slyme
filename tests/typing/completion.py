@@ -40,6 +40,12 @@ async def check_types(ctx: Context) -> None:
     assert_type(await resolve(immediate()(ctx)), int)
     assert_type(await resolve(asynchronous()(ctx)), int)
     assert_type(await resolve(mixed()(ctx)), int)
+    assert_type(immediate().acall(ctx), Awaitable[int])
+    assert_type(asynchronous().acall(ctx), Awaitable[int])
+    assert_type(mixed().acall(ctx), Awaitable[int])
+    assert_type(await immediate().acall(ctx), int)
+    assert_type(await asynchronous().acall(ctx), int)
+    assert_type(await mixed().acall(ctx), int)
 
     def setup() -> Callable[[], None]:
         return lambda: None
@@ -53,3 +59,5 @@ async def check_types(ctx: Context) -> None:
         Callable[[], None | Awaitable[None]],
     )
     assert_type(ctx.dispose(), None | Awaitable[None])
+    assert_type(ctx.adispose(), Awaitable[None])
+    assert_type(await ctx.adispose(), None)

@@ -13,30 +13,17 @@
 # limitations under the License.
 
 import sys
-from collections.abc import Generator
-from contextlib import contextmanager
 
 
-@contextmanager
-def enrich_exception(
-    info: str,
-    exc_types: type[Exception] | tuple[type[Exception], ...] = Exception,
-) -> Generator[None, None, None]:
+def enrich_exception(error: Exception, info: str) -> None:
+    """Append context to an existing exception without raising it.
+
+    Python 3.11+ uses exception notes. Older versions update the message in
+    ``args``. Call from an exception handler and use bare ``raise`` to rethrow.
     """
-    Context manager to enrich exceptions with context info.
-    """
-    try:
-        yield
-    except exc_types as e:
-        # Strategy 1: Modern Python (Preferred)
-        if sys.version_info >= (3, 11):
-            e.add_note(info)
-            raise
-
-        # Strategy 2: Legacy / Compatibility
-        # Construct the new message
-        if len(e.args) > 0 and isinstance(e.args[0], str):
-            e.args = (f"{e.args[0]} ({info})", *e.args[1:])
-        else:
-            e.args = (*e.args, f"({info})")
-        raise
+    if sys.version_info >= (3, 11):
+        error.add_note(info)
+    elif error.args and isinstance(error.args[0], str):
+        error.args = (f"{error.args[0]} ({info})", *error.args[1:])
+    else:
+        error.args = (*error.args, f"({info})")

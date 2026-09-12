@@ -10,6 +10,8 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Added `Node.acall()` and `Context.adispose()` as always-awaitable adapters
+  that preserve immediate synchronous execution and the unified completion rules.
 - Added `slyme.utils.awaitable.resolve()` to await an immediate or asynchronous
   result without starting a loop or offloading synchronous work.
 - Unified Node, Auto, and Wrapper execution around actual returned values;
@@ -42,6 +44,8 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Moved exception context enrichment into failure handlers so successful Node
+  and Wrapper calls do not allocate exception context managers or messages.
 - Indexed Schema entries by complete path for direct Context lookups while
   preserving tree-based traversal and exact declaration teardown.
 - Made ownership removal constant-time on average and synchronous disposal

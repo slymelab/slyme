@@ -201,8 +201,11 @@ def analyze_signature(
     specs: dict[str, Spec] = {}
 
     for p in params:
-        with enrich_exception(f"in definition of '{func.__name__}'"):
+        try:
             _validate_parameter_kind(p)
+        except Exception as error:
+            enrich_exception(error, f"in definition of '{func.__name__}'")
+            raise
 
     if resolve_type_hints:
         type_hints = get_type_hints(func, include_extras=True)
@@ -210,13 +213,16 @@ def analyze_signature(
         type_hints = {}
 
     for p in params:
-        with enrich_exception(f"in definition of '{func.__name__}'"):
+        try:
             if p.kind == inspect.Parameter.KEYWORD_ONLY:
                 public_params.append(p)
                 # Spec Resolution Logic: Always returns a Spec object now
                 specs[p.name] = _resolve_spec(p, type_hints.get(p.name))
             else:
                 runtime_params.append(p)
+        except Exception as error:
+            enrich_exception(error, f"in definition of '{func.__name__}'")
+            raise
 
     public_signature = sig.replace(parameters=public_params)
     return SignatureAnalysis(

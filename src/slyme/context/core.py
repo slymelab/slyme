@@ -686,6 +686,14 @@ class Context(ContextElement):
             raise first_error
         return None
 
+    def adispose(self) -> Awaitable[None]:
+        """Dispose with an always-awaitable result, preserving immediate cleanup.
+
+        Synchronous cleanup and errors occur during this call. Await the result
+        to finish disposal with the same cancellation and failure guarantees.
+        """
+        return resolve(self.dispose())
+
     async def _continue_dispose(
         self,
         owned: Iterator[Context | _Effect],

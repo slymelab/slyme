@@ -60,6 +60,96 @@ R = Schema(
 )
 
 
+async def test_acall_runs_sync_work_immediately_and_preserves_result_identity() -> None:
+    events: list[str] = []
+    value = object()
+
+    @node
+    def immediate(ctx: Context, /) -> object:
+        events.append("called")
+        return value
+
+    ctx = Context()
+    tasks = asyncio.all_tasks()
+    result = immediate().acall(ctx)
+    assert events == ["called"]
+    assert asyncio.all_tasks() == tasks
+    assert await result is value
+    ctx.dispose()
+
+
+def test_acall_preserves_immediate_node_errors() -> None:
+    failure = ValueError("immediate failure")
+
+    @node
+    def failing(ctx: Context, /) -> int:
+        raise failure
+
+    ctx = Context()
+    instance = failing()
+    with pytest.raises(NodeExceptionRecord) as caught:
+        instance.acall(ctx)
+    assert caught.value.exception is failure
+    assert caught.value.exception_node is instance
+    ctx.dispose()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_acall_awaits_async_results_and_preserves_errors(fails: bool) -> None:
+    events: list[str] = []
+    failure = ValueError("asynchronous failure")
+
+    @node
+    async def delayed(ctx: Context, /) -> int:
+        events.append("started")
+        await asyncio.sleep(0)
+        if fails:
+            raise failure
+        return 42
+
+    ctx = Context()
+    instance = delayed()
+    result = instance.acall(ctx)
+    assert not events
+    if fails:
+        with pytest.raises(NodeExceptionRecord) as caught:
+            await result
+        assert caught.value.exception is failure
+        assert caught.value.exception_node is instance
+    else:
+        assert await result == 42
+    assert events == ["started"]
+    ctx.dispose()
+
+
+async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
+    events: list[str] = []
+
+    @node
+    async def child(ctx: Context, /) -> int:
+        async def cleanup() -> None:
+            await asyncio.sleep(0)
+            events.append("cleanup")
+
+        ctx.effect(lambda: cleanup)
+        return 6
+
+    @node
+    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+        assert events == ["cleanup"]
+        return value * 2
+
+    @wrapper
+    async def increment(ctx: Context, wrapped: Node, call_next: Callable, /) -> int:
+        return await resolve(call_next(ctx)) + 1
+
+    ctx = Context()
+    graph = parent(value=child()).add_wrappers(increment())
+    assert await graph.acall(ctx) == 13
+    assert not ctx._owned
+    ctx.dispose()
+
+
 def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None:
     @node
     def configured(

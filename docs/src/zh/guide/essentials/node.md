@@ -45,19 +45,18 @@ Context 创建、外部输入处理和输出提取均由调用方负责。Node �
 Node 的返回类型是 `T | Awaitable[T]`，取决于实际执行的 Auto、Wrapper、用户函数及临时 Context 清理。纯同步调用直接返回；普通 `def` 也可以返回 awaitable，不需要声明执行模式。同步父函数可以等待异步 Auto 注入后再运行。
 
 ```python
-from slyme.utils.awaitable import resolve
-
-
 async def execute(ctx):
     try:
-        return await resolve(task(ctx))
+        return await task.acall(ctx)
     finally:
-        await resolve(ctx.dispose())
+        await ctx.adispose()
 ```
+
+`task.acall(ctx)` 和 `ctx.adispose()` 始终返回 awaitable。它们通过 `slyme.utils.awaitable` 的 `resolve()` 委托给普通调用与释放方法；同步工作和同步错误仍在调用时立即发生。它们不会创建 task 或调度异步工作。
 
 `resolve()` 只等待外层执行结果，不递归等待容器中的数据。异步 continuation 在被等待或调度前不会执行；同步前缀可能已运行。同步应用可以在应用入口使用 `asyncio.run(resolve(task(ctx)))`，已有事件循环内应 await，不创建嵌套事件循环。框架不会把阻塞函数自动放入线程。
 
-用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。需要支持异步 child 时，改用 `async def` 和 `await resolve(child(ctx))`。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
+用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。需要支持异步 child 时，改用 `async def` 和 `await child.acall(ctx)`。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
 
 ## 参数与 Auto
 

@@ -66,4 +66,4 @@ Explicit orchestration has different semantics. Calling a Node directly or using
 
 Cancelling a direct `await resolve(ctx.dispose())` waiter does not cancel scheduled cleanup, but that waiter may exit first. Await the same disposal again before shutdown to observe its retained result. Auto instead drains owned child cleanup before propagating cancellation, including repeated cancellation.
 
-Application code owns Context construction, external input validation, and output extraction. Core execution has one entry point: call the Node directly with `node(ctx)`.
+Application code owns Context construction, external input validation, and output extraction. Invoke the graph with `node(ctx)`, or use `await node.acall(ctx)` for an always-awaitable result. `await ctx.adispose()` similarly adapts disposal without changing its execution or ownership rules.

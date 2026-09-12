@@ -244,15 +244,43 @@ def test_mapping_proxy_helpers_and_aux_immutability() -> None:
         unflatten_dict([], PyTreeAux())
 
 
-def test_enrich_exception_and_warning_deduplication() -> None:
-    with pytest.raises(ValueError) as exc_info:
-        with enrich_exception("extra context"):
-            raise ValueError("failure")
+@pytest.mark.parametrize("args", [(), ("failure",), (123,), ("failure", 123)])
+def test_enrich_exception_updates_context_without_raising(
+    args: tuple[Any, ...],
+) -> None:
+    error = ValueError(*args)
+    assert enrich_exception(error, "extra context") is None
     if sys.version_info >= (3, 11):
-        assert exc_info.value.__notes__ == ["extra context"]
+        assert error.__notes__ == ["extra context"]
+        assert error.args == args
+    elif args and isinstance(args[0], str):
+        assert error.args == (f"{args[0]} (extra context)", *args[1:])
     else:
-        assert exc_info.value.args[0] == "failure (extra context)"
+        assert error.args == (*args, "(extra context)")
 
+
+def test_enrich_exception_preserves_exception_and_traceback() -> None:
+    failure = ValueError("failure")
+
+    with pytest.raises(ValueError) as caught:
+        try:
+            raise failure
+        except ValueError as error:
+            traceback = error.__traceback__
+            enrich_exception(error, "inner")
+            enrich_exception(error, "outer")
+            assert error.__traceback__ is traceback
+            raise
+
+    assert caught.value is failure
+    assert caught.value.__traceback__ is traceback
+    if sys.version_info >= (3, 11):
+        assert failure.__notes__ == ["inner", "outer"]
+    else:
+        assert failure.args == ("failure (inner) (outer)",)
+
+
+def test_warning_deduplication() -> None:
     warning_once.cache_clear()
     with pytest.warns(UserWarning, match="once") as recorded:
         warning_once("once")

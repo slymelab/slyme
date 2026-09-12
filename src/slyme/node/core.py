@@ -36,7 +36,7 @@ from typing import (
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.awaitable import _chain, _guard
+from slyme.utils.awaitable import _chain, _guard, resolve
 from slyme.utils.exception import enrich_exception
 
 from .exception import (
@@ -172,8 +172,11 @@ class NodeElement:
     def set(self, name: str, value: Any) -> None:
         """Validate and replace one build parameter."""
         parameter = self._require_param(name)
-        with enrich_exception(f"for parameter '{name}'"):
+        try:
             self._params[name] = parameter._build(value)
+        except Exception as error:
+            enrich_exception(error, f"for parameter '{name}'")
+            raise
 
     def reset(self, name: str) -> None:
         """Restore one build parameter to its declared default."""
@@ -213,11 +216,22 @@ class Node(NodeElement, Generic[_R]):
     def __call__(self, ctx: Context) -> _R | Awaitable[_R]:
         return _guard(partial(self._call, ctx), self._raise_error)
 
+    def acall(self, ctx: Context) -> Awaitable[_R]:
+        """Call with an always-awaitable result, preserving immediate execution.
+
+        Synchronous work and errors occur during this call. Await the result
+        to finish any asynchronous work; this method does not schedule it.
+        """
+        return resolve(self(ctx))
+
     def _call(self, ctx: Context) -> _R | Awaitable[_R]:
         wrappers = tuple(self.wrappers)
         kwargs = self._collect_params()
-        with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+        try:
             self._validate_ready(kwargs)
+        except Exception as error:
+            enrich_exception(error, f"in call preparation for '{self._func.__name__}'")
+            raise
         raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
         if not eval_kwargs:
             chain: Callable[[Context], _R | Awaitable[_R]] = partial(
@@ -277,8 +291,11 @@ class Wrapper(NodeElement, Generic[_R]):
         call_next: Callable[[Context], Any | Awaitable[Any]],
     ) -> _R | Awaitable[_R]:
         kwargs = self._collect_params()
-        with enrich_exception(f"in call preparation for '{self._func.__name__}'"):
+        try:
             self._validate_ready(kwargs)
+        except Exception as error:
+            enrich_exception(error, f"in call preparation for '{self._func.__name__}'")
+            raise
         raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
         if not eval_kwargs:
             return self._func(ctx, wrapped, call_next, **raw_kwargs)
@@ -339,8 +356,11 @@ class _FactoryBase(Generic[_P, _E]):
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _E:
         if args:
             raise TypeError("Node and Wrapper factories accept keyword arguments only.")
-        with enrich_exception(f"for '{self._func.__name__}'"):
+        try:
             return self.element_type(func=self._func, specs=self._specs, params=kwargs)
+        except Exception as error:
+            enrich_exception(error, f"for '{self._func.__name__}'")
+            raise
 
 
 class NodeFactory(_FactoryBase[_P, _E]):

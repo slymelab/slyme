@@ -11,6 +11,68 @@ from slyme.context.core import ContextPathError
 from slyme.utils.awaitable import resolve
 
 
+async def test_adispose_runs_sync_cleanup_immediately_without_scheduling() -> None:
+    events: list[str] = []
+    ctx = Context()
+    ctx.effect(lambda: lambda: events.append("cleaned"))
+    tasks = asyncio.all_tasks()
+    result = ctx.adispose()
+    assert events == ["cleaned"]
+    assert not ctx._owned
+    assert asyncio.all_tasks() == tasks
+    assert await result is None
+    assert await ctx.adispose() is None
+    assert events == ["cleaned"]
+
+
+def test_adispose_preserves_immediate_cleanup_errors() -> None:
+    failure = ValueError("cleanup failed")
+    ctx = Context()
+
+    def cleanup() -> None:
+        raise failure
+
+    ctx.effect(lambda: cleanup)
+    for _ in range(2):
+        with pytest.raises(ValueError) as caught:
+            ctx.adispose()
+        assert caught.value is failure
+    assert not ctx._owned
+
+
+async def test_adispose_retains_cleanup_result_after_waiter_cancellation() -> None:
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    completed = asyncio.Event()
+    calls = 0
+    failure = ValueError("late cleanup failure")
+    ctx = Context()
+
+    async def cleanup() -> None:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await finish.wait()
+        completed.set()
+        raise failure
+
+    ctx.effect(lambda: cleanup)
+    result = ctx.adispose()
+    assert not started.is_set()
+    waiter = asyncio.ensure_future(result)
+    await started.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    finish.set()
+    await completed.wait()
+    for _ in range(2):
+        with pytest.raises(ValueError) as caught:
+            await ctx.adispose()
+        assert caught.value is failure
+    assert calls == 1 and not ctx._owned
+
+
 def test_context_disposes_direct_ownership_in_lifo_order_recursively() -> None:
     events: list[str] = []
     ctx = Context()
