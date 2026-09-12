@@ -5,10 +5,61 @@ from typing import Any
 
 import pytest
 
-from slyme.context import Context, Schema
+from slyme.context import Context, Ref, Schema
 from slyme.node import Auto, Node, eval_tree, node, wrapper
+from slyme.node.eval import EVALUATOR_REGISTRY, EvaluatorDef
 from slyme.utils.awaitable import resolve
-from slyme.utils.pytree import PyTreeAux, PyTreeEngine
+from slyme.utils.registry import GeneralRegistry
+from slyme.utils.tree import TreeAux, TreeEngine
+
+
+def test_auto_subclasses_require_explicit_evaluator_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CustomRef(Ref[int]):
+        pass
+
+    class CustomNode(Node[int]):
+        pass
+
+    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
+    for key, evaluator in EVALUATOR_REGISTRY.items():
+        registry.register(evaluator, key=key)
+    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
+    ctx = Context({"value": 7}, schema=Schema({"value": Schema.leaf()}))
+    custom_ref = CustomRef("value")
+    custom_node = CustomNode(func=lambda ctx: 3, specs={}, params={})
+
+    @node
+    def collect(ctx: Context, /, *, values: Auto[list[Any]]) -> list[Any]:
+        return values
+
+    graph = collect(values=[Ref("value"), custom_ref, custom_node])
+    result = graph(ctx)
+    assert result[0] == 7
+    assert result[1] is custom_ref and result[2] is custom_node
+    registry.register(registry.get(Ref), key=CustomRef)
+    registry.register(registry.get(Node), key=CustomNode)
+    assert graph(ctx) == [7, 7, 3]
+    registry.unregister(CustomRef)
+    registry.unregister(CustomNode)
+    result = graph(ctx)
+    assert result[1] is custom_ref and result[2] is custom_node
+    ctx.dispose()
+
+
+def test_integer_evaluator_does_not_evaluate_booleans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
+    registry.register(
+        EvaluatorDef(lambda _ctx, values: [value + 1 for value in values]), key=int
+    )
+    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
+    ctx = Context()
+    result = eval_tree(ctx, [1, True])
+    assert result[0] == 2 and result[1] is True
+    ctx.dispose()
 
 
 @pytest.mark.parametrize("target", ["node", "wrapper", "eval_tree"])
@@ -95,13 +146,13 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
             self.value = value
 
     calls = 0
-    engine = PyTreeEngine("test_auto", register_defaults=True)
+    engine = TreeEngine("test_auto", register_defaults=True)
 
     def flatten(box):
         nonlocal calls
         calls += 1
         element.set("other", 2)
-        return iter((box.value,)), PyTreeAux()
+        return iter((box.value,)), TreeAux()
 
     engine.register(Box, flatten, lambda children, aux: Box(next(iter(children))))
     monkeypatch.setattr("slyme.node.eval.CTX_EVAL_ENGINE", engine)
@@ -171,7 +222,7 @@ def test_short_circuiting_wrapper_does_not_traverse_auto_parameters(
     def flatten(box):
         raise AssertionError("Auto traversal was short-circuited")
 
-    engine = PyTreeEngine("test_auto", register_defaults=True)
+    engine = TreeEngine("test_auto", register_defaults=True)
     engine.register(Box, flatten, lambda children, aux: Box())
     monkeypatch.setattr("slyme.node.eval.CTX_EVAL_ENGINE", engine)
 

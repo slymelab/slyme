@@ -8,7 +8,7 @@ import pytest
 from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
 from slyme.node.eval import ref_evaluator
-from slyme.utils.pytree import PyTreeAux, PyTreeEngine
+from slyme.utils.tree import TreeAux, TreeEngine
 
 
 @pytest.mark.parametrize("operation", ["update", "update_tree"])
@@ -118,11 +118,11 @@ def test_extract_traverses_custom_containers_once_and_reconstructs_only_final_va
             self.value = value
 
     events: list[tuple[str, Any]] = []
-    engine = PyTreeEngine("test_extract", register_defaults=True)
+    engine = TreeEngine("test_extract", register_defaults=True)
 
     def flatten(box):
         events.append(("flatten", box.value))
-        return iter((box.value,)), PyTreeAux()
+        return iter((box.value,)), TreeAux()
 
     def unflatten(children, aux):
         value = next(iter(children))

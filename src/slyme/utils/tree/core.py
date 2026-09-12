@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Tree structure utilities for slyme (PyTree-like).
+Tree structure utilities for slyme.
 
 Designed to be lightweight, explicit, and instance-isolated.
 """
@@ -28,13 +28,13 @@ from typing import (
     Protocol,
 )
 
-from slyme.utils.registry import Registry, TypeRegistry
+from slyme.utils.registry import GeneralRegistry, Registry
 
 _EMPTY_MAPPING: Mapping[str, Any] = types.MappingProxyType({})
 
 
 @dataclass(frozen=True)
-class PyTreeKey:
+class TreeKey:
     """Base class for path elements."""
 
     def resolve(self, element: Any) -> Any:
@@ -58,7 +58,7 @@ class PyTreeKey:
 
 
 @dataclass(frozen=True)
-class SequenceKey(PyTreeKey):
+class SequenceKey(TreeKey):
     """Represents an index in a sequence (list, tuple)."""
 
     index: int
@@ -71,7 +71,7 @@ class SequenceKey(PyTreeKey):
 
 
 @dataclass(frozen=True)
-class MappingKey(PyTreeKey):
+class MappingKey(TreeKey):
     """Represents a key in a mapping (dict)."""
 
     key: Hashable
@@ -84,7 +84,7 @@ class MappingKey(PyTreeKey):
 
 
 @dataclass(frozen=True)
-class AttributeKey(PyTreeKey):
+class AttributeKey(TreeKey):
     """Represents an attribute name (object)."""
 
     name: str
@@ -97,11 +97,11 @@ class AttributeKey(PyTreeKey):
 
 
 # Type Alias for Path
-KeyPath = tuple[PyTreeKey, ...]
+KeyPath = tuple[TreeKey, ...]
 
 
 @dataclass(frozen=True)
-class PyTreeAux:
+class TreeAux:
     """
     Auxiliary data required to reconstruct a container and track paths.
 
@@ -111,7 +111,7 @@ class PyTreeAux:
     """
 
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
-    children_keys: tuple[PyTreeKey, ...] | None = None
+    children_keys: tuple[TreeKey, ...] | None = None
     cls: type | None = None
 
     def __post_init__(self):
@@ -129,7 +129,7 @@ class _FlattenFunc(Protocol):
         - aux_data: Contains metadata and optional keys for path tracking.
     """
 
-    def __call__(self, element: Any, /) -> tuple[Iterable[Any], PyTreeAux]: ...
+    def __call__(self, element: Any, /) -> tuple[Iterable[Any], TreeAux]: ...
 
 
 class _UnflattenFunc(Protocol):
@@ -137,11 +137,11 @@ class _UnflattenFunc(Protocol):
     Protocol for unflattening a container.
     """
 
-    def __call__(self, children: Iterable[Any], tree_aux: PyTreeAux, /) -> Any: ...
+    def __call__(self, children: Iterable[Any], tree_aux: TreeAux, /) -> Any: ...
 
 
 @dataclass(frozen=True)
-class _PyTreeHandler:
+class _TreeHandler:
     flatten: _FlattenFunc
     unflatten: _UnflattenFunc
 
@@ -172,7 +172,7 @@ class _ResolverFunc(Protocol):
 
     def __call__(
         self, element: Any, traverse_aux: TraverseAux, /
-    ) -> _PyTreeHandler | None: ...
+    ) -> _TreeHandler | None: ...
 
 
 class _LeafSinkFunc(Protocol):
@@ -182,7 +182,7 @@ class _LeafSinkFunc(Protocol):
 
 
 @dataclass(frozen=True)
-class PyTreeDef:
+class TreeDef:
     """Base class for tree definitions."""
 
     def unflatten(self, leaves: Iterable[Any]) -> Any:
@@ -206,7 +206,7 @@ class PyTreeDef:
 
 
 @dataclass(frozen=True)
-class LeafDef(PyTreeDef):
+class LeafDef(TreeDef):
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
         try:
             return next(leaves_iter)
@@ -217,10 +217,10 @@ class LeafDef(PyTreeDef):
 
 
 @dataclass(frozen=True)
-class ContainerDef(PyTreeDef):
+class ContainerDef(TreeDef):
     cls: type
-    tree_aux: PyTreeAux
-    children_defs: tuple[PyTreeDef, ...]
+    tree_aux: TreeAux
+    children_defs: tuple[TreeDef, ...]
     unflatten_func: _UnflattenFunc = field(compare=False, repr=False)
 
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
@@ -228,30 +228,25 @@ class ContainerDef(PyTreeDef):
         return self.unflatten_func(children, self.tree_aux)
 
 
-class PyTreeEngine:
-    """
-    A PyTree Engine that defines PyTree Operations.
+class TreeEngine:
+    """Traverse registered container types and reconstruct their structure.
+
+    Type handlers match exactly. Unregistered objects remain leaves unless
+    an explicitly installed resolver supplies a handler.
     """
 
     def __init__(
         self,
         name: str | None = None,
         strict_registration: bool = True,
-        allow_inheritance: bool = True,
         register_defaults: bool = True,
     ) -> None:
         self.name = repr(self) if name is None else name
-        self.allow_inheritance = allow_inheritance
-
-        # 1. Type-based Registry (O(1) lookup, Middle Priority)
-        self._registry: TypeRegistry[Any, _PyTreeHandler] = TypeRegistry(
-            f"PyTreeTypeRegistry<{self.name}>", strict=strict_registration
+        self._registry: GeneralRegistry[type, _TreeHandler] = GeneralRegistry(
+            f"tree_handlers<{self.name}>", strict=strict_registration
         )
 
-        # 2. Dynamic Resolvers
-        # Pre-resolvers: Checked BEFORE Type Registry (High Priority)
         self._pre_resolvers: list[_ResolverFunc] = []
-        # Post-resolvers: Checked AFTER Type Registry (Low Priority)
         self._post_resolvers: list[_ResolverFunc] = []
 
         if register_defaults:
@@ -264,11 +259,8 @@ class PyTreeEngine:
         unflatten_func: _UnflattenFunc,
         strict: bool = True,
     ) -> None:
-        """
-        Register a custom type handler into the core TypeRegistry.
-        This follows the explicit-is-better-than-implicit philosophy.
-        """
-        handler = _PyTreeHandler(flatten=flatten_func, unflatten=unflatten_func)
+        """Register a handler for exactly cls, without matching its subclasses."""
+        handler = _TreeHandler(flatten=flatten_func, unflatten=unflatten_func)
         self._registry.register(handler, key=cls, strict=strict)
 
     def register_resolver(
@@ -280,9 +272,9 @@ class PyTreeEngine:
         Args:
             resolver: A function taking an element and returning a Handler or None.
             priority:
-                - 'pre': Checked BEFORE the core TypeRegistry. Used to override
+                - 'pre': Checked BEFORE the exact-type registry. Used to override
                   default behaviors or intercept specific instances.
-                - 'post': Checked AFTER the core TypeRegistry. Used for generic
+                - 'post': Checked AFTER the exact-type registry. Used for generic
                   fallbacks (e.g., Dataclasses, Protocol checks).
         """
         if priority == "pre":
@@ -295,13 +287,13 @@ class PyTreeEngine:
         # Tuple
         self.register(
             tuple,
-            lambda x: (iter(x), PyTreeAux()),
+            lambda x: (iter(x), TreeAux()),
             lambda children, _: tuple(children),
         )
         # List
         self.register(
             list,
-            lambda x: (iter(x), PyTreeAux()),
+            lambda x: (iter(x), TreeAux()),
             lambda children, _: list(children),
         )
         # Dict
@@ -309,31 +301,17 @@ class PyTreeEngine:
 
     def _lookup_handler(
         self, element: Any, traverse_aux: TraverseAux
-    ) -> _PyTreeHandler | None:
-        """
-        Resolve handler via:
-        1. Pre-resolvers (High Priority)
-        2. Type Registry (Core Priority)
-        3. Post-resolvers (Fallback Priority)
-        """
-        # 1. Try Pre-resolvers
+    ) -> _TreeHandler | None:
+        """Resolve pre-handlers, the exact type, then post-handlers."""
         for resolver in self._pre_resolvers:
             handler = resolver(element, traverse_aux)
             if handler is not None:
                 return handler
 
-        # 2. Try Type Registry
-        cls = type(element)
-        handler = None
-        if self.allow_inheritance:
-            handler = self._registry.lookup(cls, default=None)
-        else:
-            handler = self._registry.get(cls, None)
-
+        handler = self._registry.get(type(element), None)
         if handler is not None:
             return handler
 
-        # 3. Try Post-resolvers
         for resolver in self._post_resolvers:
             handler = resolver(element, traverse_aux)
             if handler is not None:
@@ -346,7 +324,7 @@ class PyTreeEngine:
         tree: Any,
         *,
         is_leaf: _IsLeafFunc | None = None,
-    ) -> tuple[list[Any], "PyTreeDef"]:
+    ) -> tuple[list[Any], "TreeDef"]:
         """
         Flatten a tree into a list of leaves and a structure definition.
         """
@@ -364,7 +342,7 @@ class PyTreeEngine:
         tree: Any,
         *,
         is_leaf: _IsLeafFunc | None = None,
-    ) -> tuple[list[tuple[KeyPath, Any]], "PyTreeDef"]:
+    ) -> tuple[list[tuple[KeyPath, Any]], "TreeDef"]:
         """
         Flatten a tree into a list of (key_path, leaf) tuples and a structure definition.
         """
@@ -384,7 +362,7 @@ class PyTreeEngine:
         is_leaf: _IsLeafFunc | None = None,
     ) -> Iterator[Any]:
         """
-        Iterate over leaves of a tree without creating a PyTreeDef.
+        Iterate over leaves of a tree without creating a TreeDef.
         """
         initial_traverse_aux = TraverseAux(parent=None, key_path=())
         yield from self._traverse_iter(
@@ -398,7 +376,7 @@ class PyTreeEngine:
         is_leaf: _IsLeafFunc | None = None,
     ) -> Iterator[tuple[KeyPath, Any]]:
         """
-        Iterate over (key_path, leaf) tuples of a tree without creating a PyTreeDef.
+        Iterate over (key_path, leaf) tuples of a tree without creating a TreeDef.
         """
         initial_traverse_aux = TraverseAux(parent=None, key_path=())
         yield from self._traverse_iter(
@@ -410,7 +388,7 @@ class PyTreeEngine:
         element: Any,
         traverse_aux: TraverseAux,
         is_leaf: _IsLeafFunc | None,
-    ) -> tuple[bool, _PyTreeHandler | None, Iterable[Any], Iterator[Any], PyTreeAux]:
+    ) -> tuple[bool, _TreeHandler | None, Iterable[Any], Iterator[Any], TreeAux]:
         """
         Helper to check if an element should be flattened and prepare iterators.
         Returns: (should_flatten, handler, children_iter, keys_iter, tree_aux)
@@ -424,7 +402,7 @@ class PyTreeEngine:
 
         if not should_flatten:
             # Return defaults for non-flattenable
-            return False, None, [], iter([]), PyTreeAux()
+            return False, None, [], iter([]), TreeAux()
 
         assert handler is not None
         children_iter, tree_aux = handler.flatten(element)
@@ -450,7 +428,7 @@ class PyTreeEngine:
         traverse_aux: TraverseAux,
         leaf_sink: _LeafSinkFunc,
         is_leaf: _IsLeafFunc | None,
-    ) -> PyTreeDef:
+    ) -> TreeDef:
         """Recursive core for traversal."""
         should_flatten, handler, children_iter, keys_iter, tree_aux = (
             self._prepare_element(element, traverse_aux, is_leaf)
@@ -527,7 +505,7 @@ class PyTreeEngine:
                 yield element
 
     @staticmethod
-    def unflatten(treedef: "PyTreeDef", leaves: Iterable[Any]) -> Any:
+    def unflatten(treedef: "TreeDef", leaves: Iterable[Any]) -> Any:
         """
         Reconstruct the tree from a structure definition and a list of leaves.
         """
@@ -567,6 +545,6 @@ class PyTreeEngine:
 
 
 # Global registry to manage Tree instances.
-PYTREE_ENGINE_REGISTRY: Registry[PyTreeEngine] = Registry("pytree_engine")
+TREE_ENGINE_REGISTRY: Registry[TreeEngine] = Registry("tree_engine")
 
 from .common import flatten_dict, unflatten_dict

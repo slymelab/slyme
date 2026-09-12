@@ -12,30 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PyTree engine used for Node inspection and Ref discovery."""
+"""Tree engine used for Node inspection and Ref discovery."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, cast
 
-from slyme.utils.pytree import (
-    PYTREE_ENGINE_REGISTRY,
+from slyme.utils.tree import (
+    TREE_ENGINE_REGISTRY,
     AttributeKey,
-    PyTreeAux,
-    PyTreeEngine,
-    PyTreeKey,
+    TreeAux,
+    TreeEngine,
+    TreeKey,
 )
-from slyme.utils.pytree.common import flatten_mapping_proxy, unflatten_mapping_proxy
+from slyme.utils.tree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 
 from .core import Node, Wrapper
 
-NODE_ENGINE = PyTreeEngine("node_engine")
-PYTREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
+NODE_ENGINE = TreeEngine("node_engine")
+TREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
 
 
 @dataclass(frozen=True)
-class _NodeParameterKey(PyTreeKey):
+class _NodeParameterKey(TreeKey):
     """Address one NodeElement build parameter without attribute projection."""
 
     name: str
@@ -47,20 +47,20 @@ class _NodeParameterKey(PyTreeKey):
         return f"{parent_expr}.get({self.name!r})"
 
 
-def _flatten_node(obj: Node) -> tuple[Iterable[Any], PyTreeAux]:
+def _flatten_node(obj: Node) -> tuple[Iterable[Any], TreeAux]:
     children = [obj.wrappers]
-    keys: list[PyTreeKey] = [AttributeKey("wrappers")]
+    keys: list[TreeKey] = [AttributeKey("wrappers")]
     for name in obj._specs:
         children.append(obj.get(name))
         keys.append(_NodeParameterKey(name))
-    return tuple(children), PyTreeAux(
+    return tuple(children), TreeAux(
         children_keys=tuple(keys),
         metadata={"func": obj._func, "specs": obj._specs},
         cls=Node,
     )
 
 
-def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Node:
+def _unflatten_node(children: Iterable[Any], aux: TreeAux) -> Node:
     if aux.children_keys is None:
         raise ValueError("Missing keys for Node unflattening.")
     iterator = zip(aux.children_keys, children, strict=True)
@@ -74,16 +74,16 @@ def _unflatten_node(children: Iterable[Any], aux: PyTreeAux) -> Node:
     )
 
 
-def _flatten_wrapper(obj: Wrapper[Any]) -> tuple[Iterable[Any], PyTreeAux]:
+def _flatten_wrapper(obj: Wrapper[Any]) -> tuple[Iterable[Any], TreeAux]:
     keys = tuple(_NodeParameterKey(name) for name in obj._specs)
-    return tuple(obj.get(name) for name in obj._specs), PyTreeAux(
+    return tuple(obj.get(name) for name in obj._specs), TreeAux(
         children_keys=keys,
         metadata={"func": obj._func, "specs": obj._specs},
         cls=Wrapper,
     )
 
 
-def _unflatten_wrapper(children: Iterable[Any], aux: PyTreeAux) -> Wrapper[Any]:
+def _unflatten_wrapper(children: Iterable[Any], aux: TreeAux) -> Wrapper[Any]:
     if aux.children_keys is None:
         raise ValueError("Missing keys for Wrapper unflattening.")
     params = {

@@ -316,7 +316,7 @@ A Context bound to a child Scope can replace an inherited Compose object at its 
 
 ## Structured operations and projections
 
-Context accepts Ref PyTrees for batch reads and writes. `extract` flattens the input once, validates all Refs, reads their values, and reconstructs the requested structure once. Leaf values retain their identities. `update_tree` assigns values from a matching tree using `update`'s preflight checks.
+Context accepts Ref Trees for batch reads and writes. `extract` flattens the input once, validates all Refs, reads their values, and reconstructs the requested structure once. Leaf values retain their identities. `update_tree` assigns values from a matching tree using `update`'s preflight checks.
 
 `keys()`, `ContextView`, and `to_dict()` traverse Schema structure before reading the flat leaf cells. Empty containers therefore have a stable declared role but do not appear in the effective data view. `to_dict()` projects visible Context leaves into nested ordinary dictionaries for display or serialization. Across different Schemas, this projection cannot distinguish a mapping-valued leaf from equivalent nested Context paths. `flatten()` instead returns the exact visible `dict[Ref, Any]` leaf mapping:
 

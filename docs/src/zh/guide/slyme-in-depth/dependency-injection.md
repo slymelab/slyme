@@ -14,7 +14,7 @@ Slyme 通过关键字绑定构建参数，并可结合运行时 `Context` 对参
 
 1. 读取对象的当前参数；
 2. 根据声明的 `auto_eval` 标记区分参数；
-3. 按 PyTree 规则展开 Auto 参数；
+3. 按 Tree 规则展开 Auto 参数；
 4. 按 evaluator 类型批处理叶子；
 5. 使用传入的 Context 解析、重建 Auto 容器并调用用户函数，同时直接传递非 Auto 值。
 

@@ -14,14 +14,14 @@
 
 from types import MappingProxyType
 
-from slyme.utils.pytree import (
-    PYTREE_ENGINE_REGISTRY,
-    PyTreeEngine,
+from slyme.utils.tree import (
+    TREE_ENGINE_REGISTRY,
+    TreeEngine,
 )
-from slyme.utils.pytree.common import flatten_mapping_proxy, unflatten_mapping_proxy
+from slyme.utils.tree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 
-CTX_EVAL_ENGINE = PyTreeEngine("ctx_eval_engine", register_defaults=True)
-PYTREE_ENGINE_REGISTRY.register(CTX_EVAL_ENGINE, key="ctx_eval_engine")
+CTX_EVAL_ENGINE = TreeEngine("ctx_eval_engine", register_defaults=True)
+TREE_ENGINE_REGISTRY.register(CTX_EVAL_ENGINE, key="ctx_eval_engine")
 CTX_EVAL_ENGINE.register(
     MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy
 )

@@ -21,7 +21,7 @@ from typing import Any, NoReturn
 from slyme.context import Context, Ref
 from slyme.context.tree import CTX_EVAL_ENGINE
 from slyme.utils.awaitable import resolve
-from slyme.utils.registry import TypeRegistry
+from slyme.utils.registry import GeneralRegistry
 
 from ._async import finish_uninterruptibly, wait_uninterruptibly
 from .core import Node
@@ -52,19 +52,20 @@ class EvaluatorDef:
     func: BatchEvaluatorFunc
 
 
-EVALUATOR_REGISTRY = TypeRegistry[Any, EvaluatorDef]("evaluator")
+EVALUATOR_REGISTRY = GeneralRegistry[type, EvaluatorDef]("evaluator")
 
 
 def eval_tree(ctx: Context, tree: Any) -> Any:
-    """Evaluate registered leaves and reconstruct every PyTree container.
+    """Evaluate registered leaves and reconstruct every Tree container.
 
     Ordinary leaves and evaluator results retain their identities. Results are
     not recursively evaluated. Return an awaitable only for asynchronous work.
+    Evaluators match the exact leaf type; subclasses require registration.
     """
     leaves, tree_def = CTX_EVAL_ENGINE.flatten(tree)
     eval_groups: dict[EvaluatorDef, tuple[list[int], list[Any]]] = {}
     for i, leaf in enumerate(leaves):
-        evaluator = EVALUATOR_REGISTRY.lookup(type(leaf), default=None)
+        evaluator = EVALUATOR_REGISTRY.get(type(leaf), None)
         if evaluator is not None:
             if evaluator not in eval_groups:
                 eval_groups[evaluator] = ([], [])

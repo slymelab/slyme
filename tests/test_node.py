@@ -31,7 +31,7 @@ from slyme.node.exception import (
 from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
 from slyme.utils.awaitable import resolve
-from slyme.utils.registry import TypeRegistry
+from slyme.utils.registry import GeneralRegistry
 
 R = Schema(
     {
@@ -561,7 +561,7 @@ async def test_evaluation_promotes_async_node() -> None:
 
 
 def test_evaluator_result_count_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
-    registry = TypeRegistry[Any, EvaluatorDef]("test_evaluator")
+    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
     evaluator = EvaluatorDef(lambda _ctx, _values: [])
     registry.register(evaluator, key=int)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
@@ -576,7 +576,7 @@ async def _empty_async() -> list[Any]:
 async def test_async_evaluator_result_count_is_validated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry = TypeRegistry[Any, EvaluatorDef]("test_evaluator")
+    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
     evaluator = EvaluatorDef(lambda _ctx, _values: _empty_async())
     registry.register(evaluator, key=int)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)

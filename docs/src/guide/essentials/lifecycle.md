@@ -38,7 +38,7 @@ At the start of each Node or Wrapper call, Slyme:
 3. builds the wrapper chain and evaluates Auto parameters before each user function invocation;
 4. passes static parameter containers directly to the user function.
 
-Parameter bindings are shallow-snapshotted, not deep-copied. Mutating a non-Auto `list`, `dict`, or other leaf from inside a Node or Wrapper mutates the live parameter and is visible to later calls. Every Auto parameter is traversed and its containers reconstructed according to PyTree rules, whether or not they contain evaluatable leaves. Ordinary leaves and evaluator results remain shared.
+Parameter bindings are shallow-snapshotted, not deep-copied. Mutating a non-Auto `list`, `dict`, or other leaf from inside a Node or Wrapper mutates the live parameter and is visible to later calls. Every Auto parameter is traversed and its containers reconstructed according to Tree rules, whether or not they contain evaluatable leaves. Ordinary leaves and evaluator results remain shared.
 
 Call the relevant Node factory or assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. Use `Context(context.flatten(), schema=context.schema)` when current visible bindings must be materialized into a new application root. None of these operations copies application values.
 

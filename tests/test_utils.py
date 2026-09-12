@@ -10,21 +10,21 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from slyme.utils.exception import enrich_exception
-from slyme.utils.pytree import (
+from slyme.utils.registry import GeneralRegistry, Registry
+from slyme.utils.tree import (
     AttributeKey,
     MappingKey,
-    PyTreeAux,
-    PyTreeEngine,
-    PyTreeKey,
     SequenceKey,
+    TreeAux,
+    TreeEngine,
+    TreeKey,
 )
-from slyme.utils.pytree.common import (
+from slyme.utils.tree.common import (
     flatten_mapping_proxy,
     unflatten_dict,
     unflatten_mapping_proxy,
 )
-from slyme.utils.pytree.core import _PyTreeHandler
-from slyme.utils.registry import GeneralRegistry, Registry, TypeRegistry
+from slyme.utils.tree.core import _TreeHandler
 from slyme.utils.warning import warning_once
 
 
@@ -74,43 +74,26 @@ def test_named_registry_infers_function_name() -> None:
         registry.register(object())
 
 
-def test_type_registry_mro_lookup_collection_and_orthogonality() -> None:
+def test_general_registry_matches_exact_type_keys() -> None:
     class Root:
         pass
 
-    class Middle(Root):
+    class Child(Root):
         pass
 
-    class Leaf(Middle):
-        pass
-
-    registry: TypeRegistry[Any, str] = TypeRegistry("types")
+    registry: GeneralRegistry[type, str | None] = GeneralRegistry("types")
     registry.register("root", key=Root)
-    registry.register("middle", key=Middle)
-
-    assert registry.lookup(Leaf) == "middle"
-    assert registry.lookup(Leaf, reverse=True) == "root"
-    assert registry.lookup_cls(Leaf) is Middle
-    assert registry.lookup_cls(str) is None
-    assert registry.lookup(str, "fallback") == "fallback"
-    assert list(registry.lookup_all_cls(Leaf)) == [Middle, Root]
-    assert list(registry.lookup_all(Leaf)) == ["middle", "root"]
-    assert list(registry.collect_cls(Root)) == [Root, Middle]
-    assert list(registry.collect(Root)) == ["root", "middle"]
-    with pytest.raises(KeyError, match="cannot be correctly resolved"):
-        registry.lookup(str)
-    with pytest.raises(TypeError, match="must be a class"):
-        registry.register("bad", key="not-a-type")  # type: ignore[arg-type]
-
-    orthogonal: TypeRegistry[Any, str] = TypeRegistry("orthogonal", orthogonal=True)
-    orthogonal.register("middle", key=Middle)
-    with pytest.raises(ValueError, match="parents"):
-        orthogonal.register("leaf", key=Leaf)
-    with pytest.raises(ValueError, match="children"):
-        orthogonal.register("root", key=Root)
+    assert registry.get(Root) == "root"
+    assert registry.get(Child, "missing") == "missing"
+    registry.register(None, key=Child)
+    assert registry.get(Child, "missing") is None
+    registry.unregister(Child)
+    assert registry.get(Child, "missing") == "missing"
+    registry.register("integer", key=int)
+    assert registry.get(bool, None) is None
 
 
-def test_pytree_keys_resolve_and_codify() -> None:
+def test_tree_keys_resolve_and_codify() -> None:
     class Record:
         value = 4
 
@@ -121,9 +104,9 @@ def test_pytree_keys_resolve_and_codify() -> None:
     assert AttributeKey("value").resolve(Record()) == 4
     assert AttributeKey("value").codify("root") == "root.value"
     with pytest.raises(NotImplementedError, match="resolve"):
-        PyTreeKey().resolve(None)
+        TreeKey().resolve(None)
     with pytest.raises(NotImplementedError, match="codify"):
-        PyTreeKey().codify("root")
+        TreeKey().codify("root")
 
 
 @given(
@@ -139,8 +122,8 @@ def test_pytree_keys_resolve_and_codify() -> None:
         max_leaves=30,
     )
 )
-def test_default_pytree_round_trip_and_map(tree: Any) -> None:
-    engine = PyTreeEngine()
+def test_default_tree_round_trip_and_map(tree: Any) -> None:
+    engine = TreeEngine()
     leaves, definition = engine.flatten(tree)
     assert engine.unflatten(definition, leaves) == tree
     assert list(engine.iter(tree)) == leaves
@@ -149,8 +132,8 @@ def test_default_pytree_round_trip_and_map(tree: Any) -> None:
     )
 
 
-def test_pytree_paths_iteration_and_leaf_override() -> None:
-    engine = PyTreeEngine()
+def test_tree_paths_iteration_and_leaf_override() -> None:
+    engine = TreeEngine()
     tree = {"a": [10, 20], "b": (30,)}
     paths_and_leaves, definition = engine.flatten_with_key_path(tree)
 
@@ -168,25 +151,25 @@ def test_pytree_paths_iteration_and_leaf_override() -> None:
     assert leaves == [[10, 20], 30]
 
 
-def test_pytree_custom_handler_resolvers_and_inheritance() -> None:
+def test_tree_custom_handlers_and_explicit_resolver_priority() -> None:
     @dataclass
     class Box:
         value: Any
 
-    def flatten_box(box: Box) -> tuple[list[Any], PyTreeAux]:
-        return [box.value], PyTreeAux(children_keys=(AttributeKey("value"),))
+    def flatten_box(box: Box) -> tuple[list[Any], TreeAux]:
+        return [box.value], TreeAux(children_keys=(AttributeKey("value"),))
 
-    def unflatten_box(children: Any, _: PyTreeAux) -> Box:
+    def unflatten_box(children: Any, _: TreeAux) -> Box:
         return Box(next(iter(children)))
 
-    engine = PyTreeEngine(register_defaults=False)
+    engine = TreeEngine(register_defaults=False)
     engine.register(Box, flatten_box, unflatten_box)
     leaves, definition = engine.flatten(Box(3))
     assert leaves == [3]
     assert engine.unflatten(definition, [5]) == Box(5)
 
-    override = _PyTreeHandler(
-        flatten=lambda box: ([box.value + 1], PyTreeAux()),
+    override = _TreeHandler(
+        flatten=lambda box: ([box.value + 1], TreeAux()),
         unflatten=lambda children, _: Box(next(iter(children)) - 1),
     )
     engine.register_resolver(
@@ -198,7 +181,7 @@ def test_pytree_custom_handler_resolvers_and_inheritance() -> None:
     class ChildBox(Box):
         pass
 
-    exact_engine = PyTreeEngine(allow_inheritance=False, register_defaults=False)
+    exact_engine = TreeEngine(register_defaults=False)
     exact_engine.register(Box, flatten_box, unflatten_box)
     assert exact_engine.flatten(ChildBox(1))[0] == [ChildBox(1)]
     exact_engine.register_resolver(
@@ -209,8 +192,54 @@ def test_pytree_custom_handler_resolvers_and_inheritance() -> None:
     assert exact_engine.flatten(Box(1))[0] == [1]
 
 
-def test_pytree_definition_rejects_wrong_leaf_counts_and_keys() -> None:
-    engine = PyTreeEngine()
+def test_tree_subclasses_can_register_their_own_reconstruction() -> None:
+    @dataclass
+    class Box:
+        value: int
+
+    @dataclass
+    class ChildBox(Box):
+        label: str
+
+    engine = TreeEngine(register_defaults=False)
+    engine.register(
+        Box,
+        lambda box: ([box.value], TreeAux()),
+        lambda children, _: Box(next(iter(children))),
+    )
+    value = ChildBox(1, "child")
+    leaves, definition = engine.flatten(value)
+    assert len(leaves) == 1 and leaves[0] is value
+    assert engine.unflatten(definition, leaves) is value
+
+    engine.register(
+        ChildBox,
+        lambda box: ([box.value], TreeAux(metadata={"label": box.label})),
+        lambda children, aux: ChildBox(next(iter(children)), aux.metadata["label"]),
+    )
+    leaves, definition = engine.flatten(value)
+    assert leaves == [1]
+    rebuilt = engine.unflatten(definition, [2])
+    assert type(rebuilt) is ChildBox
+    assert rebuilt == ChildBox(2, "child")
+
+
+@pytest.mark.parametrize(
+    "base, payload", [(list, [1]), (dict, {"x": 1}), (tuple, (1,))]
+)
+def test_builtin_container_subclasses_remain_opaque(base: type, payload: Any) -> None:
+    class CustomContainer(base):
+        pass
+
+    value = CustomContainer(payload)
+    engine = TreeEngine()
+    leaves, definition = engine.flatten(value)
+    assert len(leaves) == 1 and leaves[0] is value
+    assert engine.unflatten(definition, leaves) is value
+
+
+def test_tree_definition_rejects_wrong_leaf_counts_and_keys() -> None:
+    engine = TreeEngine()
     _, definition = engine.flatten([1, 2])
     with pytest.raises(ValueError, match="Too few"):
         engine.unflatten(definition, [1])
@@ -220,10 +249,10 @@ def test_pytree_definition_rejects_wrong_leaf_counts_and_keys() -> None:
     class Broken:
         pass
 
-    broken = PyTreeEngine(register_defaults=False)
+    broken = TreeEngine(register_defaults=False)
     broken.register(
         Broken,
-        lambda _value: ([1], PyTreeAux(children_keys=())),
+        lambda _value: ([1], TreeAux(children_keys=())),
         lambda _children, _aux: Broken(),
     )
     with pytest.raises(ValueError, match="Not enough keys"):
@@ -237,11 +266,11 @@ def test_mapping_proxy_helpers_and_aux_immutability() -> None:
     children, aux = flatten_mapping_proxy(proxy)
     assert list(children) == [1, 2]
     assert unflatten_mapping_proxy([3, 4], aux) == {"a": 3, "b": 4}
-    assert isinstance(PyTreeAux(metadata={"x": 1}).metadata, MappingProxyType)
+    assert isinstance(TreeAux(metadata={"x": 1}).metadata, MappingProxyType)
     with pytest.raises(ValueError, match="Missing keys"):
-        unflatten_mapping_proxy([], PyTreeAux())
+        unflatten_mapping_proxy([], TreeAux())
     with pytest.raises(ValueError, match="Missing keys"):
-        unflatten_dict([], PyTreeAux())
+        unflatten_dict([], TreeAux())
 
 
 @pytest.mark.parametrize("args", [(), ("failure",), (123,), ("failure", 123)])

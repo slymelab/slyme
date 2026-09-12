@@ -13,27 +13,25 @@
 # limitations under the License.
 
 """
-Common utilities and shared logic for PyTree operations.
+Common utilities and shared logic for Tree operations.
 """
 
 from collections.abc import Iterable
 from types import MappingProxyType
 from typing import Any, cast
 
-from .core import MappingKey, PyTreeAux
+from .core import MappingKey, TreeAux
 
 
-def flatten_mapping_proxy(data: MappingProxyType) -> tuple[Iterable[Any], PyTreeAux]:
+def flatten_mapping_proxy(data: MappingProxyType) -> tuple[Iterable[Any], TreeAux]:
     """Flatten MappingProxyType."""
     keys = tuple(data.keys())
     rich_keys = tuple(MappingKey(k) for k in keys)
     children = (data[k] for k in keys)
-    return children, PyTreeAux(children_keys=rich_keys)
+    return children, TreeAux(children_keys=rich_keys)
 
 
-def unflatten_mapping_proxy(
-    children: Iterable[Any], aux: PyTreeAux
-) -> MappingProxyType:
+def unflatten_mapping_proxy(children: Iterable[Any], aux: TreeAux) -> MappingProxyType:
     """Unflatten to MappingProxyType."""
     if aux.children_keys is None:
         raise ValueError("Missing keys for MappingProxyType unflattening.")
@@ -41,17 +39,17 @@ def unflatten_mapping_proxy(
     return MappingProxyType(dict(zip(raw_keys, children, strict=True)))
 
 
-def flatten_dict(data: dict) -> tuple[Iterable[Any], PyTreeAux]:
+def flatten_dict(data: dict) -> tuple[Iterable[Any], TreeAux]:
     """Flatten dict."""
     keys = tuple(data.keys())
     # Wrap keys in DictKey for path tracking.
     rich_keys = tuple(MappingKey(k) for k in keys)
     # Yield values as children.
     children = (data[k] for k in keys)
-    return children, PyTreeAux(children_keys=rich_keys)
+    return children, TreeAux(children_keys=rich_keys)
 
 
-def unflatten_dict(children: Iterable[Any], tree_aux: PyTreeAux) -> dict:
+def unflatten_dict(children: Iterable[Any], tree_aux: TreeAux) -> dict:
     """Unflatten to dict."""
     if tree_aux.children_keys is None:
         raise ValueError("Missing keys in TreeAux for dict unflattening.")

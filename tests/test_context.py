@@ -763,7 +763,7 @@ def test_context_eval_engine_flatten_round_trip(tree: Any) -> None:
     assert CTX_EVAL_ENGINE.unflatten(definition, leaves) == tree
 
 
-def test_context_is_an_opaque_pytree_leaf() -> None:
+def test_context_is_an_opaque_tree_leaf() -> None:
     ctx = Context(schema=R)
     ctx.update({R.resolve("a.b.c"): 1, R.resolve("c"): 2})
 

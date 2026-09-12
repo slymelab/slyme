@@ -22,7 +22,7 @@ const guideEn = [
     text: 'Slyme In Depth',
     items: [
       { text: 'Functional Programming Basics', link: '/guide/slyme-in-depth/functional-programming-basics' },
-      { text: 'PyTree in Slyme', link: '/guide/slyme-in-depth/pytree-in-slyme' },
+      { text: 'Trees in Slyme', link: '/guide/slyme-in-depth/tree-in-slyme' },
       { text: 'Dependency Injection', link: '/guide/slyme-in-depth/dependency-injection' },
     ],
     collapsed: false,
@@ -64,7 +64,7 @@ const guideZh = [
     text: '深入 Slyme',
     items: [
       { text: '函数式编程基础', link: '/zh/guide/slyme-in-depth/functional-programming-basics' },
-      { text: '深入理解 Slyme 中的 PyTree', link: '/zh/guide/slyme-in-depth/pytree-in-slyme' },
+      { text: '深入理解 Slyme 中的 Tree', link: '/zh/guide/slyme-in-depth/tree-in-slyme' },
       { text: '依赖注入', link: '/zh/guide/slyme-in-depth/dependency-injection' },
     ],
     collapsed: false,

@@ -23,10 +23,12 @@ Slyme (pronounced /slaɪm/) is a highly composable functional execution framewor
 
 Whether you are building complex LLM pipelines, executing DAGs, or creating generic data-processing flows, Slyme provides a structural, functional, and deeply Pythonic foundation.
 
-`Auto` evaluates registered leaves and reconstructs PyTree containers on each
+`Auto` evaluates registered leaves and reconstructs Tree containers on each
 invocation, including containers holding only ordinary values. Ordinary leaves
 and evaluator results retain their identities; non-Auto parameters pass through
 unchanged. `eval_tree(ctx, tree)` exposes the same evaluation behavior directly.
+Tree handlers and Auto evaluators match exact types; subclasses need explicit
+registration. The traversal utilities live in `slyme.utils.tree`.
 
 ## Installation
 
@@ -159,7 +161,7 @@ retaining withdrawn Schema values.
 
 **Native Python Development Experience:** Eliminates heavy object-oriented boilerplate code. You only need to master basic Python functions and native data structures (dictionaries, lists, tuples) to get started quickly.
 
-**Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to PyTree augmentation, Node containment relationships can be represented directly through native Python structures.
+**Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to Tree augmentation, Node containment relationships can be represented directly through native Python structures.
 
 **Explicit Lifetime and Visibility:** Context provides single-parent lifetime ownership, while Scope provides independent C3 visibility. Every Context path, structural role, and replacement policy is declared by a shared Schema; `flatten()` exposes the visible Ref-to-value mapping, and `Compose` provides ordered, reversible values across Scope hierarchies.
 

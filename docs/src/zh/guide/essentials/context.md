@@ -303,7 +303,7 @@ root.dispose()
 
 ## 结构化操作与投影
 
-Context 接受 Ref PyTree 进行批量读写。`extract` 会将输入展开一次、校验全部 Ref、读取对应值，再重建一次请求结构；叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
+Context 接受 Ref Tree 进行批量读写。`extract` 会将输入展开一次、校验全部 Ref、读取对应值，再重建一次请求结构；叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
 
 `keys()`、`ContextView` 和 `to_dict()` 会先遍历 Schema 结构，再读取平铺的 leaf 单元。因此空 container 的声明角色保持稳定，但不会出现在有效数据视图中。`to_dict()` 将可见 Context leaf 投影为嵌套的普通字典，适合展示或序列化；在不同 Schema 之间，该投影无法区分以 mapping 为值的 leaf 与内容相同的嵌套 Context 路径。`flatten()` 则返回准确的 `dict[Ref, Any]` 可见 leaf 映射：
 

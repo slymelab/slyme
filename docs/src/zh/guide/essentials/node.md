@@ -92,7 +92,7 @@ assert root(Context()) == 11
 
 使用 `get(name)` 读取参数，使用 `set(name, value)` 替换参数，使用 `reset(name)` 恢复声明的默认值或 `UNDEFINED`。只读 `params` mapping 暴露全部当前参数。参数名可以与 `func`、`get`、`wrappers` 等框架 API 重合，因为参数不会投影为对象属性。
 
-调用时，非 Auto 参数会直接传给用户函数，因此对其容器的修改会更新 Node 或 Wrapper 上的实时参数。每个 Auto 参数都会按 PyTree 规则遍历并重建容器，包括只有普通值的子树。普通叶子与 evaluator 返回值保持原对象 identity；这不是深拷贝。
+调用时，非 Auto 参数会直接传给用户函数，因此对其容器的修改会更新 Node 或 Wrapper 上的实时参数。每个 Auto 参数都会按 Tree 规则遍历并重建容器，包括只有普通值的子树。普通叶子与 evaluator 返回值保持原对象 identity；这不是深拷贝。
 
 需要另一张可独立配置的图时，应重新调用 Node factory 或 组装函数。可变应用值是否共享或复制由其自身语义决定；Slyme 不会猜测哪些引用需要复制。
 
@@ -120,7 +120,7 @@ Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适
 
 ## 组合结构
 
-Node 与 Wrapper 参数可以保存任意值和嵌套 PyTree，包括其他 Node 或 Wrapper。Slyme 不对整张对象图施加统一的合法性检查；两者采用相同的直接结果或 awaitable 执行协议。
+Node 与 Wrapper 参数可以保存任意值和嵌套 Tree，包括其他 Node 或 Wrapper。Slyme 不对整张对象图施加统一的合法性检查；两者采用相同的直接结果或 awaitable 执行协议。
 
 ## 顺序组合
 

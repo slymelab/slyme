@@ -13,38 +13,35 @@
 # limitations under the License.
 
 """
-slyme pytree utility module.
+slyme tree utility module.
 """
 
 from .core import (
-    # Instances
-    PYTREE_ENGINE_REGISTRY,
+    TREE_ENGINE_REGISTRY,
     AttributeKey,
     ContainerDef,
-    # Types & Keys
     KeyPath,
     LeafDef,
     MappingKey,
-    PyTreeAux,
-    # Structure & Engine
-    PyTreeDef,
-    PyTreeEngine,
-    PyTreeKey,
     SequenceKey,
     TraverseAux,
+    TreeAux,
+    TreeDef,
+    TreeEngine,
+    TreeKey,
 )
 
 __all__ = [
     "KeyPath",
-    "PyTreeKey",
+    "TreeKey",
     "SequenceKey",
     "MappingKey",
     "AttributeKey",
-    "PyTreeAux",
-    "PyTreeDef",
+    "TreeAux",
+    "TreeDef",
     "LeafDef",
     "ContainerDef",
     "TraverseAux",
-    "PyTreeEngine",
-    "PYTREE_ENGINE_REGISTRY",
+    "TreeEngine",
+    "TREE_ENGINE_REGISTRY",
 ]

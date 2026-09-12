@@ -11,7 +11,7 @@ from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.eval import EvaluatorDef
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.awaitable import resolve
-from slyme.utils.registry import TypeRegistry
+from slyme.utils.registry import GeneralRegistry
 
 
 async def test_resolve_preserves_values_and_only_awaits_outer_completion() -> None:
@@ -153,7 +153,7 @@ async def test_evaluation_continues_remaining_batches_after_await(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    registry = TypeRegistry[object, EvaluatorDef]("test_evaluator")
+    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
 
     async def asynchronous(ctx, values):
         calls.append("async")

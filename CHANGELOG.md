@@ -83,6 +83,9 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `TypeRegistry` and `TreeEngine.allow_inheritance`. Tree handlers and
+  Auto evaluators use exact type keys through `GeneralRegistry`; subclasses
+  require explicit registration. Explicit Tree resolvers remain supported.
 - Removed `Context.mutate()`. Use separate `drop()` and `update()` calls for
   deletion followed by assignment; the two calls are not one transaction.
 - Removed `contains_eval_type()`, `EvaluationPlan`, `prepare_eval_plan()`, and
@@ -111,8 +114,8 @@ breaking changes when they are documented here.
 - Removed positional Scope injection from Node factories.
 - Removed Context hooks and the asynchronous mirrors of locally synchronous
   Context operations.
-- Removed the public Context data-container type and Context PyTree
-  registration; runtime Context objects remain opaque PyTree leaves.
+- Removed the public Context data-container type and Context Tree
+  registration; runtime Context objects remain opaque Tree leaves.
 - Removed `Context.clear()` and `collect_leaves()`; empty structural containers
   are not retained, and `flatten()` returns Ref-keyed leaf mappings.
 - Removed `Context.diff()`, `ContextDiff`, and `DIFF_MISSING`.
@@ -126,6 +129,9 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Renamed `slyme.utils.pytree` to `slyme.utils.tree`, `PyTree*` types to `Tree*`,
+  and `PYTREE_ENGINE_REGISTRY` to `TREE_ENGINE_REGISTRY`, including its namespace
+  from `pytree_engine` to `tree_engine`. No compatibility aliases are provided.
 - Scope viewers, Context-binding identities, and Schema declarations use direct
   ownership sets managed by internal registration and cleanup methods. Compose
   entries use unique tokens and ordered buckets, without per-entry internal
@@ -145,7 +151,7 @@ breaking changes when they are documented here.
   graph element types for immediate and asynchronous functions.
 - Node and Wrapper calls now pass their current static parameter containers
   directly to user functions instead of creating an implicit frozen snapshot.
-- Auto parameters always reconstruct PyTree containers, including ordinary-only
+- Auto parameters always reconstruct Tree containers, including ordinary-only
   subtrees, while preserving ordinary leaf identities. Each Wrapper `call_next`
   invocation evaluates the current Auto containers without a content pre-scan.
 - Context construction now accepts a Ref-to-value mapping and keyword-only

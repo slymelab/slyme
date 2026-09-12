@@ -22,7 +22,9 @@ Slyme（发音为 /slaɪm/）是一个高度可组合的函数式执行框架。
 
 无论是构建复杂的 LLM 流水线、执行 DAG，还是创建通用的数据处理流程，Slyme 都提供了结构化、函数式且深度符合 Python 习惯的基础。
 
-`Auto` 会在每次调用时求值已注册叶子并重建 PyTree 容器，包括只有普通值的容器。普通叶子和 evaluator 返回值保持原对象 identity；非 Auto 参数直接传递。`eval_tree(ctx, tree)` 提供相同的求值行为。
+`Auto` 会在每次调用时求值已注册叶子并重建 Tree 容器，包括只有普通值的容器。普通叶子和 evaluator 返回值保持原对象 identity；非 Auto 参数直接传递。`eval_tree(ctx, tree)` 提供相同的求值行为。
+
+Tree handler 和 Auto evaluator 按精确类型匹配，子类需要显式注册。遍历工具位于 `slyme.utils.tree`。
 
 ## 安装
 
@@ -147,7 +149,7 @@ Scope viewer、共享的 Context-binding identity 和 Schema 声明直接使用�
 
 **原生 Python 开发体验：** 消除了繁重的面向对象样板代码。您只需掌握基本的 Python 函数和原生数据结构（字典、列表、元组）即可快速上手。
 
-**无限可组合性：** 通过完全解耦构建任意复杂的执行流程。得益于 PyTree 增强，节点 containment 关系可以直接通过原生 Python 结构表示。
+**无限可组合性：** 通过完全解耦构建任意复杂的执行流程。得益于 Tree 增强，节点 containment 关系可以直接通过原生 Python 结构表示。
 
 **显式生命周期与可见性：** Context 提供单 parent 的生命周期归属，Scope 提供独立的 C3 可见性。每个 Context 路径、结构角色和替换策略都由共享 Schema 声明；`flatten()` 暴露可见的 Ref 到 value 映射，`Compose` 则沿 Scope 层次管理有序、可撤销的组合值。
 

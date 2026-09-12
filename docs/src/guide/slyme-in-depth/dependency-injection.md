@@ -14,7 +14,7 @@ For each call, Slyme:
 
 1. reads the object's current parameters;
 2. separates parameters by their declared `auto_eval` flag;
-3. flattens Auto parameters according to PyTree rules;
+3. flattens Auto parameters according to Tree rules;
 4. batches leaves by evaluator type;
 5. resolves them with the supplied Context, reconstructs Auto containers, and invokes the user function, passing non-Auto values directly.
 
