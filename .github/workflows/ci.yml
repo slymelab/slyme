@@ -122,10 +122,10 @@ jobs:
 
           assert asyncio.run(evaluate()) == [1, 1]
           visited = []
-          assert Continuation.sequential([1, 2], visited.append).unwrap() is None
+          assert Continuation.sequential([1, 2], visited.append).unwrap() == [None, None]
           assert visited == [1, 2]
           assert Continuation.batch(["invalid"], int).catch(
-              lambda error: list(error.errors), exceptions=BatchError
+              lambda error: [i for i, result in enumerate(error.results) if result.error is not None], exceptions=BatchError
           ).unwrap() == [0]
           assert ctx.dispose() is None
           print(slyme.__version__)

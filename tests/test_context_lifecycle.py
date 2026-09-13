@@ -8,7 +8,7 @@ import pytest
 
 from slyme.context import Compose, Context, Schema, Scope
 from slyme.context.core import ContextPathError
-from slyme.utils.continuation import await_result
+from slyme.utils.continuation import BatchError, Result, await_result
 
 
 async def test_adispose_runs_sync_cleanup_immediately_without_scheduling() -> None:
@@ -33,10 +33,14 @@ def test_adispose_preserves_immediate_cleanup_errors() -> None:
         raise failure
 
     ctx.effect(lambda: cleanup)
+    previous = None
     for _ in range(2):
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(BatchError) as caught:
             ctx.adispose()
-        assert caught.value is failure
+        assert caught.value.results == [Result(error=failure)]
+        if previous is not None:
+            assert caught.value is previous
+        previous = caught.value
     assert not ctx._owned
 
 
@@ -67,9 +71,9 @@ async def test_adispose_retains_cleanup_result_after_waiter_cancellation() -> No
     finish.set()
     await completed.wait()
     for _ in range(2):
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(BatchError) as caught:
             await ctx.adispose()
-        assert caught.value is failure
+        assert caught.value.results == [Result(error=failure)]
     assert calls == 1 and not ctx._owned
 
 
@@ -169,9 +173,16 @@ def test_sync_disposal_snapshot_handles_sibling_cleanup_and_failure() -> None:
     root.effect(lambda: lambda: events.append("middle"))
     root.effect(lambda: child.dispose)
 
-    with pytest.raises(ValueError) as caught:
+    with pytest.raises(BatchError) as caught:
         root.dispose()
-    assert caught.value is failure
+    child_error = caught.value.results[0].error
+    assert isinstance(child_error, BatchError)
+    assert child_error.results == [Result(error=failure)]
+    assert caught.value.results == [
+        Result(error=child_error),
+        Result(),
+        Result(error=child_error),
+    ]
     assert events == ["child", "middle"]
     assert not root._owned
 
@@ -241,9 +252,11 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
     finish.set()
     for _ in range(2):
         if fails:
-            with pytest.raises(ValueError) as caught:
+            with pytest.raises(BatchError) as caught:
                 await root.adispose()
-            assert caught.value is failure
+            child_error = caught.value.results[1].error
+            assert isinstance(child_error, BatchError)
+            assert child_error.results == [Result(error=failure)]
         else:
             await root.adispose()
     assert events == ["last", "child:start", "child:finish", "first"]
@@ -517,16 +530,23 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
 
     if effect_failure:
         child.effect(lambda: cleanup)
-    expected = primary if effect_failure else failures[0]
+    previous = None
     with monkeypatch.context() as patch:
         patch.setattr(type(bindings[0]), "release_scope", fail)
         for _ in range(2):
-            with pytest.raises(ValueError) as raised:
+            with pytest.raises(BatchError if effect_failure else ValueError) as raised:
                 if asynchronous:
                     await await_result(child.dispose())
                 else:
                     child.dispose()
-            assert raised.value is expected
+            if effect_failure:
+                assert raised.value.results == [Result(error=primary)]
+                assert raised.value.__cause__ is failures[0]
+            else:
+                assert raised.value is failures[0]
+            if previous is not None:
+                assert raised.value is previous
+            previous = raised.value
 
     assert calls == [
         (binding, scope)
@@ -1056,10 +1076,13 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
         await asyncio.wait({disposal_task})
         repeated = asyncio.create_task(await_result(ctx.dispose()))
 
-    with pytest.raises(ValueError, match="late cleanup failure"):
+    with pytest.raises(BatchError) as caught:
         await repeated
-    with pytest.raises(ValueError, match="late cleanup failure"):
+    assert isinstance(caught.value.results[0].error, ValueError)
+    assert str(caught.value.results[0].error) == "late cleanup failure"
+    with pytest.raises(BatchError) as replayed:
         await await_result(ctx.dispose())
+    assert replayed.value is caught.value
 
 
 async def test_dispose_marks_context_before_scheduling_cleanup() -> None:
@@ -1090,8 +1113,10 @@ async def test_async_cleanup_cannot_reenter_owner_disposal() -> None:
         await await_result(ctx.dispose())
 
     ctx.effect(lambda: cleanup)
-    with pytest.raises(RuntimeError, match="cannot be re-entered"):
+    with pytest.raises(BatchError) as caught:
         await await_result(ctx.dispose())
+    assert isinstance(caught.value.results[0].error, RuntimeError)
+    assert "cannot be re-entered" in str(caught.value.results[0].error)
 
 
 async def test_early_async_effect_disposal_cannot_dispose_its_owner() -> None:
@@ -1216,8 +1241,10 @@ async def test_async_effect_disposal_cannot_await_itself() -> None:
         await dispose_effect()
 
     dispose_effect = ctx.effect(lambda: cleanup)
-    with pytest.raises(RuntimeError, match="cannot await its own"):
+    with pytest.raises(BatchError) as caught:
         await await_result(ctx.dispose())
+    assert isinstance(caught.value.results[0].error, RuntimeError)
+    assert "cannot await its own" in str(caught.value.results[0].error)
 
 
 async def test_cancelling_a_dispose_waiter_does_not_cancel_cleanup() -> None:
@@ -1259,10 +1286,13 @@ async def test_async_cleanup_failure_does_not_skip_remaining_cleanup() -> None:
     ctx.effect(lambda: fail)
     ctx.effect(lambda: lambda: cleanup("last"))
 
-    with pytest.raises(ValueError, match="cleanup failed"):
+    with pytest.raises(BatchError) as caught:
         await await_result(ctx.dispose())
-    with pytest.raises(ValueError, match="cleanup failed"):
+    assert isinstance(caught.value.results[1].error, ValueError)
+    assert str(caught.value.results[1].error) == "cleanup failed"
+    with pytest.raises(BatchError) as replayed:
         await await_result(ctx.dispose())
+    assert replayed.value is caught.value
     assert events == ["last", "fail", "first"]
 
 
@@ -1281,10 +1311,12 @@ async def test_cancelled_async_cleanup_does_not_skip_remaining_cleanup() -> None
     ctx.effect(lambda: cancel)
     ctx.effect(lambda: lambda: cleanup("last"))
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(BatchError) as caught:
         await await_result(ctx.dispose())
-    with pytest.raises(asyncio.CancelledError):
+    assert isinstance(caught.value.results[1].error, asyncio.CancelledError)
+    with pytest.raises(BatchError) as replayed:
         await await_result(ctx.dispose())
+    assert replayed.value is caught.value
     assert events == ["last", "cancel", "first"]
 
 
@@ -1297,8 +1329,10 @@ def test_parent_disposal_blocks_new_effects_in_active_children() -> None:
 
     root.effect(lambda: lambda: child.effect(lambda: async_cleanup))
 
-    with pytest.raises(RuntimeError, match="ancestor Context is being disposed"):
+    with pytest.raises(BatchError) as caught:
         root.dispose()
+    assert isinstance(caught.value.results[0].error, RuntimeError)
+    assert "ancestor Context is being disposed" in str(caught.value.results[0].error)
     with pytest.raises(RuntimeError, match="disposed"):
         child.fork()
 
@@ -1407,13 +1441,20 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
     results = await asyncio.gather(
         child_waiter, await_result(root_pending), return_exceptions=True
     )
-    assert results == ([failure, failure] if fail else [None, None])
+    if fail:
+        child_error, parent_error = results
+        assert isinstance(child_error, BatchError)
+        assert isinstance(parent_error, BatchError)
+        assert child_error.results == [Result(error=failure), Result()]
+        assert parent_error.results == [Result(error=child_error)]
+    else:
+        assert results == [None, None]
     assert calls == 1
     assert not root._owned and not child._owned
     if fail:
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(BatchError) as caught:
             await root.adispose()
-        assert caught.value is failure
+        assert caught.value is parent_error
 
 
 @pytest.mark.parametrize("inherit_scope", [False, True])
@@ -1465,8 +1506,10 @@ async def test_cancelled_dispose_waiter_does_not_reopen_descendants() -> None:
     with pytest.raises(RuntimeError, match="being disposed"):
         grandchild.fork()
     finish.set()
-    with pytest.raises(ValueError, match="parent cleanup failed"):
+    with pytest.raises(BatchError) as caught:
         await root.adispose()
+    assert isinstance(caught.value.results[0].error, ValueError)
+    assert str(caught.value.results[0].error) == "parent cleanup failed"
     assert cleaned == ["child"]
     with pytest.raises(RuntimeError, match="disposed"):
         grandchild.get("value")
@@ -1485,8 +1528,10 @@ def test_cleanup_failures_do_not_skip_remaining_cleanup_or_scope_release() -> No
     ctx.effect(lambda: fail)
     ctx.effect(lambda: lambda: events.append("last"))
 
-    with pytest.raises(RuntimeError, match="cleanup failed"):
+    with pytest.raises(BatchError) as caught:
         ctx.dispose()
+    assert isinstance(caught.value.results[1].error, RuntimeError)
+    assert str(caught.value.results[1].error) == "cleanup failed"
     assert events == ["last", "fail", "first"]
     with pytest.raises(RuntimeError, match="disposed"):
         ctx.get("value")
@@ -1502,10 +1547,13 @@ def test_failed_sync_context_disposal_replays_error_without_repeating_cleanup() 
         raise ValueError("cleanup failed")
 
     ctx.effect(lambda: cleanup)
-    with pytest.raises(ValueError, match="cleanup failed"):
+    with pytest.raises(BatchError) as caught:
         ctx.dispose()
-    with pytest.raises(ValueError, match="cleanup failed"):
+    assert isinstance(caught.value.results[0].error, ValueError)
+    assert str(caught.value.results[0].error) == "cleanup failed"
+    with pytest.raises(BatchError) as replayed:
         ctx.dispose()
+    assert replayed.value is caught.value
     assert calls == 1
 
 

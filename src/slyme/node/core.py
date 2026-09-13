@@ -241,7 +241,7 @@ class Node(NodeElement, Generic[_R]):
 
             def chain(call_ctx: Context) -> _R | Awaitable[_R]:
                 return (
-                    Continuation.resolve(eval_tree(call_ctx, eval_kwargs))
+                    Continuation(eval_tree(call_ctx, eval_kwargs))
                     .then(
                         lambda evaluated: self._func(
                             call_ctx, **raw_kwargs, **evaluated
@@ -320,7 +320,7 @@ class Wrapper(NodeElement, Generic[_R]):
         if not eval_kwargs:
             return self._func(ctx, wrapped, call_next, **raw_kwargs)
         return (
-            Continuation.resolve(eval_tree(ctx, eval_kwargs))
+            Continuation(eval_tree(ctx, eval_kwargs))
             .then(
                 lambda evaluated: self._func(
                     ctx, wrapped, call_next, **raw_kwargs, **evaluated

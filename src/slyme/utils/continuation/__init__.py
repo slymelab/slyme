@@ -14,6 +14,6 @@
 
 """Compose immediate and asynchronous results, including settled batches."""
 
-from .core import BatchError, Continuation, await_result
+from .core import BatchError, Continuation, Result, await_result
 
-__all__ = ["BatchError", "Continuation", "await_result"]
+__all__ = ["BatchError", "Continuation", "Result", "await_result"]

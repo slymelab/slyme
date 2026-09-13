@@ -5,7 +5,34 @@ from inspect import isawaitable
 
 import pytest
 
-from slyme.utils.continuation import BatchError, Continuation
+from slyme.utils.continuation import BatchError, Continuation, Result
+
+
+def test_result_supports_typed_construction_and_exception_values() -> None:
+    error = ValueError("data or failure")
+    assert Result[ValueError](value=error) == Result(value=error)
+    assert Result[ValueError](value=error) != Result[ValueError](error=error)
+    assert Result[None](value=None) == Result()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_failed_batch_retains_none_and_exception_return_values(
+    asynchronous: bool,
+) -> None:
+    error = ValueError("data and failure")
+
+    def call(value):
+        if value == 1:
+            raise error
+        return error if value == 0 else None
+
+    async def acall(value):
+        await asyncio.sleep(0)
+        return call(value)
+
+    with pytest.raises(BatchError) as caught:
+        await Continuation.batch(range(3), acall if asynchronous else call).aunwrap()
+    assert caught.value.results == [Result(value=error), Result(error=error), Result()]
 
 
 def test_sync_batch_building_is_lazy_and_results_stay_synchronous() -> None:
@@ -45,7 +72,11 @@ async def test_batch_collects_failures_at_input_indices(asynchronous: bool) -> N
     chain = Continuation.batch(range(3), acall if asynchronous else call)
     with pytest.raises(BatchError) as caught:
         await chain.aunwrap()
-    assert caught.value.errors == {0: failure, 2: failure}
+    assert caught.value.results == [
+        Result(error=failure),
+        Result(value=7),
+        Result(error=failure),
+    ]
     assert visited == [0, 1, 2]
 
 
@@ -93,7 +124,11 @@ async def test_batch_waits_for_later_calls_after_sync_failure() -> None:
         return later()
 
     chain = Continuation.batch([0, 1], call)
-    assert await chain.catch(lambda error: list(error.errors)).aunwrap() == [0]
+    results = await chain.catch(
+        lambda error: error.results, exceptions=BatchError
+    ).aunwrap()
+    assert isinstance(results[0].error, ValueError)
+    assert results[1] == Result(value=2)
     assert visited == ["later"]
 
 
@@ -112,9 +147,9 @@ async def test_batch_keeps_exceptions_as_data_and_nested_error_indices() -> None
         Continuation.batch(
             [1], lambda value: Continuation.batch([2], fail).unwrap()
         ).unwrap()
-    inner = caught.value.errors[0]
+    inner = caught.value.results[0].error
     assert isinstance(inner, BatchError)
-    assert inner.errors == {0: data}
+    assert inner.results == [Result(error=data)]
 
 
 def test_batch_catch_handles_aggregate_errors_and_later_callback_errors() -> None:
@@ -123,7 +158,7 @@ def test_batch_catch_handles_aggregate_errors_and_later_callback_errors() -> Non
 
     assert (
         Continuation.batch([1], fail)
-        .catch(lambda error: [len(error.errors)], exceptions=BatchError)
+        .catch(lambda error: [len(error.results)], exceptions=BatchError)
         .then(lambda values: values[0] + 1)
         .unwrap()
     ) == 2
@@ -156,7 +191,7 @@ async def test_iterator_failure_waits_for_already_started_calls(
 
     with pytest.raises(BatchError) as caught:
         await Continuation.batch(values(), acall if asynchronous else call).aunwrap()
-    assert caught.value.errors == {1: failure}
+    assert caught.value.results == [Result(value=0), Result(error=failure)]
     assert finished == [0]
 
 
@@ -174,7 +209,7 @@ async def test_item_cancellation_is_a_batch_failure_without_cancelling_siblings(
 
     with pytest.raises(BatchError) as caught:
         await Continuation.batch([0, 1], call).aunwrap()
-    assert isinstance(caught.value.errors[0], asyncio.CancelledError)
+    assert isinstance(caught.value.results[0].error, asyncio.CancelledError)
     assert finished == [1]
 
 
@@ -223,7 +258,7 @@ async def test_caller_cancellation_preserves_other_failures() -> None:
     task.cancel()
     with pytest.raises(BatchError) as caught:
         await task
-    assert caught.value.errors[0] is failure
-    assert isinstance(caught.value.errors[1], asyncio.CancelledError)
+    assert caught.value.results[0].error is failure
+    assert isinstance(caught.value.results[1].error, asyncio.CancelledError)
     assert isinstance(caught.value.__cause__, asyncio.CancelledError)
     assert finished == [1]

@@ -123,7 +123,7 @@ if __name__ == "__main__":
 
 普通函数可通过 `slyme.utils.continuation` 的 `Continuation` 组合两种结果：`Continuation.call(lambda: task(ctx)).then(transform).unwrap()`。构建链只原地追加回调，不执行它们。`unwrap()` 消费链，执行同步前缀，并返回结果值或异步剩余流程；需要始终可等待的结果时使用 `await chain.aunwrap()`。链本身不可 await，只能执行一次，不缓存结果，也不拥有资源生命周期。
 
-`Continuation.sequential(items, call)` 构建按顺序执行、遇错即停的调用并丢弃返回值。`Continuation.batch(items, call)` 尝试所有输入，并发等待异步调用，返回按输入排序的结果列表，或抛出 `BatchError`，通过 `errors: dict[int, BaseException]` 保存失败。两者均返回支持 `then()` 和 `catch()` 的链。只有 batch 的异步剩余流程被等待时才会调度任务；纯同步工作仍同步完成。Auto 在 evaluator 组之间以及 Ref、Node 组内部都使用 batch，并保留嵌套错误的局部索引。
+`Continuation.sequential(items, call)` 按顺序执行并返回结果列表，默认遇错即停；设置 `continue_on_error=True` 会继续尝试其余调用。`Continuation.batch(items, call)` 尝试所有输入，并发等待异步调用，返回按输入排序的结果列表，或抛出 `BatchError`，通过 `results: list[Result]` 按输入顺序保存成功值与错误。每项 `Result` 用 `value` 表示返回值，用 `error` 表示抛出的异常，因此正常返回的异常对象仍是普通数据。两者均返回支持 `then()` 和 `catch()` 的链。只有 batch 的异步剩余流程被等待时才会调度任务；纯同步工作仍同步完成。Auto 在 evaluator 组之间以及 Ref、Node 组内部都使用 batch，并保留嵌套错误的局部索引。
 
 ## Context 生命周期、Scope 可见性与 Compose
 

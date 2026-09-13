@@ -72,7 +72,7 @@ def increment_child(ctx, *, child: Node[int]):
     return Continuation.call(lambda: child(ctx)).then(lambda value: value + 1).unwrap()
 ```
 
-`Continuation.call(operation)` 延迟操作本身的调用。`Continuation.resolve(value)` 包装已有结果；写成 `Continuation.resolve(operation())` 时，Python 会先调用 `operation()`，再构建链。`then(success, failure)` 处理上游的完成结果，配对的 failure 不捕获 success 自己抛出的错误；后续的 `catch(recover)` 可以处理这些错误。两种回调均可返回同步或异步结果。
+`Continuation.call(operation)` 延迟操作本身的调用。`Continuation(value)` 包装已有结果；写成 `Continuation(operation())` 时，Python 会先调用 `operation()`，再构建链。`then(success, failure)` 处理上游的完成结果，配对的 failure 不捕获 success 自己抛出的错误；后续的 `catch(recover)` 可以处理这些错误。两种回调均可返回同步或异步结果。
 
 创建和扩展链不会执行回调。`unwrap()` 立即执行同步前缀，返回最终值或尚未调度的异步剩余流程。`aunwrap()` 保留立即执行的同步操作及其错误，但始终返回 awaitable；异步代码中使用 `await chain.aunwrap()`。链本身不可 await。同步入口可使用 `asyncio.run(await_result(chain.unwrap()))`，已有事件循环内可用 `asyncio.create_task(await_result(chain.unwrap()))` 调度剩余流程。回调返回另一条链时，必须显式调用它的 `unwrap()`；裸链对象只是普通数据。
 
@@ -80,7 +80,7 @@ def increment_child(ctx, *, child: Node[int]):
 
 `catch()` 和 `then()` 的失败回调默认只处理 `Exception`，不拦截取消等其他 `BaseException` 子类。可通过 `exceptions=SomeException` 选择异常类；需要观察取消的生命周期清理可以显式选择 `BaseException`，再决定是否继续传播取消。
 
-`Continuation.sequential(values, call)` 构建一个 `Continuation[None]`，按顺序执行调用并丢弃返回值。调用 `unwrap()` 或 `aunwrap()` 时才开始迭代，只有前一次调用完成后才获取下一个输入；失败或取消会停止迭代。展开前可通过 `then()` 或 `catch()` 处理完成结果。
+`Continuation.sequential(values, call, *, continue_on_error=False)` 构建一个 `Continuation[list[T]]`，按顺序执行调用并收集返回值。调用 `unwrap()` 或 `aunwrap()` 时才开始迭代，只有前一次调用完成后才获取下一个输入；失败或取消会抛出保存已执行前缀的 `BatchError`。设置 `continue_on_error=True` 时，会继续尝试其余调用再报告错误。展开前可通过 `then()` 或 `catch()` 处理完成结果。
 
 `Continuation.batch(values, call)` 构建一个执行独立调用的 `Continuation[list[T]]`。执行时即使已有失败，也会尝试所有输入；遇到返回 awaitable 的调用前保持同步。等待剩余流程时，会并发调度该调用和其余输入。全部结束后，batch 返回按输入排序的结果列表，或抛出从 `slyme.utils.continuation` 导出的 `BatchError`。`then()` 接收结果列表，`catch()` 仍与其他链一样接收单个异常：
 
@@ -89,7 +89,12 @@ from slyme.utils.continuation import BatchError
 
 
 def recover(error: BatchError) -> list[str]:
-    return [f"input {index}: {failure}" for index, failure in error.errors.items()]
+    return [
+        f"input {index}: {result.error}"
+        if result.error is not None
+        else str(result.value)
+        for index, result in enumerate(error.results)
+    ]
 
 
 result = (
@@ -100,7 +105,7 @@ result = (
 )
 ```
 
-`BatchError.errors` 将从零开始的输入索引映射到错误，只有一个调用失败时也使用这一形式。嵌套 batch 保留各自的局部索引。迭代器失败会停止枚举，以待获取的输入索引记录错误，并等待已开始的调用。正常返回的异常对象仍是数据，失败的 batch 不返回部分结果。单个项目失败或取消不会取消 sibling。取消 batch 等待者时，asyncio 会向尚未完成的调用传播取消；若还存在其他错误，`BatchError` 会保留它们并以取消为 cause，否则直接传播取消。Batch 不提供超时或资源清理策略。
+`BatchError.results` 是按输入顺序排列的 `Result(value=..., error=...)` 列表，只有一个调用失败时也使用这一形式。每项完成的调用保存返回值或抛出的异常；成功返回 `None` 表示为 `Result(value=None)`。嵌套 batch 保留各自的局部索引。迭代器失败会停止枚举，以待获取的输入索引记录错误，并等待已开始的调用。正常返回的异常对象仍是数据：`Result(value=ValueError(...))` 不同于 `Result(error=ValueError(...))`。失败的 batch 抛出异常而不是返回，但异常中会保留部分成功结果。单个项目失败或取消不会取消 sibling。取消 batch 等待者时，asyncio 会向尚未完成的调用传播取消；若还存在其他错误，`BatchError` 会保留它们并以取消为 cause，否则直接传播取消。Batch 不提供超时或资源清理策略。
 
 ## 参数与 Auto
 
@@ -170,4 +175,4 @@ Node 与 Wrapper 参数可以保存任意值和嵌套 Tree，包括其他 Node �
 
 ## 顺序组合
 
-声明式顺序组合使用 `sequential(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部同步时直接返回。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。
+声明式顺序组合使用 `sequential(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部完成后返回 `None`，所有步骤同步时保持同步。失败会停止执行，并抛出保存已尝试前缀的 `BatchError`。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。

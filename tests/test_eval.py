@@ -12,7 +12,7 @@ from slyme.context.core import ContextPathError
 from slyme.node import Auto, Node, eval_tree, node, wrapper
 from slyme.node.eval import EVALUATOR_REGISTRY, EvaluatorDef, node_evaluator
 from slyme.node.exception import NodeExceptionRecord
-from slyme.utils.continuation import BatchError, Continuation, await_result
+from slyme.utils.continuation import BatchError, Continuation, Result, await_result
 from slyme.utils.registry import GeneralRegistry
 from slyme.utils.tree import TreeAux, TreeEngine
 
@@ -50,7 +50,7 @@ async def test_evaluator_groups_run_concurrently_and_settle_before_reporting(
     if fail:
         with pytest.raises(BatchError) as caught:
             await asyncio.wait_for(pending, timeout=1)
-        assert caught.value.errors == dict(enumerate(failures))
+        assert caught.value.results == [Result(error=failure) for failure in failures]
     else:
         assert await asyncio.wait_for(pending, timeout=1) == [2, "A", 3, "B"]
     assert sorted(finished) == [0, 1]
@@ -98,16 +98,16 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
         .aunwrap()
     )
     assert isinstance(error, BatchError)
-    assert list(error.errors) == [0, 1]
-    ref_errors, node_errors = error.errors.values()
+    assert len(error.results) == 2
+    ref_errors, node_errors = (result.error for result in error.results)
     assert isinstance(ref_errors, BatchError)
-    assert list(ref_errors.errors) == [0, 1]
+    assert len(ref_errors.results) == 2
     assert all(
-        isinstance(error, ContextPathError) for error in ref_errors.errors.values()
+        isinstance(result.error, ContextPathError) for result in ref_errors.results
     )
     assert isinstance(node_errors, BatchError)
-    assert list(node_errors.errors) == [0]
-    child_error = node_errors.errors[0]
+    assert len(node_errors.results) == 1
+    child_error = node_errors.results[0].error
     assert isinstance(child_error, NodeExceptionRecord)
     assert child_error.exception is failure
     assert visited == ["child", "cleanup"]
@@ -149,14 +149,19 @@ async def test_auto_reports_all_child_and_cleanup_failures(asynchronous: bool) -
         await await_result(
             node_evaluator(ctx, [failing(index=0), failing(index=1), successful()])
         )
-    assert list(caught.value.errors) == [0, 1]
+    assert len(caught.value.results) == 3
+    assert caught.value.results[2] == Result(value=2)
     for index, failure in enumerate(failures):
-        child_error = caught.value.errors[index]
+        child_error = caught.value.results[index].error
         assert isinstance(child_error, NodeExceptionRecord)
         assert child_error.exception is failure
     cause = caught.value.__cause__
     assert isinstance(cause, BatchError)
-    assert cause.errors == dict(enumerate(cleanup_failures))
+    assert len(cause.results) == 3
+    for result, failure in zip(cause.results[:2], cleanup_failures, strict=True):
+        assert isinstance(result.error, BatchError)
+        assert result.error.results == [Result(error=failure)]
+    assert cause.results[2] == Result(value=None)
     for index in range(3):
         assert events.count(("run", index)) == 1
         assert events.count(("cleanup", index)) == 1
@@ -184,7 +189,10 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
     ctx = Context()
     with pytest.raises(BatchError) as caught:
         node_evaluator(ctx, [first(), second()])
-    assert caught.value.errors == {0: failure}
+    cleanup_error = caught.value.results[0].error
+    assert isinstance(cleanup_error, BatchError)
+    assert cleanup_error.results == [Result(error=failure)]
+    assert caught.value.results[1] == Result(value=2)
     assert caught.value.__cause__ is None
     assert events == ["cleanup", "second"]
     assert not ctx._owned
@@ -288,7 +296,7 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
     release.set()
     with pytest.raises(BatchError) as caught:
         await task
-    assert isinstance(caught.value.errors[0], asyncio.CancelledError)
+    assert isinstance(caught.value.results[0].error, asyncio.CancelledError)
     assert "sibling finished" in events
     assert events.count("cleanup:cancelled") == 1
     assert events.count("cleanup:sibling") == 1

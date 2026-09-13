@@ -73,7 +73,7 @@ def increment_child(ctx, *, child: Node[int]):
     return Continuation.call(lambda: child(ctx)).then(lambda value: value + 1).unwrap()
 ```
 
-`Continuation.call(operation)` defers the operation itself. `Continuation.resolve(value)` wraps a result that already exists; in `Continuation.resolve(operation())`, Python calls `operation()` before constructing the chain. `then(success, failure)` handles upstream completion; a paired failure callback does not catch errors from its success callback. A later `catch(recover)` handles those errors. Both kinds of callback may return immediate or asynchronous results.
+`Continuation.call(operation)` defers the operation itself. `Continuation(value)` wraps a result that already exists; in `Continuation(operation())`, Python calls `operation()` before constructing the chain. `then(success, failure)` handles upstream completion; a paired failure callback does not catch errors from its success callback. A later `catch(recover)` handles those errors. Both kinds of callback may return immediate or asynchronous results.
 
 Constructing or extending a chain runs no callbacks. `unwrap()` executes its synchronous prefix immediately and returns either the final value or an unscheduled awaitable remainder. `aunwrap()` preserves that immediate work and its errors, but always returns an awaitable; use `await chain.aunwrap()` in asynchronous code. The chain itself is not awaitable. Use `asyncio.run(await_result(chain.unwrap()))` at a synchronous entry point or `asyncio.create_task(await_result(chain.unwrap()))` to schedule the remainder within a running loop. A callback returning another chain must call its `unwrap()` explicitly; a bare chain is ordinary data.
 
@@ -81,7 +81,7 @@ Constructing or extending a chain runs no callbacks. `unwrap()` executes its syn
 
 `catch()` and the failure callback of `then()` handle `Exception` by default, leaving cancellation and other `BaseException` subclasses untouched. Pass `exceptions=SomeException` to select an exception class, or explicitly select `BaseException` for lifecycle cleanup that must observe cancellation. Recovery then determines whether to propagate it again.
 
-`Continuation.sequential(values, call)` builds a `Continuation[None]` that executes calls in order and discards their results. Iteration starts on `unwrap()` or `aunwrap()`. It consumes the next input only after the preceding call completes; failure or cancellation stops iteration. Use `then()` or `catch()` before unwrapping to handle completion.
+`Continuation.sequential(values, call, *, continue_on_error=False)` builds a `Continuation[list[T]]` that executes calls in order and collects their return values. Iteration starts on `unwrap()` or `aunwrap()`. It consumes the next input only after the preceding call completes; failure or cancellation raises `BatchError` with the completed prefix. With `continue_on_error=True`, remaining calls are attempted before reporting. Use `then()` or `catch()` before unwrapping to handle completion.
 
 `Continuation.batch(values, call)` builds a `Continuation[list[T]]` of independent calls. Execution attempts every input despite failures and stays synchronous until a call returns an awaitable. Awaiting the remainder schedules that call and the remaining inputs concurrently. When all calls finish, the batch returns results in input order or raises `BatchError`, exported from `slyme.utils.continuation`. `then()` receives the result list; `catch()` receives one exception, as on any other chain:
 
@@ -90,7 +90,12 @@ from slyme.utils.continuation import BatchError
 
 
 def recover(error: BatchError) -> list[str]:
-    return [f"input {index}: {failure}" for index, failure in error.errors.items()]
+    return [
+        f"input {index}: {result.error}"
+        if result.error is not None
+        else str(result.value)
+        for index, result in enumerate(error.results)
+    ]
 
 
 result = (
@@ -101,7 +106,7 @@ result = (
 )
 ```
 
-`BatchError.errors` maps zero-based input indices to failures, including when only one call fails. Nested batches retain their own local indices. An iterator failure stops enumeration and is recorded at the next input index; started calls still finish. Returned exception objects remain data, and failed batches do not return partial results. A failed or cancelled item does not cancel siblings. Cancelling the batch waiter propagates through asyncio to pending calls; if other failures also occur, `BatchError` preserves them with cancellation as its cause, otherwise cancellation propagates directly. Batch provides no timeout or resource cleanup policy.
+`BatchError.results` is an input-ordered list of `Result(value=..., error=...)` records, including when only one call fails. Each completed call stores either its returned value or its raised error. An error-free call returning `None` is `Result(value=None)`. Nested batches retain their own local indices. An iterator failure stops enumeration and is recorded at the next input index; started calls still finish. Returned exception objects remain data: `Result(value=ValueError(...))` differs from `Result(error=ValueError(...))`. Failed batches raise instead of returning, but their exception retains successful partial results. A failed or cancelled item does not cancel siblings. Cancelling the batch waiter propagates through asyncio to pending calls; if other failures also occur, `BatchError` preserves them with cancellation as its cause, otherwise cancellation propagates directly. Batch provides no timeout or resource cleanup policy.
 
 ## Parameters and Auto
 
@@ -171,4 +176,4 @@ Node and Wrapper parameters may contain arbitrary values and nested Trees, inclu
 
 ## Sequential composition
 
-Use `sequential(nodes=[...])` for a declarative sequence or `sequential_exec(ctx, nodes)` for an existing iterable. Both wait for each completion before starting the next Node and remain synchronous when every step is synchronous. They share the supplied Context, so later steps observe earlier local writes, unlike Auto child evaluation.
+Use `sequential(nodes=[...])` for a declarative sequence or `sequential_exec(ctx, nodes)` for an existing iterable. Both return `None` after waiting for each completion before starting the next Node, and remain synchronous when every step is synchronous. A failure stops execution and raises `BatchError` with the attempted prefix. They share the supplied Context, so later steps observe earlier local writes, unlike Auto child evaluation.

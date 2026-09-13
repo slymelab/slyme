@@ -12,12 +12,15 @@ breaking changes when they are documented here.
 
 - Added `Wrapper.compose()` to assemble outermost-first callable chains without
   execution, preserving live wrapper parameters and caller-controlled Contexts.
-- Added mutable, single-use `Continuation.call()` / `Continuation.resolve()` chains with `then()`, `catch()`,
+- Added mutable, single-use `Continuation.call()` / `Continuation()` chains with `then()`, `catch()`,
   `unwrap()`, and always-awaitable `aunwrap()` in `slyme.utils.continuation`. Ordinary errors
   are recoverable; cancellation propagates unless explicitly selected.
 - Added `Continuation.sequential()` for ordered fail-fast calls and
   `Continuation.batch()` for independent calls that all settle before returning
-  ordered results or raising `BatchError` with indexed failures. Both build chains.
+  ordered results or raising `BatchError`. Both build chains and collect return values.
+  `sequential(..., continue_on_error=True)` continues after failures.
+- Added `Result(value=..., error=...)` records; `BatchError.results` retains successes
+  and failures in input order, including exception objects returned as ordinary data.
 - Added `Node.acall()` and `Context.adispose()` as always-awaitable adapters
   that preserve immediate synchronous execution and the unified completion rules.
 - Added `slyme.utils.continuation.await_result()` to await an immediate or asynchronous
@@ -144,6 +147,8 @@ breaking changes when they are documented here.
 - Context and effect disposal use Continuation chains for immediate and
   asynchronous cleanup, preserving recursive LIFO order, continued cleanup
   after failure, repeatable results, and cancellation and reentrancy protection.
+  Context uses `sequential(..., continue_on_error=True)` and reports all directly
+  owned cleanup failures through `BatchError.results`.
 - Auto batches independent evaluator groups, collecting Ref and Node failures
   into nested `BatchError` objects without cancelling siblings. Node and Wrapper
   calls preserve these aggregates; child cleanup finishes before reporting them.

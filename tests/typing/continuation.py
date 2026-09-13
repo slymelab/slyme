@@ -4,7 +4,7 @@ from collections.abc import Awaitable
 
 from typing_extensions import assert_type
 
-from slyme.utils.continuation import BatchError, Continuation
+from slyme.utils.continuation import BatchError, Continuation, Result
 
 
 async def asynchronous() -> int:
@@ -28,42 +28,49 @@ def recover_number(error: Exception) -> int:
 
 
 async def check_types() -> None:
-    assert_type(Continuation.sequential([1, 2], str), Continuation[None])
-    assert_type(Continuation.sequential([1, 2], stringify), Continuation[None])
+    assert_type(Continuation.sequential([1, 2], str), Continuation[list[str]])
+    assert_type(Continuation.sequential([1, 2], stringify), Continuation[list[str]])
+    assert_type(
+        Continuation.sequential([1, 2], stringify, continue_on_error=True),
+        Continuation[list[str]],
+    )
+    assert_type(Result(value=1), Result[int])
+    assert_type(Result[int](error=ValueError()).error, BaseException | None)
     assert_type(Continuation.batch([1, 2], str), Continuation[list[str]])
     assert_type(Continuation.batch([1, 2], stringify), Continuation[list[str]])
-    assert_type(Continuation.resolve(1).aunwrap(), Awaitable[int])
+    assert_type(Continuation(1).aunwrap(), Awaitable[int])
     assert_type(
         Continuation.batch([1, 2], stringify).catch(
-            lambda error: list(error.errors), exceptions=BatchError
+            lambda error: [
+                i for i, result in enumerate(error.results) if result.error is not None
+            ],
+            exceptions=BatchError,
         ),
         Continuation[list[str] | list[int]],
     )
-    assert_type(Continuation.resolve(1), Continuation[int])
-    assert_type(Continuation.resolve(asynchronous()), Continuation[int])
+    assert_type(Continuation(1), Continuation[int])
+    assert_type(Continuation(asynchronous()), Continuation[int])
     assert_type(Continuation.call(asynchronous), Continuation[int])
-    assert_type(Continuation.resolve(1).then(stringify), Continuation[str])
-    assert_type(Continuation.resolve(1).unwrap(), int | Awaitable[int])
+    assert_type(Continuation(1).then(stringify), Continuation[str])
+    assert_type(Continuation(1).unwrap(), int | Awaitable[int])
     assert_type(
-        Continuation.resolve(1).catch(recover, exceptions=ValueError),
+        Continuation(1).catch(recover, exceptions=ValueError),
         Continuation[int | str],
     )
     assert_type(
-        Continuation.resolve(1).then(str, recover, exceptions=ValueError),
+        Continuation(1).then(str, recover, exceptions=ValueError),
         Continuation[str],
     )
-    assert_type(await Continuation.resolve(1).then(stringify).aunwrap(), str)
+    assert_type(await Continuation(1).then(stringify).aunwrap(), str)
+    assert_type(Continuation(1).then(str, recover_number), Continuation[str | int])
+    assert_type(Continuation(1).catch(arecover), Continuation[int | str])
+    assert_type(Continuation(1).then(int, arecover), Continuation[int | str])
+    assert_type(Continuation(1).then(stringify, arecover), Continuation[str])
     assert_type(
-        Continuation.resolve(1).then(str, recover_number), Continuation[str | int]
-    )
-    assert_type(Continuation.resolve(1).catch(arecover), Continuation[int | str])
-    assert_type(Continuation.resolve(1).then(int, arecover), Continuation[int | str])
-    assert_type(Continuation.resolve(1).then(stringify, arecover), Continuation[str])
-    assert_type(
-        Continuation.resolve(1).then(int, arecover, exceptions=ValueError),
+        Continuation(1).then(int, arecover, exceptions=ValueError),
         Continuation[int | str],
     )
     assert_type(
-        Continuation.resolve(1).then(stringify, arecover, exceptions=ValueError),
+        Continuation(1).then(stringify, arecover, exceptions=ValueError),
         Continuation[str],
     )

@@ -569,8 +569,8 @@ def test_evaluator_result_count_is_validated(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     with pytest.raises(BatchError) as caught:
         eval_tree(Context(schema=R), [1])
-    assert isinstance(caught.value.errors[0], ValueError)
-    assert "expected 1" in str(caught.value.errors[0])
+    assert isinstance(caught.value.results[0].error, ValueError)
+    assert "expected 1" in str(caught.value.results[0].error)
 
 
 async def _empty_async() -> list[Any]:
@@ -586,8 +586,8 @@ async def test_async_evaluator_result_count_is_validated(
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     with pytest.raises(BatchError) as caught:
         await await_result(eval_tree(Context(schema=R), [1]))
-    assert isinstance(caught.value.errors[0], ValueError)
-    assert "expected 1" in str(caught.value.errors[0])
+    assert isinstance(caught.value.results[0].error, ValueError)
+    assert "expected 1" in str(caught.value.results[0].error)
 
 
 def test_auto_nodes_receive_isolated_child_contexts() -> None:
@@ -803,14 +803,16 @@ def test_sync_auto_preserves_node_failure_when_cleanup_also_fails() -> None:
     with pytest.raises(BatchError) as caught:
         parent(value=child_node)(Context(schema=R))
 
-    child_errors = caught.value.errors[0]
+    child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
-    failure = child_errors.errors[0]
+    failure = child_errors.results[0].error
     assert isinstance(failure, NodeExceptionRecord)
     assert failure.exception_node is child_node
     assert isinstance(failure.exception, ValueError)
     assert isinstance(child_errors.__cause__, BatchError)
-    assert isinstance(child_errors.__cause__.errors[0], RuntimeError)
+    cleanup_error = child_errors.__cause__.results[0].error
+    assert isinstance(cleanup_error, BatchError)
+    assert isinstance(cleanup_error.results[0].error, RuntimeError)
 
 
 async def test_async_auto_preserves_node_failure_when_cleanup_also_fails() -> None:
@@ -830,14 +832,16 @@ async def test_async_auto_preserves_node_failure_when_cleanup_also_fails() -> No
     with pytest.raises(BatchError) as caught:
         await parent(value=child_node)(Context(schema=R))
 
-    child_errors = caught.value.errors[0]
+    child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
-    failure = child_errors.errors[0]
+    failure = child_errors.results[0].error
     assert isinstance(failure, NodeExceptionRecord)
     assert failure.exception_node is child_node
     assert isinstance(failure.exception, ValueError)
     assert isinstance(child_errors.__cause__, BatchError)
-    assert isinstance(child_errors.__cause__.errors[0], RuntimeError)
+    cleanup_error = child_errors.__cause__.results[0].error
+    assert isinstance(cleanup_error, BatchError)
+    assert isinstance(cleanup_error.results[0].error, RuntimeError)
 
 
 async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> None:
@@ -881,9 +885,9 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
     release.set()
     with pytest.raises(BatchError) as caught:
         await task
-    child_errors = caught.value.errors[0]
+    child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
-    failure = child_errors.errors[1]
+    failure = child_errors.results[1].error
     assert isinstance(failure, NodeExceptionRecord)
     assert isinstance(failure.exception, RuntimeError)
     assert str(failure.exception) == "child failed"
@@ -932,16 +936,18 @@ async def test_async_auto_preserves_sibling_cleanup_failure_after_caller_cancell
     with pytest.raises(BatchError) as caught:
         await task
 
-    child_errors = caught.value.errors[0]
+    child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
-    failure = child_errors.errors[0]
+    failure = child_errors.results[0].error
     assert isinstance(failure, NodeExceptionRecord)
     assert isinstance(failure.exception, ValueError)
     assert str(failure.exception) == "primary child failure"
     details = child_errors.__cause__
     assert isinstance(details, BatchError)
-    assert isinstance(details.errors[1], RuntimeError)
-    assert str(details.errors[1]) == "sibling cleanup failed"
+    cleanup_error = details.results[1].error
+    assert isinstance(cleanup_error, BatchError)
+    assert isinstance(cleanup_error.results[0].error, RuntimeError)
+    assert str(cleanup_error.results[0].error) == "sibling cleanup failed"
     assert not ctx._owned
 
 
@@ -982,9 +988,9 @@ async def test_repeated_auto_cancellation_finishes_child_cleanup(
     if child_fails:
         with pytest.raises(BatchError) as caught:
             await task
-        child_errors = caught.value.errors[0]
+        child_errors = caught.value.results[0].error
         assert isinstance(child_errors, BatchError)
-        failure = child_errors.errors[0]
+        failure = child_errors.results[0].error
         assert isinstance(failure, NodeExceptionRecord)
         assert isinstance(failure.exception, ValueError)
     else:
@@ -1024,10 +1030,12 @@ async def test_repeated_auto_cancellation_preserves_cleanup_failure() -> None:
     release_cleanup.set()
     with pytest.raises(BatchError) as caught:
         await task
-    child_errors = caught.value.errors[0]
+    child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
-    assert isinstance(child_errors.errors[0], RuntimeError)
-    assert str(child_errors.errors[0]) == "cleanup failed"
+    cleanup_error = child_errors.results[0].error
+    assert isinstance(cleanup_error, BatchError)
+    assert isinstance(cleanup_error.results[0].error, RuntimeError)
+    assert str(cleanup_error.results[0].error) == "cleanup failed"
     assert isinstance(child_errors.__cause__, asyncio.CancelledError)
     assert not ctx._owned
 

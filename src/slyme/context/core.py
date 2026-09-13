@@ -183,7 +183,7 @@ class _Effect:
             return None
         self._disposing = True
         result = (
-            Continuation.resolve(self._setup)
+            Continuation(self._setup)
             .catch(self._fail_dispose, exceptions=BaseException)
             .then(lambda _: self._dispose_cleanup())
             .unwrap()
@@ -664,6 +664,8 @@ class Context(ContextElement):
         except BaseException as release_error:
             if error is None:
                 error = release_error
+            else:
+                error.__cause__ = release_error
         if self.parent is not None:
             self.parent._forget_owned(self)
         object.__setattr__(self, "_dispose_error", error)
@@ -676,6 +678,7 @@ class Context(ContextElement):
         Synchronous cleanup runs immediately. Await asynchronous completion;
         once awaited, waiter cancellation does not cancel cleanup. Repeated
         calls share that completion and reproduce its terminal failure.
+        Owned cleanup failures are retained together in BatchError.results.
         Mutations in the entire ownership subtree are forbidden before the
         first cleanup; each Context remains readable until its own release.
         """
@@ -691,26 +694,19 @@ class Context(ContextElement):
         self._close_subtree()
         object.__setattr__(self, "_state", _ContextState.DISPOSING)
         owned = reversed(tuple(self._owned))
-        first_error: BaseException | None = None
 
-        def record(error: BaseException) -> None:
-            nonlocal first_error
-            if first_error is None:
-                first_error = error
-
-        def release(item: Context | _Effect) -> None | Awaitable[None]:
-            return (
-                Continuation.call(item.dispose)
-                .catch(record, exceptions=BaseException)
-                .unwrap()
-            )
-
-        def finish(_: None) -> None:
-            error = self._finish_dispose(first_error)
+        def finish(error: BaseException | None = None) -> None:
+            error = self._finish_dispose(error)
             if error is not None:
                 raise error
 
-        result = Continuation.sequential(owned, release).then(finish).unwrap()
+        result = (
+            Continuation.sequential(
+                owned, lambda item: item.dispose(), continue_on_error=True
+            )
+            .then(lambda _: finish(), finish, exceptions=BaseException)
+            .unwrap()
+        )
         if isawaitable(result):
             pending = _Completion(
                 self._await_dispose(result), self._assert_disposal_allowed

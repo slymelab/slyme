@@ -80,7 +80,7 @@ def eval_tree(ctx: Context, tree: Any) -> Any:
     def evaluate(batch: tuple[EvaluatorDef, tuple[list[int], list[Any]]]) -> Any:
         evaluator, (indices, values) = batch
         return (
-            Continuation.resolve(evaluator.func(ctx, values))
+            Continuation(evaluator.func(ctx, values))
             .then(lambda result: store(evaluator, indices, result))
             .unwrap()
         )
@@ -131,7 +131,7 @@ def node_evaluator(
     def cleanup(error: BaseException) -> Any:
         def check_failure(failure: BaseException) -> None:
             if not isinstance(error, BatchError) or all(
-                failure is not previous for previous in error.errors.values()
+                failure is not previous.error for previous in error.results
             ):
                 raise failure
 

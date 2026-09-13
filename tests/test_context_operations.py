@@ -151,12 +151,12 @@ def test_extract_validates_all_refs_before_reading_values() -> None:
         ctx.extract([schema.resolve("empty"), Ref("undeclared")])
     with pytest.raises(BatchError) as caught:
         ref_evaluator(ctx, [schema.resolve("empty"), Ref("undeclared")])
-    assert list(caught.value.errors) == [0, 1]
+    assert len(caught.value.results) == 2
     assert all(
-        isinstance(error, ContextPathError) for error in caught.value.errors.values()
+        isinstance(result.error, ContextPathError) for result in caught.value.results
     )
-    assert "empty" in str(caught.value.errors[0])
-    assert "undeclared" in str(caught.value.errors[1])
+    assert "empty" in str(caught.value.results[0].error)
+    assert "undeclared" in str(caught.value.results[1].error)
     ctx.dispose()
 
 

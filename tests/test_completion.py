@@ -10,7 +10,7 @@ from slyme.context import Context
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.eval import EvaluatorDef
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.continuation import BatchError, await_result
+from slyme.utils.continuation import BatchError, Result, await_result
 from slyme.utils.registry import GeneralRegistry
 
 
@@ -288,9 +288,9 @@ async def test_setup_failure_during_owner_disposal_keeps_cleaning_and_replays() 
     registration = ctx.effect(setup)
     ctx.effect(lambda: lambda: events.append("last"))
     for _ in range(2):
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(BatchError) as caught:
             await await_result(ctx.dispose())
-        assert caught.value is failure
+        assert caught.value.results == [Result(), Result(error=failure), Result()]
     with pytest.raises(ValueError) as caught:
         await await_result(registration)
     assert caught.value is failure
@@ -390,13 +390,15 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_keeps_both_errors()
     ctx = Context()
     with pytest.raises(BatchError) as caught:
         await await_result(parent(value=child())(ctx))
-    child_errors = caught.value.errors[0]
+    child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
-    node_error = child_errors.errors[0]
+    node_error = child_errors.results[0].error
     assert isinstance(node_error, NodeExceptionRecord)
     assert node_error.exception is failure
     assert isinstance(child_errors.__cause__, BatchError)
-    assert child_errors.__cause__.errors == {0: cleanup_failure}
+    cleanup_error = child_errors.__cause__.results[0].error
+    assert isinstance(cleanup_error, BatchError)
+    assert cleanup_error.results == [Result(error=cleanup_failure)]
     assert not ctx._owned
     ctx.dispose()
 
@@ -410,8 +412,10 @@ async def test_cleanup_cannot_await_saved_owner_completion() -> None:
 
     ctx.effect(lambda: cleanup)
     completion = ctx.dispose()
-    with pytest.raises(RuntimeError, match="setup or cleanup"):
+    with pytest.raises(BatchError) as caught:
         await asyncio.wait_for(await_result(completion), 1)
+    assert isinstance(caught.value.results[0].error, RuntimeError)
+    assert "setup or cleanup" in str(caught.value.results[0].error)
     assert not ctx._owned
 
 
@@ -433,7 +437,11 @@ async def test_disposal_preserves_sync_failure_while_finishing_async_cleanup() -
     ctx.effect(lambda: fail)
     pending = ctx.dispose()
     assert events == ["sync"]
-    with pytest.raises(ValueError) as caught:
+    with pytest.raises(BatchError) as caught:
         await await_result(pending)
-    assert caught.value is first_error
+    assert len(caught.value.results) == 3
+    assert caught.value.results[0].error is first_error
+    assert isinstance(caught.value.results[1].error, RuntimeError)
+    assert str(caught.value.results[1].error) == "second failure"
+    assert caught.value.results[2] == Result()
     assert events == ["sync", "async", "last"]

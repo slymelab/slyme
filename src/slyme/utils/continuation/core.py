@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable, Iterator
+from dataclasses import dataclass
+from functools import partial
 from inspect import isawaitable
 from itertools import chain
-from typing import Any, Generic, TypeVar, overload
+from typing import Any, Generic, TypeVar, cast, overload
 
-__all__ = ["BatchError", "Continuation", "await_result"]
+__all__ = ["BatchError", "Continuation", "Result", "await_result"]
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -51,17 +53,38 @@ _Step = tuple[
 ]
 
 
-class BatchError(Exception):
-    """Failures keyed by zero-based input index, after a batch has settled.
+@dataclass(frozen=True)
+class Result(Generic[_T]):
+    """One completed call: a returned value or a raised error.
 
-    Nested batches retain their own BatchError and local indices. An iterator
-    failure uses the index of the input it could not produce. Successful values
-    are not exceptions, even when the returned value is an exception object.
+    Successful values, including None and exception objects, use ``value``.
+    Failed calls use ``error`` and leave ``value`` as None.
     """
 
-    def __init__(self, errors: dict[int, BaseException]) -> None:
-        self.errors = dict(sorted(errors.items()))
-        super().__init__(f"Batch failed at input indices {list(self.errors)}.")
+    value: _T | None = None
+    error: BaseException | None = None
+
+    @staticmethod
+    def _collect(results: list[Result[_R]]) -> list[_R]:
+        if any(result.error is not None for result in results):
+            raise BatchError(results)
+        return [cast(_R, result.value) for result in results]
+
+
+class BatchError(Exception):
+    """Ordered results of completed calls, including successes and failures.
+
+    Nested batches retain their own BatchError and local indices. An iterator
+    failure occupies the next input slot. Fail-fast execution records only the
+    attempted prefix; unconsumed inputs have no result.
+    """
+
+    def __init__(self, results: Iterable[Result[Any]]) -> None:
+        self.results = list(results)
+        failed = [
+            i for i, result in enumerate(self.results) if result.error is not None
+        ]
+        super().__init__(f"Batch failed at input indices {failed}.")
 
 
 class Continuation(Generic[_T]):
@@ -79,20 +102,14 @@ class Continuation(Generic[_T]):
 
     __slots__ = ("_value", "_steps")
 
+    @overload
+    def __init__(self, value: Awaitable[_T]) -> None: ...
+    @overload
+    def __init__(self, value: _T | Awaitable[_T]) -> None: ...
     def __init__(self, value: _T | Awaitable[_T]) -> None:
+        """Wrap an existing result without awaiting it or calling its value."""
         self._value: Any = value
         self._steps: list[_Step] | None = []
-
-    @overload
-    @staticmethod
-    def resolve(value: Awaitable[_R]) -> Continuation[_R]: ...
-    @overload
-    @staticmethod
-    def resolve(value: _R | Awaitable[_R]) -> Continuation[_R]: ...
-    @staticmethod
-    def resolve(value: _R | Awaitable[_R]) -> Continuation[_R]:
-        """Wrap an existing result without awaiting it or calling its value."""
-        return Continuation(value)
 
     @overload
     @staticmethod
@@ -103,7 +120,7 @@ class Continuation(Generic[_T]):
     @staticmethod
     def call(operation: Callable[[], _R | Awaitable[_R]]) -> Continuation[_R]:
         """Defer a call, including synchronous errors, until execution."""
-        return Continuation.resolve(None).then(lambda _: operation())
+        return Continuation(None).then(lambda _: operation())
 
     @overload
     def then(
@@ -272,29 +289,82 @@ class Continuation(Generic[_T]):
         """Unwrap now and return an awaitable, preserving immediate sync work."""
         return await_result(self.unwrap())
 
+    @overload
     @staticmethod
     def sequential(
-        values: Iterable[_R], call: Callable[[_R], Any | Awaitable[Any]]
-    ) -> Continuation[None]:
-        """Build ordered calls that discard results and stop on failure.
+        values: Iterable[_R],
+        call: Callable[[_R], Awaitable[_S]],
+        *,
+        continue_on_error: bool = False,
+    ) -> Continuation[list[_S]]: ...
+    @overload
+    @staticmethod
+    def sequential(
+        values: Iterable[_R],
+        call: Callable[[_R], _S | Awaitable[_S]],
+        *,
+        continue_on_error: bool = False,
+    ) -> Continuation[list[_S]]: ...
+    @staticmethod
+    def sequential(
+        values: Iterable[_R],
+        call: Callable[[_R], _S | Awaitable[_S]],
+        *,
+        continue_on_error: bool = False,
+    ) -> Continuation[list[_S]]:
+        """Build ordered calls, returning their values or raising BatchError.
 
         Iteration starts on execution. Each next input is consumed only after
         the preceding call completes. Entirely synchronous calls stay synchronous.
+        Failure, including cancellation, stops iteration unless continue_on_error
+        is enabled. Iterator failures always stop iteration. No tasks are scheduled
+        and no cancellation shielding is provided.
         """
 
-        def execute() -> None | Awaitable[None]:
-            iterator = iter(values)
+        def execute() -> list[_S] | Awaitable[list[_S]]:
+            results: list[Result[_S]] = []
 
-            async def remaining(pending: Awaitable[Any]) -> None:
+            def record(error: BaseException) -> None:
+                results.append(Result(error=error))
+                if not continue_on_error:
+                    raise BatchError(results)
+
+            def calls() -> Iterator[None | Awaitable[None]]:
+                try:
+                    iterator = iter(values)
+                except BaseException as error:
+                    results.append(Result(error=error))
+                    return
+                while True:
+                    try:
+                        value = next(iterator)
+                    except StopIteration:
+                        return
+                    except BaseException as error:
+                        results.append(Result(error=error))
+                        return
+                    yield (
+                        Continuation.call(partial(call, value))
+                        .then(
+                            lambda value: results.append(Result(value=value)),
+                            record,
+                            exceptions=BaseException,
+                        )
+                        .unwrap()
+                    )
+
+            iterator = calls()
+
+            async def remaining(pending: Awaitable[None]) -> list[_S]:
                 await pending
-                for value in iterator:
-                    await await_result(call(value))
+                for result in iterator:
+                    await await_result(result)
+                return Result._collect(results)
 
-            for value in iterator:
-                result = call(value)
+            for result in iterator:
                 if isawaitable(result):
                     return remaining(result)
-            return None
+            return Result._collect(results)
 
         return Continuation.call(execute)
 
@@ -316,8 +386,8 @@ class Continuation(Generic[_T]):
 
         Every input is attempted despite earlier call failures. Execution stays
         synchronous until a call returns an awaitable; awaiting the remainder
-        schedules it and the remaining calls concurrently. Failed slots never
-        appear in returned results. Child cancellation is an indexed failure;
+        schedules it and the remaining calls concurrently. BatchError retains
+        both successful values and failures. Child cancellation is an indexed failure;
         cancelling the batch waiter follows asyncio cancellation propagation.
         If cancellation coincides with other failures, BatchError retains them
         and chains the cancellation as its cause; otherwise cancellation propagates.
@@ -325,15 +395,11 @@ class Continuation(Generic[_T]):
         """
 
         def execute() -> list[_S] | Awaitable[list[_S]]:
-            iterator = iter(values)
-            # Pending slots hold awaitables; failed batches never return results.
-            results: list[Any] = []
-            errors: dict[int, BaseException] = {}
-
-            def report() -> list[_S]:
-                if errors:
-                    raise BatchError(errors)
-                return results
+            try:
+                iterator = iter(values)
+            except BaseException as error:
+                raise BatchError([Result(error=error)]) from error
+            results: list[Result[_S]] = []
 
             async def remaining(first: Awaitable[_S]) -> list[_S]:
                 async def evaluate(value: _R) -> _S:
@@ -343,10 +409,10 @@ class Continuation(Generic[_T]):
                 try:
                     for value in iterator:
                         index = len(results)
-                        results.append(None)
+                        results.append(Result())
                         tasks[index] = asyncio.create_task(evaluate(value))
                 except BaseException as error:
-                    errors[len(results)] = error
+                    results.append(Result(error=error))
 
                 cancellation: asyncio.CancelledError | None = None
                 try:
@@ -355,31 +421,32 @@ class Continuation(Generic[_T]):
                     cancellation = error
                 for index, task in tasks.items():
                     try:
-                        results[index] = task.result()
+                        results[index] = Result(value=task.result())
                     except BaseException as error:
-                        errors[index] = error
+                        results[index] = Result(error=error)
                 if cancellation is not None:
                     if any(
-                        not isinstance(error, asyncio.CancelledError)
-                        for error in errors.values()
+                        result.error is not None
+                        and not isinstance(result.error, asyncio.CancelledError)
+                        for result in results
                     ):
-                        raise BatchError(errors) from cancellation
+                        raise BatchError(results) from cancellation
                     raise cancellation
-                return report()
+                return Result._collect(results)
 
             try:
                 for value in iterator:
                     try:
                         result = call(value)
                     except BaseException as error:
-                        errors[len(results)] = error
-                        results.append(None)
+                        results.append(Result(error=error))
                         continue
-                    results.append(result)
                     if isawaitable(result):
+                        results.append(Result())
                         return remaining(result)
+                    results.append(Result(value=result))
             except BaseException as error:
-                errors[len(results)] = error
-            return report()
+                results.append(Result(error=error))
+            return Result._collect(results)
 
         return Continuation.call(execute)
