@@ -36,7 +36,7 @@ from typing import (
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.continuation import Continuation, await_result
+from slyme.utils.continuation import BatchError, Continuation, await_result
 from slyme.utils.exception import enrich_exception
 
 from .exception import (
@@ -205,7 +205,7 @@ class Node(NodeElement, Generic[_R]):
             if error.source_node is None:
                 error.source_node = self
             raise error
-        if isinstance(error, NodeException):
+        if isinstance(error, (NodeException, BatchError)):
             raise error
         raise NodeExceptionRecord(exception_node=self, exception=error) from error
 
@@ -271,7 +271,7 @@ class Wrapper(NodeElement, Generic[_R]):
         super().__init__(func=func, specs=specs, params=params)
 
     def _raise_error(self, wrapped: Node[Any], error: Exception) -> NoReturn:
-        if isinstance(error, NodeException):
+        if isinstance(error, (NodeException, BatchError)):
             raise error
         raise WrapperExceptionRecord(
             exception_node=self, wrapped_node=wrapped, exception=error

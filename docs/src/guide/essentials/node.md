@@ -75,13 +75,33 @@ def increment_child(ctx, *, child: Node[int]):
 
 `Continuation.call(operation)` defers the operation itself. `Continuation.resolve(value)` wraps a result that already exists; in `Continuation.resolve(operation())`, Python calls `operation()` before constructing the chain. `then(success, failure)` handles upstream completion; a paired failure callback does not catch errors from its success callback. A later `catch(recover)` handles those errors. Both kinds of callback may return immediate or asynchronous results.
 
-Constructing or extending a chain runs no callbacks. `unwrap()` executes its synchronous prefix immediately and returns either the final value or an unscheduled awaitable remainder. `await chain` executes and completes the chain. Unlike JavaScript Promise reactions, these callbacks are not automatically scheduled. Use `asyncio.run(await_result(chain))` at a synchronous entry point or `asyncio.create_task(await_result(chain))` to explicitly schedule it within a running loop; `await_result()` returns a coroutine accepted by these APIs.
+Constructing or extending a chain runs no callbacks. `unwrap()` executes its synchronous prefix immediately and returns either the final value or an unscheduled awaitable remainder. `aunwrap()` preserves that immediate work and its errors, but always returns an awaitable; use `await chain.aunwrap()` in asynchronous code. The chain itself is not awaitable. Use `asyncio.run(await_result(chain.unwrap()))` at a synchronous entry point or `asyncio.create_task(await_result(chain.unwrap()))` to schedule the remainder within a running loop. A callback returning another chain must call its `unwrap()` explicitly; a bare chain is ordinary data.
 
 `then()` and `catch()` append to the same mutable operation list and return the same object. Aliases are not independent branches; use the fluent return as the current typed stage. Each chain can be executed only once, and cannot be extended after execution starts. Build another chain for another execution. Continuation has no subscribers or cached settlement to notify, unlike JavaScript Promise. A caller needing shared execution can explicitly create and retain a Task. Continuation does not shield cancellation or own cleanup; Context retains its separate repeatable, cancellation-safe disposal behavior.
 
 `catch()` and the failure callback of `then()` handle `Exception` by default, leaving cancellation and other `BaseException` subclasses untouched. Pass `exceptions=SomeException` to select an exception class, or explicitly select `BaseException` for lifecycle cleanup that must observe cancellation. Recovery then determines whether to propagate it again.
 
-`Continuation.each(values, call)` executes calls in order and discards their results. Unlike chain registration, it runs synchronous calls immediately, returning `None` if all finish synchronously or an unscheduled awaitable for the remainder. It consumes the next input only after the preceding call completes; failure or cancellation stops iteration.
+`Continuation.sequential(values, call)` builds a `Continuation[None]` that executes calls in order and discards their results. Iteration starts on `unwrap()` or `aunwrap()`. It consumes the next input only after the preceding call completes; failure or cancellation stops iteration. Use `then()` or `catch()` before unwrapping to handle completion.
+
+`Continuation.batch(values, call)` builds a `Continuation[list[T]]` of independent calls. Execution attempts every input despite failures and stays synchronous until a call returns an awaitable. Awaiting the remainder schedules that call and the remaining inputs concurrently. When all calls finish, the batch returns results in input order or raises `BatchError`, exported from `slyme.utils.continuation`. `then()` receives the result list; `catch()` receives one exception, as on any other chain:
+
+```python
+from slyme.utils.continuation import BatchError
+
+
+def recover(error: BatchError) -> list[str]:
+    return [f"input {index}: {failure}" for index, failure in error.errors.items()]
+
+
+result = (
+    Continuation.batch(["1", "invalid", "3"], int)
+    .then(lambda values: [str(value * 2) for value in values])
+    .catch(recover, exceptions=BatchError)
+    .unwrap()
+)
+```
+
+`BatchError.errors` maps zero-based input indices to failures, including when only one call fails. Nested batches retain their own local indices. An iterator failure stops enumeration and is recorded at the next input index; started calls still finish. Returned exception objects remain data, and failed batches do not return partial results. A failed or cancelled item does not cancel siblings. Cancelling the batch waiter propagates through asyncio to pending calls; if other failures also occur, `BatchError` preserves them with cancellation as its cause, otherwise cancellation propagates directly. Batch provides no timeout or resource cleanup policy.
 
 ## Parameters and Auto
 

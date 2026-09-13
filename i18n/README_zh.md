@@ -117,11 +117,17 @@ if __name__ == "__main__":
 
 类型化 API 通过类型注解约束参数和回调类型，包括同步／异步回调及 `Literal` 选项；请使用静态类型检查器检查这些调用。Slyme 在运行时检查动态 Schema 声明、结构冲突和生命周期约束。可复用的 Node 图通过普通 Python 函数组装。
 
+执行或清理可能异步时，使用 `await task.acall(ctx)` 和 `await ctx.adispose()`。这两个适配方法始终返回 awaitable，保留立即执行的同步操作和错误，不调度任务。纯同步应用仍可直接调用 `task(ctx)` 和 `ctx.dispose()`。
+
+普通函数可通过 `slyme.utils.continuation` 的 `Continuation` 组合两种结果：`Continuation.call(lambda: task(ctx)).then(transform).unwrap()`。构建链只原地追加回调，不执行它们。`unwrap()` 消费链，执行同步前缀，并返回结果值或异步剩余流程；需要始终可等待的结果时使用 `await chain.aunwrap()`。链本身不可 await，只能执行一次，不缓存结果，也不拥有资源生命周期。
+
+`Continuation.sequential(items, call)` 构建按顺序执行、遇错即停的调用并丢弃返回值。`Continuation.batch(items, call)` 尝试所有输入，并发等待异步调用，返回按输入排序的结果列表，或抛出 `BatchError`，通过 `errors: dict[int, BaseException]` 保存失败。两者均返回支持 `then()` 和 `catch()` 的链。只有 batch 的异步剩余流程被等待时才会调度任务；纯同步工作仍同步完成。Auto 在 evaluator 组之间以及 Ref、Node 组内部都使用 batch，并保留嵌套错误的局部索引。
+
 ## Context 生命周期、Scope 可见性与 Compose
 
 `set` 和 `delete` 修改单个本地路径。`update` 和 `drop` 会在应用修改前校验整个批次；预检失败时 binding 保持不变，实际应用修改时发生的失败不会触发回滚。
 
-Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 Compose 局部 identity。`Compose.bind()` 可以让选定 Scope 共享 identity，而不改变其他 Compose 的可见性。`effect()` 管理同步或异步 setup 和 cleanup，`add()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await resolve(ctx.dispose())`，其中 `resolve` 从 `slyme.utils.awaitable` 导入。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
+Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 leaf 局部 identity。`Compose.bind()` 可以让选定 Scope 共享 identity，而不改变其他 Compose 的可见性。`effect()` 管理同步或异步 setup 和 cleanup，`add()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await ctx.adispose()`。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
 
 ```python
 from slyme.context import Compose, Context, Schema

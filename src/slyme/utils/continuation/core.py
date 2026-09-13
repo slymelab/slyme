@@ -12,16 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Lazy result composition without implicit tasks or an event loop."""
+"""Single-use synchronous and asynchronous result composition."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator
+import asyncio
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from inspect import isawaitable
 from itertools import chain
 from typing import Any, Generic, TypeVar, overload
 
-__all__ = ["Continuation", "await_result"]
+__all__ = ["BatchError", "Continuation", "await_result"]
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -50,16 +51,30 @@ _Step = tuple[
 ]
 
 
+class BatchError(Exception):
+    """Failures keyed by zero-based input index, after a batch has settled.
+
+    Nested batches retain their own BatchError and local indices. An iterator
+    failure uses the index of the input it could not produce. Successful values
+    are not exceptions, even when the returned value is an exception object.
+    """
+
+    def __init__(self, errors: dict[int, BaseException]) -> None:
+        self.errors = dict(sorted(errors.items()))
+        super().__init__(f"Batch failed at input indices {list(self.errors)}.")
+
+
 class Continuation(Generic[_T]):
     """One mutable, single-use chain of immediate or asynchronous operations.
 
     Unlike JavaScript Promise.then, ``then`` and ``catch`` append to the same
     object; aliases do not create independent branches or subscribers. Building
     the chain runs no callbacks. ``unwrap`` consumes it, executing synchronous
-    work eagerly and returning any asynchronous remainder. Awaiting the chain
-    finishes either kind. An executing or consumed chain cannot be extended
-    or executed again. No tasks, notifications, result caching, or cancellation
-    shielding are provided.
+    work eagerly and returning any asynchronous remainder. ``aunwrap`` provides
+    an always-awaitable result; the chain itself is not awaitable. An executing
+    or consumed chain cannot be extended or executed again. Only ``batch``
+    schedules tasks, when its asynchronous remainder is awaited. No result
+    caching, cancellation shielding, or resource ownership is provided.
     """
 
     __slots__ = ("_value", "_steps")
@@ -253,32 +268,118 @@ class Continuation(Generic[_T]):
             raise error
         return value
 
-    def __await__(self) -> Generator[Any, None, _T]:
-        async def execute() -> _T:
-            return await await_result(self.unwrap())
-
-        return execute().__await__()
+    def aunwrap(self) -> Awaitable[_T]:
+        """Unwrap now and return an awaitable, preserving immediate sync work."""
+        return await_result(self.unwrap())
 
     @staticmethod
-    def each(
+    def sequential(
         values: Iterable[_R], call: Callable[[_R], Any | Awaitable[Any]]
-    ) -> None | Awaitable[None]:
-        """Run calls in order, discarding their results.
+    ) -> Continuation[None]:
+        """Build ordered calls that discard results and stop on failure.
 
-        Consume each input only after the preceding call completes. Synchronous
-        calls run immediately; the first awaitable produces an unscheduled
-        remainder. Return None if all calls complete synchronously. Failure or
-        cancellation stops iteration.
+        Iteration starts on execution. Each next input is consumed only after
+        the preceding call completes. Entirely synchronous calls stay synchronous.
         """
-        iterator = iter(values)
 
-        async def remaining(pending: Awaitable[Any]) -> None:
-            await pending
+        def execute() -> None | Awaitable[None]:
+            iterator = iter(values)
+
+            async def remaining(pending: Awaitable[Any]) -> None:
+                await pending
+                for value in iterator:
+                    await await_result(call(value))
+
             for value in iterator:
-                await await_result(call(value))
+                result = call(value)
+                if isawaitable(result):
+                    return remaining(result)
+            return None
 
-        for value in iterator:
-            result = call(value)
-            if isawaitable(result):
-                return remaining(result)
-        return None
+        return Continuation.call(execute)
+
+    @overload
+    @staticmethod
+    def batch(
+        values: Iterable[_R], call: Callable[[_R], Awaitable[_S]]
+    ) -> Continuation[list[_S]]: ...
+    @overload
+    @staticmethod
+    def batch(
+        values: Iterable[_R], call: Callable[[_R], _S | Awaitable[_S]]
+    ) -> Continuation[list[_S]]: ...
+    @staticmethod
+    def batch(
+        values: Iterable[_R], call: Callable[[_R], _S | Awaitable[_S]]
+    ) -> Continuation[list[_S]]:
+        """Build independent calls, returning ordered results or BatchError.
+
+        Every input is attempted despite earlier call failures. Execution stays
+        synchronous until a call returns an awaitable; awaiting the remainder
+        schedules it and the remaining calls concurrently. Failed slots never
+        appear in returned results. Child cancellation is an indexed failure;
+        cancelling the batch waiter follows asyncio cancellation propagation.
+        If cancellation coincides with other failures, BatchError retains them
+        and chains the cancellation as its cause; otherwise cancellation propagates.
+        An iterator failure stops enumeration but still waits for started calls.
+        """
+
+        def execute() -> list[_S] | Awaitable[list[_S]]:
+            iterator = iter(values)
+            # Pending slots hold awaitables; failed batches never return results.
+            results: list[Any] = []
+            errors: dict[int, BaseException] = {}
+
+            def report() -> list[_S]:
+                if errors:
+                    raise BatchError(errors)
+                return results
+
+            async def remaining(first: Awaitable[_S]) -> list[_S]:
+                async def evaluate(value: _R) -> _S:
+                    return await await_result(call(value))
+
+                tasks = {len(results) - 1: asyncio.create_task(await_result(first))}
+                try:
+                    for value in iterator:
+                        index = len(results)
+                        results.append(None)
+                        tasks[index] = asyncio.create_task(evaluate(value))
+                except BaseException as error:
+                    errors[len(results)] = error
+
+                cancellation: asyncio.CancelledError | None = None
+                try:
+                    await asyncio.gather(*tasks.values(), return_exceptions=True)
+                except asyncio.CancelledError as error:
+                    cancellation = error
+                for index, task in tasks.items():
+                    try:
+                        results[index] = task.result()
+                    except BaseException as error:
+                        errors[index] = error
+                if cancellation is not None:
+                    if any(
+                        not isinstance(error, asyncio.CancelledError)
+                        for error in errors.values()
+                    ):
+                        raise BatchError(errors) from cancellation
+                    raise cancellation
+                return report()
+
+            try:
+                for value in iterator:
+                    try:
+                        result = call(value)
+                    except BaseException as error:
+                        errors[len(results)] = error
+                        results.append(None)
+                        continue
+                    results.append(result)
+                    if isawaitable(result):
+                        return remaining(result)
+            except BaseException as error:
+                errors[len(results)] = error
+            return report()
+
+        return Continuation.call(execute)

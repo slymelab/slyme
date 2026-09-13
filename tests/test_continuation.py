@@ -31,16 +31,24 @@ def test_chain_building_is_in_place_and_execution_is_single_use() -> None:
         root.catch(str)
 
 
-async def test_await_defers_sync_prefix_until_the_await_iterator_runs() -> None:
+async def test_aunwrap_runs_sync_prefix_and_returns_an_awaitable() -> None:
     events = []
     chain = Continuation.call(lambda: events.append("call")).then(lambda _: 7)
-    iterator = chain.__await__()
+    assert not isawaitable(chain)
     assert events == []
-    with pytest.raises(StopIteration) as caught:
-        next(iterator)
-    assert caught.value.value == 7
+    result = chain.aunwrap()
+    assert isawaitable(result)
     assert events == ["call"]
-    assert await Continuation.resolve(3) == 3
+    assert await result == 7
+    assert await Continuation.resolve(3).aunwrap() == 3
+
+
+def test_aunwrap_preserves_immediate_synchronous_errors() -> None:
+    def fail():
+        raise ValueError("immediate")
+
+    with pytest.raises(ValueError, match="immediate"):
+        Continuation.call(fail).aunwrap()
 
 
 async def test_unwrap_stops_at_async_result_without_scheduling() -> None:
@@ -69,16 +77,18 @@ async def test_root_awaitable_and_nested_continuations_preserve_results() -> Non
     async def initial():
         return 2
 
-    assert await Continuation.resolve(initial()).then(str) == "2"
-    assert await Continuation.resolve(Continuation.resolve(4)) == 4
+    assert await Continuation.resolve(initial()).then(str).aunwrap() == "2"
+    inner = Continuation.resolve(4)
+    assert Continuation.resolve(inner).unwrap() is inner
+    assert await Continuation.resolve(inner.unwrap()).aunwrap() == 4
     assert (
-        await Continuation.resolve(2).then(
-            lambda value: Continuation.resolve(value + 3)
-        )
+        await Continuation.resolve(2)
+        .then(lambda value: Continuation.resolve(value + 3).unwrap())
+        .aunwrap()
         == 5
     )
     data = [initial()]
-    assert await Continuation.resolve(data) is data
+    assert await Continuation.resolve(data).aunwrap() is data
     assert await data[0] == 2
     marker = object()
     assert Continuation.resolve(marker).unwrap() is marker
@@ -91,7 +101,7 @@ async def test_pending_execution_rejects_reuse_and_additional_steps() -> None:
     chain = Continuation.call(initial).then(lambda value: value + 1)
     pending = chain.unwrap()
     with pytest.raises(RuntimeError, match="once"):
-        await chain
+        await chain.aunwrap()
     with pytest.raises(RuntimeError, match="extended"):
         chain.then(str)
     assert await await_result(pending) == 3
@@ -143,15 +153,18 @@ async def test_recovery_handles_sync_and_async_errors(asynchronous: bool) -> Non
 
     operation = afail if asynchronous else fail
     assert (
-        await Continuation.call(operation).catch(recover).then(lambda value: value + 1)
+        await Continuation.call(operation)
+        .catch(recover)
+        .then(lambda value: value + 1)
+        .aunwrap()
         == 6
     )
     assert (
-        await Continuation.call(operation).then(str, lambda error: str(error))
+        await Continuation.call(operation).then(str, lambda error: str(error)).aunwrap()
         == "failure"
     )
     with pytest.raises(ValueError) as caught:
-        await Continuation.call(operation).then(str)
+        await Continuation.call(operation).then(str).aunwrap()
     assert caught.value is failure
 
 
@@ -170,7 +183,7 @@ async def test_paired_recovery_does_not_catch_its_success_callback_error(
     chain = Continuation.resolve(initial() if asynchronous else 1).then(
         fail, lambda error: events.append("wrong handler")
     )
-    assert await chain.catch(lambda error: str(error)) == "success failed"
+    assert await chain.catch(lambda error: str(error)).aunwrap() == "success failed"
     assert events == []
 
 
@@ -193,7 +206,7 @@ async def test_recovery_can_fail_or_skip_a_nonmatching_exception(
         .catch(recover)
     )
     with pytest.raises(LookupError) as caught:
-        await chain
+        await chain.aunwrap()
     assert isinstance(caught.value.__cause__, ValueError)
 
 
@@ -215,19 +228,19 @@ async def test_cancellation_propagates_unless_explicitly_selected(
         lambda error: events.append("wrong handler")
     )
     with pytest.raises(asyncio.CancelledError) as caught:
-        await chain
+        await chain.aunwrap()
     assert caught.value is cancellation
     assert events == []
     assert (
-        await Continuation.call(operation).catch(
-            lambda error: 7, exceptions=BaseException
-        )
+        await Continuation.call(operation)
+        .catch(lambda error: 7, exceptions=BaseException)
+        .aunwrap()
         == 7
     )
     assert (
-        await Continuation.call(operation).then(
-            str, lambda error: "cancelled", exceptions=BaseException
-        )
+        await Continuation.call(operation)
+        .then(str, lambda error: "cancelled", exceptions=BaseException)
+        .aunwrap()
         == "cancelled"
     )
 
@@ -243,7 +256,7 @@ async def test_waiter_cancellation_reaches_the_operation_without_hidden_tasks() 
         finally:
             stopped.set()
 
-    task = asyncio.create_task(await_result(Continuation.call(operation)))
+    task = asyncio.create_task(Continuation.call(operation).aunwrap())
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -264,21 +277,23 @@ async def test_long_chains_use_bounded_execution_stack() -> None:
         sync = sync.then(increment)
         asynchronous = asynchronous.then(aincrement)
     assert sync.unwrap() == 5000
-    assert await asynchronous == 5000
+    assert await asynchronous.aunwrap() == 5000
 
 
-def test_each_runs_synchronous_calls_immediately_and_discards_results() -> None:
+def test_sequential_defers_calls_until_unwrap_and_discards_results() -> None:
     visited = []
 
     def call(value: int) -> int:
         visited.append(value)
         return value * 2
 
-    assert Continuation.each([1, 2, 3], call) is None
+    chain = Continuation.sequential([1, 2, 3], call)
+    assert visited == []
+    assert chain.unwrap() is None
     assert visited == [1, 2, 3]
 
 
-async def test_each_consumes_iterators_after_previous_completion() -> None:
+async def test_sequential_consumes_iterators_after_previous_completion() -> None:
     events = []
 
     def values():
@@ -295,13 +310,15 @@ async def test_each_consumes_iterators_after_previous_completion() -> None:
     def call(value) -> None | Awaitable[None]:
         return first() if value == 1 else events.append("second")
 
-    result = Continuation.each(values(), call)
+    chain = Continuation.sequential(values(), call)
+    assert events == []
+    result = chain.unwrap()
     assert events == ["yield:first"]
     await await_result(result)
     assert events == ["yield:first", "first", "finished", "yield:second", "second"]
 
 
-def test_each_stops_consuming_when_a_call_fails() -> None:
+def test_sequential_stops_consuming_when_a_call_fails() -> None:
     events = []
 
     def values():
@@ -313,5 +330,24 @@ def test_each_stops_consuming_when_a_call_fails() -> None:
         raise ValueError(value)
 
     with pytest.raises(ValueError):
-        Continuation.each(values(), fail)
+        Continuation.sequential(values(), fail).unwrap()
     assert events == []
+
+
+async def test_sequential_supports_recovery_without_consuming_remaining_inputs() -> (
+    None
+):
+    visited = []
+
+    async def fail(value):
+        visited.append(value)
+        raise ValueError("failed")
+
+    result = await (
+        Continuation.sequential([1, 2], fail)
+        .catch(lambda error: str(error))
+        .then(lambda result: (result, "done"))
+        .aunwrap()
+    )
+    assert result == ("failed", "done")
+    assert visited == [1]

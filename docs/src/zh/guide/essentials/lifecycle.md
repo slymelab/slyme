@@ -60,9 +60,9 @@ process(data=R.resolve("items"))(ctx)  # data 是 Context 中保存的 list
 
 Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。求值保持同步，直到子调用或 cleanup 返回 awaitable；被等待后，未完成的 child 和剩余 sibling 并发执行，结果保持输入顺序。成功的子节点立即释放 Context。全部子任务结束后，会完成失败或被中断的释放，再报告错误或执行父函数。
 
-Auto 会尝试执行所有 sibling，包括同步节点已经失败的情况。子节点失败或取消不会取消其他 sibling；求值会等待所有节点结束，类似 `asyncio.gather(..., return_exceptions=True)`。子节点错误按输入顺序收集，最终清理中的错误追加在后。第一个非取消错误作为主错误抛出，其他错误通过 cause 保留；只有取消时才传播取消。重复释放同一个 Context 不会重复报告其保存的同一个错误。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
+Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling；求值会等待所有节点结束，类似 `asyncio.gather(..., return_exceptions=True)`。错误统一通过 `slyme.utils.continuation` 的 `BatchError` 抛出。其 `errors` 映射按照 evaluator 组首次出现的顺序索引；内置 evaluator 的错误是另一层 `BatchError`，使用 Ref 或 Node 在该组内的位置作为索引。最终的子 Context 清理错误组成独立的 `BatchError`，作为 Node batch 的 cause 保留。重复释放不会重复报告同一个已保存的清理错误，Node 和 Wrapper 调用也会保留这些汇总异常。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
 
-取消外层求值 Task 时，asyncio 会将取消传播给尚未完成的子任务。Auto 会等待这些任务退出以及子 Context 清理完成，包括收到重复取消的情况。同步子节点在事件循环线程内直接执行，执行期间无法被打断。Task 取消不保证底层网络、线程或进程中的工作已经停止；这些行为由应用适配层负责。
+取消外层求值 Task 时，asyncio 会将取消传播给尚未完成的子任务。Auto 会等待这些任务退出以及子 Context 清理完成，包括收到重复取消的情况。没有其他错误时直接传播取消，否则通过 `BatchError` 保留错误，并将取消保留为 cause。同步子节点在事件循环线程内直接执行，执行期间无法被打断。Task 取消不保证底层网络、线程或进程中的工作已经停止；这些行为由应用适配层负责。
 
 Auto child 返回的值不得依赖其子 Context 拥有的资源，因为这些资源会在父函数运行前关闭；返回这类值时应显式转移所有权，或者使用生命周期更长的 Context。子 Context 仍会共享可变 leaf 对象，也无法撤销没有注册 cleanup 的文件、网络请求或其他外部副作用。
 

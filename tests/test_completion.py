@@ -10,7 +10,7 @@ from slyme.context import Context
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.eval import EvaluatorDef
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.continuation import await_result
+from slyme.utils.continuation import BatchError, await_result
 from slyme.utils.registry import GeneralRegistry
 
 
@@ -388,10 +388,15 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_keeps_both_errors()
         return value
 
     ctx = Context()
-    with pytest.raises(NodeExceptionRecord) as caught:
+    with pytest.raises(BatchError) as caught:
         await await_result(parent(value=child())(ctx))
-    assert caught.value.exception is failure
-    assert caught.value.__cause__ is cleanup_failure
+    child_errors = caught.value.errors[0]
+    assert isinstance(child_errors, BatchError)
+    node_error = child_errors.errors[0]
+    assert isinstance(node_error, NodeExceptionRecord)
+    assert node_error.exception is failure
+    assert isinstance(child_errors.__cause__, BatchError)
+    assert child_errors.__cause__.errors == {0: cleanup_failure}
     assert not ctx._owned
     ctx.dispose()
 

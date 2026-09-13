@@ -24,7 +24,7 @@ __all__ = ["sequential_exec", "sequential"]
 
 def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None | Awaitable[None]:
     """Execute nodes in order, waiting for each completion before the next."""
-    return Continuation.each(nodes, lambda item: item(ctx))
+    return Continuation.sequential(nodes, lambda item: item(ctx)).unwrap()
 
 
 @node

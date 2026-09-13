@@ -123,7 +123,9 @@ Typed APIs rely on their annotations for argument and callback types, including 
 
 Use `await task.acall(ctx)` and `await ctx.adispose()` when execution or cleanup may be asynchronous. These always-awaitable adapters preserve immediate synchronous work and errors, and do not schedule tasks. Purely synchronous applications can call `task(ctx)` and `ctx.dispose()` directly.
 
-For a regular function that composes both kinds of result, use `Continuation` from `slyme.utils.continuation`: `Continuation.call(lambda: task(ctx)).then(transform).unwrap()`. Building the chain appends callbacks in place without executing them. `unwrap()` consumes the chain, runs its synchronous prefix, and returns a value or an awaitable remainder; `await chain` completes either kind. Chains are single-use and do not create tasks, cache results, or own resource lifetimes.
+For a regular function that composes both kinds of result, use `Continuation` from `slyme.utils.continuation`: `Continuation.call(lambda: task(ctx)).then(transform).unwrap()`. Building the chain appends callbacks in place without executing them. `unwrap()` consumes the chain, runs its synchronous prefix, and returns a value or an awaitable remainder; use `await chain.aunwrap()` for an always-awaitable result. The chain itself is not awaitable. Chains are single-use and do not cache results or own resource lifetimes.
+
+`Continuation.sequential(items, call)` builds ordered, fail-fast calls and discards their results. `Continuation.batch(items, call)` attempts every item, awaits asynchronous calls concurrently, and returns an input-ordered list or raises `BatchError` with failures in `errors: dict[int, BaseException]`. Both return chains supporting `then()` and `catch()`. Batch execution schedules tasks only when its asynchronous remainder is awaited; entirely synchronous work stays synchronous. Auto uses batches across evaluator groups as well as within Ref and Node evaluation, retaining nested error indices.
 
 ## Context lifetimes, Scope visibility, and Compose
 

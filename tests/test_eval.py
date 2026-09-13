@@ -8,12 +8,111 @@ from typing import Any
 import pytest
 
 from slyme.context import Context, Ref, Schema
+from slyme.context.core import ContextPathError
 from slyme.node import Auto, Node, eval_tree, node, wrapper
 from slyme.node.eval import EVALUATOR_REGISTRY, EvaluatorDef, node_evaluator
 from slyme.node.exception import NodeExceptionRecord
-from slyme.utils.continuation import await_result
+from slyme.utils.continuation import BatchError, Continuation, await_result
 from slyme.utils.registry import GeneralRegistry
 from slyme.utils.tree import TreeAux, TreeEngine
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_evaluator_groups_run_concurrently_and_settle_before_reporting(
+    monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    started = [asyncio.Event(), asyncio.Event()]
+    failures = [ValueError("integer evaluator"), LookupError("string evaluator")]
+    finished = []
+
+    async def integers(ctx, values):
+        started[0].set()
+        await started[1].wait()
+        finished.append(0)
+        if fail:
+            raise failures[0]
+        return [value + 1 for value in values]
+
+    async def strings(ctx, values):
+        started[1].set()
+        await started[0].wait()
+        finished.append(1)
+        if fail:
+            raise failures[1]
+        return [value.upper() for value in values]
+
+    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
+    registry.register(EvaluatorDef(integers), key=int)
+    registry.register(EvaluatorDef(strings), key=str)
+    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
+    ctx = Context()
+    pending = await_result(eval_tree(ctx, [1, "a", 2, "b"]))
+    if fail:
+        with pytest.raises(BatchError) as caught:
+            await asyncio.wait_for(pending, timeout=1)
+        assert caught.value.errors == dict(enumerate(failures))
+    else:
+        assert await asyncio.wait_for(pending, timeout=1) == [2, "A", 3, "B"]
+    assert sorted(finished) == [0, 1]
+    ctx.dispose()
+
+
+@pytest.mark.parametrize("target", ["node", "wrapper", "eval_tree"])
+async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> None:
+    schema = Schema({"first": Schema.leaf(), "second": Schema.leaf()})
+    ctx = Context(schema=schema)
+    visited = []
+    failure = ValueError("child failed")
+
+    @node
+    async def child(ctx: Context, /) -> int:
+        ctx.effect(lambda: lambda: visited.append("cleanup"))
+        visited.append("child")
+        raise failure
+
+    @node
+    def parent(ctx: Context, /, *, values: Auto[Any]) -> Any:
+        visited.append("parent")
+        return values
+
+    @wrapper
+    def middleware(
+        ctx: Context, wrapped: Node, call_next: Callable, /, *, values: Auto[Any]
+    ) -> Any:
+        visited.append("wrapper")
+        return values
+
+    values = [schema.resolve("first"), schema.resolve("second"), child()]
+    if target == "node":
+        call = parent(values=values)
+    elif target == "wrapper":
+        call = parent(values=None).add_wrappers(middleware(values=values))
+    else:
+
+        def call(ctx):
+            return eval_tree(ctx, values)
+
+    error = await (
+        Continuation.call(lambda: call(ctx))
+        .catch(lambda error: error, exceptions=BatchError)
+        .aunwrap()
+    )
+    assert isinstance(error, BatchError)
+    assert list(error.errors) == [0, 1]
+    ref_errors, node_errors = error.errors.values()
+    assert isinstance(ref_errors, BatchError)
+    assert list(ref_errors.errors) == [0, 1]
+    assert all(
+        isinstance(error, ContextPathError) for error in ref_errors.errors.values()
+    )
+    assert isinstance(node_errors, BatchError)
+    assert list(node_errors.errors) == [0]
+    child_error = node_errors.errors[0]
+    assert isinstance(child_error, NodeExceptionRecord)
+    assert child_error.exception is failure
+    assert visited == ["child", "cleanup"]
+    assert not ctx._owned
+    ctx.dispose()
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -46,17 +145,18 @@ async def test_auto_reports_all_child_and_cleanup_failures(asynchronous: bool) -
         return 2
 
     ctx = Context()
-    with pytest.raises(NodeExceptionRecord) as caught:
+    with pytest.raises(BatchError) as caught:
         await await_result(
             node_evaluator(ctx, [failing(index=0), failing(index=1), successful()])
         )
-    assert caught.value.exception is failures[0]
+    assert list(caught.value.errors) == [0, 1]
+    for index, failure in enumerate(failures):
+        child_error = caught.value.errors[index]
+        assert isinstance(child_error, NodeExceptionRecord)
+        assert child_error.exception is failure
     cause = caught.value.__cause__
-    assert cause is not None
-    additional = getattr(cause, "errors", (cause,))
-    assert isinstance(additional[0], NodeExceptionRecord)
-    assert additional[0].exception is failures[1]
-    assert additional[1:] == tuple(cleanup_failures)
+    assert isinstance(cause, BatchError)
+    assert cause.errors == dict(enumerate(cleanup_failures))
     for index in range(3):
         assert events.count(("run", index)) == 1
         assert events.count(("cleanup", index)) == 1
@@ -82,9 +182,9 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
         return 2
 
     ctx = Context()
-    with pytest.raises(RuntimeError) as caught:
+    with pytest.raises(BatchError) as caught:
         node_evaluator(ctx, [first(), second()])
-    assert caught.value is failure
+    assert caught.value.errors == {0: failure}
     assert caught.value.__cause__ is None
     assert events == ["cleanup", "second"]
     assert not ctx._owned
@@ -107,7 +207,7 @@ async def test_sync_auto_failure_still_starts_async_siblings() -> None:
     pending = node_evaluator(ctx, [failing(), asynchronous()])
     assert inspect.isawaitable(pending)
     assert visited == ["sync"]
-    with pytest.raises(NodeExceptionRecord):
+    with pytest.raises(BatchError):
         await pending
     assert visited == ["sync", "async"]
     assert not ctx._owned
@@ -186,8 +286,9 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
     await asyncio.sleep(0)
     assert not task.done()
     release.set()
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(BatchError) as caught:
         await task
+    assert isinstance(caught.value.errors[0], asyncio.CancelledError)
     assert "sibling finished" in events
     assert events.count("cleanup:cancelled") == 1
     assert events.count("cleanup:sibling") == 1

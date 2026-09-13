@@ -11,8 +11,11 @@ breaking changes when they are documented here.
 ### Added
 
 - Added mutable, single-use `Continuation.call()` / `Continuation.resolve()` chains with `then()`, `catch()`,
-  `unwrap()`, and direct awaiting in `slyme.utils.continuation`. Ordinary errors
+  `unwrap()`, and always-awaitable `aunwrap()` in `slyme.utils.continuation`. Ordinary errors
   are recoverable; cancellation propagates unless explicitly selected.
+- Added `Continuation.sequential()` for ordered fail-fast calls and
+  `Continuation.batch()` for independent calls that all settle before returning
+  ordered results or raising `BatchError` with indexed failures. Both build chains.
 - Added `Node.acall()` and `Context.adispose()` as always-awaitable adapters
   that preserve immediate synchronous execution and the unified completion rules.
 - Added `slyme.utils.continuation.await_result()` to await an immediate or asynchronous
@@ -87,6 +90,8 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `Continuation.__await__` and `each()`. Use explicit `aunwrap()` for
+  awaiting a chain and `sequential(...).unwrap()` for ordered execution.
 - Removed `slyme.utils.awaitable`; import `await_result` from `slyme.utils.continuation`.
 - Removed `TypeRegistry` and `TreeEngine.allow_inheritance`. Tree handlers and
   Auto evaluators use exact type keys through `GeneralRegistry`; subclasses
@@ -134,6 +139,9 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Auto batches independent evaluator groups, collecting Ref and Node failures
+  into nested `BatchError` objects without cancelling siblings. Node and Wrapper
+  calls preserve these aggregates; child cleanup finishes before reporting them.
 - Renamed `slyme.utils.pytree` to `slyme.utils.tree`, `PyTree*` types to `Tree*`,
   and `PYTREE_ENGINE_REGISTRY` to `TREE_ENGINE_REGISTRY`, including its namespace
   from `pytree_engine` to `tree_engine`. No compatibility aliases are provided.

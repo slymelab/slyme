@@ -8,6 +8,7 @@ import pytest
 from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
 from slyme.node.eval import ref_evaluator
+from slyme.utils.continuation import BatchError
 from slyme.utils.tree import TreeAux, TreeEngine
 
 
@@ -148,8 +149,14 @@ def test_extract_validates_all_refs_before_reading_values() -> None:
     ctx = Context(schema=schema)
     with pytest.raises(ContextPathError, match="undeclared"):
         ctx.extract([schema.resolve("empty"), Ref("undeclared")])
-    with pytest.raises(ContextPathError, match="empty"):
+    with pytest.raises(BatchError) as caught:
         ref_evaluator(ctx, [schema.resolve("empty"), Ref("undeclared")])
+    assert list(caught.value.errors) == [0, 1]
+    assert all(
+        isinstance(error, ContextPathError) for error in caught.value.errors.values()
+    )
+    assert "empty" in str(caught.value.errors[0])
+    assert "undeclared" in str(caught.value.errors[1])
     ctx.dispose()
 
 

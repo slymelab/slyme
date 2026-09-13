@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compose immediate and asynchronous results without implicit scheduling."""
+"""Compose immediate and asynchronous results, including settled batches."""
 
-from .core import Continuation, await_result
+from .core import BatchError, Continuation, await_result
 
-__all__ = ["Continuation", "await_result"]
+__all__ = ["BatchError", "Continuation", "await_result"]

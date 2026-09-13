@@ -74,13 +74,33 @@ def increment_child(ctx, *, child: Node[int]):
 
 `Continuation.call(operation)` 延迟操作本身的调用。`Continuation.resolve(value)` 包装已有结果；写成 `Continuation.resolve(operation())` 时，Python 会先调用 `operation()`，再构建链。`then(success, failure)` 处理上游的完成结果，配对的 failure 不捕获 success 自己抛出的错误；后续的 `catch(recover)` 可以处理这些错误。两种回调均可返回同步或异步结果。
 
-创建和扩展链不会执行回调。`unwrap()` 立即执行同步前缀，返回最终值或尚未调度的异步剩余流程；`await chain` 执行并完成整个链。这与 JavaScript Promise 自动调度回调不同。同步入口可使用 `asyncio.run(await_result(chain))`，已有事件循环内可用 `asyncio.create_task(await_result(chain))` 显式调度；`await_result()` 返回这些 API 接受的 coroutine。
+创建和扩展链不会执行回调。`unwrap()` 立即执行同步前缀，返回最终值或尚未调度的异步剩余流程。`aunwrap()` 保留立即执行的同步操作及其错误，但始终返回 awaitable；异步代码中使用 `await chain.aunwrap()`。链本身不可 await。同步入口可使用 `asyncio.run(await_result(chain.unwrap()))`，已有事件循环内可用 `asyncio.create_task(await_result(chain.unwrap()))` 调度剩余流程。回调返回另一条链时，必须显式调用它的 `unwrap()`；裸链对象只是普通数据。
 
 `then()` 和 `catch()` 向同一个可变操作列表追加步骤，并返回原对象；多个别名不是独立分支，应以流式返回值作为当前类型阶段。每条链只能执行一次，开始执行后不能继续追加步骤；需要再次执行时应创建新链。与 JavaScript Promise 不同，Continuation 没有订阅者或用于通知的完成结果缓存。需要共享同一次执行的调用方可以显式创建并保留 Task。Continuation 不屏蔽取消，也不拥有资源清理；Context 的可重复等待、取消安全的释放逻辑保持独立。
 
 `catch()` 和 `then()` 的失败回调默认只处理 `Exception`，不拦截取消等其他 `BaseException` 子类。可通过 `exceptions=SomeException` 选择异常类；需要观察取消的生命周期清理可以显式选择 `BaseException`，再决定是否继续传播取消。
 
-`Continuation.each(values, call)` 按顺序执行调用并丢弃返回值。与注册链步骤不同，它立即执行同步调用；全部同步完成时返回 `None`，否则返回尚未调度的异步剩余流程。只有前一次调用完成后才获取下一个输入；失败或取消会停止迭代。
+`Continuation.sequential(values, call)` 构建一个 `Continuation[None]`，按顺序执行调用并丢弃返回值。调用 `unwrap()` 或 `aunwrap()` 时才开始迭代，只有前一次调用完成后才获取下一个输入；失败或取消会停止迭代。展开前可通过 `then()` 或 `catch()` 处理完成结果。
+
+`Continuation.batch(values, call)` 构建一个执行独立调用的 `Continuation[list[T]]`。执行时即使已有失败，也会尝试所有输入；遇到返回 awaitable 的调用前保持同步。等待剩余流程时，会并发调度该调用和其余输入。全部结束后，batch 返回按输入排序的结果列表，或抛出从 `slyme.utils.continuation` 导出的 `BatchError`。`then()` 接收结果列表，`catch()` 仍与其他链一样接收单个异常：
+
+```python
+from slyme.utils.continuation import BatchError
+
+
+def recover(error: BatchError) -> list[str]:
+    return [f"input {index}: {failure}" for index, failure in error.errors.items()]
+
+
+result = (
+    Continuation.batch(["1", "invalid", "3"], int)
+    .then(lambda values: [str(value * 2) for value in values])
+    .catch(recover, exceptions=BatchError)
+    .unwrap()
+)
+```
+
+`BatchError.errors` 将从零开始的输入索引映射到错误，只有一个调用失败时也使用这一形式。嵌套 batch 保留各自的局部索引。迭代器失败会停止枚举，以待获取的输入索引记录错误，并等待已开始的调用。正常返回的异常对象仍是数据，失败的 batch 不返回部分结果。单个项目失败或取消不会取消 sibling。取消 batch 等待者时，asyncio 会向尚未完成的调用传播取消；若还存在其他错误，`BatchError` 会保留它们并以取消为 cause，否则直接传播取消。Batch 不提供超时或资源清理策略。
 
 ## 参数与 Auto
 
