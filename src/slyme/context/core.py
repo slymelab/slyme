@@ -32,7 +32,7 @@ from enum import Enum
 from inspect import isawaitable
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
-from slyme.utils.awaitable import resolve
+from slyme.utils.continuation import await_result
 
 from .compose import Compose
 from .ref import Ref
@@ -74,7 +74,7 @@ class _Completion(Generic[_T]):
         self._check()
         if self._task is None:
             self._task = asyncio.create_task(
-                resolve(cast(Awaitable[_T], self._operation))
+                await_result(cast(Awaitable[_T], self._operation))
             )
             self._operation = None
             self._task.add_done_callback(self._observe)
@@ -165,7 +165,7 @@ class _Effect:
             cleanup = self._cleanup
             self._cleanup = None
             if cleanup is not None:
-                await resolve(cleanup())
+                await await_result(cleanup())
         except BaseException as error:
             self._finish(error)
             raise
@@ -730,7 +730,7 @@ class Context(ContextElement):
         Synchronous cleanup and errors occur during this call. Await the result
         to finish disposal with the same cancellation and failure guarantees.
         """
-        return resolve(self.dispose())
+        return await_result(self.dispose())
 
     async def _continue_dispose(
         self,
@@ -747,7 +747,7 @@ class Context(ContextElement):
                     first_error = error
             for item in owned:
                 try:
-                    await resolve(item.dispose())
+                    await await_result(item.dispose())
                 except BaseException as error:
                     if first_error is None:
                         first_error = error
@@ -817,9 +817,6 @@ class Context(ContextElement):
         """Create an owned child sharing this Context's Scope by default."""
         self._assert_mutable()
         return type(self)(parent=self, scope=scope)
-
-    def _fork_for_auto(self) -> Context:
-        return self.fork(scope=self.scope.fork())
 
     def isolate(
         self,

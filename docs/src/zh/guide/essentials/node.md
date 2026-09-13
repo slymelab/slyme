@@ -52,11 +52,35 @@ async def execute(ctx):
         await ctx.adispose()
 ```
 
-`task.acall(ctx)` 和 `ctx.adispose()` 始终返回 awaitable。它们通过 `slyme.utils.awaitable` 的 `resolve()` 委托给普通调用与释放方法；同步工作和同步错误仍在调用时立即发生。它们不会创建 task 或调度异步工作。
+`task.acall(ctx)` 和 `ctx.adispose()` 始终返回 awaitable。它们通过 `slyme.utils.continuation` 的 `await_result()` 委托给普通调用与释放方法；同步工作和同步错误仍在调用时立即发生。它们不会创建 task 或调度异步工作。
 
-`resolve()` 只等待外层执行结果，不递归等待容器中的数据。异步 continuation 在被等待或调度前不会执行；同步前缀可能已运行。同步应用可以在应用入口使用 `asyncio.run(resolve(task(ctx)))`，已有事件循环内应 await，不创建嵌套事件循环。框架不会把阻塞函数自动放入线程。
+`await_result()` 只等待外层执行结果，不递归等待容器中的数据。异步 continuation 在被等待或调度前不会执行；同步前缀可能已运行。同步应用可以在应用入口使用 `asyncio.run(await_result(task(ctx)))`，已有事件循环内应 await，不创建嵌套事件循环。框架不会把阻塞函数自动放入线程。
 
-用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。需要支持异步 child 时，改用 `async def` 和 `await child.acall(ctx)`。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
+用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。可以使用 `async def` 和 `await child.acall(ctx)`，或返回下面的 Continuation 组合。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
+
+### 惰性结果链
+
+`Continuation` 让普通函数组合同步和异步结果，而不必自行定义异步 continuation：
+
+```python
+from slyme.node import Node
+from slyme.utils.continuation import Continuation, await_result
+
+
+@node
+def increment_child(ctx, *, child: Node[int]):
+    return Continuation.call(lambda: child(ctx)).then(lambda value: value + 1).unwrap()
+```
+
+`Continuation.call(operation)` 延迟操作本身的调用。`Continuation.resolve(value)` 包装已有结果；写成 `Continuation.resolve(operation())` 时，Python 会先调用 `operation()`，再构建链。`then(success, failure)` 处理上游的完成结果，配对的 failure 不捕获 success 自己抛出的错误；后续的 `catch(recover)` 可以处理这些错误。两种回调均可返回同步或异步结果。
+
+创建和扩展链不会执行回调。`unwrap()` 立即执行同步前缀，返回最终值或尚未调度的异步剩余流程；`await chain` 执行并完成整个链。这与 JavaScript Promise 自动调度回调不同。同步入口可使用 `asyncio.run(await_result(chain))`，已有事件循环内可用 `asyncio.create_task(await_result(chain))` 显式调度；`await_result()` 返回这些 API 接受的 coroutine。
+
+`then()` 和 `catch()` 向同一个可变操作列表追加步骤，并返回原对象；多个别名不是独立分支，应以流式返回值作为当前类型阶段。每条链只能执行一次，开始执行后不能继续追加步骤；需要再次执行时应创建新链。与 JavaScript Promise 不同，Continuation 没有订阅者或用于通知的完成结果缓存。需要共享同一次执行的调用方可以显式创建并保留 Task。Continuation 不屏蔽取消，也不拥有资源清理；Context 的可重复等待、取消安全的释放逻辑保持独立。
+
+`catch()` 和 `then()` 的失败回调默认只处理 `Exception`，不拦截取消等其他 `BaseException` 子类。可通过 `exceptions=SomeException` 选择异常类；需要观察取消的生命周期清理可以显式选择 `BaseException`，再决定是否继续传播取消。
+
+`Continuation.each(values, call)` 按顺序执行调用并丢弃返回值。与注册链步骤不同，它立即执行同步调用；全部同步完成时返回 `None`，否则返回尚未调度的异步剩余流程。只有前一次调用完成后才获取下一个输入；失败或取消会停止迭代。
 
 ## 参数与 Auto
 
@@ -116,7 +140,7 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适用于同步执行：`call_next(ctx)` 返回 awaitable 时，后续语句会在异步完成前运行。仅转发结果的 Wrapper 可以直接返回它；需要最终结果、异步异常或完成后清理的 Wrapper 应使用 `async def` 与 `await resolve(call_next(ctx))`。框架不会改写用户的 `try/finally`。
+Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适用于同步执行：`call_next(ctx)` 返回 awaitable 时，后续语句会在异步完成前运行。仅转发结果的 Wrapper 可以直接返回它。普通函数中的结果依赖操作可以使用 `Continuation.call(lambda: call_next(ctx)).then(transform).unwrap()`；需要以原生 `try/finally` 完成清理时，可以使用 `async def` 与 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
 ## 组合结构
 

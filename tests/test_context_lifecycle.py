@@ -8,7 +8,7 @@ import pytest
 
 from slyme.context import Compose, Context, Schema, Scope
 from slyme.context.core import ContextPathError
-from slyme.utils.awaitable import resolve
+from slyme.utils.continuation import await_result
 
 
 async def test_adispose_runs_sync_cleanup_immediately_without_scheduling() -> None:
@@ -132,7 +132,7 @@ async def test_mixed_ownership_preserves_lifo_after_arbitrary_early_release(
     early_child.dispose()
     assert events == ["early-effect", "early-child"]
     if asynchronous:
-        await resolve(root.dispose())
+        await await_result(root.dispose())
     else:
         root.dispose()
     assert events == ["early-effect", "early-child", "last", "child", "first"]
@@ -188,10 +188,10 @@ async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None
 
     release = child.effect(lambda: cleanup)
     effect = next(iter(child._owned))
-    early = asyncio.create_task(resolve(release()))
+    early = asyncio.create_task(await_result(release()))
     await started.wait()
     assert effect in child._owned
-    disposing = asyncio.create_task(resolve(root.dispose()))
+    disposing = asyncio.create_task(await_result(root.dispose()))
     await asyncio.sleep(0)
     assert child in root._owned
     assert not disposing.done()
@@ -473,7 +473,7 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
         for _ in range(2):
             with pytest.raises(ValueError) as raised:
                 if asynchronous:
-                    await resolve(child.dispose())
+                    await await_result(child.dispose())
                 else:
                     child.dispose()
             assert raised.value is expected
@@ -950,7 +950,7 @@ def test_dispose_returns_async_completion_without_starting_a_loop() -> None:
     assert events == []
     assert ctx.dispose() is pending
 
-    asyncio.run(resolve(pending))
+    asyncio.run(await_result(pending))
     assert events == ["async", "sync"]
 
 
@@ -964,8 +964,8 @@ async def test_async_dispose_is_shared_and_runs_cleanup_once() -> None:
         calls += 1
 
     ctx.effect(lambda: cleanup)
-    await asyncio.gather(resolve(ctx.dispose()), resolve(ctx.dispose()))
-    await resolve(ctx.dispose())
+    await asyncio.gather(await_result(ctx.dispose()), await_result(ctx.dispose()))
+    await await_result(ctx.dispose())
     assert calls == 1
 
 
@@ -987,14 +987,14 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
         raise ValueError("late cleanup failure")
 
     ctx.effect(lambda: cleanup)
-    first_waiter = asyncio.create_task(resolve(ctx.dispose()))
+    first_waiter = asyncio.create_task(await_result(ctx.dispose()))
     await started.wait()
     first_waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first_waiter
 
     if rewait_before_cleanup_finishes:
-        repeated = asyncio.create_task(resolve(ctx.dispose()))
+        repeated = asyncio.create_task(await_result(ctx.dispose()))
         await asyncio.sleep(0)
         assert not repeated.done()
         release.set()
@@ -1004,12 +1004,12 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
         disposal_task = ctx._dispose_pending._task
         assert disposal_task is not None
         await asyncio.wait({disposal_task})
-        repeated = asyncio.create_task(resolve(ctx.dispose()))
+        repeated = asyncio.create_task(await_result(ctx.dispose()))
 
     with pytest.raises(ValueError, match="late cleanup failure"):
         await repeated
     with pytest.raises(ValueError, match="late cleanup failure"):
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
 
 
 async def test_dispose_marks_context_before_scheduling_cleanup() -> None:
@@ -1026,7 +1026,7 @@ async def test_dispose_marks_context_before_scheduling_cleanup() -> None:
     assert not started.is_set()
     with pytest.raises(RuntimeError, match="being disposed"):
         ctx.fork()
-    task = asyncio.create_task(resolve(pending))
+    task = asyncio.create_task(await_result(pending))
     await started.wait()
     assert ctx.dispose() is pending
     release.set()
@@ -1037,11 +1037,11 @@ async def test_async_cleanup_cannot_reenter_owner_disposal() -> None:
     ctx = Context()
 
     async def cleanup() -> None:
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
 
     ctx.effect(lambda: cleanup)
     with pytest.raises(RuntimeError, match="cannot be re-entered"):
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
 
 
 async def test_early_async_effect_disposal_cannot_dispose_its_owner() -> None:
@@ -1050,12 +1050,12 @@ async def test_early_async_effect_disposal_cannot_dispose_its_owner() -> None:
 
     async def cleanup() -> None:
         assert dispose_effect is not None
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
 
     dispose_effect = ctx.effect(lambda: cleanup)
     with pytest.raises(RuntimeError, match="cannot be re-entered"):
         await dispose_effect()
-    await resolve(ctx.dispose())
+    await await_result(ctx.dispose())
 
 
 @pytest.mark.parametrize("dispose_ancestor", [False, True])
@@ -1073,7 +1073,7 @@ async def test_async_early_cleanup_blocks_owner_and_ancestor_disposal(
         with pytest.raises(RuntimeError, match="setup or cleanup"):
             target.dispose()
         with pytest.raises(RuntimeError, match="setup or cleanup"):
-            await resolve(target.dispose())
+            await await_result(target.dispose())
         events.append(child.get("value"))
 
     dispose_effect = child.effect(lambda: cleanup)
@@ -1167,7 +1167,7 @@ async def test_async_effect_disposal_cannot_await_itself() -> None:
 
     dispose_effect = ctx.effect(lambda: cleanup)
     with pytest.raises(RuntimeError, match="cannot await its own"):
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
 
 
 async def test_cancelling_a_dispose_waiter_does_not_cancel_cleanup() -> None:
@@ -1182,7 +1182,7 @@ async def test_cancelling_a_dispose_waiter_does_not_cancel_cleanup() -> None:
         finished.set()
 
     ctx.effect(lambda: cleanup)
-    waiter = asyncio.create_task(resolve(ctx.dispose()))
+    waiter = asyncio.create_task(await_result(ctx.dispose()))
     await started.wait()
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1190,7 +1190,7 @@ async def test_cancelling_a_dispose_waiter_does_not_cancel_cleanup() -> None:
     assert not finished.is_set()
 
     release.set()
-    await resolve(ctx.dispose())
+    await await_result(ctx.dispose())
     assert finished.is_set()
 
 
@@ -1210,9 +1210,9 @@ async def test_async_cleanup_failure_does_not_skip_remaining_cleanup() -> None:
     ctx.effect(lambda: lambda: cleanup("last"))
 
     with pytest.raises(ValueError, match="cleanup failed"):
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
     with pytest.raises(ValueError, match="cleanup failed"):
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
     assert events == ["last", "fail", "first"]
 
 
@@ -1232,9 +1232,9 @@ async def test_cancelled_async_cleanup_does_not_skip_remaining_cleanup() -> None
     ctx.effect(lambda: lambda: cleanup("last"))
 
     with pytest.raises(asyncio.CancelledError):
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
     with pytest.raises(asyncio.CancelledError):
-        await resolve(ctx.dispose())
+        await await_result(ctx.dispose())
     assert events == ["last", "cancel", "first"]
 
 
@@ -1314,7 +1314,7 @@ async def test_closing_child_can_dispose_while_parent_cleanup_waits() -> None:
         with pytest.raises(RuntimeError, match="being disposed"):
             ctx.set("value", 2)
 
-    waiter = asyncio.create_task(resolve(pending))
+    waiter = asyncio.create_task(await_result(pending))
     await started.wait()
     child.dispose()
     assert root.dispose() is pending
@@ -1345,7 +1345,7 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
 
     child.effect(lambda: cleanup)
     child_pending = child.dispose()
-    child_waiter = asyncio.create_task(resolve(child_pending))
+    child_waiter = asyncio.create_task(await_result(child_pending))
     await started.wait()
     root_pending = root.dispose()
     assert child.dispose() is child_pending
@@ -1355,7 +1355,7 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
         grandchild.set("value", 2)
     finish.set()
     results = await asyncio.gather(
-        child_waiter, resolve(root_pending), return_exceptions=True
+        child_waiter, await_result(root_pending), return_exceptions=True
     )
     assert results == ([failure, failure] if fail else [None, None])
     assert calls == 1

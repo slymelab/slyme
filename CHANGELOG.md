@@ -10,9 +10,12 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Added mutable, single-use `Continuation.call()` / `Continuation.resolve()` chains with `then()`, `catch()`,
+  `unwrap()`, and direct awaiting in `slyme.utils.continuation`. Ordinary errors
+  are recoverable; cancellation propagates unless explicitly selected.
 - Added `Node.acall()` and `Context.adispose()` as always-awaitable adapters
   that preserve immediate synchronous execution and the unified completion rules.
-- Added `slyme.utils.awaitable.resolve()` to await an immediate or asynchronous
+- Added `slyme.utils.continuation.await_result()` to await an immediate or asynchronous
   result without starting a loop or offloading synchronous work.
 - Unified Node, Auto, and Wrapper execution around actual returned values;
   async dependencies and child cleanup can promote a synchronous parent call.
@@ -72,8 +75,9 @@ breaking changes when they are documented here.
   and cleanup, preventing reentrant teardown from invalidating live cleanup.
 - Released Context-owned `add()` values when their final Schema declaration is
   removed, without weakening public Compose ownership.
-- Preserved failures from cancelled Auto siblings and their cleanup during
-  evaluation failure and repeated cancellation.
+- Auto evaluates all sibling Nodes before reporting errors, without cancelling
+  siblings on failure. Successful children dispose immediately; failure cleanup
+  completes before reporting child and cleanup errors together.
 - Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
   they cannot bypass fixed runtime-arity and named build-parameter validation.
 - Prevented Context updates from changing Schema-owned leaf/container roles.
@@ -83,6 +87,7 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `slyme.utils.awaitable`; import `await_result` from `slyme.utils.continuation`.
 - Removed `TypeRegistry` and `TreeEngine.allow_inheritance`. Tree handlers and
   Auto evaluators use exact type keys through `GeneralRegistry`; subclasses
   require explicit registration. Explicit Tree resolvers remain supported.
@@ -92,7 +97,7 @@ breaking changes when they are documented here.
   `execute_eval_plan()`. `eval_tree()` handles traversal, batched evaluation,
   and reconstruction directly without an intermediate evaluation plan.
 - Removed execution-mode decorators and separate async Node, Wrapper, evaluator,
-  sequence, and Context lifecycle APIs. Use the unified APIs and `resolve()`
+  sequence, and Context lifecycle APIs. Use the unified APIs and `await_result()`
   when immediate and awaitable results are both possible.
 - Removed `Context.bind()` and `Context.contribute()`. Use
   `Context.isolate(..., identity=...)` for shared isolated leaf storage and

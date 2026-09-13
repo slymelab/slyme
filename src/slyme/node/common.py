@@ -13,11 +13,9 @@
 # limitations under the License.
 
 from collections.abc import Awaitable, Iterable, Sequence
-from inspect import isawaitable
-from typing import Any
 
 from slyme.context import Context
-from slyme.utils.awaitable import resolve
+from slyme.utils.continuation import Continuation
 
 from .core import Node, node
 
@@ -26,18 +24,7 @@ __all__ = ["sequential_exec", "sequential"]
 
 def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None | Awaitable[None]:
     """Execute nodes in order, waiting for each completion before the next."""
-    iterator = iter(nodes)
-
-    async def continue_async(pending: Awaitable[Any]) -> None:
-        await pending
-        for item in iterator:
-            await resolve(item(ctx))
-
-    for item in iterator:
-        result = item(ctx)
-        if isawaitable(result):
-            return continue_async(result)
-    return None
+    return Continuation.each(nodes, lambda item: item(ctx))
 
 
 @node

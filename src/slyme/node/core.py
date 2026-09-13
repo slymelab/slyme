@@ -36,7 +36,7 @@ from typing import (
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.awaitable import _chain, _guard, resolve
+from slyme.utils.continuation import Continuation, await_result
 from slyme.utils.exception import enrich_exception
 
 from .exception import (
@@ -210,7 +210,11 @@ class Node(NodeElement, Generic[_R]):
         raise NodeExceptionRecord(exception_node=self, exception=error) from error
 
     def __call__(self, ctx: Context) -> _R | Awaitable[_R]:
-        return _guard(partial(self._call, ctx), self._raise_error)
+        return (
+            Continuation.call(partial(self._call, ctx))
+            .catch(self._raise_error)
+            .unwrap()
+        )
 
     def acall(self, ctx: Context) -> Awaitable[_R]:
         """Call with an always-awaitable result, preserving immediate execution.
@@ -218,7 +222,7 @@ class Node(NodeElement, Generic[_R]):
         Synchronous work and errors occur during this call. Await the result
         to finish any asynchronous work; this method does not schedule it.
         """
-        return resolve(self(ctx))
+        return await_result(self(ctx))
 
     def _call(self, ctx: Context) -> _R | Awaitable[_R]:
         wrappers = tuple(self.wrappers)
@@ -236,9 +240,14 @@ class Node(NodeElement, Generic[_R]):
         else:
 
             def chain(call_ctx: Context) -> _R | Awaitable[_R]:
-                return _chain(
-                    eval_tree(call_ctx, eval_kwargs),
-                    lambda evaluated: self._func(call_ctx, **raw_kwargs, **evaluated),
+                return (
+                    Continuation.resolve(eval_tree(call_ctx, eval_kwargs))
+                    .then(
+                        lambda evaluated: self._func(
+                            call_ctx, **raw_kwargs, **evaluated
+                        )
+                    )
+                    .unwrap()
                 )
 
         for wrapper_obj in reversed(wrappers):
@@ -274,9 +283,10 @@ class Wrapper(NodeElement, Generic[_R]):
         wrapped: Node[Any],
         call_next: Callable[[Context], Any | Awaitable[Any]],
     ) -> _R | Awaitable[_R]:
-        return _guard(
-            partial(self._call, ctx, wrapped, call_next),
-            partial(self._raise_error, wrapped),
+        return (
+            Continuation.call(partial(self._call, ctx, wrapped, call_next))
+            .catch(partial(self._raise_error, wrapped))
+            .unwrap()
         )
 
     def _call(
@@ -294,11 +304,14 @@ class Wrapper(NodeElement, Generic[_R]):
         raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
         if not eval_kwargs:
             return self._func(ctx, wrapped, call_next, **raw_kwargs)
-        return _chain(
-            eval_tree(ctx, eval_kwargs),
-            lambda evaluated: self._func(
-                ctx, wrapped, call_next, **raw_kwargs, **evaluated
-            ),
+        return (
+            Continuation.resolve(eval_tree(ctx, eval_kwargs))
+            .then(
+                lambda evaluated: self._func(
+                    ctx, wrapped, call_next, **raw_kwargs, **evaluated
+                )
+            )
+            .unwrap()
         )
 
 

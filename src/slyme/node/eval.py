@@ -16,14 +16,13 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from inspect import isawaitable
-from typing import Any, NoReturn
+from typing import Any
 
 from slyme.context import Context, Ref
 from slyme.context.tree import CTX_EVAL_ENGINE
-from slyme.utils.awaitable import resolve
+from slyme.utils.continuation import Continuation, await_result
 from slyme.utils.registry import GeneralRegistry
 
-from ._async import finish_uninterruptibly, wait_uninterruptibly
 from .core import Node
 
 __all__ = [
@@ -40,7 +39,7 @@ BatchEvaluatorFunc = Callable[
 
 
 class _AdditionalAutoFailures(Exception):
-    """Additional child failures observed while Auto evaluation was unwinding."""
+    """Other child and cleanup failures from a completed Auto batch."""
 
     def __init__(self, errors: tuple[BaseException, ...]) -> None:
         self.errors = errors
@@ -85,25 +84,19 @@ def eval_tree(ctx: Context, tree: Any) -> Any:
         for index, value in zip(indices, values, strict=True):
             leaves[index] = value
 
-    for evaluator, (indices, values) in batches:
-        batch_results = evaluator.func(ctx, values)
-        if isawaitable(batch_results):
+    def evaluate(batch: tuple[EvaluatorDef, tuple[list[int], list[Any]]]) -> Any:
+        evaluator, (indices, values) = batch
+        return (
+            Continuation.resolve(evaluator.func(ctx, values))
+            .then(lambda result: store(evaluator, indices, result))
+            .unwrap()
+        )
 
-            async def continue_async(
-                evaluator: EvaluatorDef,
-                indices: list[int],
-                pending: Awaitable[Sequence[Any]],
-            ) -> Any:
-                store(evaluator, indices, await pending)
-                for evaluator, (indices, values) in batches:
-                    store(
-                        evaluator, indices, await resolve(evaluator.func(ctx, values))
-                    )
-                return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
-
-            return continue_async(evaluator, indices, batch_results)
-        store(evaluator, indices, batch_results)
-    return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
+    return (
+        Continuation.resolve(Continuation.each(batches, evaluate))
+        .then(lambda _: CTX_EVAL_ENGINE.unflatten(tree_def, leaves))
+        .unwrap()
+    )
 
 
 # --- Evaluator Implementations ---
@@ -118,135 +111,111 @@ EVALUATOR_REGISTRY.register(EvaluatorDef(ref_evaluator), key=Ref)
 def node_evaluator(
     ctx: Context, nodes: Sequence[Node]
 ) -> Sequence[Any] | Awaitable[Sequence[Any]]:
-    """Evaluate siblings concurrently after the first asynchronous completion."""
+    """Evaluate every sibling and report failures after all children settle.
+
+    Execution stays synchronous until a child call or cleanup is awaitable.
+    Successful children dispose immediately; failure cleanup follows the batch.
+    Child failure never cancels siblings. Caller cancellation follows asyncio
+    propagation, with child cleanup completed before leaving the evaluator.
+    """
     results: list[Any] = []
-    cleanup_failures: dict[int, BaseException] = {}
+    children: list[Context] = []
+    errors: list[BaseException] = []
 
-    def finish_child(
-        index: int, child: Context, value: Any, error: BaseException | None = None
-    ) -> Any:
-        def finish() -> Any:
-            if error is not None:
-                raise error
-            return value
+    def record(error: BaseException) -> None:
+        if all(error is not previous for previous in errors):
+            errors.append(error)
 
-        def failed(cleanup_error: BaseException) -> NoReturn:
-            cleanup_failures[index] = cleanup_error
-            if error is not None:
-                raise error from cleanup_error
-            raise cleanup_error
-
-        try:
-            cleanup = child.dispose()
-        except BaseException as cleanup_error:
-            return failed(cleanup_error)
-        if not isawaitable(cleanup):
-            return finish()
-
-        async def finish_async() -> Any:
-            task: asyncio.Task[None] = asyncio.create_task(resolve(cleanup))
-            try:
-                await wait_uninterruptibly(task)
-            except BaseException as cleanup_error:
-                recorded = (
-                    task.exception()
-                    if task.done() and not task.cancelled()
-                    else cleanup_error
+    def report() -> Sequence[Any]:
+        if errors:
+            primary = next(
+                (
+                    error
+                    for error in errors
+                    if not isinstance(error, asyncio.CancelledError)
+                ),
+                errors[0],
+            )
+            additional = tuple(error for error in errors if error is not primary)
+            if additional:
+                cause = (
+                    additional[0]
+                    if len(additional) == 1
+                    else _AdditionalAutoFailures(additional)
                 )
-                cleanup_failures[index] = recorded or cleanup_error
-                if error is not None:
-                    raise error from cleanup_error
-                raise
-            return finish()
+                raise primary from cause
+            raise primary
+        return results
 
-        return finish_async()
+    def release(child: Context) -> None | Awaitable[None]:
+        return (
+            Continuation.call(child.dispose)
+            .catch(record, exceptions=BaseException)
+            .unwrap()
+        )
 
-    def evaluate_one(index: int, node: Node) -> Any:
-        child = ctx._fork_for_auto()
-        try:
-            value = node(child)
-        except BaseException as error:
-            return finish_child(index, child, None, error)
-        if not isawaitable(value):
-            return finish_child(index, child, value)
-
-        async def evaluate_async() -> Any:
+    async def finish_async(cleanup: Awaitable[None]) -> Sequence[Any]:
+        task = asyncio.create_task(await_result(cleanup))
+        while not task.done():
             try:
-                result = await value
-            except BaseException as error:
-                return await resolve(finish_child(index, child, None, error))
-            return await resolve(finish_child(index, child, result))
+                await asyncio.shield(task)
+            except asyncio.CancelledError as error:
+                record(error)
+        task.result()
+        return report()
 
-        return evaluate_async()
+    def finish() -> Sequence[Any] | Awaitable[Sequence[Any]]:
+        if errors:
+            cleanup = Continuation.each(children, release)
+            if isawaitable(cleanup):
+                return finish_async(cleanup)
+        return report()
+
+    def evaluate_one(node: Node) -> Any:
+        child = ctx.fork(scope=ctx.scope.fork())
+        children.append(child)
+        return (
+            Continuation.call(lambda: node(child))
+            .then(
+                lambda value: (
+                    Continuation.call(child.dispose).then(lambda _: value).unwrap()
+                )
+            )
+            .unwrap()
+        )
 
     async def remaining(first_index: int, first: Awaitable[Any]) -> Sequence[Any]:
         async def evaluate(index: int) -> Any:
-            return await resolve(evaluate_one(index, nodes[index]))
+            return await await_result(evaluate_one(nodes[index]))
 
         tasks = (
-            asyncio.create_task(resolve(first)),
+            asyncio.create_task(await_result(first)),
             *(
                 asyncio.create_task(evaluate(index))
                 for index in range(first_index + 1, len(nodes))
             ),
         )
         try:
-            return [*results, *await asyncio.gather(*tasks)]
-        except BaseException as error:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            pending = asyncio.gather(*tasks, return_exceptions=True)
-            await finish_uninterruptibly(pending)
-            outcomes = pending.result()
-            primary_index = next(
-                (
-                    index
-                    for index, task in enumerate(tasks)
-                    if not task.cancelled() and task.exception() is error
-                ),
-                None,
-            )
-            additional: list[BaseException] = []
-            for index, outcome in enumerate(outcomes):
-                if index == primary_index or not isinstance(outcome, BaseException):
-                    continue
-                if isinstance(outcome, asyncio.CancelledError):
-                    failure = cleanup_failures.get(first_index + index)
-                    if failure is not None:
-                        additional.append(failure)
-                else:
-                    additional.append(outcome)
-
-            if isinstance(error, asyncio.CancelledError) and additional:
-                failures = tuple(
-                    failure
-                    for failure in additional
-                    if not isinstance(failure, asyncio.CancelledError)
-                )
-                if len(failures) == 1:
-                    raise failures[0] from error
-                if failures:
-                    raise _AdditionalAutoFailures(failures) from error
-            elif additional:
-                causes = [] if error.__cause__ is None else [error.__cause__]
-                for failure in additional:
-                    if all(failure is not current for current in causes):
-                        causes.append(failure)
-                cause: BaseException = (
-                    causes[0]
-                    if len(causes) == 1
-                    else _AdditionalAutoFailures(tuple(causes))
-                )
-                raise error from cause
-            raise
+            await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError as error:
+            record(error)
+        for task in tasks:
+            try:
+                results.append(task.result())
+            except BaseException as error:
+                record(error)
+        return await await_result(finish())
 
     for index, node in enumerate(nodes):
-        value = evaluate_one(index, node)
+        try:
+            value = evaluate_one(node)
+        except BaseException as error:
+            record(error)
+            continue
         if isawaitable(value):
             return remaining(index, value)
         results.append(value)
-    return results
+    return finish()
 
 
 EVALUATOR_REGISTRY.register(EvaluatorDef(node_evaluator), key=Node)

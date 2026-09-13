@@ -10,19 +10,19 @@ from slyme.context import Context
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.eval import EvaluatorDef
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.awaitable import resolve
+from slyme.utils.continuation import await_result
 from slyme.utils.registry import GeneralRegistry
 
 
-async def test_resolve_preserves_values_and_only_awaits_outer_completion() -> None:
+async def test_await_result_preserves_values_and_only_awaits_outer_completion() -> None:
     async def value() -> int:
         return 3
 
     data = [value()]
-    assert await resolve(data) is data
-    assert await resolve(data[0]) == 3
-    assert await resolve(None) is None
-    assert await resolve(2) == 2
+    assert await await_result(data) is data
+    assert await await_result(data[0]) == 3
+    assert await await_result(None) is None
+    assert await await_result(2) == 2
 
 
 def test_sync_call_and_disposal_need_no_event_loop() -> None:
@@ -58,7 +58,7 @@ async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
     pending = graph(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["call"]
-    assert await resolve(pending) == 5
+    assert await await_result(pending) == 5
     assert events == ["call", "await", "parent"]
     assert not ctx._owned
     ctx.dispose()
@@ -82,7 +82,7 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
 
     ctx = Context()
     result = parent(values=[child(index=1), child(index=2)])(ctx)
-    assert await asyncio.wait_for(resolve(result), 1) == 3
+    assert await asyncio.wait_for(await_result(result), 1) == 3
     assert not ctx._owned
     ctx.dispose()
 
@@ -103,7 +103,7 @@ async def test_sync_wrapper_forwards_completion_and_async_wrapper_waits() -> Non
     @wrapper
     async def finished(ctx: Context, wrapped: Node, call_next: Callable, /):
         events.append("before")
-        result = await resolve(call_next(ctx))
+        result = await await_result(call_next(ctx))
         events.append("after")
         return result + 1
 
@@ -111,7 +111,7 @@ async def test_sync_wrapper_forwards_completion_and_async_wrapper_waits() -> Non
     graph = value().add_wrappers(forward(), finished())
     pending = graph(ctx)
     assert events == ["forward"]
-    assert await resolve(pending) == 6
+    assert await await_result(pending) == 6
     assert events == ["forward", "before", "node", "after"]
     ctx.dispose()
 
@@ -131,7 +131,7 @@ async def test_awaited_failures_keep_node_and_wrapper_attribution(
 
     @wrapper
     async def wrap(ctx: Context, wrapped: Node, call_next: Callable, /):
-        result = await resolve(call_next(ctx))
+        result = await await_result(call_next(ctx))
         if failure_in_wrapper:
             raise failure
         return result
@@ -143,7 +143,7 @@ async def test_awaited_failures_keep_node_and_wrapper_attribution(
         graph.add_wrappers(wrapping)
     error_type = WrapperExceptionRecord if failure_in_wrapper else NodeExceptionRecord
     with pytest.raises(error_type) as caught:
-        await resolve(graph(ctx))
+        await await_result(graph(ctx))
     assert caught.value.exception is failure
     assert caught.value.exception_node is (wrapping if failure_in_wrapper else graph)
     ctx.dispose()
@@ -169,7 +169,12 @@ async def test_evaluation_continues_remaining_batches_after_await(
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
     marker = object()
-    assert await resolve(eval_tree(ctx, [1, marker, "x", 2])) == [2, marker, "X", 3]
+    assert await await_result(eval_tree(ctx, [1, marker, "x", 2])) == [
+        2,
+        marker,
+        "X",
+        3,
+    ]
     assert calls == ["async", "sync"]
     ctx.dispose()
 
@@ -191,14 +196,14 @@ async def test_context_owns_async_setup_before_caller_waits(await_setup: bool) -
     registration = ctx.effect(setup)
     assert events == []
     if await_setup:
-        early = await resolve(registration)
-        await resolve(early())
-        await resolve(early())
-    await resolve(ctx.dispose())
+        early = await await_result(registration)
+        await await_result(early())
+        await await_result(early())
+    await await_result(ctx.dispose())
     assert events == ["setup", "cleanup"]
     assert not ctx._owned
-    early = await resolve(registration)
-    await resolve(early())
+    early = await await_result(registration)
+    await await_result(early())
 
 
 async def test_owner_disposal_joins_inflight_setup_after_waiter_cancelled() -> None:
@@ -219,12 +224,12 @@ async def test_owner_disposal_joins_inflight_setup_after_waiter_cancelled() -> N
         return cleanup
 
     registration = ctx.effect(setup)
-    waiter = asyncio.create_task(resolve(registration))
+    waiter = asyncio.create_task(await_result(registration))
     await started.wait()
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
-    disposal = asyncio.create_task(resolve(ctx.dispose()))
+    disposal = asyncio.create_task(await_result(ctx.dispose()))
     await asyncio.sleep(0)
     assert not disposal.done()
     finish.set()
@@ -243,11 +248,11 @@ async def test_async_setup_cannot_dispose_owner_or_ancestor(ancestor: bool) -> N
     async def setup():
         await asyncio.sleep(0)
         with pytest.raises(RuntimeError, match="setup or cleanup"):
-            await resolve(target.dispose())
+            await await_result(target.dispose())
         return lambda: events.append("cleanup")
 
-    release = await resolve(ctx.effect(setup))
-    await resolve(release())
+    release = await await_result(ctx.effect(setup))
+    await await_result(release())
     assert events == ["cleanup"]
     root.dispose()
 
@@ -265,7 +270,7 @@ async def test_setup_failure_detaches_registration(asynchronous: bool) -> None:
         raise failure
 
     with pytest.raises(ValueError) as caught:
-        await resolve(ctx.effect(async_fail if asynchronous else fail))
+        await await_result(ctx.effect(async_fail if asynchronous else fail))
     assert caught.value is failure
     assert not ctx._owned
     assert ctx.dispose() is None
@@ -284,10 +289,10 @@ async def test_setup_failure_during_owner_disposal_keeps_cleaning_and_replays() 
     ctx.effect(lambda: lambda: events.append("last"))
     for _ in range(2):
         with pytest.raises(ValueError) as caught:
-            await resolve(ctx.dispose())
+            await await_result(ctx.dispose())
         assert caught.value is failure
     with pytest.raises(ValueError) as caught:
-        await resolve(registration)
+        await await_result(registration)
     assert caught.value is failure
     assert events == ["last", "first"]
     assert not ctx._owned
@@ -305,10 +310,10 @@ async def test_async_setup_cleanup_failure_replays_without_repeating() -> None:
 
         return cleanup
 
-    release = await resolve(ctx.effect(setup))
+    release = await await_result(ctx.effect(setup))
     for _ in range(2):
         with pytest.raises(ValueError) as caught:
-            await resolve(release())
+            await await_result(release())
         assert caught.value is failure
     assert calls == ["cleanup"]
     assert ctx.dispose() is None
@@ -336,7 +341,7 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
         return call_next(ctx) + extra
 
     ctx = Context()
-    assert await resolve(value().add_wrappers(add(extra=parameter()))(ctx)) == 5
+    assert await await_result(value().add_wrappers(add(extra=parameter()))(ctx)) == 5
     assert not ctx._owned
     ctx.dispose()
 
@@ -354,7 +359,7 @@ async def test_sequential_continues_sync_and_async_steps_after_first_await() -> 
         events.append(value)
 
     ctx = Context()
-    await resolve(
+    await await_result(
         sequential_exec(
             ctx, [asynchronous(value=1), synchronous(value=2), asynchronous(value=3)]
         )
@@ -384,7 +389,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_keeps_both_errors()
 
     ctx = Context()
     with pytest.raises(NodeExceptionRecord) as caught:
-        await resolve(parent(value=child())(ctx))
+        await await_result(parent(value=child())(ctx))
     assert caught.value.exception is failure
     assert caught.value.__cause__ is cleanup_failure
     assert not ctx._owned
@@ -396,12 +401,12 @@ async def test_cleanup_cannot_await_saved_owner_completion() -> None:
     completion = None
 
     async def cleanup() -> None:
-        await resolve(completion)
+        await await_result(completion)
 
     ctx.effect(lambda: cleanup)
     completion = ctx.dispose()
     with pytest.raises(RuntimeError, match="setup or cleanup"):
-        await asyncio.wait_for(resolve(completion), 1)
+        await asyncio.wait_for(await_result(completion), 1)
     assert not ctx._owned
 
 
@@ -424,6 +429,6 @@ async def test_disposal_preserves_sync_failure_while_finishing_async_cleanup() -
     pending = ctx.dispose()
     assert events == ["sync"]
     with pytest.raises(ValueError) as caught:
-        await resolve(pending)
+        await await_result(pending)
     assert caught.value is first_error
     assert events == ["sync", "async", "last"]

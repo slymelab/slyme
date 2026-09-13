@@ -53,11 +53,35 @@ async def execute(ctx):
         await ctx.adispose()
 ```
 
-`task.acall(ctx)` and `ctx.adispose()` always return awaitables. They delegate to the ordinary call and disposal methods through `resolve()` from `slyme.utils.awaitable`; synchronous work and errors still occur immediately when called. They do not create tasks or schedule asynchronous work.
+`task.acall(ctx)` and `ctx.adispose()` always return awaitables. They delegate to the ordinary call and disposal methods through `await_result()` from `slyme.utils.continuation`; synchronous work and errors still occur immediately when called. They do not create tasks or schedule asynchronous work.
 
-`resolve()` awaits only the outer execution result, not values inside containers. Async continuations run when awaited or scheduled, although their synchronous prefix may already have run. Synchronous applications can use `asyncio.run(resolve(task(ctx)))` at their entry point; await within an existing loop instead of nesting loops. Slyme never automatically offloads blocking functions to threads.
+`await_result()` awaits only the outer execution result, not values inside containers. Async continuations run when awaited or scheduled, although their synchronous prefix may already have run. Synchronous applications can use `asyncio.run(await_result(task(ctx)))` at their entry point; await within an existing loop instead of nesting loops. Slyme never automatically offloads blocking functions to threads.
 
-Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await child.acall(ctx)` when the child may be asynchronous. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
+Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await child.acall(ctx)`, or return a Continuation composition as below. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
+
+### Lazy result chains
+
+`Continuation` lets an ordinary function compose immediate and asynchronous results without defining an async continuation:
+
+```python
+from slyme.node import Node
+from slyme.utils.continuation import Continuation, await_result
+
+
+@node
+def increment_child(ctx, *, child: Node[int]):
+    return Continuation.call(lambda: child(ctx)).then(lambda value: value + 1).unwrap()
+```
+
+`Continuation.call(operation)` defers the operation itself. `Continuation.resolve(value)` wraps a result that already exists; in `Continuation.resolve(operation())`, Python calls `operation()` before constructing the chain. `then(success, failure)` handles upstream completion; a paired failure callback does not catch errors from its success callback. A later `catch(recover)` handles those errors. Both kinds of callback may return immediate or asynchronous results.
+
+Constructing or extending a chain runs no callbacks. `unwrap()` executes its synchronous prefix immediately and returns either the final value or an unscheduled awaitable remainder. `await chain` executes and completes the chain. Unlike JavaScript Promise reactions, these callbacks are not automatically scheduled. Use `asyncio.run(await_result(chain))` at a synchronous entry point or `asyncio.create_task(await_result(chain))` to explicitly schedule it within a running loop; `await_result()` returns a coroutine accepted by these APIs.
+
+`then()` and `catch()` append to the same mutable operation list and return the same object. Aliases are not independent branches; use the fluent return as the current typed stage. Each chain can be executed only once, and cannot be extended after execution starts. Build another chain for another execution. Continuation has no subscribers or cached settlement to notify, unlike JavaScript Promise. A caller needing shared execution can explicitly create and retain a Task. Continuation does not shield cancellation or own cleanup; Context retains its separate repeatable, cancellation-safe disposal behavior.
+
+`catch()` and the failure callback of `then()` handle `Exception` by default, leaving cancellation and other `BaseException` subclasses untouched. Pass `exceptions=SomeException` to select an exception class, or explicitly select `BaseException` for lifecycle cleanup that must observe cancellation. Recovery then determines whether to propagate it again.
+
+`Continuation.each(values, call)` executes calls in order and discards their results. Unlike chain registration, it runs synchronous calls immediately, returning `None` if all finish synchronously or an unscheduled awaitable for the remainder. It consumes the next input only after the preceding call completes; failure or cancellation stops iteration.
 
 ## Parameters and Auto
 
@@ -117,7 +141,7 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrappers use onion ordering and read their live parameters when invoked. The example above is synchronous-only: when `call_next(ctx)` returns an awaitable, its following statements run before that completion. A forwarding wrapper may return it unchanged; a wrapper that needs the final result, async exceptions, or completion-time cleanup must use `async def` and `await resolve(call_next(ctx))`. Slyme does not rewrite a wrapper's `try/finally`.
+Wrappers use onion ordering and read their live parameters when invoked. The example above is synchronous-only: when `call_next(ctx)` returns an awaitable, its following statements run before that completion. A forwarding wrapper may return it unchanged. Use `Continuation.call(lambda: call_next(ctx)).then(transform).unwrap()` for result-dependent work in an ordinary function, or `async def` and `await await_result(call_next(ctx))` when using native `try/finally` for completion-time cleanup. Slyme does not rewrite a wrapper's `try/finally`.
 
 ## Composition structure
 

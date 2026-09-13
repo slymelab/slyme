@@ -6,7 +6,7 @@ from typing_extensions import assert_type
 
 from slyme.context import Context
 from slyme.node import Node, Wrapper, node, wrapper
-from slyme.utils.awaitable import resolve
+from slyme.utils.continuation import await_result
 
 
 @node
@@ -37,9 +37,9 @@ async def check_types(ctx: Context) -> None:
     assert_type(mixed(), Node[int])
     assert_type(mixed_wrapper(), Wrapper[int])
     assert_type(immediate()(ctx), int | Awaitable[int])
-    assert_type(await resolve(immediate()(ctx)), int)
-    assert_type(await resolve(asynchronous()(ctx)), int)
-    assert_type(await resolve(mixed()(ctx)), int)
+    assert_type(await await_result(immediate()(ctx)), int)
+    assert_type(await await_result(asynchronous()(ctx)), int)
+    assert_type(await await_result(mixed()(ctx)), int)
     assert_type(immediate().acall(ctx), Awaitable[int])
     assert_type(asynchronous().acall(ctx), Awaitable[int])
     assert_type(mixed().acall(ctx), Awaitable[int])
@@ -55,7 +55,7 @@ async def check_types(ctx: Context) -> None:
 
     assert_type(ctx.effect(setup), Callable[[], None])
     assert_type(
-        await resolve(ctx.effect(async_setup)),
+        await await_result(ctx.effect(async_setup)),
         Callable[[], None | Awaitable[None]],
     )
     assert_type(ctx.dispose(), None | Awaitable[None])

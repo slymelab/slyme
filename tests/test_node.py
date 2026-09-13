@@ -30,7 +30,7 @@ from slyme.node.exception import (
 )
 from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
-from slyme.utils.awaitable import resolve
+from slyme.utils.continuation import await_result
 from slyme.utils.registry import GeneralRegistry
 
 R = Schema(
@@ -136,7 +136,7 @@ async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
 
     @wrapper
     async def increment(ctx: Context, wrapped: Node, call_next: Callable, /) -> int:
-        return await resolve(call_next(ctx)) + 1
+        return await await_result(call_next(ctx)) + 1
 
     ctx = Context()
     graph = parent(value=child()).add_wrappers(increment())
@@ -548,7 +548,9 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
     assert events[0] == "before:trace"
     assert set(events[1:3]) == {"sync", "async"}
     assert events[-1] == "after"
-    assert await resolve(eval_tree(ctx, {"x": R.resolve("input.value")})) == {"x": 3}
+    assert await await_result(eval_tree(ctx, {"x": R.resolve("input.value")})) == {
+        "x": 3
+    }
 
 
 async def test_evaluation_promotes_async_node() -> None:
@@ -557,7 +559,7 @@ async def test_evaluation_promotes_async_node() -> None:
         return 1
 
     child = async_child()
-    assert await resolve(eval_tree(Context(schema=R), child)) == 1
+    assert await await_result(eval_tree(Context(schema=R), child)) == 1
 
 
 def test_evaluator_result_count_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -581,7 +583,7 @@ async def test_async_evaluator_result_count_is_validated(
     registry.register(evaluator, key=int)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     with pytest.raises(ValueError, match="expected 1"):
-        await resolve(eval_tree(Context(schema=R), [1]))
+        await await_result(eval_tree(Context(schema=R), [1]))
 
 
 def test_auto_nodes_receive_isolated_child_contexts() -> None:
@@ -723,7 +725,7 @@ async def test_sync_auto_promotes_async_cleanup_before_parent_execution() -> Non
     pending = parent(value=child())(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["child"]
-    assert await resolve(pending) == 1
+    assert await await_result(pending) == 1
     assert events == ["child", "cleanup", "parent"]
     assert not ctx._owned
 
@@ -824,8 +826,11 @@ async def test_async_auto_preserves_node_failure_when_cleanup_also_fails() -> No
     assert isinstance(caught.value.__cause__, RuntimeError)
 
 
-async def test_async_auto_failure_disposes_cancelled_siblings() -> None:
+async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> None:
     started = asyncio.Event()
+    failed = asyncio.Event()
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
     cleaned = asyncio.Event()
 
     @node
@@ -835,26 +840,43 @@ async def test_async_auto_failure_disposes_cancelled_siblings() -> None:
 
         ctx.effect(lambda: cleanup)
         started.set()
-        await asyncio.Event().wait()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
         return 1
 
     @node
     async def failing(ctx: Context, /) -> int:
         await started.wait()
+        failed.set()
         raise RuntimeError("child failed")
 
     @node
     async def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
         return sum(values)
 
+    ctx = Context(schema=R)
+    task = asyncio.create_task(parent(values=[waiting(), failing()])(ctx))
+    await failed.wait()
+    await asyncio.sleep(0)
+    assert not task.done()
+    assert not cancelled.is_set()
+    assert not cleaned.is_set()
+    release.set()
     with pytest.raises(NodeExceptionRecord) as caught:
-        await parent(values=[waiting(), failing()])(Context(schema=R))
+        await task
     assert isinstance(caught.value.exception, RuntimeError)
     assert str(caught.value.exception) == "child failed"
     assert cleaned.is_set()
+    assert not cancelled.is_set()
+    assert not ctx._owned
 
 
-async def test_async_auto_preserves_cancelled_sibling_cleanup_failure() -> None:
+async def test_async_auto_preserves_sibling_cleanup_failure_after_caller_cancellation() -> (
+    None
+):
     started = asyncio.Event()
     cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
@@ -868,7 +890,6 @@ async def test_async_auto_preserves_cancelled_sibling_cleanup_failure() -> None:
 
         ctx.effect(lambda: cleanup)
         started.set()
-        await asyncio.Event().wait()
         return 1
 
     @node
@@ -881,7 +902,7 @@ async def test_async_auto_preserves_cancelled_sibling_cleanup_failure() -> None:
         return sum(values)
 
     ctx = Context(schema=R)
-    task = asyncio.create_task(parent(values=[waiting(), failing()])(ctx))
+    task = asyncio.create_task(parent(values=[failing(), waiting()])(ctx))
     await cleanup_started.wait()
     task.cancel()
     await asyncio.sleep(0)
@@ -905,7 +926,10 @@ async def test_async_auto_preserves_cancelled_sibling_cleanup_failure() -> None:
     assert not ctx._owned
 
 
-async def test_repeated_auto_cancellation_finishes_child_cleanup() -> None:
+@pytest.mark.parametrize("child_fails", [False, True])
+async def test_repeated_auto_cancellation_finishes_child_cleanup(
+    child_fails: bool,
+) -> None:
     cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
     cleanup_finished = asyncio.Event()
@@ -918,6 +942,8 @@ async def test_repeated_auto_cancellation_finishes_child_cleanup() -> None:
             cleanup_finished.set()
 
         ctx.effect(lambda: cleanup)
+        if child_fails:
+            raise ValueError("node failed")
         return 1
 
     @node
@@ -934,8 +960,13 @@ async def test_repeated_auto_cancellation_finishes_child_cleanup() -> None:
     assert not task.done()
 
     release_cleanup.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    if child_fails:
+        with pytest.raises(NodeExceptionRecord) as caught:
+            await task
+        assert isinstance(caught.value.exception, ValueError)
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert cleanup_finished.is_set()
     assert not ctx._owned
 
@@ -973,7 +1004,12 @@ async def test_repeated_auto_cancellation_preserves_cleanup_failure() -> None:
     assert isinstance(caught.value.exception, RuntimeError)
     assert str(caught.value.exception) == "cleanup failed"
     assert caught.value.__cause__ is caught.value.exception
-    assert isinstance(caught.value.exception.__cause__, asyncio.CancelledError)
+    cause = caught.value.exception.__cause__
+    assert cause is not None
+    assert all(
+        isinstance(error, asyncio.CancelledError)
+        for error in getattr(cause, "errors", (cause,))
+    )
     assert not ctx._owned
 
 
@@ -1008,10 +1044,10 @@ async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
 
     ctx = Context(schema=R)
     nodes = [sync_step(), async_step()]
-    await resolve(sequential_exec(ctx, nodes))
+    await await_result(sequential_exec(ctx, nodes))
     assert ctx.get(R.resolve("sync")) and ctx.get(R.resolve("async_value"))
     assert sync_thread == owner_thread
-    await resolve(sequential(nodes=nodes)(ctx))
+    await await_result(sequential(nodes=nodes)(ctx))
 
 
 async def test_plain_functions_assemble_independent_node_graphs() -> None:
