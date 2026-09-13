@@ -23,16 +23,15 @@ from collections.abc import (
     Generator,
     Hashable,
     Iterable,
-    Iterator,
     Mapping,
 )
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from inspect import isawaitable
-from typing import Any, Generic, Literal, TypeVar, cast, overload
+from typing import Any, Generic, Literal, NoReturn, TypeVar, cast, overload
 
-from slyme.utils.continuation import await_result
+from slyme.utils.continuation import Continuation, await_result
 
 from .compose import Compose
 from .ref import Ref
@@ -142,37 +141,35 @@ class _Effect:
         finally:
             _DISPOSAL_CHAIN.reset(token)
 
-    async def _finish_cleanup(self, cleanup: Awaitable[None]) -> None:
+    def _fail_dispose(self, error: BaseException) -> NoReturn:
+        self._finish(error)
+        raise error
+
+    async def _await_cleanup(self, pending: Awaitable[None]) -> None:
         token = _DISPOSAL_CHAIN.set(self._chain())
         try:
-            await cleanup
-        except BaseException as error:
-            self._finish(error)
-            raise
-        else:
-            self._finish()
+            await pending
         finally:
             _DISPOSAL_CHAIN.reset(token)
 
-    async def _dispose_after_setup(self) -> None:
+    def _dispose_cleanup(self) -> None | Awaitable[None]:
+        owner = self.owner
+        guarded = owner._enter_sync_disposal_guard() if owner is not None else ()
+        cleanup = self._cleanup
+        self._cleanup = None
         try:
-            await cast(_Completion[_Disposer], self._setup)
-        except BaseException as error:
-            self._finish(error)
-            raise
-        token = _DISPOSAL_CHAIN.set(self._chain())
-        try:
-            cleanup = self._cleanup
-            self._cleanup = None
-            if cleanup is not None:
-                await await_result(cleanup())
-        except BaseException as error:
-            self._finish(error)
-            raise
-        else:
-            self._finish()
+            result = (
+                Continuation.call(lambda: cleanup() if cleanup is not None else None)
+                .then(
+                    lambda _: self._finish(),
+                    self._fail_dispose,
+                    exceptions=BaseException,
+                )
+                .unwrap()
+            )
         finally:
-            _DISPOSAL_CHAIN.reset(token)
+            Context._exit_sync_disposal_guard(guarded)
+        return self._await_cleanup(result) if isawaitable(result) else None
 
     def dispose(self) -> None | Awaitable[None]:
         self._check()
@@ -185,25 +182,15 @@ class _Effect:
                 raise self._error
             return None
         self._disposing = True
-        if self._setup is not None:
-            self._pending = _Completion(self._dispose_after_setup(), self._check)
-            return self._pending
-
-        owner = self.owner
-        guarded = owner._enter_sync_disposal_guard() if owner is not None else ()
-        cleanup = self._cleanup
-        self._cleanup = None
-        try:
-            result = cleanup() if cleanup is not None else None
-        except BaseException as error:
-            self._finish(error)
-            raise
-        finally:
-            Context._exit_sync_disposal_guard(guarded)
+        result = (
+            Continuation.resolve(self._setup)
+            .catch(self._fail_dispose, exceptions=BaseException)
+            .then(lambda _: self._dispose_cleanup())
+            .unwrap()
+        )
         if isawaitable(result):
-            self._pending = _Completion(self._finish_cleanup(result), self._check)
+            self._pending = _Completion(result, self._check)
             return self._pending
-        self._finish()
         return None
 
 
@@ -703,25 +690,33 @@ class Context(ContextElement):
             raise RuntimeError("Context disposal is already in progress.")
         self._close_subtree()
         object.__setattr__(self, "_state", _ContextState.DISPOSING)
-        owned = iter(reversed(tuple(self._owned)))
+        owned = reversed(tuple(self._owned))
         first_error: BaseException | None = None
-        for item in owned:
-            try:
-                result = item.dispose()
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
-                continue
-            if isawaitable(result):
-                pending = _Completion(
-                    self._continue_dispose(owned, result, first_error),
-                    self._assert_disposal_allowed,
-                )
-                object.__setattr__(self, "_dispose_pending", pending)
-                return pending
-        first_error = self._finish_dispose(first_error)
-        if first_error is not None:
-            raise first_error
+
+        def record(error: BaseException) -> None:
+            nonlocal first_error
+            if first_error is None:
+                first_error = error
+
+        def release(item: Context | _Effect) -> None | Awaitable[None]:
+            return (
+                Continuation.call(item.dispose)
+                .catch(record, exceptions=BaseException)
+                .unwrap()
+            )
+
+        def finish(_: None) -> None:
+            error = self._finish_dispose(first_error)
+            if error is not None:
+                raise error
+
+        result = Continuation.sequential(owned, release).then(finish).unwrap()
+        if isawaitable(result):
+            pending = _Completion(
+                self._await_dispose(result), self._assert_disposal_allowed
+            )
+            object.__setattr__(self, "_dispose_pending", pending)
+            return pending
         return None
 
     def adispose(self) -> Awaitable[None]:
@@ -732,32 +727,12 @@ class Context(ContextElement):
         """
         return await_result(self.dispose())
 
-    async def _continue_dispose(
-        self,
-        owned: Iterator[Context | _Effect],
-        pending: Awaitable[None],
-        first_error: BaseException | None,
-    ) -> None:
+    async def _await_dispose(self, pending: Awaitable[None]) -> None:
         token = _DISPOSAL_CHAIN.set((*_DISPOSAL_CHAIN.get(), self))
         try:
-            try:
-                await pending
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
-            for item in owned:
-                try:
-                    await await_result(item.dispose())
-                except BaseException as error:
-                    if first_error is None:
-                        first_error = error
+            await pending
         finally:
-            try:
-                first_error = self._finish_dispose(first_error)
-            finally:
-                _DISPOSAL_CHAIN.reset(token)
-        if first_error is not None:
-            raise first_error
+            _DISPOSAL_CHAIN.reset(token)
 
     @property
     def root(self) -> Context:

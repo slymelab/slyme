@@ -200,6 +200,56 @@ async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None
     assert not child._owned and not root._owned
 
 
+@pytest.mark.parametrize("async_setup", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
+    async_setup: bool, fails: bool
+) -> None:
+    events = []
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    failure = ValueError("child cleanup")
+    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    root.effect(lambda: lambda: events.append("first"))
+    child = root.fork()
+
+    async def cleanup() -> None:
+        events.append("child:start")
+        started.set()
+        await finish.wait()
+        assert child.get("value") == 1
+        events.append("child:finish")
+        if fails:
+            raise failure
+
+    async def setup():
+        await asyncio.sleep(0)
+        return cleanup
+
+    child.effect(setup if async_setup else lambda: cleanup)
+    root.effect(lambda: lambda: events.append("last"))
+    pending = root.dispose()
+    assert events == ["last"]
+    waiter = asyncio.create_task(await_result(pending))
+    await started.wait()
+    assert events == ["last", "child:start"]
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert root.dispose() is pending
+    assert events == ["last", "child:start"]
+    finish.set()
+    for _ in range(2):
+        if fails:
+            with pytest.raises(ValueError) as caught:
+                await root.adispose()
+            assert caught.value is failure
+        else:
+            await root.adispose()
+    assert events == ["last", "child:start", "child:finish", "first"]
+    assert not root._owned and not child._owned
+
+
 def test_failed_sync_effect_disposal_replays_error_without_repeating_cleanup() -> None:
     calls = 0
     ctx = Context()

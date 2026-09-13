@@ -119,6 +119,8 @@ if __name__ == "__main__":
 
 执行或清理可能异步时，使用 `await task.acall(ctx)` 和 `await ctx.adispose()`。这两个适配方法始终返回 awaitable，保留立即执行的同步操作和错误，不调度任务。纯同步应用仍可直接调用 `task(ctx)` 和 `ctx.dispose()`。
 
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 构建从外到内的 callable 链，不执行它。Wrapper 顺序采用快照，参数仍实时读取；每个 wrapper 控制对下一层的调用，并可返回同步或异步结果。
+
 普通函数可通过 `slyme.utils.continuation` 的 `Continuation` 组合两种结果：`Continuation.call(lambda: task(ctx)).then(transform).unwrap()`。构建链只原地追加回调，不执行它们。`unwrap()` 消费链，执行同步前缀，并返回结果值或异步剩余流程；需要始终可等待的结果时使用 `await chain.aunwrap()`。链本身不可 await，只能执行一次，不缓存结果，也不拥有资源生命周期。
 
 `Continuation.sequential(items, call)` 构建按顺序执行、遇错即停的调用并丢弃返回值。`Continuation.batch(items, call)` 尝试所有输入，并发等待异步调用，返回按输入排序的结果列表，或抛出 `BatchError`，通过 `errors: dict[int, BaseException]` 保存失败。两者均返回支持 `then()` 和 `catch()` 的链。只有 batch 的异步剩余流程被等待时才会调度任务；纯同步工作仍同步完成。Auto 在 evaluator 组之间以及 Ref、Node 组内部都使用 batch，并保留嵌套错误的局部索引。

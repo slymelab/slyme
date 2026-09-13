@@ -163,6 +163,8 @@ task.add_wrappers(trace(name="add"))
 
 Wrappers use onion ordering and read their live parameters when invoked. The example above is synchronous-only: when `call_next(ctx)` returns an awaitable, its following statements run before that completion. A forwarding wrapper may return it unchanged. Use `Continuation.call(lambda: call_next(ctx)).then(transform).unwrap()` for result-dependent work in an ordinary function, or `async def` and `await await_result(call_next(ctx))` when using native `try/finally` for completion-time cleanup. Slyme does not rewrite a wrapper's `try/finally`.
 
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context. Wrapper parameters remain live. Each wrapper controls whether and how often it invokes the next layer, which Context it passes, and the result type. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
+
 ## Composition structure
 
 Node and Wrapper parameters may contain arbitrary values and nested Trees, including other Nodes or Wrappers. Slyme imposes no global legality check on the object graph. Both use the same immediate-or-awaitable execution protocol.

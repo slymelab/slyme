@@ -46,6 +46,8 @@ A Context owns its children and cleanup registered through `effect()`, `add()`, 
 
 Calling `dispose()` immediately marks the Context as disposing and runs its synchronous portion; await its asynchronous portion to schedule it. Early cleanup stays owned until completion, so owner disposal joins it. Removing an early registration preserves the remaining release order.
 
+Each owned cleanup finishes before the next starts, including asynchronous cleanup. A failure or cleanup cancellation does not skip remaining ownership or Scope release. Context preserves and rethrows the first failure; subsequent disposal calls observe that same terminal result without repeating cleanup. The internal Continuation chain orders execution, while a separate shared completion protects cleanup from waiter cancellation and supports repeated waits.
+
 ## Auto values
 
 Static parameter values and values retrieved from `Context` keep their normal Python mutability:

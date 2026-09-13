@@ -10,6 +10,8 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Added `Wrapper.compose()` to assemble outermost-first callable chains without
+  execution, preserving live wrapper parameters and caller-controlled Contexts.
 - Added mutable, single-use `Continuation.call()` / `Continuation.resolve()` chains with `then()`, `catch()`,
   `unwrap()`, and always-awaitable `aunwrap()` in `slyme.utils.continuation`. Ordinary errors
   are recoverable; cancellation propagates unless explicitly selected.
@@ -139,6 +141,9 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Context and effect disposal use Continuation chains for immediate and
+  asynchronous cleanup, preserving recursive LIFO order, continued cleanup
+  after failure, repeatable results, and cancellation and reentrancy protection.
 - Auto batches independent evaluator groups, collecting Ref and Node failures
   into nested `BatchError` objects without cancelling siblings. Node and Wrapper
   calls preserve these aggregates; child cleanup finishes before reporting them.

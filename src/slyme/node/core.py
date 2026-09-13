@@ -250,15 +250,30 @@ class Node(NodeElement, Generic[_R]):
                     .unwrap()
                 )
 
-        for wrapper_obj in reversed(wrappers):
-            chain = partial(wrapper_obj, wrapped=self, call_next=chain)
-        return chain(ctx)
+        return Wrapper.compose(wrappers, wrapped=self, call_next=chain)(ctx)
 
 
 class Wrapper(NodeElement, Generic[_R]):
     """Wrap a Node call; await its completion before result-dependent work."""
 
     __slots__ = ()
+
+    @staticmethod
+    def compose(
+        wrappers: Iterable["Wrapper[Any]"],
+        *,
+        wrapped: Node[Any],
+        call_next: Callable[[Context], Any],
+    ) -> Callable[[Context], Any]:
+        """Assemble outermost-first wrappers without invoking them.
+
+        Snapshot wrapper order; each invocation reads the wrappers' live
+        parameters. Wrappers control whether and how often to call the next
+        layer, its Context, and its result type, including awaitable results.
+        """
+        for wrapper_obj in reversed(tuple(wrappers)):
+            call_next = partial(wrapper_obj, wrapped=wrapped, call_next=call_next)
+        return call_next
 
     def __init__(
         self,

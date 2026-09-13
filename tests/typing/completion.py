@@ -1,6 +1,7 @@
 """Static checks for the awaited result type of unified execution APIs."""
 
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from typing_extensions import assert_type
 
@@ -36,6 +37,10 @@ async def check_types(ctx: Context) -> None:
     assert_type(asynchronous(), Node[int])
     assert_type(mixed(), Node[int])
     assert_type(mixed_wrapper(), Wrapper[int])
+    assert_type(
+        Wrapper.compose([mixed_wrapper()], wrapped=immediate(), call_next=immediate()),
+        Callable[[Context], Any],
+    )
     assert_type(immediate()(ctx), int | Awaitable[int])
     assert_type(await await_result(immediate()(ctx)), int)
     assert_type(await await_result(asynchronous()(ctx)), int)

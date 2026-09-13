@@ -162,6 +162,8 @@ task.add_wrappers(trace(name="add"))
 
 Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适用于同步执行：`call_next(ctx)` 返回 awaitable 时，后续语句会在异步完成前运行。仅转发结果的 Wrapper 可以直接返回它。普通函数中的结果依赖操作可以使用 `Continuation.call(lambda: call_next(ctx)).then(transform).unwrap()`；需要以原生 `try/finally` 完成清理时，可以使用 `async def` 与 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 的 callable。Wrapper 参数保持实时读取；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context，以及返回值类型。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
+
 ## 组合结构
 
 Node 与 Wrapper 参数可以保存任意值和嵌套 Tree，包括其他 Node 或 Wrapper。Slyme 不对整张对象图施加统一的合法性检查；两者采用相同的直接结果或 awaitable 执行协议。
