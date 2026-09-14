@@ -8,7 +8,7 @@ Tree 是一种嵌套结构：容器描述拓扑，未注册对象作为叶子。
 
 ## `NODE_ENGINE`
 
-`NODE_ENGINE` 注册 `Node`、`Wrapper`、普通容器以及 `MappingProxyType`，用于物理图检查和 Ref 收集。Node 参数可以包含异质的嵌套值；该引擎只描述遍历方式，不判断组合是否合法。
+`NODE_ENGINE` 注册 `Node`、`Wrapper`、普通容器以及 `MappingProxyType`，用于物理图检查和 Ref 收集。Node 参数可以包含异质的嵌套值；该引擎只描述遍历方式，不判断组合是否合法。`Node` 和 `Wrapper` 以 `unflatten_func=None` 注册：支持遍历和展开，但重建时抛出 `TypeError`。
 
 ## 对象 identity
 

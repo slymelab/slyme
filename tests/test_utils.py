@@ -192,6 +192,30 @@ def test_tree_custom_handlers_and_explicit_resolver_priority() -> None:
     assert exact_engine.flatten(Box(1))[0] == [1]
 
 
+def test_tree_handler_can_support_traversal_without_reconstruction() -> None:
+    @dataclass
+    class Box:
+        value: int
+
+    engine = TreeEngine()
+    engine.register(
+        Box,
+        lambda box: ([box.value], TreeAux(children_keys=(AttributeKey("value"),))),
+        None,
+    )
+    tree = {"box": Box(3)}
+    leaves, definition = engine.flatten(tree)
+    assert leaves == [3]
+    assert list(engine.iter(tree)) == [3]
+    paths_and_leaves = list(engine.iter_with_key_path(tree))
+    assert paths_and_leaves == [((MappingKey("box"), AttributeKey("value")), 3)]
+    assert engine.get_element(tree, paths_and_leaves[0][0]) == 3
+    with pytest.raises(TypeError, match="Box is registered for traversal only"):
+        engine.unflatten(definition, leaves)
+    with pytest.raises(TypeError, match="Box is registered for traversal only"):
+        engine.map(lambda value: value + 1, tree)
+
+
 def test_tree_subclasses_can_register_their_own_reconstruction() -> None:
     @dataclass
     class Box:

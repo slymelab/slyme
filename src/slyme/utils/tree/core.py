@@ -143,7 +143,7 @@ class _UnflattenFunc(Protocol):
 @dataclass(frozen=True)
 class _TreeHandler:
     flatten: _FlattenFunc
-    unflatten: _UnflattenFunc
+    unflatten: _UnflattenFunc | None
 
 
 @dataclass(frozen=True)
@@ -221,9 +221,14 @@ class ContainerDef(TreeDef):
     cls: type
     tree_aux: TreeAux
     children_defs: tuple[TreeDef, ...]
-    unflatten_func: _UnflattenFunc = field(compare=False, repr=False)
+    unflatten_func: _UnflattenFunc | None = field(compare=False, repr=False)
 
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
+        if self.unflatten_func is None:
+            raise TypeError(
+                f"{self.cls.__name__} is registered for traversal only; "
+                "unflatten_func is None."
+            )
         children = tuple(child._build(leaves_iter) for child in self.children_defs)
         return self.unflatten_func(children, self.tree_aux)
 
@@ -256,10 +261,13 @@ class TreeEngine:
         self,
         cls: type,
         flatten_func: _FlattenFunc,
-        unflatten_func: _UnflattenFunc,
+        unflatten_func: _UnflattenFunc | None,
         strict: bool = True,
     ) -> None:
-        """Register a handler for exactly cls, without matching its subclasses."""
+        """Register a handler for exactly cls, without matching its subclasses.
+
+        Pass unflatten_func=None for traversal without reconstruction.
+        """
         handler = _TreeHandler(flatten=flatten_func, unflatten=unflatten_func)
         self._registry.register(handler, key=cls, strict=strict)
 

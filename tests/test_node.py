@@ -1165,7 +1165,7 @@ async def test_wrappers_can_be_added_through_the_public_list() -> None:
     assert events == ["sync wrapper", "sync node", "async wrapper", "async node"]
 
 
-def test_node_tree_round_trip() -> None:
+def test_node_and_wrapper_trees_support_traversal_without_reconstruction() -> None:
     @wrapper
     def trace(
         ctx: Context,
@@ -1184,7 +1184,9 @@ def test_node_tree_round_trip() -> None:
         return nested
 
     graph = parent(nested=child()).add_wrappers(trace())
-    leaves, definition = NODE_ENGINE.flatten(graph)
-    rebuilt = NODE_ENGINE.unflatten(definition, leaves)
-    assert isinstance(rebuilt, Node)
-    assert rebuilt(Context(schema=R)) == 1
+    for value, expected_leaves in ((graph, [1]), (trace(), [])):
+        leaves, definition = NODE_ENGINE.flatten(value)
+        assert leaves == expected_leaves
+        assert list(NODE_ENGINE.iter(value)) == expected_leaves
+        with pytest.raises(TypeError, match="registered for traversal only"):
+            NODE_ENGINE.unflatten(definition, leaves)

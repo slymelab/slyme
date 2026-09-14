@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tree engine used for Node inspection and Ref discovery."""
+"""Tree engine for inspection and Ref discovery, not Node/Wrapper reconstruction."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any
 
 from slyme.utils.tree import (
     TREE_ENGINE_REGISTRY,
@@ -55,22 +55,7 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], TreeAux]:
         keys.append(_NodeParameterKey(name))
     return tuple(children), TreeAux(
         children_keys=tuple(keys),
-        metadata={"func": obj._func, "specs": obj._specs},
         cls=Node,
-    )
-
-
-def _unflatten_node(children: Iterable[Any], aux: TreeAux) -> Node:
-    if aux.children_keys is None:
-        raise ValueError("Missing keys for Node unflattening.")
-    iterator = zip(aux.children_keys, children, strict=True)
-    _, wrappers = next(iterator)
-    params = {cast("_NodeParameterKey", key).name: value for key, value in iterator}
-    return Node(
-        func=aux.metadata["func"],
-        specs=aux.metadata["specs"],
-        wrappers=wrappers,
-        params=params,
     )
 
 
@@ -78,23 +63,10 @@ def _flatten_wrapper(obj: Wrapper[Any]) -> tuple[Iterable[Any], TreeAux]:
     keys = tuple(_NodeParameterKey(name) for name in obj._specs)
     return tuple(obj.get(name) for name in obj._specs), TreeAux(
         children_keys=keys,
-        metadata={"func": obj._func, "specs": obj._specs},
         cls=Wrapper,
     )
 
 
-def _unflatten_wrapper(children: Iterable[Any], aux: TreeAux) -> Wrapper[Any]:
-    if aux.children_keys is None:
-        raise ValueError("Missing keys for Wrapper unflattening.")
-    params = {
-        cast("_NodeParameterKey", key).name: value
-        for key, value in zip(aux.children_keys, children, strict=True)
-    }
-    return Wrapper(
-        func=aux.metadata["func"], specs=aux.metadata["specs"], params=params
-    )
-
-
-NODE_ENGINE.register(Node, _flatten_node, _unflatten_node, strict=True)
-NODE_ENGINE.register(Wrapper, _flatten_wrapper, _unflatten_wrapper, strict=True)
+NODE_ENGINE.register(Node, _flatten_node, None, strict=True)
+NODE_ENGINE.register(Wrapper, _flatten_wrapper, None, strict=True)
 NODE_ENGINE.register(MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy)
