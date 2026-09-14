@@ -17,7 +17,6 @@ from typing import Any
 
 from slyme.context import Context
 from slyme.utils.continuation import run
-from slyme.utils.exception import BatchError, Result
 
 from .core import Node, node
 
@@ -25,17 +24,11 @@ __all__ = ["sequential_exec", "sequential"]
 
 
 def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None | Awaitable[None]:
-    """Execute nodes in order, returning None or raising BatchError on failure."""
+    """Execute nodes in order."""
 
     def execute() -> Generator[Any, Any, None]:
-        results: list[Result[Any]] = []
         for item in nodes:
-            try:
-                value = yield item(ctx)
-            except BaseException as error:
-                results.append(Result(error=error))
-                raise BatchError(results) from error
-            results.append(Result(value=value))
+            yield item(ctx)
 
     return run(execute())
 
