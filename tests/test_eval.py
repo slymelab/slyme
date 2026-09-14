@@ -72,22 +72,22 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
         raise failure
 
     @node
-    def parent(ctx: Context, /, *, values: Auto[Any]) -> Any:
+    def parent(ctx: Context, /, *, values: Any) -> Any:
         visited.append("parent")
         return values
 
     @wrapper
     def middleware(
-        ctx: Context, wrapped: Node, call_next: Callable, /, *, values: Auto[Any]
+        ctx: Context, wrapped: Node, call_next: Callable, /, *, values: Any
     ) -> Any:
         visited.append("wrapper")
         return values
 
     values = [schema.resolve("first"), schema.resolve("second"), child()]
     if target == "node":
-        call = parent(values=values)
+        call = parent(values=Auto(values))
     elif target == "wrapper":
-        call = parent(values=None).add_wrappers(middleware(values=values))
+        call = parent(values=Auto(None)).add_wrappers(middleware(values=Auto(values)))
     else:
 
         def call(ctx):
@@ -399,13 +399,13 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context({"value": 7}, schema=Schema({"value": Schema.leaf()}))
     custom_ref = CustomRef("value")
-    custom_node = CustomNode(func=lambda ctx: 3, specs={}, params={})
+    custom_node = CustomNode(func=lambda ctx: 3, params={})
 
     @node
-    def collect(ctx: Context, /, *, values: Auto[list[Any]]) -> list[Any]:
+    def collect(ctx: Context, /, *, values: list[Any]) -> list[Any]:
         return values
 
-    graph = collect(values=[Ref("value"), custom_ref, custom_node])
+    graph = collect(values=Auto([Ref("value"), custom_ref, custom_node]))
     result = graph(ctx)
     assert result[0] == 7
     assert result[1] is custom_ref and result[2] is custom_node
@@ -448,19 +448,19 @@ async def test_auto_reconstructs_containers_and_preserves_ordinary_leaves(
     }
 
     @node
-    def identity(ctx: Context, /, *, value: Auto[Any]) -> Any:
+    def identity(ctx: Context, /, *, value: Any) -> Any:
         return value
 
     @wrapper
     def capture(
-        ctx: Context, wrapped: Node, call_next: Callable, /, *, value: Auto[Any]
+        ctx: Context, wrapped: Node, call_next: Callable, /, *, value: Any
     ) -> Any:
         return value
 
     if target == "node":
-        call = identity(value=payload)
+        call = identity(value=Auto(payload))
     elif target == "wrapper":
-        call = identity(value=None).add_wrappers(capture(value=payload))
+        call = identity(value=Auto(None)).add_wrappers(capture(value=Auto(payload)))
     else:
 
         def call(ctx):
@@ -484,26 +484,26 @@ async def test_auto_reconstructs_containers_and_preserves_ordinary_leaves(
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_auto_and_non_auto_parameters_have_declaration_driven_identity(
+async def test_auto_and_non_auto_parameters_have_binding_driven_identity(
     asynchronous: bool,
 ) -> None:
     @node
-    def identity(ctx: Context, /, *, evaluated: Auto[Any], raw: Any) -> Any:
+    def identity(ctx: Context, /, *, evaluated: Any, raw: Any) -> Any:
         return evaluated, raw
 
     @node
-    async def async_identity(ctx: Context, /, *, evaluated: Auto[Any], raw: Any) -> Any:
+    async def async_identity(ctx: Context, /, *, evaluated: Any, raw: Any) -> Any:
         return evaluated, raw
 
     ctx = Context()
     marker = object()
     payload = [marker]
     factory = async_identity if asynchronous else identity
-    evaluated, raw = await factory(evaluated=payload, raw=payload).acall(ctx)
+    evaluated, raw = await factory(evaluated=Auto(payload), raw=payload).acall(ctx)
     assert evaluated is not payload
     assert evaluated[0] is marker
     assert raw is payload
-    evaluated, raw = await factory(evaluated=marker, raw=marker).acall(ctx)
+    evaluated, raw = await factory(evaluated=Auto(marker), raw=marker).acall(ctx)
     assert evaluated is raw is marker
     ctx.dispose()
 
@@ -529,7 +529,7 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
     monkeypatch.setattr("slyme.node.eval.CTX_EVAL_ENGINE", engine)
 
     @node
-    def identity(ctx: Context, /, *, value: Auto[Any], other: int) -> Any:
+    def identity(ctx: Context, /, *, value: Any, other: int) -> Any:
         return value, other
 
     @wrapper
@@ -539,7 +539,7 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
         call_next: Callable,
         /,
         *,
-        value: Auto[Any],
+        value: Any,
         other: int,
     ) -> Any:
         return value, other
@@ -547,10 +547,10 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
     marker = object()
     box = Box(marker)
     if target == "node":
-        element = graph = identity(value=box, other=1)
+        element = graph = identity(value=Auto(box), other=1)
     else:
-        element = capture(value=box, other=1)
-        graph = identity(value=None, other=0).add_wrappers(element)
+        element = capture(value=Auto(box), other=1)
+        graph = identity(value=Auto(None), other=0).add_wrappers(element)
     ctx = Context()
     result, other = graph(ctx)
     assert calls == 1
@@ -566,19 +566,19 @@ def test_wrapper_reentry_evaluates_current_auto_container_each_time() -> None:
     payload = [1]
 
     @node
-    def read(ctx: Context, /, *, values: Auto[list[int]]) -> list[int]:
+    def read(ctx: Context, /, *, values: list[int]) -> list[int]:
         return values
 
     @wrapper
     def repeat(ctx: Context, wrapped: Node, call_next: Callable, /) -> Any:
-        wrapped.set("values", [42])
+        wrapped.set("values", Auto([42]))
         first = call_next(ctx)
         payload.append(schema.resolve("value"))
         ctx.set("value", 3)
         return first, call_next(ctx)
 
     ctx = Context({"value": 2}, schema=schema)
-    graph = read(values=payload).add_wrappers(repeat())
+    graph = read(values=Auto(payload)).add_wrappers(repeat())
     assert graph(ctx) == ([1], [1, 3])
     assert graph(ctx) == ([42], [42])
     ctx.dispose()
@@ -598,7 +598,7 @@ def test_short_circuiting_wrapper_does_not_traverse_auto_parameters(
     monkeypatch.setattr("slyme.node.eval.CTX_EVAL_ENGINE", engine)
 
     @node
-    def identity(ctx: Context, /, *, value: Auto[Any]) -> Any:
+    def identity(ctx: Context, /, *, value: Any) -> Any:
         return value
 
     @wrapper
@@ -606,5 +606,5 @@ def test_short_circuiting_wrapper_does_not_traverse_auto_parameters(
         return 12
 
     ctx = Context()
-    assert identity(value=Box()).add_wrappers(stop())(ctx) == 12
+    assert identity(value=Auto(Box())).add_wrappers(stop())(ctx) == 12
     ctx.dispose()

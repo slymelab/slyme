@@ -2,18 +2,18 @@
 
 Slyme binds build parameters by keyword and optionally evaluates their values with the runtime `Context`.
 
-## Spec collection
+## Explicit bindings
 
-Every keyword-only function parameter produces a `Spec`. Defaults, `default_factory`, and `auto_eval` may be configured explicitly; `Auto[T]` is shorthand for `Spec(auto_eval=True)`.
+Node and Wrapper factories store only supplied keyword bindings. Function signatures and annotations are not inspected; `Auto(tree)` marks a binding for evaluation. Ordinary values, including bare Ref and Node objects, pass through unchanged.
 
-Factory calls validate keyword names and apply defaults immediately. A missing required value becomes `UNDEFINED` and is rejected when the Node or Wrapper is called.
+At execution, keyword overrides replace saved bindings for that call without mutating them. Defaults and argument errors belong to Python's actual function call. Deleting a binding makes that argument absent; a function default is not an implicit stored or Auto-evaluated value.
 
 ## Call-time evaluation
 
 For each call, Slyme:
 
-1. reads the object's current parameters;
-2. separates parameters by their declared `auto_eval` flag;
+1. shallowly merges saved bindings with invocation keyword overrides;
+2. separates explicit Auto wrappers from ordinary values;
 3. flattens Auto parameters according to Tree rules;
 4. batches leaves by evaluator type;
 5. resolves them with the supplied Context, reconstructs Auto containers, and invokes the user function, passing non-Auto values directly.

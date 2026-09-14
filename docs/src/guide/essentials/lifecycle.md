@@ -19,11 +19,11 @@ R = Schema(
 
 
 @node
-def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
+def process(ctx: Context, /, *, timeout: int = 30, data: list):
     return timeout, data
 
 
-task = process(data=[R.resolve("user.age"), R.resolve("user.name")])
+task = process(data=Auto([R.resolve("user.age"), R.resolve("user.name")]))
 task.set("timeout", 60)
 ```
 
@@ -33,8 +33,8 @@ Node parameters and wrappers may be changed between calls. A change never requir
 
 At the start of each Node or Wrapper call, Slyme:
 
-1. reads and validates the object's current parameters;
-2. separates static values from values that require Auto evaluation;
+1. shallowly snapshots saved bindings and applies this call's keyword overrides;
+2. separates ordinary values from explicitly wrapped Auto trees;
 3. builds the wrapper chain and evaluates Auto parameters before each user function invocation;
 4. passes static parameter containers directly to the user function.
 
@@ -56,10 +56,10 @@ Static parameter values and values retrieved from `Context` keep their normal Py
 ctx = Context(schema=R)
 ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
-process(data=[R.resolve("a"), R.resolve("b")])(
+process(data=Auto([R.resolve("a"), R.resolve("b")]))(
     ctx
 )  # Auto produces the evaluated list [1, 2]
-process(data=R.resolve("items"))(ctx)  # data is the list stored in Context
+process(data=Auto(R.resolve("items")))(ctx)  # data is the list stored in Context
 ```
 
 Auto Ref values are read from `ctx`. Every Auto child Node instead executes with an owned child Context and a distinct child Scope. Evaluation stays synchronous until a child call or cleanup returns an awaitable. The pending child and remaining siblings then run concurrently when awaited; their results retain input order. Successful children dispose immediately. After all child tasks finish, any failed or interrupted disposal is completed before reporting errors or running the parent function.

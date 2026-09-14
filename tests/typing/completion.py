@@ -6,7 +6,7 @@ from typing import Any
 from typing_extensions import assert_type
 
 from slyme.context import Context
-from slyme.node import Node, Wrapper, node, wrapper
+from slyme.node import Auto, Node, Wrapper, node, wrapper
 from slyme.utils.continuation import await_result
 
 
@@ -25,6 +25,16 @@ def mixed(ctx: Context, /) -> int | Awaitable[int]:
     return 1
 
 
+@node()
+def parameterized(ctx: Context, /, *, value: int, scale: int = 2) -> int:
+    return value * scale
+
+
+@node()
+async def decorated_async(ctx: Context, /, **kwargs: int) -> int:
+    return sum(kwargs.values())
+
+
 @wrapper
 def mixed_wrapper(
     ctx: Context, wrapped: Node, call_next: Callable, /
@@ -37,6 +47,11 @@ async def check_types(ctx: Context) -> None:
     assert_type(asynchronous(), Node[int])
     assert_type(mixed(), Node[int])
     assert_type(mixed_wrapper(), Wrapper[int])
+    assert_type(parameterized(), Node[int])
+    assert_type(parameterized(value=Auto(mixed())), Node[int])
+    assert_type(parameterized()(ctx, value=1), int | Awaitable[int])
+    assert_type(parameterized().acall(ctx, value=1), Awaitable[int])
+    assert_type(decorated_async(value=1), Node[int])
     assert_type(
         Wrapper.compose([mixed_wrapper()], wrapped=immediate(), call_next=immediate()),
         Callable[[Context], Any],

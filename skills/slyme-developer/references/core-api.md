@@ -21,7 +21,7 @@ R = Schema(
 
 
 @node
-def calculate(ctx, *, value: Auto[float], scale: float = 1.0) -> float:
+def calculate(ctx, *, value: float, scale: float = 1.0) -> float:
     return value * scale
 
 
@@ -34,7 +34,7 @@ def increment(ctx, *, counter: Ref[int]) -> None:
 def execute(
     ctx,
     *,
-    derived: Auto[float],
+    derived: float,
     children: tuple[Node, ...],
     output: Ref[float],
 ) -> float:
@@ -43,7 +43,7 @@ def execute(
     return derived
 ```
 
-A Node function has exactly one non-keyword-only runtime parameter. All build parameters are keyword-only. `Auto` resolves registered leaves such as `Ref` and value-producing `Node`; omit it when the function needs the object itself.
+Factories accept keyword bindings without inspecting function signatures. Node execution passes Context positionally and bindings by keyword; Python handles defaults, variadic parameters, and argument errors. Wrap a bound parameter tree in `Auto(...)` to resolve registered leaves such as Ref and value-producing Node; omit the wrapper when the function needs the object itself.
 
 An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned child Context with a distinct `ctx.scope.fork()`. Slyme disposes that child, including its effects, before parent execution continues. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe its writes.
 
@@ -101,16 +101,16 @@ def trace(ctx, wrapped: Node, call_next, *, name: str):
         print(name, "end")
 ```
 
-A Wrapper has exactly three non-keyword-only runtime parameters. Attach it through `node.add_wrappers(...)`. This example and the `execute` function above assume synchronous children. For mixed children, use `async def` and `await await_result(...)` before inspecting results, executing following statements, or leaving `try/finally`; see [async.md](async.md).
+Wrapper execution passes Context, the wrapped Node, and the next callable positionally, followed by keyword bindings. Attach it through `node.add_wrappers(...)`. This example and the `execute` function above assume synchronous children. For mixed children, use `async def` and `await await_result(...)` before inspecting results, executing following statements, or leaving `try/finally`; see [async.md](async.md).
 
 ## Assembly and execution
 
 ```python
 root = execute(
-    derived=calculate(
-        value=R.resolve("input.value"),
+    derived=Auto(calculate(
+        value=Auto(R.resolve("input.value")),
         scale=2.0,
-    ),
+    )),
     children=(increment(counter=R.resolve("state.counter")),),
     output=R.resolve("output.result"),
 ).add_wrappers(trace(name="execute"))
@@ -123,6 +123,6 @@ result = root(ctx)
 assert ctx.get(R.resolve("output.result")) == result
 ```
 
-The Node graph stays mutable. Read build parameters with `root.get(name)`, replace them with `root.set(name, value)`, and restore defaults with `root.reset(name)`. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. A change affects subsequent calls without an explicit prepare phase. Call the relevant factory or assembly function again when another independently configurable graph is needed, and copy mutable application values explicitly when they must not be shared.
+The Node graph stays mutable. Read explicit bindings with `root.get(name)`, replace them with `root.set(name, value)`, and remove them with `root.delete(name)`. Absent bindings use the function's native defaults at invocation. `root(ctx, **kwargs)` overrides saved bindings for one call before Auto evaluation. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. Call the relevant factory or assembly function again when another independently configurable graph is needed, and copy mutable application values explicitly when they must not be shared.
 
 Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

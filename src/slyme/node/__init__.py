@@ -17,6 +17,7 @@ from .common import (
     sequential_exec,
 )
 from .core import (
+    Auto,
     Node,
     NodeElement,
     Wrapper,
@@ -26,7 +27,6 @@ from .core import (
 
 # NOTE: register eval funcs here through import
 from .eval import eval_tree
-from .signature import UNDEFINED, UNSET, Auto, spec
 
 __all__ = [
     "NodeElement",
@@ -36,9 +36,6 @@ __all__ = [
     "wrapper",
     "sequential_exec",
     "sequential",
-    "spec",
     "Auto",
-    "UNSET",
-    "UNDEFINED",
     "eval_tree",
 ]

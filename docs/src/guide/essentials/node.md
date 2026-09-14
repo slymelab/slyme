@@ -4,7 +4,7 @@
 
 ## Define and create a Node
 
-A Node function has exactly one non-keyword-only runtime parameter. Every build parameter must be keyword-only:
+A Node factory accepts only keyword bindings. Execution passes Context positionally and the merged bindings by keyword; the function's own signature controls how they are received:
 
 ```python
 from slyme.context import Context, Ref, Schema
@@ -14,18 +14,16 @@ R = Schema({"input": {"x": Schema.leaf()}, "output": {"total": Schema.leaf()}})
 
 
 @node
-def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
+def add(ctx: Context, *, x: int, y: int, output: Ref[int]):
     result = x + y
     ctx.set(output, result)
     return result
 
 
-task = add(x=R.resolve("input.x"), y=2, output=R.resolve("output.total"))
+task = add(x=Auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
 ```
 
-Runtime parameter names and annotations are optional; Slyme identifies runtime and build parameters by parameter count and keyword-only placement.
-Variadic `*args` and `**kwargs` parameters are not supported: runtime arity and
-build parameter names must remain explicit.
+Slyme does not inspect function signatures or resolve type annotations. Functions may declare `*args` and `**kwargs`; Python binds the positional Context and supplied keywords normally. Node's framework `ctx` argument is positional-only, so a business keyword named `ctx` can be forwarded independently.
 
 ## Execute
 
@@ -89,11 +87,11 @@ Auto independently owns its all-settled evaluation policy. It calls every evalua
 
 ## Parameters and Auto
 
-Every build parameter has a `Spec`. `Auto[T]` is shorthand for enabling automatic evaluation:
+Function parameters describe the values the function receives. Wrap a bound parameter tree in `Auto(...)` at construction or invocation to request evaluation:
 
 ```python
 @node
-def parent(ctx, *, child: Auto[int]):
+def parent(ctx, *, child: int):
     return child + 1
 
 
@@ -102,24 +100,27 @@ def child(ctx, *, value: int):
     return value
 
 
-root = parent(child=child(value=4))
+root = parent(child=Auto(child(value=4)))
 assert root(Context()) == 5
 ```
 
 `Auto` recursively resolves registered evaluator leaves such as `Ref` and `Node`. A Ref reads the supplied Context directly. Each value-producing child Node receives an owned child Context bound to a distinct `ctx.scope.fork()`. Slyme disposes that Context and its effects before parent execution continues, so child-Scope writes and Context-owned registrations do not leak into the parent or a sibling Auto child. Returned values, mutations to shared leaf objects, direct registrations whose disposers were not adopted by the child Context, and external side effects without registered cleanup are not isolated. Without `Auto`, Ref and Node objects are passed through unchanged.
 
-Missing required build parameters are represented by `UNDEFINED` and rejected when the Node is called. Use `UNSET` to request a declared default explicitly.
+Only explicitly supplied bindings are stored. Absent parameters use native function defaults; missing required or unexpected arguments raise Python `TypeError` when the function is invoked, retained by the Node or Wrapper exception record. Auto work can therefore run before a parameter error is discovered. Defaults are not scanned or evaluated by Slyme: bind dynamic inputs explicitly rather than placing `Auto(...)` in a function default. An Auto object nested inside an ordinary, unwrapped parameter is ordinary data.
 
 ## Dynamic modification
 
 Node and Wrapper parameters remain mutable between calls through an explicit parameter API:
 
 ```python
-root.get("child").set("value", 10)
+root.get("child").value.set("value", 10)
 assert root(Context()) == 11
+assert root(Context(), child=20) == 21  # Does not execute the bound child.
 ```
 
-Use `get(name)` to read, `set(name, value)` to replace, and `reset(name)` to restore a parameter's declared default or `UNDEFINED`. The read-only `params` mapping exposes all current parameters. Parameter names may overlap framework attributes such as `func`, `get`, or `wrappers` because parameters are not projected as object attributes.
+Use `get(name)` to read a binding, `set(name, value)` to store any binding, and `delete(name)` to remove one. Absent `get` and `delete` keys raise `KeyError`; neither reads function defaults. The live, read-only `params` mapping contains only saved bindings. `node(ctx, **kwargs)` and `node.acall(ctx, **kwargs)` shallowly override those bindings for one call before Auto evaluation, without updating `params` or merging nested containers. Parameter names may overlap framework attributes because parameters are not projected as object attributes.
+
+Factories and mutable bindings accept dynamic keyword names and values, including partial bindings and Auto trees. Their typing preserves execution result types but does not statically validate each binding against the underlying function's parameters.
 
 At call time, non-Auto parameters are passed directly to the user function. Mutating their containers therefore updates the live Node or Wrapper parameter. Every Auto parameter is traversed and its containers reconstructed according to Tree rules, including subtrees containing only ordinary values. Ordinary leaves and evaluator results retain their original identities; this is not a deep copy.
 
@@ -127,7 +128,7 @@ Call the Node factory or an assembly function again when another independently c
 
 ## Wrappers
 
-`@wrapper` functions have exactly three non-keyword-only runtime parameters: Context, the wrapped Node, and the next callable. Build parameters remain keyword-only.
+`@wrapper` factories also accept only keyword bindings. Execution passes Context, the wrapped Node, and the next callable positionally, followed by the merged keyword bindings. User functions may receive them with named parameters or `*args`/`**kwargs`. The framework's `Wrapper.__call__` parameters are positional-only; direct calls may independently override business keywords named `ctx`, `wrapped`, or `call_next`.
 
 ```python
 from collections.abc import Callable

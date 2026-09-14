@@ -8,7 +8,7 @@ from slyme.utils.continuation import await_result
 
 
 @node
-async def fetch(ctx, *, key: Auto[str]) -> str:
+async def fetch(ctx, *, key: str) -> str:
     return await remote_fetch(key)
 
 

@@ -75,8 +75,8 @@ cp -R /path/to/slyme/skills/slyme-developer .claude/skills/
 ```
 
 ```text
-检查这个 Slyme Node tree，重点检查 Auto 求值、positional-only 和
-keyword-only 参数、Context 更新以及 wrapper 组合是否正确。
+检查这个 Slyme Node tree，重点检查显式 Auto 绑定、调用时的关键字覆盖、
+Context 更新以及 wrapper 组合是否正确。
 ```
 
 Skill 会要求代理在修改代码前检查目标项目安装的 Slyme 版本和已有约定。

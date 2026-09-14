@@ -21,7 +21,7 @@ R = Schema(
 
 
 @node
-def format_prompts(ctx, *, articles: Auto[list[dict]]) -> list[str]:
+def format_prompts(ctx, *, articles: list[dict]) -> list[str]:
     return [
         f"Summarize {article['title']}: {article['content']}" for article in articles
     ]
@@ -31,7 +31,7 @@ def format_prompts(ctx, *, articles: Auto[list[dict]]) -> list[str]:
 def call_llm(
     ctx,
     *,
-    prompts: Auto[list[str]],
+    prompts: list[str],
     output: Ref[list[str]],
 ) -> None:
     ctx.set(output, [f"Response: {prompt}" for prompt in prompts])
@@ -47,9 +47,9 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 
 def build() -> Node:
-    formatter = format_prompts(articles=R.resolve("input.articles"))
+    formatter = format_prompts(articles=Auto(R.resolve("input.articles")))
     return call_llm(
-        prompts=formatter,
+        prompts=Auto(formatter),
         output=R.resolve("output.responses"),
     ).add_wrappers(timing(name="llm"))
 

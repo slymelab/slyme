@@ -23,12 +23,17 @@ Slyme (pronounced /slaɪm/) is a highly composable functional execution framewor
 
 Whether you are building complex LLM pipelines, executing DAGs, or creating generic data-processing flows, Slyme provides a structural, functional, and deeply Pythonic foundation.
 
-`Auto` evaluates registered leaves and reconstructs Tree containers on each
+`Auto(tree)` explicitly marks a bound parameter for evaluation. It evaluates
+registered leaves and reconstructs Tree containers on each
 invocation, including containers holding only ordinary values. Ordinary leaves
 and evaluator results retain their identities; non-Auto parameters pass through
 unchanged. `eval_tree(ctx, tree)` exposes the same evaluation behavior directly.
 Tree handlers and Auto evaluators match exact types; subclasses need explicit
 registration. The traversal utilities live in `slyme.utils.tree`.
+
+Node and Wrapper factories save only supplied keyword bindings. Native function
+defaults apply at invocation; `node(ctx, **kwargs)` overrides saved bindings for
+one call before Auto evaluation. Use `get`, `set`, and `delete` to manage bindings.
 
 ## Installation
 
@@ -63,14 +68,14 @@ R = Schema(
 
 # 1. Define an execution node
 @node
-def llm_api(ctx: Context, /, *, prompts: Auto[list[str]], responses: Ref[list[str]]):
+def llm_api(ctx: Context, /, *, prompts: list[str], responses: Ref[list[str]]):
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
     ctx.set(responses, responses_)
 
 
 # 2. Define a value-producing node
 @node
-def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
+def format_prompts(ctx: Context, /, *, articles: list[dict]) -> list[str]:
     return [
         f"Summarize: {article['title']}. Content: {article['content']}"
         for article in articles
@@ -98,9 +103,9 @@ def timing(
 def build_pipeline() -> Node[None]:
     return llm_api(
         responses=R.resolve("output.responses"),
-        prompts=format_prompts(
-            articles=R.resolve("input.articles"),
-        ),
+        prompts=Auto(format_prompts(
+            articles=Auto(R.resolve("input.articles")),
+        )),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 

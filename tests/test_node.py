@@ -4,14 +4,12 @@ import asyncio
 import inspect
 import threading
 from collections.abc import Awaitable, Callable
-from types import MappingProxyType
 from typing import Any
 
 import pytest
 
 from slyme.context import Context, Ref, Schema
 from slyme.node import (
-    UNDEFINED,
     Auto,
     Node,
     Wrapper,
@@ -19,7 +17,6 @@ from slyme.node import (
     node,
     sequential,
     sequential_exec,
-    spec,
     wrapper,
 )
 from slyme.node.eval import EvaluatorDef
@@ -28,7 +25,6 @@ from slyme.node.exception import (
     NodeTerminate,
     WrapperExceptionRecord,
 )
-from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
 from slyme.utils.continuation import await_result
 from slyme.utils.exception import BatchError
@@ -131,7 +127,7 @@ async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
         return 6
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    def parent(ctx: Context, /, *, value: int) -> int:
         assert events == ["cleanup"]
         return value * 2
 
@@ -140,55 +136,26 @@ async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
         return await await_result(call_next(ctx)) + 1
 
     ctx = Context()
-    graph = parent(value=child()).add_wrappers(increment())
+    graph = parent(value=Auto(child())).add_wrappers(increment())
     assert await graph.acall(ctx) == 13
     assert not ctx._owned
     ctx.dispose()
-
-
-def test_signature_analysis_merges_specs_and_exposes_factory_signature() -> None:
-    @node
-    def configured(
-        ctx: Context,
-        /,
-        *,
-        required: int,
-        defaulted: int = 2,
-        produced: int = spec(default_factory=lambda: 3),
-        dynamic: Auto[int] = spec(default=R.resolve("input.value")),
-    ) -> tuple[int, int, int, int]:
-        return required, defaulted, produced, dynamic
-
-    # Public signatures retain only keyword-only build-time parameters.
-    assert list(inspect.signature(configured).parameters) == [
-        "required",
-        "defaulted",
-        "produced",
-        "dynamic",
-    ]
-    instance = configured(required=1)
-    assert instance.get("defaulted") == 2
-    assert instance.get("produced") == 3
-    assert instance.get("dynamic") == R.resolve("input.value")
-    ctx = Context(schema=R)
-    ctx.set(R.resolve("input.value"), 4)
-    assert instance(ctx) == (1, 2, 3, 4)
 
 
 def test_schema_integrates_with_auto_during_graph_assembly() -> None:
     schema = Schema({"input": {"value": Schema.leaf()}})
 
     @node
-    def increment(ctx: Context, /, *, value: Auto[int]) -> int:
+    def increment(ctx: Context, /, *, value: int) -> int:
         return value + 1
 
     ctx = Context(schema=R)
     value_ref = schema.resolve("input.value")
     ctx.set(value_ref, 4)
-    assert increment(value=value_ref)(ctx) == 5
+    assert increment(value=Auto(value_ref))(ctx) == 5
 
     def misspelled() -> Node[int]:
-        return increment(value=schema.resolve("input.vlaue"))
+        return increment(value=Auto(schema.resolve("input.vlaue")))
 
     with pytest.raises(KeyError, match="Did you mean 'value'"):
         misspelled()
@@ -198,11 +165,11 @@ def test_prebuilt_node_uses_schema_declared_after_runtime_fork() -> None:
     plugin_schema = Schema({"plugin": {"value": Schema.leaf()}})
 
     @node
-    def read(ctx: Context, /, *, value: Auto[int]) -> int:
+    def read(ctx: Context, /, *, value: int) -> int:
         return value
 
     plugin_ref = plugin_schema.resolve("plugin.value")
-    graph = read(value=plugin_ref)
+    graph = read(value=Auto(plugin_ref))
     root = Context()
     turn = root.fork()
 
@@ -212,130 +179,11 @@ def test_prebuilt_node_uses_schema_declared_after_runtime_fork() -> None:
     assert graph(turn) == 4
 
 
-def test_spec_validation_and_missing_parameters() -> None:
-    with pytest.raises(ValueError, match="cannot be set at the same time"):
-        Spec(default=1, default_factory=lambda: 2)
-    with pytest.raises(ValueError, match="auto_eval"):
-        Spec().should_eval()
-    assert Spec(auto_eval=True).should_eval()
-    assert not Spec(auto_eval=False).should_eval()
-
-    @node
-    def required(ctx: Context, /, *, value: int) -> int:
-        return value
-
-    item = required()
-    assert item.get("value") is UNDEFINED
-    with pytest.raises(NodeExceptionRecord) as exc_info:
-        item(Context(schema=R))
-    assert isinstance(exc_info.value.exception, ValueError)
-    assert "Missing required parameter" in str(exc_info.value.exception)
-
-
-def test_decorator_validation_and_factory_behavior() -> None:
-    with pytest.raises(TypeError, match="exactly 1 runtime"):
-
-        @node
-        def no_context(*, value: int) -> int:
-            return value
-
-    with pytest.raises(TypeError, match="exactly 3 runtime"):
-
-        @wrapper
-        def bad_wrapper(ctx: Context, /) -> None:
-            return None
-
-    @node
-    def names_can_overlap_framework_api(
-        ctx: Context,
-        /,
-        *,
-        func: int = 1,
-        get: int = 2,
-        wrappers: int = 3,
-    ) -> tuple[int, int, int]:
-        return func, get, wrappers
-
-    overlapping = names_can_overlap_framework_api()
-    assert overlapping.get("func") == 1
-    assert overlapping.get("get") == 2
-    assert overlapping.get("wrappers") == 3
-    assert overlapping.wrappers == []
-    assert overlapping(Context(schema=R)) == (1, 2, 3)
-
-    @node
-    async def detected(ctx: Context, /) -> int:
-        return 1
-
-    assert detected.element_type is Node
-    assert detected.func.__name__ == "detected"
-
-
-def test_variadic_node_and_wrapper_parameters_are_rejected() -> None:
-    with pytest.raises(TypeError, match=r"Variadic parameter '\*args'"):
-
-        @node
-        def variadic_node_args(*args: Any) -> None:
-            return None
-
-    with pytest.raises(TypeError, match=r"Variadic parameter '\*\*kwargs'"):
-
-        @node
-        def variadic_node_kwargs(**kwargs: Any) -> None:
-            return None
-
-    with pytest.raises(TypeError, match=r"Variadic parameter '\*args'"):
-
-        @wrapper
-        def variadic_wrapper_args(ctx: Context, wrapped: Node[Any], *args: Any) -> Any:
-            return None
-
-    with pytest.raises(TypeError, match=r"Variadic parameter '\*\*kwargs'"):
-
-        @wrapper
-        def variadic_wrapper_kwargs(
-            ctx: Context,
-            wrapped: Node[Any],
-            /,
-            **kwargs: Any,
-        ) -> Any:
-            return None
-
-
-def test_node_parameters_are_explicit_and_mutable() -> None:
-    @node
-    def identity(ctx: Context, /, *, value: int = 1) -> int:
-        return value
-
-    instance = identity()
-    instance.set("value", 2)
-    assert instance(Context(schema=R)) == 2
-    assert instance.get("value") == 2
-    assert instance.params == {"value": 2}
-    assert isinstance(instance.params, MappingProxyType)
-    assert instance.specs["value"].default == 1
-    assert instance.func is identity.func
-    instance.reset("value")
-    assert instance.get("value") == 1
-    with pytest.raises(KeyError, match="Unknown parameter"):
-        instance.get("other")
-    with pytest.raises(KeyError, match="Unknown parameter"):
-        instance.set("other", 3)
-    with pytest.raises(KeyError, match="Unknown parameter"):
-        instance.reset("other")
-    with pytest.raises(AttributeError):
-        instance.value = 3  # type: ignore[attr-defined]
-    with pytest.raises(TypeError):
-        instance.params["value"] = 3  # type: ignore[index]
-    with pytest.raises(TypeError, match="unexpected keyword"):
-        identity(other=3)  # type: ignore[call-arg]
-
-
 def test_auto_evaluation_for_refs_nodes_and_nested_containers() -> None:
     calls: list[str] = []
 
     @node
-    def child(ctx: Context, /, *, offset: Auto[int]) -> int:
+    def child(ctx: Context, /, *, offset: int) -> int:
         calls.append("child")
         return offset + 1
 
@@ -344,18 +192,20 @@ def test_auto_evaluation_for_refs_nodes_and_nested_containers() -> None:
         ctx: Context,
         /,
         *,
-        payload: Auto[dict[str, Any]],
+        payload: dict[str, Any],
     ) -> dict[str, Any]:
         return payload
 
     ctx = Context(schema=R)
     ctx.set(R.resolve("input.base"), 4)
     graph = parent(
-        payload={
-            "raw": R.resolve("input.base"),
-            "computed": child(offset=R.resolve("input.base")),
-            "constant": [1, 2],
-        }
+        payload=Auto(
+            {
+                "raw": R.resolve("input.base"),
+                "computed": child(offset=Auto(R.resolve("input.base"))),
+                "constant": [1, 2],
+            }
+        )
     )
     assert graph(ctx) == {"raw": 4, "computed": 5, "constant": [1, 2]}
     assert calls == ["child"]
@@ -426,7 +276,7 @@ def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:
         call_next: Callable[[Context], Any],
         /,
         *,
-        name: Auto[str],
+        name: str,
     ) -> Any:
         events.append(f"before:{name}:{wrapped.func.__name__}")
         result = call_next(ctx)
@@ -441,7 +291,7 @@ def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:
     ctx = Context(schema=R)
     ctx.set(R.resolve("names.outer"), "outer")
     result = work(value=7).add_wrappers(
-        trace(name=R.resolve("names.outer")), trace(name="inner")
+        trace(name=Auto(R.resolve("names.outer"))), trace(name=Auto("inner"))
     )(ctx)
 
     assert result == 7
@@ -503,12 +353,12 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
     events: list[str] = []
 
     @node
-    def sync_child(ctx: Context, /, *, value: Auto[int]) -> int:
+    def sync_child(ctx: Context, /, *, value: int) -> int:
         events.append("sync")
         return value + 1
 
     @node
-    async def async_child(ctx: Context, /, *, value: Auto[int]) -> int:
+    async def async_child(ctx: Context, /, *, value: int) -> int:
         await asyncio.sleep(0)
         events.append("async")
         return value + 2
@@ -520,7 +370,7 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
         call_next: Callable[[Context], Awaitable[Any]],
         /,
         *,
-        label: Auto[str],
+        label: str,
     ) -> Any:
         events.append(f"before:{label}")
         value = await call_next(ctx)
@@ -532,18 +382,20 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
         ctx: Context,
         /,
         *,
-        values: Auto[list[int]],
+        values: list[int],
     ) -> int:
         return sum(values)
 
     ctx = Context(schema=R)
     ctx.update({R.resolve("input.value"): 3, R.resolve("input.label"): "trace"})
     graph = parent(
-        values=[
-            sync_child(value=R.resolve("input.value")),
-            async_child(value=R.resolve("input.value")),
-        ]
-    ).add_wrappers(async_trace(label=R.resolve("input.label")))
+        values=Auto(
+            [
+                sync_child(value=Auto(R.resolve("input.value"))),
+                async_child(value=Auto(R.resolve("input.value"))),
+            ]
+        )
+    ).add_wrappers(async_trace(label=Auto(R.resolve("input.label"))))
 
     assert await graph(ctx) == 9
     assert events[0] == "before:trace"
@@ -608,15 +460,15 @@ def test_auto_nodes_receive_isolated_child_contexts() -> None:
         ctx: Context,
         /,
         *,
-        left: Auto[int],
-        right: Auto[int],
+        left: int,
+        right: int,
     ) -> tuple[int, int]:
         return left, right
 
     ctx = Context(schema=R)
     ctx.set(inherited, 4)
     shared_child = child()
-    assert parent(left=shared_child, right=shared_child)(ctx) == (1, 2)
+    assert parent(left=Auto(shared_child), right=Auto(shared_child))(ctx) == (1, 2)
     assert len(seen) == 2
     assert seen[0] is not seen[1]
     assert seen[0].parent is ctx
@@ -638,7 +490,7 @@ def test_auto_realizes_each_original_leaf_only_once() -> None:
         return calls
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[Any]) -> Any:
+    def parent(ctx: Context, /, *, value: Any) -> Any:
         return value
 
     produced_node = child()
@@ -646,10 +498,10 @@ def test_auto_realizes_each_original_leaf_only_once() -> None:
     ctx = Context(schema=R)
 
     ctx.set(dynamic, produced_node)
-    assert parent(value=dynamic)(ctx) is produced_node
+    assert parent(value=Auto(dynamic))(ctx) is produced_node
 
     ctx.set(dynamic, produced_mapping)
-    assert parent(value=dynamic)(ctx) is produced_mapping
+    assert parent(value=Auto(dynamic))(ctx) is produced_mapping
     assert calls == 0
 
 
@@ -671,12 +523,12 @@ async def test_async_auto_nodes_receive_isolated_child_contexts() -> None:
         return started
 
     @node
-    async def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+    async def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
     ctx = Context(schema=R)
     result = await asyncio.wait_for(
-        parent(values=[child(), child()])(ctx),
+        parent(values=Auto([child(), child()]))(ctx),
         timeout=5,
     )
     assert result == 4
@@ -700,11 +552,11 @@ def test_sync_auto_disposes_child_effects_before_parent_execution() -> None:
         return 1
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    def parent(ctx: Context, /, *, value: int) -> int:
         assert events == ["child", "cleanup"]
         return value
 
-    assert parent(value=child())(Context(schema=R)) == 1
+    assert parent(value=Auto(child()))(Context(schema=R)) == 1
 
 
 async def test_sync_auto_promotes_async_cleanup_before_parent_execution() -> None:
@@ -721,13 +573,13 @@ async def test_sync_auto_promotes_async_cleanup_before_parent_execution() -> Non
         return 1
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    def parent(ctx: Context, /, *, value: int) -> int:
         assert events == ["child", "cleanup"]
         events.append("parent")
         return value
 
     ctx = Context(schema=R)
-    pending = parent(value=child())(ctx)
+    pending = parent(value=Auto(child()))(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["child"]
     assert await await_result(pending) == 1
@@ -749,11 +601,11 @@ async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None
         return 1
 
     @node
-    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    async def parent(ctx: Context, /, *, value: int) -> int:
         assert events == ["child", "cleanup"]
         return value
 
-    assert await parent(value=child())(Context(schema=R)) == 1
+    assert await parent(value=Auto(child()))(Context(schema=R)) == 1
 
 
 async def test_async_auto_runs_sync_nodes_inline_with_isolated_contexts() -> None:
@@ -771,12 +623,12 @@ async def test_async_auto_runs_sync_nodes_inline_with_isolated_contexts() -> Non
         ctx: Context,
         /,
         *,
-        values: Auto[list[tuple[int, object]]],
+        values: list[tuple[int, object]],
     ) -> list[tuple[int, object]]:
         return values
 
     ctx = Context(schema=R)
-    results = await parent(values=[child(value=1), child(value=2)])(ctx)
+    results = await parent(values=Auto([child(value=1), child(value=2)]))(ctx)
 
     assert [value for value, _ in results] == [1, 2]
     assert [entry[:2] for entry in observed] == [
@@ -797,12 +649,12 @@ def test_sync_auto_preserves_node_failure_when_cleanup_also_fails() -> None:
         raise ValueError("node failed")
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
     child_node = child()
     with pytest.raises(BatchError) as caught:
-        parent(value=child_node)(Context(schema=R))
+        parent(value=Auto(child_node))(Context(schema=R))
 
     child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
@@ -826,12 +678,12 @@ async def test_async_auto_preserves_node_failure_when_cleanup_also_fails() -> No
         raise ValueError("node failed")
 
     @node
-    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    async def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
     child_node = child()
     with pytest.raises(BatchError) as caught:
-        await parent(value=child_node)(Context(schema=R))
+        await parent(value=Auto(child_node))(Context(schema=R))
 
     child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
@@ -873,11 +725,11 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
         raise RuntimeError("child failed")
 
     @node
-    async def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+    async def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
     ctx = Context(schema=R)
-    task = asyncio.create_task(parent(values=[waiting(), failing()])(ctx))
+    task = asyncio.create_task(parent(values=Auto([waiting(), failing()]))(ctx))
     await failed.wait()
     await asyncio.sleep(0)
     assert not task.done()
@@ -925,11 +777,11 @@ async def test_cancelled_auto_finishes_sibling_cleanup_without_aggregating_error
         raise ValueError("primary child failure")
 
     @node
-    async def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+    async def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
     ctx = Context(schema=R)
-    task = asyncio.create_task(parent(values=[failing(), waiting()])(ctx))
+    task = asyncio.create_task(parent(values=Auto([failing(), waiting()]))(ctx))
     await cleanup_started.wait()
     task.cancel()
     await asyncio.sleep(0)
@@ -969,11 +821,11 @@ async def test_repeated_auto_cancellation_finishes_child_cleanup(
         return 1
 
     @node
-    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    async def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
     ctx = Context(schema=R)
-    task = asyncio.create_task(parent(value=child())(ctx))
+    task = asyncio.create_task(parent(value=Auto(child()))(ctx))
     await cleanup_started.wait()
     task.cancel()
     await asyncio.sleep(0)
@@ -1007,11 +859,11 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
         return 1
 
     @node
-    async def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    async def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
     ctx = Context(schema=R)
-    task = asyncio.create_task(parent(value=child())(ctx))
+    task = asyncio.create_task(parent(value=Auto(child()))(ctx))
     await cleanup_started.wait()
     task.cancel()
     await asyncio.sleep(0)
@@ -1180,10 +1032,11 @@ def test_node_and_wrapper_trees_support_traversal_without_reconstruction() -> No
         return value
 
     @node
-    def parent(ctx: Context, /, *, nested: Auto[int]) -> int:
+    def parent(ctx: Context, /, *, nested: int) -> int:
         return nested
 
-    graph = parent(nested=child()).add_wrappers(trace())
+    assert NODE_ENGINE.flatten(child())[0] == []
+    graph = parent(nested=Auto(child(value=1))).add_wrappers(trace())
     for value, expected_leaves in ((graph, [1]), (trace(), [])):
         leaves, definition = NODE_ENGINE.flatten(value)
         assert leaves == expected_leaves

@@ -4,7 +4,7 @@
 
 ## 定义与创建 Node
 
-Node 函数必须恰好有一个非 keyword-only 运行时参数，所有构建参数必须是 keyword-only：
+Node 工厂只接受关键字绑定。执行时按位置传入 Context，并按关键字传入合并后的绑定；具体如何接收由用户函数自身的签名决定：
 
 ```python
 from slyme.context import Context, Ref, Schema
@@ -14,17 +14,16 @@ R = Schema({"input": {"x": Schema.leaf()}, "output": {"total": Schema.leaf()}})
 
 
 @node
-def add(ctx: Context, *, x: Auto[int], y: Auto[int], output: Ref[int]):
+def add(ctx: Context, *, x: int, y: int, output: Ref[int]):
     result = x + y
     ctx.set(output, result)
     return result
 
 
-task = add(x=R.resolve("input.x"), y=2, output=R.resolve("output.total"))
+task = add(x=Auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
 ```
 
-运行时参数的名称与类型标注都不是必需的；Slyme 仅根据参数数量及 keyword-only 位置区分运行时参数和构建参数。
-不支持变长参数 `*args` 和 `**kwargs`：运行时参数数量与构建参数名称都必须显式声明。
+Slyme 不分析函数签名或解析类型注解。函数可以声明 `*args` 和 `**kwargs`，由 Python 正常绑定位置 Context 和传入的关键字。Node 的框架参数 `ctx` 为仅位置参数，因此可以独立传递名为 `ctx` 的业务关键字。
 
 ## 执行
 
@@ -88,11 +87,11 @@ Auto 独立拥有全部完成后汇总的求值策略。它先内联调用每个
 
 ## 参数与 Auto
 
-每个构建参数都有一个 `Spec`。`Auto[T]` 是启用自动求值的简写：
+函数参数描述最终接收的值。构造或调用时，将需要求值的参数树包装为 `Auto(...)`：
 
 ```python
 @node
-def parent(ctx, *, child: Auto[int]):
+def parent(ctx, *, child: int):
     return child + 1
 
 
@@ -101,24 +100,27 @@ def child(ctx, *, value: int):
     return value
 
 
-root = parent(child=child(value=4))
+root = parent(child=Auto(child(value=4)))
 assert root(Context()) == 5
 ```
 
 `Auto` 会递归解析已注册的 evaluator 叶子，例如 `Ref` 和 `Node`。Ref 会直接读取传入的 Context；每个产生值的子 Node 则获得由父 Context 管理、绑定到独立 `ctx.scope.fork()` 的子 Context。父 Node 继续执行前，Slyme 会 dispose 该 Context 及其 effect，因此 child Scope 的写入与由 Context 管理的注册不会泄漏到父级或其他 Auto 子 Node。返回值、对共享 leaf 对象的修改、disposer 未交给子 Context 管理的直接注册，以及没有注册 cleanup 的外部副作用并不会被隔离。没有 `Auto` 时，Ref 和 Node 对象会原样传入。
 
-缺失的必需构建参数以 `UNDEFINED` 表示，并在 Node 调用时被拒绝。使用 `UNSET` 可以显式请求声明的默认值。
+框架只保存显式传入的绑定。未绑定参数使用函数原生默认值；缺少必需参数或传入未知参数时，由 Python 在实际调用函数时抛出 `TypeError`，并保留在 Node 或 Wrapper 的异常记录中。因此参数错误被发现前，Auto 工作可能已经执行。Slyme 不扫描或求值函数默认值：动态输入应显式绑定，而不是把 `Auto(...)` 放进函数默认值。普通未包装参数内部的 Auto 对象也是普通数据。
 
 ## 动态修改
 
 Node 和 Wrapper 参数通过显式参数 API 在两次调用之间保持可变：
 
 ```python
-root.get("child").set("value", 10)
+root.get("child").value.set("value", 10)
 assert root(Context()) == 11
+assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
 ```
 
-使用 `get(name)` 读取参数，使用 `set(name, value)` 替换参数，使用 `reset(name)` 恢复声明的默认值或 `UNDEFINED`。只读 `params` mapping 暴露全部当前参数。参数名可以与 `func`、`get`、`wrappers` 等框架 API 重合，因为参数不会投影为对象属性。
+使用 `get(name)` 读取绑定，使用 `set(name, value)` 保存任意绑定，使用 `delete(name)` 删除绑定。`get` 和 `delete` 遇到不存在的 key 时抛出 `KeyError`，也不会读取函数默认值。实时、只读的 `params` mapping 只包含已保存的绑定。`node(ctx, **kwargs)` 和 `node.acall(ctx, **kwargs)` 在 Auto 求值前，为本次调用浅覆盖绑定，不修改 `params`，也不合并嵌套容器。参数名可以与框架属性重合，因为参数不会投影为对象属性。
+
+工厂和可变绑定接受动态关键字名称与值，包括部分绑定和 Auto 树。类型声明保留执行结果类型，但不会根据底层函数参数逐项静态检查绑定。
 
 调用时，非 Auto 参数会直接传给用户函数，因此对其容器的修改会更新 Node 或 Wrapper 上的实时参数。每个 Auto 参数都会按 Tree 规则遍历并重建容器，包括只有普通值的子树。普通叶子与 evaluator 返回值保持原对象 identity；这不是深拷贝。
 
@@ -126,7 +128,7 @@ assert root(Context()) == 11
 
 ## Wrapper
 
-`@wrapper` 函数必须恰好有三个非 keyword-only 运行时参数：Context、被包装的 Node 和下一层 callable。构建参数仍为 keyword-only。
+`@wrapper` 工厂同样只接受关键字绑定。执行时依次按位置传入 Context、被包装的 Node 和下一层 callable，再传入合并后的关键字绑定。用户函数可以使用具名参数或 `*args`/`**kwargs` 接收。框架的 `Wrapper.__call__` 参数为仅位置参数，直接调用时可以独立覆盖名为 `ctx`、`wrapped` 或 `call_next` 的业务关键字。
 
 ```python
 from collections.abc import Callable

@@ -19,11 +19,11 @@ R = Schema(
 
 
 @node
-def process(ctx: Context, /, *, timeout: int = 30, data: Auto[list]):
+def process(ctx: Context, /, *, timeout: int = 30, data: list):
     return timeout, data
 
 
-task = process(data=[R.resolve("user.age"), R.resolve("user.name")])
+task = process(data=Auto([R.resolve("user.age"), R.resolve("user.name")]))
 task.set("timeout", 60)
 ```
 
@@ -33,8 +33,8 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 每次 Node 或 Wrapper 调用开始时，Slyme 会：
 
-1. 读取并校验对象的当前参数；
-2. 分离静态值与需要 Auto 求值的值；
+1. 对已保存的绑定取浅快照，并应用本次调用的关键字覆盖；
+2. 分离普通值与显式包装的 Auto 树；
 3. 构建 wrapper chain，在每次用户函数调用前求值 Auto 参数；
 4. 将静态参数容器直接传给用户函数。
 
@@ -56,8 +56,8 @@ Context 拥有子 Context，以及通过 `effect()`、`add()` 和 `declare()` �
 ctx = Context(schema=R)
 ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
-process(data=[R.resolve("a"), R.resolve("b")])(ctx)  # Auto 生成求值后的 list [1, 2]
-process(data=R.resolve("items"))(ctx)  # data 是 Context 中保存的 list
+process(data=Auto([R.resolve("a"), R.resolve("b")]))(ctx)  # Auto 生成求值后的 list [1, 2]
+process(data=Auto(R.resolve("items")))(ctx)  # data 是 Context 中保存的 list
 ```
 
 Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。求值保持同步，直到子调用或 cleanup 返回 awaitable；被等待后，未完成的 child 和剩余 sibling 并发执行，结果保持输入顺序。成功的子节点立即释放 Context。全部子任务结束后，会完成失败或被中断的释放，再报告错误或执行父函数。

@@ -22,9 +22,11 @@ Slyme（发音为 /slaɪm/）是一个高度可组合的函数式执行框架。
 
 无论是构建复杂的 LLM 流水线、执行 DAG，还是创建通用的数据处理流程，Slyme 都提供了结构化、函数式且深度符合 Python 习惯的基础。
 
-`Auto` 会在每次调用时求值已注册叶子并重建 Tree 容器，包括只有普通值的容器。普通叶子和 evaluator 返回值保持原对象 identity；非 Auto 参数直接传递。`eval_tree(ctx, tree)` 提供相同的求值行为。
+`Auto(tree)` 显式标记需要求值的参数绑定，在每次调用时求值已注册叶子并重建 Tree 容器，包括只有普通值的容器。普通叶子和 evaluator 返回值保持原对象 identity；非 Auto 参数直接传递。`eval_tree(ctx, tree)` 提供相同的求值行为。
 
 Tree handler 和 Auto evaluator 按精确类型匹配，子类需要显式注册。遍历工具位于 `slyme.utils.tree`。
+
+Node 和 Wrapper 工厂只保存传入的关键字绑定。函数原生默认值在实际调用时生效；`node(ctx, **kwargs)` 在 Auto 求值前为本次调用覆盖已保存的绑定。使用 `get`、`set`、`delete` 管理绑定。
 
 ## 安装
 
@@ -59,14 +61,14 @@ R = Schema(
 
 # 1. 定义执行节点
 @node
-def llm_api(ctx: Context, /, *, prompts: Auto[list[str]], responses: Ref[list[str]]):
+def llm_api(ctx: Context, /, *, prompts: list[str], responses: Ref[list[str]]):
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
     ctx.set(responses, responses_)
 
 
 # 2. 定义产生值的节点
 @node
-def format_prompts(ctx: Context, /, *, articles: Auto[list[dict]]) -> list[str]:
+def format_prompts(ctx: Context, /, *, articles: list[dict]) -> list[str]:
     return [
         f"Summarize: {article['title']}. Content: {article['content']}"
         for article in articles
@@ -94,9 +96,9 @@ def timing(
 def build_pipeline() -> Node[None]:
     return llm_api(
         responses=R.resolve("output.responses"),
-        prompts=format_prompts(
-            articles=R.resolve("input.articles"),
-        ),
+        prompts=Auto(format_prompts(
+            articles=Auto(R.resolve("input.articles")),
+        )),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 

@@ -75,8 +75,8 @@ normalizes them with an node, and writes the result to Context.
 ```
 
 ```text
-Review this Slyme node tree. Check Auto evaluation, positional-only and
-keyword-only parameters, Context updates, and wrapper composition.
+Review this Slyme node tree. Check explicit Auto bindings, call-time keyword
+overrides, Context updates, and wrapper composition.
 ```
 
 The Skill directs the agent to inspect the target project's installed Slyme version and existing conventions before making changes.

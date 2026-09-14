@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tree engine for inspection and Ref discovery, not Node/Wrapper reconstruction."""
+"""Traverse explicit Node/Wrapper bindings and Auto payloads for inspection."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -28,7 +28,7 @@ from slyme.utils.tree import (
 )
 from slyme.utils.tree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 
-from .core import Node, Wrapper
+from .core import Auto, Node, Wrapper
 
 NODE_ENGINE = TreeEngine("node_engine")
 TREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
@@ -50,8 +50,8 @@ class _NodeParameterKey(TreeKey):
 def _flatten_node(obj: Node) -> tuple[Iterable[Any], TreeAux]:
     children = [obj.wrappers]
     keys: list[TreeKey] = [AttributeKey("wrappers")]
-    for name in obj._specs:
-        children.append(obj.get(name))
+    for name, value in obj._params.items():
+        children.append(value)
         keys.append(_NodeParameterKey(name))
     return tuple(children), TreeAux(
         children_keys=tuple(keys),
@@ -60,8 +60,8 @@ def _flatten_node(obj: Node) -> tuple[Iterable[Any], TreeAux]:
 
 
 def _flatten_wrapper(obj: Wrapper[Any]) -> tuple[Iterable[Any], TreeAux]:
-    keys = tuple(_NodeParameterKey(name) for name in obj._specs)
-    return tuple(obj.get(name) for name in obj._specs), TreeAux(
+    keys = tuple(_NodeParameterKey(name) for name in obj._params)
+    return tuple(obj._params.values()), TreeAux(
         children_keys=keys,
         cls=Wrapper,
     )
@@ -69,4 +69,9 @@ def _flatten_wrapper(obj: Wrapper[Any]) -> tuple[Iterable[Any], TreeAux]:
 
 NODE_ENGINE.register(Node, _flatten_node, None, strict=True)
 NODE_ENGINE.register(Wrapper, _flatten_wrapper, None, strict=True)
+NODE_ENGINE.register(
+    Auto,
+    lambda obj: ((obj.value,), TreeAux(children_keys=(AttributeKey("value"),))),
+    None,
+)
 NODE_ENGINE.register(MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy)

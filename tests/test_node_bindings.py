@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+
+from slyme.context import Context, Schema
+from slyme.node import Auto, Node, node, wrapper
+from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
+from slyme.node.tree import NODE_ENGINE
+
+
+@pytest.mark.parametrize("kind", ["node", "wrapper"])
+def test_bindings_are_explicit_and_defaults_belong_to_the_function(kind: str) -> None:
+    default = []
+
+    def function(*runtime, value=default, **kwargs):
+        return value, kwargs
+
+    factory = node(function) if kind == "node" else wrapper(function)
+    instance = factory()
+    ctx = Context()
+    runtime = (
+        (ctx,) if kind == "node" else (ctx, node(lambda ctx: None)(), lambda ctx: None)
+    )
+    params = instance.params
+    assert params == {}
+    assert instance(*runtime) == (default, {})
+    assert instance(*runtime)[0] is default
+    assert instance.func is function
+    with pytest.raises(KeyError):
+        instance.get("value")
+
+    instance.set("value", None)
+    instance.set("extra", 3)
+    assert params == {"value": None, "extra": 3}
+    assert instance(*runtime) == (None, {"extra": 3})
+    instance.delete("value")
+    assert instance(*runtime)[0] is default
+    assert params == {"extra": 3}
+    with pytest.raises(KeyError):
+        instance.delete("value")
+    instance.delete("extra")
+    assert params == {}
+    ctx.dispose()
+
+
+@pytest.mark.parametrize("kind", ["node", "wrapper"])
+def test_call_overrides_bindings_before_auto_evaluation(kind: str) -> None:
+    calls = []
+
+    @node
+    def child(ctx, /):
+        calls.append("child")
+        return 3
+
+    def function(*runtime, value=1, **kwargs):
+        return value, kwargs
+
+    factory = node(function) if kind == "node" else wrapper(function)
+    binding = Auto(child())
+    original = {"left": 1}
+    instance = factory(value=binding, options=original)
+    ctx = Context({"value": 4}, schema=Schema({"value": Schema.leaf()}))
+    runtime = (ctx,) if kind == "node" else (ctx, child(), lambda ctx: None)
+    replacement = {"right": 2}
+    assert instance(*runtime, value=9, options=replacement) == (
+        9,
+        {"options": replacement},
+    )
+    assert calls == []
+    assert instance(*runtime, value=Auto(ctx.schema.resolve("value")))[0] == 4
+    assert calls == []
+    assert instance(*runtime, value=None)[0] is None
+    assert instance(*runtime)[0] == 3
+    assert calls == ["child"]
+    assert instance.params == {"value": binding, "options": original}
+    assert instance.get("options") is original
+    assert not ctx._owned
+    ctx.dispose()
+
+
+def test_native_parameter_errors_are_reported_at_invocation() -> None:
+    calls = []
+
+    @node
+    def child(ctx, /):
+        calls.append("child")
+        return 1
+
+    @node
+    def required(ctx, /, *, value):
+        return value
+
+    instance = required()
+    ctx = Context()
+    with pytest.raises(NodeExceptionRecord) as missing:
+        instance(ctx)
+    assert isinstance(missing.value.exception, TypeError)
+    assert "value" in str(missing.value.exception)
+
+    instance.set("unknown", 1)
+    with pytest.raises(NodeExceptionRecord) as unexpected:
+        instance(ctx, value=Auto(child()))
+    assert isinstance(unexpected.value.exception, TypeError)
+    assert "unknown" in str(unexpected.value.exception)
+    assert calls == ["child"]
+    assert not ctx._owned
+    instance.delete("unknown")
+    assert instance(ctx, value=2) == 2
+
+    @wrapper
+    def middleware(ctx, wrapped, call_next, /, *, required):
+        return call_next(ctx)
+
+    wrapped = required(value=1).add_wrappers(middleware())
+    with pytest.raises(WrapperExceptionRecord) as missing_wrapper:
+        wrapped(ctx)
+    assert isinstance(missing_wrapper.value.exception, TypeError)
+    ctx.dispose()
+
+
+def test_variadic_functions_receive_positional_framework_arguments() -> None:
+    ctx = Context()
+    keywords = {"self": 1, "ctx": 2, "wrapped": 3, "call_next": 4}
+
+    @node()
+    def collect(*args, **kwargs):
+        return args, kwargs
+
+    instance = collect(**keywords)
+    assert instance(ctx) == ((ctx,), keywords)
+    assert instance(ctx, ctx=5) == ((ctx,), {**keywords, "ctx": 5})
+
+    @node
+    def collect_tail(ctx, /, *args, **kwargs):
+        return args, kwargs
+
+    assert collect_tail(**keywords)(ctx) == ((), keywords)
+
+    @wrapper()
+    def middleware(*args, **kwargs):
+        return args, kwargs
+
+    wrapped = collect()
+    next_call = node(lambda ctx: None)()
+    effect = middleware(**keywords)
+    assert effect(ctx, wrapped, next_call, wrapped=5) == (
+        (ctx, wrapped, next_call),
+        {**keywords, "wrapped": 5},
+    )
+    runtime, actual = wrapped.add_wrappers(effect)(ctx)
+    assert runtime[0] is ctx and runtime[1] is wrapped
+    assert actual == keywords
+    assert runtime[2](ctx) == ((ctx,), {})
+    ctx.dispose()
+
+
+def test_auto_is_a_binding_not_a_function_default_or_a_nested_implicit_marker() -> None:
+    calls = []
+
+    @node
+    def child(ctx, /):
+        calls.append("child")
+        return 1
+
+    default = Auto(child())
+
+    @node
+    def identity(ctx, /, value=default):
+        return value
+
+    ctx = Context()
+    assert identity()(ctx) is default
+    nested = [default]
+    assert identity(value=nested)(ctx) is nested
+    assert not calls
+    assert identity(value=default)(ctx) == 1
+    assert calls == ["child"]
+    ctx.dispose()
+
+
+def test_auto_can_produce_a_node_without_executing_its_result() -> None:
+    @node
+    def handler(ctx, /):
+        raise AssertionError("Handler is data here")
+
+    callback = handler()
+
+    @node
+    def select(ctx, /):
+        return callback
+
+    @node
+    def register(ctx, /, *, handler: Node):
+        return handler
+
+    ctx = Context()
+    assert register(handler=callback)(ctx) is callback
+    assert register(handler=Auto(select()))(ctx) is callback
+    ctx.dispose()
+
+
+async def test_async_calls_snapshot_overrides_without_changing_saved_bindings() -> None:
+    @node
+    async def value(ctx, /, value=1):
+        await asyncio.sleep(0)
+        return value
+
+    @wrapper
+    async def pause(ctx: Context, wrapped: Node, call_next: Callable, /) -> Any:
+        await asyncio.sleep(0)
+        return await call_next(ctx)
+
+    instance = value(value=2).add_wrappers(pause())
+    ctx = Context()
+    first = instance.acall(ctx)
+    second = instance.acall(ctx, value=3)
+    instance.set("value", 4)
+    assert await asyncio.gather(first, second) == [2, 3]
+    assert await instance.acall(ctx) == 4
+    await ctx.adispose()
+
+
+def test_inspection_follows_explicit_bindings_and_auto_trees() -> None:
+    @node
+    def value(ctx, /, default=42, **kwargs):
+        return kwargs
+
+    schema = Schema({"input": Schema.leaf()})
+    ref = schema.resolve("input")
+    instance = value(dynamic=Auto({"value": ref}), extra="raw")
+    paths_and_leaves = list(NODE_ENGINE.iter_with_key_path(instance))
+    assert [leaf for _, leaf in paths_and_leaves] == [ref, "raw"]
+    assert [
+        NODE_ENGINE.get_element(instance, path) for path, _ in paths_and_leaves
+    ] == [ref, "raw"]
+    instance.delete("extra")
+    assert list(NODE_ENGINE.iter(instance)) == [ref]

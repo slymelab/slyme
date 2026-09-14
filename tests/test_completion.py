@@ -50,12 +50,12 @@ async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
         return finish()
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    def parent(ctx: Context, /, *, value: int) -> int:
         events.append("parent")
         return value + 1
 
     ctx = Context()
-    graph = parent(value=child())
+    graph = parent(value=Auto(child()))
     pending = graph(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["call"]
@@ -78,11 +78,11 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
         return index
 
     @node
-    def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+    def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
     ctx = Context()
-    result = parent(values=[child(index=1), child(index=2)])(ctx)
+    result = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
     assert await asyncio.wait_for(await_result(result), 1) == 3
     assert not ctx._owned
     ctx.dispose()
@@ -103,12 +103,12 @@ async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
         return finish()
 
     @node
-    def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+    def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
     ctx = Context()
     before = asyncio.all_tasks()
-    pending = parent(values=[child(index=1), child(index=2)])(ctx)
+    pending = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
     assert events == [("call", 1), ("call", 2)]
     assert asyncio.all_tasks() == before
     assert await await_result(pending) == 3
@@ -394,12 +394,14 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
         return 3
 
     @wrapper
-    def add(ctx: Context, wrapped: Node, call_next: Callable, /, *, extra: Auto[int]):
+    def add(ctx: Context, wrapped: Node, call_next: Callable, /, *, extra: int):
         assert events == ["cleanup"]
         return call_next(ctx) + extra
 
     ctx = Context()
-    assert await await_result(value().add_wrappers(add(extra=parameter()))(ctx)) == 5
+    assert (
+        await await_result(value().add_wrappers(add(extra=Auto(parameter())))(ctx)) == 5
+    )
     assert not ctx._owned
     ctx.dispose()
 
@@ -442,12 +444,12 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_keeps_both_errors()
         raise failure
 
     @node
-    def parent(ctx: Context, /, *, value: Auto[int]) -> int:
+    def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
     ctx = Context()
     with pytest.raises(BatchError) as caught:
-        await await_result(parent(value=child())(ctx))
+        await await_result(parent(value=Auto(child()))(ctx))
     child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
     node_error = child_errors.results[0].error

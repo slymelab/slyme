@@ -10,6 +10,8 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Added explicit `Auto(tree)` parameter bindings and per-call keyword overrides
+  for Node and Wrapper. `delete(name)` removes a saved binding.
 - Added `Wrapper.compose()` to assemble outermost-first callable chains without
   execution, preserving live wrapper parameters and caller-controlled Contexts.
 - Added `slyme.utils.continuation.run(generator)` to drive ordinary generator
@@ -83,8 +85,6 @@ breaking changes when they are documented here.
 - Auto evaluates all sibling Nodes before reporting errors, without cancelling
   siblings on failure. Successful children dispose immediately; failure cleanup
   completes before reporting child and cleanup errors together.
-- Rejected variadic `*args` and `**kwargs` in Node and Wrapper signatures so
-  they cannot bypass fixed runtime-arity and named build-parameter validation.
 - Prevented Context updates from changing Schema-owned leaf/container roles.
 - Context batch writes and deletions validate inputs before applying changes
   to flat per-entry bindings. Preflight failures leave bindings unchanged;
@@ -170,8 +170,8 @@ breaking changes when they are documented here.
 - Node and Wrapper build parameters now use explicit `get()`, `set()`, and
   `reset()` methods. Parameter names may overlap framework API names without
   changing attribute behavior.
-- Node and Wrapper factories share signature analysis and construct the same
-  graph element types for immediate and asynchronous functions.
+- Node and Wrapper factories construct the same graph element types for
+  immediate and asynchronous functions without inspecting signatures.
 - Node and Wrapper calls now pass their current static parameter containers
   directly to user functions instead of creating an implicit frozen snapshot.
 - Auto parameters always reconstruct Tree containers, including ordinary-only
@@ -202,9 +202,10 @@ breaking changes when they are documented here.
   single-thread-owned. Asynchronous evaluation invokes synchronous child Nodes
   inline instead of moving live Context state into worker threads; applications
   explicitly offload ordinary value computation when needed.
-- Node and Wrapper construction now binds every declared parameter through one
-  `Spec` build path. Missing required parameters remain `UNDEFINED` until the
-  call boundary instead of being rejected or processed by a second kwargs path.
+- Removed `slyme.node.signature`, `Spec`, `spec()`, parameter sentinels, and
+  `reset()`. Nodes store only explicit bindings; function defaults, variadic
+  declarations, and argument validation follow Python's native call semantics.
+  Framework call arguments are positional-only and do not reserve business keys.
 
 ## [0.1.1] - 2026-08-26
 

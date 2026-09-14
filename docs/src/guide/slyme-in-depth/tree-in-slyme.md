@@ -8,7 +8,7 @@ A tree is a nested structure whose containers define topology and whose unregist
 
 ## `NODE_ENGINE`
 
-`NODE_ENGINE` registers `Node`, `Wrapper`, ordinary containers, and `MappingProxyType`. It is used for physical graph inspection and Ref discovery. Node parameters may contain heterogeneous nested values; the engine describes traversal, not which combinations are legal. `Node` and `Wrapper` register with `unflatten_func=None`: traversal and flattening are supported, but reconstruction raises `TypeError`.
+`NODE_ENGINE` registers `Node`, `Wrapper`, `Auto`, ordinary containers, and `MappingProxyType`. It traverses explicit parameter bindings and Auto payloads for physical graph inspection and Ref discovery; function defaults are not included. Parameters may contain heterogeneous nested values; the engine describes traversal, not which combinations are legal. `Node`, `Wrapper`, and `Auto` register with `unflatten_func=None`: traversal and flattening are supported, but reconstruction raises `TypeError`.
 
 ## Object identity
 
