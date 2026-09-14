@@ -57,56 +57,35 @@ async def execute(ctx):
 
 `await_result()` awaits only the outer execution result, not values inside containers. Async continuations run when awaited or scheduled, although their synchronous prefix may already have run. Synchronous applications can use `asyncio.run(await_result(task(ctx)))` at their entry point; await within an existing loop instead of nesting loops. Slyme never automatically offloads blocking functions to threads.
 
-Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await child.acall(ctx)`, or return a Continuation composition as below. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
+Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await child.acall(ctx)`, or drive a generator as below. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
 
-### Lazy result chains
+### Generator-based composition
 
-`Continuation` lets an ordinary function compose immediate and asynchronous results without defining an async continuation:
+`run(generator)` from `slyme.utils.continuation` drives ordinary generator control flow. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
 
 ```python
 from slyme.node import Node
-from slyme.utils.continuation import Continuation, await_result
+from slyme.utils.continuation import run
 
 
 @node
 def increment_child(ctx, *, child: Node[int]):
-    return Continuation.call(lambda: child(ctx)).then(lambda value: value + 1).unwrap()
+    def execute():
+        value = yield child(ctx)
+        return value + 1
+
+    return run(execute())
 ```
 
-`Continuation.call(operation)` defers the operation itself. `Continuation(value)` wraps a result that already exists; in `Continuation(operation())`, Python calls `operation()` before constructing the chain. `then(success, failure)` handles upstream completion; a paired failure callback does not catch errors from its success callback. A later `catch(recover)` handles those errors. Both kinds of callback may return immediate or asynchronous results.
+Creating the generator does not execute its body. Calling `run()` executes its synchronous prefix immediately, including synchronous errors. Await the returned remainder to continue asynchronous work: `await await_result(run(execute()))`. Use `asyncio.run(await_result(run(execute())))` only at a synchronous application entry point. The driver neither starts an event loop nor schedules tasks.
 
-Constructing or extending a chain runs no callbacks. `unwrap()` executes its synchronous prefix immediately and returns either the final value or an unscheduled awaitable remainder. `aunwrap()` preserves that immediate work and its errors, but always returns an awaitable; use `await chain.aunwrap()` in asynchronous code. The chain itself is not awaitable. Use `asyncio.run(await_result(chain.unwrap()))` at a synchronous entry point or `asyncio.create_task(await_result(chain.unwrap()))` to schedule the remainder within a running loop. A callback returning another chain must call its `unwrap()` explicitly; a bare chain is ordinary data.
+Only values explicitly handed to `yield` are inspected. Containers and bare generators remain ordinary data. Each yield awaits only its outer result; the generator's final return value is not implicitly awaited. Use `return (yield operation())` when completion belongs inside the generator's exception handling. Delegate another generator with `yield from`, or explicitly yield its `run()` result. Node does not automatically drive a returned generator.
 
-`then()` and `catch()` append to the same mutable operation list and return the same object. Aliases are not independent branches; use the fluent return as the current typed stage. Each chain can be executed only once, and cannot be extended after execution starts. Build another chain for another execution. Continuation has no subscribers or cached settlement to notify, unlike JavaScript Promise. A caller needing shared execution can explicitly create and retain a Task. Continuation does not shield cancellation or own cleanup; Context retains its separate repeatable, cancellation-safe disposal behavior.
+Hand exclusive driving of the generator to `run()`; generator exhaustion and reentrancy follow Python's protocol. The driver does not cache results, shield cancellation, aggregate errors, or own resources. Cancellation is thrown at the suspended yield and follows the generator's exception handling. A `finally` block may yield asynchronous cleanup while the remainder is being awaited, but discarding a remainder does not finish that cleanup.
 
-`catch()` and the failure callback of `then()` handle `Exception` by default, leaving cancellation and other `BaseException` subclasses untouched. Pass `exceptions=SomeException` to select an exception class, or explicitly select `BaseException` for lifecycle cleanup that must observe cancellation. Recovery then determines whether to propagate it again.
+Execution order, concurrency, and result collection belong to the caller. A loop that yields each call waits for that call before proceeding. A concurrent implementation can first call its items, retain the returned awaitables, and yield one asynchronous aggregation operation. Create `gather()` or Tasks inside that asynchronous operation when the caller may not yet have a running event loop. Synchronous exceptions during enumeration or calls follow the caller's `try/except/finally`; the driver invents no batch policy.
 
-`Continuation.sequential(values, call, *, continue_on_error=False)` builds a `Continuation[list[T]]` that executes calls in order and collects their return values. Iteration starts on `unwrap()` or `aunwrap()`. It consumes the next input only after the preceding call completes; failure or cancellation raises `BatchError` with the completed prefix. With `continue_on_error=True`, remaining calls are attempted before reporting. Use `then()` or `catch()` before unwrapping to handle completion.
-
-`Continuation.batch(values, call)` builds a `Continuation[list[T]]` of independent calls. Execution attempts every input despite failures and stays synchronous until a call returns an awaitable. Awaiting the remainder schedules that call and the remaining inputs concurrently. When all calls finish, the batch returns results in input order or raises `BatchError`, exported from `slyme.utils.continuation`. `then()` receives the result list; `catch()` receives one exception, as on any other chain:
-
-```python
-from slyme.utils.continuation import BatchError
-
-
-def recover(error: BatchError) -> list[str]:
-    return [
-        f"input {index}: {result.error}"
-        if result.error is not None
-        else str(result.value)
-        for index, result in enumerate(error.results)
-    ]
-
-
-result = (
-    Continuation.batch(["1", "invalid", "3"], int)
-    .then(lambda values: [str(value * 2) for value in values])
-    .catch(recover, exceptions=BatchError)
-    .unwrap()
-)
-```
-
-`BatchError.results` is an input-ordered list of `Result(value=..., error=...)` records, including when only one call fails. Each completed call stores either its returned value or its raised error. An error-free call returning `None` is `Result(value=None)`. Nested batches retain their own local indices. An iterator failure stops enumeration and is recorded at the next input index; started calls still finish. Returned exception objects remain data: `Result(value=ValueError(...))` differs from `Result(error=ValueError(...))`. Failed batches raise instead of returning, but their exception retains successful partial results. A failed or cancelled item does not cancel siblings. Cancelling the batch waiter propagates through asyncio to pending calls; if other failures also occur, `BatchError` preserves them with cancellation as its cause, otherwise cancellation propagates directly. Batch provides no timeout or resource cleanup policy.
+Auto independently owns its all-settled evaluation policy. It calls every evaluator group and child inline before awaiting asynchronous results; only asynchronous results are scheduled as Tasks. Failed items do not cancel siblings. It reports nested `BatchError` objects from `slyme.utils.exception`, with input-ordered `Result(value=..., error=...)` records retaining successful values and raised errors separately. Context owns its separate recursive LIFO cleanup policy; both consumers use the generator driver without sharing an execution-policy API.
 
 ## Parameters and Auto
 
@@ -166,7 +145,7 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrappers use onion ordering and read their live parameters when invoked. The example above is synchronous-only: when `call_next(ctx)` returns an awaitable, its following statements run before that completion. A forwarding wrapper may return it unchanged. Use `Continuation.call(lambda: call_next(ctx)).then(transform).unwrap()` for result-dependent work in an ordinary function, or `async def` and `await await_result(call_next(ctx))` when using native `try/finally` for completion-time cleanup. Slyme does not rewrite a wrapper's `try/finally`.
+Wrappers use onion ordering and read their live parameters when invoked. The example above is synchronous-only: when `call_next(ctx)` returns an awaitable, its following statements run before that completion. A forwarding wrapper may return it unchanged. Use a generator driven by `run()` with `yield call_next(ctx)`, or `async def` with `await await_result(call_next(ctx))`, for result-dependent work and completion-time `try/finally` cleanup. Slyme does not rewrite a wrapper's `try/finally`.
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context. Wrapper parameters remain live. Each wrapper controls whether and how often it invokes the next layer, which Context it passes, and the result type. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
 

@@ -12,15 +12,12 @@ breaking changes when they are documented here.
 
 - Added `Wrapper.compose()` to assemble outermost-first callable chains without
   execution, preserving live wrapper parameters and caller-controlled Contexts.
-- Added mutable, single-use `Continuation.call()` / `Continuation()` chains with `then()`, `catch()`,
-  `unwrap()`, and always-awaitable `aunwrap()` in `slyme.utils.continuation`. Ordinary errors
-  are recoverable; cancellation propagates unless explicitly selected.
-- Added `Continuation.sequential()` for ordered fail-fast calls and
-  `Continuation.batch()` for independent calls that all settle before returning
-  ordered results or raising `BatchError`. Both build chains and collect return values.
-  `sequential(..., continue_on_error=True)` continues after failures.
-- Added `Result(value=..., error=...)` records; `BatchError.results` retains successes
-  and failures in input order, including exception objects returned as ordinary data.
+- Added `slyme.utils.continuation.run(generator)` to drive ordinary generator
+  control flow, returning synchronously until a yielded awaitable requires an
+  asynchronous remainder. Awaited errors are thrown at the suspended yield.
+- Added `Result(value=..., error=...)` and `BatchError` in `slyme.utils.exception`
+  for consumer-owned evaluation and cleanup diagnostics, retaining successful
+  values separately from raised errors.
 - Added `Node.acall()` and `Context.adispose()` as always-awaitable adapters
   that preserve immediate synchronous execution and the unified completion rules.
 - Added `slyme.utils.continuation.await_result()` to await an immediate or asynchronous
@@ -95,8 +92,9 @@ breaking changes when they are documented here.
 
 ### Removed
 
-- Removed `Continuation.__await__` and `each()`. Use explicit `aunwrap()` for
-  awaiting a chain and `sequential(...).unwrap()` for ordered execution.
+- Removed the `Continuation` class and its chain, batch, and sequential APIs.
+  Use `run(generator)` with native loops and exception handling; consumers own
+  scheduling, result collection, and error aggregation.
 - Removed `slyme.utils.awaitable`; import `await_result` from `slyme.utils.continuation`.
 - Removed `TypeRegistry` and `TreeEngine.allow_inheritance`. Tree handlers and
   Auto evaluators use exact type keys through `GeneralRegistry`; subclasses
@@ -144,12 +142,12 @@ breaking changes when they are documented here.
 
 ### Changed
 
-- Context and effect disposal use Continuation chains for immediate and
+- Context and effect disposal use generator control flow for immediate and
   asynchronous cleanup, preserving recursive LIFO order, continued cleanup
   after failure, repeatable results, and cancellation and reentrancy protection.
-  Context uses `sequential(..., continue_on_error=True)` and reports all directly
-  owned cleanup failures through `BatchError.results`.
-- Auto batches independent evaluator groups, collecting Ref and Node failures
+  Context owns the cleanup loop and reports failures through `BatchError.results`.
+- Auto calls all independent evaluator groups before scheduling asynchronous
+  results, collecting Ref and Node failures
   into nested `BatchError` objects without cancelling siblings. Node and Wrapper
   calls preserve these aggregates; child cleanup finishes before reporting them.
 - Renamed `slyme.utils.pytree` to `slyme.utils.tree`, `PyTree*` types to `Tree*`,

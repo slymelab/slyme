@@ -1,76 +1,31 @@
-"""Result types across synchronous and asynchronous continuation steps."""
+"""Generator return types survive synchronous and asynchronous driving."""
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Generator
 
 from typing_extensions import assert_type
 
-from slyme.utils.continuation import BatchError, Continuation, Result
+from slyme.utils.continuation import await_result, run
 
 
 async def asynchronous() -> int:
     return 1
 
 
-async def stringify(value: int) -> str:
+def immediate() -> Generator[int, int, str]:
+    value = yield 1
     return str(value)
 
 
-def recover(error: ValueError) -> str:
-    return str(error)
-
-
-async def arecover(error: Exception) -> str:
-    return str(error)
-
-
-def recover_number(error: Exception) -> int:
-    return 0
+def mixed() -> Generator[int | Awaitable[int], int, str]:
+    first = yield 1
+    second = yield asynchronous()
+    return str(first + second)
 
 
 async def check_types() -> None:
-    assert_type(Continuation.sequential([1, 2], str), Continuation[list[str]])
-    assert_type(Continuation.sequential([1, 2], stringify), Continuation[list[str]])
-    assert_type(
-        Continuation.sequential([1, 2], stringify, continue_on_error=True),
-        Continuation[list[str]],
-    )
-    assert_type(Result(value=1), Result[int])
-    assert_type(Result[int](error=ValueError()).error, BaseException | None)
-    assert_type(Continuation.batch([1, 2], str), Continuation[list[str]])
-    assert_type(Continuation.batch([1, 2], stringify), Continuation[list[str]])
-    assert_type(Continuation(1).aunwrap(), Awaitable[int])
-    assert_type(
-        Continuation.batch([1, 2], stringify).catch(
-            lambda error: [
-                i for i, result in enumerate(error.results) if result.error is not None
-            ],
-            exceptions=BatchError,
-        ),
-        Continuation[list[str] | list[int]],
-    )
-    assert_type(Continuation(1), Continuation[int])
-    assert_type(Continuation(asynchronous()), Continuation[int])
-    assert_type(Continuation.call(asynchronous), Continuation[int])
-    assert_type(Continuation(1).then(stringify), Continuation[str])
-    assert_type(Continuation(1).unwrap(), int | Awaitable[int])
-    assert_type(
-        Continuation(1).catch(recover, exceptions=ValueError),
-        Continuation[int | str],
-    )
-    assert_type(
-        Continuation(1).then(str, recover, exceptions=ValueError),
-        Continuation[str],
-    )
-    assert_type(await Continuation(1).then(stringify).aunwrap(), str)
-    assert_type(Continuation(1).then(str, recover_number), Continuation[str | int])
-    assert_type(Continuation(1).catch(arecover), Continuation[int | str])
-    assert_type(Continuation(1).then(int, arecover), Continuation[int | str])
-    assert_type(Continuation(1).then(stringify, arecover), Continuation[str])
-    assert_type(
-        Continuation(1).then(int, arecover, exceptions=ValueError),
-        Continuation[int | str],
-    )
-    assert_type(
-        Continuation(1).then(stringify, arecover, exceptions=ValueError),
-        Continuation[str],
-    )
+    assert_type(run(immediate()), str | Awaitable[str])
+    assert_type(run(mixed()), str | Awaitable[str])
+    result: Awaitable[str] = await_result(run(mixed()))
+    assert_type(result, Awaitable[str])
+    assert_type(await await_result(run(immediate())), str)
+    assert_type(await await_result(run(mixed())), str)

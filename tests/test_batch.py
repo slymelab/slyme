@@ -5,7 +5,9 @@ from inspect import isawaitable
 
 import pytest
 
-from slyme.utils.continuation import BatchError, Continuation, Result
+from slyme.node.eval import _batch
+from slyme.utils.continuation import await_result, run
+from slyme.utils.exception import BatchError, Result
 
 
 def test_result_supports_typed_construction_and_exception_values() -> None:
@@ -31,11 +33,11 @@ async def test_failed_batch_retains_none_and_exception_return_values(
         return call(value)
 
     with pytest.raises(BatchError) as caught:
-        await Continuation.batch(range(3), acall if asynchronous else call).aunwrap()
+        await await_result(_batch(range(3), acall if asynchronous else call))
     assert caught.value.results == [Result(value=error), Result(error=error), Result()]
 
 
-def test_sync_batch_building_is_lazy_and_results_stay_synchronous() -> None:
+def test_sync_evaluation_batch_runs_immediately() -> None:
     visited = []
 
     def values():
@@ -47,11 +49,9 @@ def test_sync_batch_building_is_lazy_and_results_stay_synchronous() -> None:
         visited.append(value)
         return value * 2
 
-    chain = Continuation.batch(values(), call).then(tuple)
-    assert visited == []
-    assert chain.unwrap() == (2, 4)
+    assert _batch(values(), call) == [2, 4]
     assert visited == ["iterate", 1, 2]
-    assert Continuation.batch([], call).unwrap() == []
+    assert _batch([], call) == []
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -69,9 +69,8 @@ async def test_batch_collects_failures_at_input_indices(asynchronous: bool) -> N
         await asyncio.sleep(0)
         return call(value)
 
-    chain = Continuation.batch(range(3), acall if asynchronous else call)
     with pytest.raises(BatchError) as caught:
-        await chain.aunwrap()
+        await await_result(_batch(range(3), acall if asynchronous else call))
     assert caught.value.results == [
         Result(error=failure),
         Result(value=7),
@@ -80,7 +79,7 @@ async def test_batch_collects_failures_at_input_indices(asynchronous: bool) -> N
     assert visited == [0, 1, 2]
 
 
-async def test_batch_schedules_after_first_awaitable_and_keeps_result_order() -> None:
+async def test_batch_calls_all_items_before_scheduling_and_keeps_result_order() -> None:
     events = []
     release = asyncio.Event()
 
@@ -102,12 +101,18 @@ async def test_batch_schedules_after_first_awaitable_and_keeps_result_order() ->
             release.set()
         return value
 
-    chain = Continuation.batch(values(), call)
     before = asyncio.all_tasks()
-    pending = chain.unwrap()
+    pending = _batch(values(), call)
     assert isawaitable(pending)
     assert asyncio.all_tasks() == before
-    assert events == [("input", 0), ("call", 0), ("input", 1), ("call", 1)]
+    assert events == [
+        ("input", 0),
+        ("call", 0),
+        ("input", 1),
+        ("call", 1),
+        ("input", 2),
+        ("call", 2),
+    ]
     assert await pending == [0, "async", 2]
 
 
@@ -123,10 +128,9 @@ async def test_batch_waits_for_later_calls_after_sync_failure() -> None:
             raise ValueError("first")
         return later()
 
-    chain = Continuation.batch([0, 1], call)
-    results = await chain.catch(
-        lambda error: error.results, exceptions=BatchError
-    ).aunwrap()
+    with pytest.raises(BatchError) as caught:
+        await await_result(_batch([0, 1], call))
+    results = caught.value.results
     assert isinstance(results[0].error, ValueError)
     assert results[1] == Result(value=2)
     assert visited == ["later"]
@@ -138,36 +142,38 @@ async def test_batch_keeps_exceptions_as_data_and_nested_error_indices() -> None
     async def call(value):
         return data
 
-    assert await Continuation.batch([1, 2], call).aunwrap() == [data, data]
+    assert await await_result(_batch([1, 2], call)) == [data, data]
 
     def fail(value):
         raise data
 
     with pytest.raises(BatchError) as caught:
-        Continuation.batch(
-            [1], lambda value: Continuation.batch([2], fail).unwrap()
-        ).unwrap()
+        _batch([1], lambda value: _batch([2], fail))
     inner = caught.value.results[0].error
     assert isinstance(inner, BatchError)
     assert inner.results == [Result(error=data)]
 
 
-def test_batch_catch_handles_aggregate_errors_and_later_callback_errors() -> None:
+def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
     def fail(value):
         raise LookupError(value)
 
-    assert (
-        Continuation.batch([1], fail)
-        .catch(lambda error: [len(error.results)], exceptions=BatchError)
-        .then(lambda values: values[0] + 1)
-        .unwrap()
-    ) == 2
-    assert (
-        Continuation.batch([], str)
-        .then(lambda values: values[0])
-        .catch(lambda error: "index", exceptions=IndexError)
-        .unwrap()
-    ) == "index"
+    def recover():
+        try:
+            values = yield _batch([1], fail)
+        except BatchError as error:
+            values = [len(error.results)]
+        return values[0] + 1
+
+    def postprocess():
+        try:
+            values = yield _batch([], str)
+            return values[0]
+        except IndexError:
+            return "index"
+
+    assert run(recover()) == 2
+    assert run(postprocess()) == "index"
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -189,10 +195,101 @@ async def test_iterator_failure_waits_for_already_started_calls(
         await asyncio.sleep(0)
         return call(value)
 
-    with pytest.raises(BatchError) as caught:
-        await Continuation.batch(values(), acall if asynchronous else call).aunwrap()
-    assert caught.value.results == [Result(value=0), Result(error=failure)]
+    with pytest.raises(ValueError) as caught:
+        await await_result(_batch(values(), acall if asynchronous else call))
+    assert caught.value is failure
+    assert caught.value.__cause__ is None
     assert finished == [0]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_iterator_failure_retains_only_item_results_in_its_cause(
+    asynchronous: bool,
+) -> None:
+    iteration_error = LookupError("iterator")
+    item_error = ValueError("item")
+    returned_error = ValueError("data")
+    finished = []
+
+    def values():
+        yield 0
+        yield 1
+        yield 2
+        raise iteration_error
+
+    def call(value):
+        finished.append(value)
+        if value == 1:
+            raise item_error
+        return returned_error if value == 2 else None
+
+    async def acall(value):
+        await asyncio.sleep(0)
+        return call(value)
+
+    with pytest.raises(LookupError) as caught:
+        await await_result(_batch(values(), acall if asynchronous else call))
+    assert caught.value is iteration_error
+    cause = caught.value.__cause__
+    assert isinstance(cause, BatchError)
+    assert cause.results == [
+        Result(value=None),
+        Result(error=item_error),
+        Result(value=returned_error),
+    ]
+    assert finished == [0, 1, 2]
+
+
+async def test_iterator_failure_stays_pending_until_submitted_calls_finish() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = []
+    failure = ValueError("iterator")
+
+    def values():
+        yield 0
+        raise failure
+
+    async def call(value):
+        started.set()
+        await release.wait()
+        finished.append(value)
+        return value
+
+    task = asyncio.create_task(await_result(_batch(values(), call)))
+    await started.wait()
+    assert not task.done()
+    release.set()
+    with pytest.raises(ValueError) as caught:
+        await task
+    assert caught.value is failure
+    assert finished == [0]
+
+
+async def test_batch_schedules_only_asynchronous_items() -> None:
+    caller = asyncio.current_task()
+    sync_tasks = []
+    async_tasks = []
+
+    async def acall(value):
+        async_tasks.append(asyncio.current_task())
+        await asyncio.sleep(0)
+        return value
+
+    def call(value):
+        if value % 2 == 0:
+            return acall(value)
+        sync_tasks.append(asyncio.current_task())
+        return value
+
+    before = asyncio.all_tasks()
+    pending = _batch(range(5), call)
+    assert asyncio.all_tasks() == before
+    assert await pending == list(range(5))
+    assert sync_tasks == [caller, caller]
+    assert len(set(async_tasks)) == 3
+    assert caller not in async_tasks
+    assert asyncio.all_tasks() == before
 
 
 async def test_item_cancellation_is_a_batch_failure_without_cancelling_siblings() -> (
@@ -208,7 +305,7 @@ async def test_item_cancellation_is_a_batch_failure_without_cancelling_siblings(
         return value
 
     with pytest.raises(BatchError) as caught:
-        await Continuation.batch([0, 1], call).aunwrap()
+        await await_result(_batch([0, 1], call))
     assert isinstance(caught.value.results[0].error, asyncio.CancelledError)
     assert finished == [1]
 
@@ -230,7 +327,7 @@ async def test_caller_cancellation_waits_for_submitted_calls(suppress: bool) -> 
             finished.append(value)
         return value
 
-    task = asyncio.create_task(Continuation.batch([1, 2], call).aunwrap())
+    task = asyncio.create_task(await_result(_batch([1, 2], call)))
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError) as caught:
@@ -253,7 +350,7 @@ async def test_caller_cancellation_preserves_other_failures() -> None:
         finally:
             finished.append(value)
 
-    task = asyncio.create_task(Continuation.batch([0, 1], call).aunwrap())
+    task = asyncio.create_task(await_result(_batch([0, 1], call)))
     await started.wait()
     task.cancel()
     with pytest.raises(BatchError) as caught:

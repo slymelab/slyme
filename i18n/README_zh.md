@@ -121,9 +121,9 @@ if __name__ == "__main__":
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 构建从外到内的 callable 链，不执行它。Wrapper 顺序采用快照，参数仍实时读取；每个 wrapper 控制对下一层的调用，并可返回同步或异步结果。
 
-普通函数可通过 `slyme.utils.continuation` 的 `Continuation` 组合两种结果：`Continuation.call(lambda: task(ctx)).then(transform).unwrap()`。构建链只原地追加回调，不执行它们。`unwrap()` 消费链，执行同步前缀，并返回结果值或异步剩余流程；需要始终可等待的结果时使用 `await chain.aunwrap()`。链本身不可 await，只能执行一次，不缓存结果，也不拥有资源生命周期。
+需要混合执行时，编写普通生成器并传给 `slyme.utils.continuation` 的 `run()`。每个 `value = yield operation()` 都可以接收同步或异步结果。驱动器同步执行到第一个被 yield 的 awaitable，再返回尚未调度的异步剩余流程。循环、分支和 `try/except/finally` 留在生成器内。返回模式不确定时，使用 `await await_result(run(generator))`。驱动器不调度 task、不汇总错误，也不拥有资源生命周期。
 
-`Continuation.sequential(items, call)` 按顺序执行并返回结果列表，默认遇错即停；设置 `continue_on_error=True` 会继续尝试其余调用。`Continuation.batch(items, call)` 尝试所有输入，并发等待异步调用，返回按输入排序的结果列表，或抛出 `BatchError`，通过 `results: list[Result]` 按输入顺序保存成功值与错误。每项 `Result` 用 `value` 表示返回值，用 `error` 表示抛出的异常，因此正常返回的异常对象仍是普通数据。两者均返回支持 `then()` 和 `catch()` 的链。只有 batch 的异步剩余流程被等待时才会调度任务；纯同步工作仍同步完成。Auto 在 evaluator 组之间以及 Ref、Node 组内部都使用 batch，并保留嵌套错误的局部索引。
+Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递归 LIFO 清理；二者的 `BatchError` 和 `Result` 记录从 `slyme.utils.exception` 导入。成功返回的异常对象仍是值，与抛出的异常区分保存。
 
 ## Context 生命周期、Scope 可见性与 Compose
 

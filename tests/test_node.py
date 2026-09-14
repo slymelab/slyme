@@ -30,7 +30,8 @@ from slyme.node.exception import (
 )
 from slyme.node.signature import Spec
 from slyme.node.tree import NODE_ENGINE
-from slyme.utils.continuation import BatchError, await_result
+from slyme.utils.continuation import await_result
+from slyme.utils.exception import BatchError
 from slyme.utils.registry import GeneralRegistry
 
 R = Schema(

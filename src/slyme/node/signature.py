@@ -168,21 +168,6 @@ def _resolve_spec(param: inspect.Parameter, hint: Any) -> Spec:
     return Spec(**merged_values)
 
 
-def _validate_parameter_kind(param: inspect.Parameter) -> None:
-    if param.kind not in (
-        inspect.Parameter.VAR_POSITIONAL,
-        inspect.Parameter.VAR_KEYWORD,
-    ):
-        return
-
-    prefix = "*" if param.kind == inspect.Parameter.VAR_POSITIONAL else "**"
-    raise TypeError(
-        f"Variadic parameter '{prefix}{param.name}' is not supported. "
-        "Node and Wrapper runtime parameters must be declared explicitly, "
-        "and build parameters must be keyword-only."
-    )
-
-
 def analyze_signature(
     func: Callable, *, resolve_type_hints: bool = True
 ) -> SignatureAnalysis:
@@ -198,7 +183,16 @@ def analyze_signature(
 
     for p in params:
         try:
-            _validate_parameter_kind(p)
+            if p.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                prefix = "*" if p.kind == inspect.Parameter.VAR_POSITIONAL else "**"
+                raise TypeError(
+                    f"Variadic parameter '{prefix}{p.name}' is not supported. "
+                    "Node and Wrapper runtime parameters must be declared explicitly, "
+                    "and build parameters must be keyword-only."
+                )
         except Exception as error:
             enrich_exception(error, f"in definition of '{func.__name__}'")
             raise

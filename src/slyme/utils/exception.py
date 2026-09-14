@@ -13,6 +13,38 @@
 # limitations under the License.
 
 import sys
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar
+
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True)
+class Result(Generic[_T]):
+    """One completed call: a returned value or a raised error.
+
+    Successful values, including None and exception objects, use ``value``.
+    Failed calls use ``error`` and leave ``value`` as None.
+    """
+
+    value: _T | None = None
+    error: BaseException | None = None
+
+
+class BatchError(Exception):
+    """Ordered completed results retained by an evaluation or cleanup failure.
+
+    Each consumer defines which calls are attempted and when errors are reported.
+    Nested errors preserve their own results and local indices.
+    """
+
+    def __init__(self, results: Iterable[Result[Any]]) -> None:
+        self.results = list(results)
+        failed = [
+            i for i, result in enumerate(self.results) if result.error is not None
+        ]
+        super().__init__(f"Batch failed at input indices {failed}.")
 
 
 def enrich_exception(error: Exception, info: str) -> None:

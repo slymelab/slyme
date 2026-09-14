@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Awaitable, Iterable, Sequence
+from collections.abc import Awaitable, Generator, Iterable, Sequence
+from typing import Any
 
 from slyme.context import Context
-from slyme.utils.continuation import Continuation
+from slyme.utils.continuation import run
+from slyme.utils.exception import BatchError, Result
 
 from .core import Node, node
 
@@ -24,11 +26,18 @@ __all__ = ["sequential_exec", "sequential"]
 
 def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None | Awaitable[None]:
     """Execute nodes in order, returning None or raising BatchError on failure."""
-    return (
-        Continuation.sequential(nodes, lambda item: item(ctx))
-        .then(lambda _: None)
-        .unwrap()
-    )
+
+    def execute() -> Generator[Any, Any, None]:
+        results: list[Result[Any]] = []
+        for item in nodes:
+            try:
+                value = yield item(ctx)
+            except BaseException as error:
+                results.append(Result(error=error))
+                raise BatchError(results) from error
+            results.append(Result(value=value))
+
+    return run(execute())
 
 
 @node

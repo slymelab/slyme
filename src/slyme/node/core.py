@@ -17,7 +17,7 @@ Core node module, consolidating base definitions and functional APIs.
 """
 
 import inspect
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from enum import Enum
 from functools import partial, update_wrapper
 from types import MappingProxyType
@@ -25,7 +25,6 @@ from typing import (
     Any,
     Concatenate,
     Generic,
-    NoReturn,
     ParamSpec,
     Protocol,
     TypeVar,
@@ -36,8 +35,8 @@ from typing import (
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.continuation import BatchError, Continuation, await_result
-from slyme.utils.exception import enrich_exception
+from slyme.utils.continuation import await_result, run
+from slyme.utils.exception import BatchError, enrich_exception
 
 from .exception import (
     NodeException,
@@ -98,17 +97,6 @@ class NodeElement:
     ) -> None:
         self._func = func
         self._specs = specs
-        self._validate_inputs(specs, params)
-        self._params: dict[str, Any] = {}
-        for name in specs:
-            self.set(name, params[name] if name in params else UNSET)
-
-    @staticmethod
-    def _validate_inputs(
-        specs: Mapping[str, Spec],
-        params: Mapping[str, Any],
-    ) -> None:
-        """Reject parameters that are not declared by the decorated function."""
         allowed_names = set(specs.keys())
         unknown_args = set(params.keys()) - allowed_names
         if unknown_args:
@@ -116,6 +104,9 @@ class NodeElement:
                 f"Got unexpected keyword argument(s) {list(unknown_args)}. "
                 f"Allowed arguments: {list(allowed_names)}."
             )
+        self._params: dict[str, Any] = {}
+        for name in specs:
+            self.set(name, params[name] if name in params else UNSET)
 
     @staticmethod
     def _prepare_eval(
@@ -200,21 +191,24 @@ class Node(NodeElement, Generic[_R]):
         self.wrappers.extend(wrappers)
         return self
 
-    def _raise_error(self, error: Exception) -> NoReturn:
-        if isinstance(error, NodeTerminate):
-            if error.source_node is None:
-                error.source_node = self
-            raise error
-        if isinstance(error, (NodeException, BatchError)):
-            raise error
-        raise NodeExceptionRecord(exception_node=self, exception=error) from error
-
     def __call__(self, ctx: Context) -> _R | Awaitable[_R]:
-        return (
-            Continuation.call(partial(self._call, ctx))
-            .catch(self._raise_error)
-            .unwrap()
-        )
+        def execute() -> Generator[Any, Any, _R]:
+            try:
+                return (yield self._call(ctx))
+            except BaseException as error:
+                if not isinstance(error, Exception):
+                    raise
+                if isinstance(error, NodeTerminate):
+                    if error.source_node is None:
+                        error.source_node = self
+                    raise
+                if isinstance(error, (NodeException, BatchError)):
+                    raise
+                raise NodeExceptionRecord(
+                    exception_node=self, exception=error
+                ) from error
+
+        return run(execute())
 
     def acall(self, ctx: Context) -> Awaitable[_R]:
         """Call with an always-awaitable result, preserving immediate execution.
@@ -240,15 +234,11 @@ class Node(NodeElement, Generic[_R]):
         else:
 
             def chain(call_ctx: Context) -> _R | Awaitable[_R]:
-                return (
-                    Continuation(eval_tree(call_ctx, eval_kwargs))
-                    .then(
-                        lambda evaluated: self._func(
-                            call_ctx, **raw_kwargs, **evaluated
-                        )
-                    )
-                    .unwrap()
-                )
+                def execute() -> Generator[Any, Any, _R]:
+                    evaluated = yield eval_tree(call_ctx, eval_kwargs)
+                    return (yield self._func(call_ctx, **raw_kwargs, **evaluated))
+
+                return run(execute())
 
         return Wrapper.compose(wrappers, wrapped=self, call_next=chain)(ctx)
 
@@ -285,24 +275,25 @@ class Wrapper(NodeElement, Generic[_R]):
     ):
         super().__init__(func=func, specs=specs, params=params)
 
-    def _raise_error(self, wrapped: Node[Any], error: Exception) -> NoReturn:
-        if isinstance(error, (NodeException, BatchError)):
-            raise error
-        raise WrapperExceptionRecord(
-            exception_node=self, wrapped_node=wrapped, exception=error
-        ) from error
-
     def __call__(
         self,
         ctx: Context,
         wrapped: Node[Any],
         call_next: Callable[[Context], Any | Awaitable[Any]],
     ) -> _R | Awaitable[_R]:
-        return (
-            Continuation.call(partial(self._call, ctx, wrapped, call_next))
-            .catch(partial(self._raise_error, wrapped))
-            .unwrap()
-        )
+        def execute() -> Generator[Any, Any, _R]:
+            try:
+                return (yield self._call(ctx, wrapped, call_next))
+            except BaseException as error:
+                if not isinstance(error, Exception):
+                    raise
+                if isinstance(error, (NodeException, BatchError)):
+                    raise
+                raise WrapperExceptionRecord(
+                    exception_node=self, wrapped_node=wrapped, exception=error
+                ) from error
+
+        return run(execute())
 
     def _call(
         self,
@@ -319,15 +310,14 @@ class Wrapper(NodeElement, Generic[_R]):
         raw_kwargs, eval_kwargs = self._prepare_eval(self._specs, kwargs)
         if not eval_kwargs:
             return self._func(ctx, wrapped, call_next, **raw_kwargs)
-        return (
-            Continuation(eval_tree(ctx, eval_kwargs))
-            .then(
-                lambda evaluated: self._func(
-                    ctx, wrapped, call_next, **raw_kwargs, **evaluated
-                )
+
+        def execute() -> Generator[Any, Any, _R]:
+            evaluated = yield eval_tree(ctx, eval_kwargs)
+            return (
+                yield self._func(ctx, wrapped, call_next, **raw_kwargs, **evaluated)
             )
-            .unwrap()
-        )
+
+        return run(execute())
 
 
 # Functional Factory & Decorators

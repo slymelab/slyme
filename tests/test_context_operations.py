@@ -8,7 +8,7 @@ import pytest
 from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
 from slyme.node.eval import ref_evaluator
-from slyme.utils.continuation import BatchError
+from slyme.utils.exception import BatchError
 from slyme.utils.tree import TreeAux, TreeEngine
 
 

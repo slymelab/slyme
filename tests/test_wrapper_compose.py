@@ -1,12 +1,61 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
 import pytest
 
 from slyme.context import Context, Schema
 from slyme.node import Node, Wrapper, node, wrapper
-from slyme.utils.continuation import Continuation, await_result
+from slyme.utils.continuation import await_result, run
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("origin", ["node", "wrapper"])
+@pytest.mark.parametrize(
+    "error_type", [asyncio.CancelledError, KeyboardInterrupt, SystemExit]
+)
+async def test_node_and_wrapper_preserve_control_exceptions(
+    asynchronous: bool,
+    origin: str,
+    error_type: type[BaseException],
+) -> None:
+    failure = error_type()
+
+    def run():
+        if origin == "node":
+            raise failure
+        return 1
+
+    @node
+    def target(ctx: Context, /) -> int:
+        return run()
+
+    @node
+    async def atarget(ctx: Context, /) -> int:
+        await asyncio.sleep(0)
+        return run()
+
+    @wrapper
+    def around(ctx: Context, wrapped: Node, call_next: Callable, /):
+        if origin == "wrapper":
+            raise failure
+        return call_next(ctx)
+
+    @wrapper
+    async def aaround(ctx: Context, wrapped: Node, call_next: Callable, /):
+        await asyncio.sleep(0)
+        return await await_result(around()(ctx, wrapped, call_next))
+
+    graph = atarget() if asynchronous else target()
+    graph.add_wrappers(aaround() if asynchronous else around())
+    ctx = Context()
+    try:
+        with pytest.raises(error_type) as caught:
+            await graph.acall(ctx)
+        assert caught.value is failure
+    finally:
+        await ctx.adispose()
 
 
 def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
@@ -24,11 +73,12 @@ def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
         assert wrapped is graph
         events.append((label, "before"))
 
-        def finish(value):
+        def execute():
+            value = yield call_next(ctx)
             events.append((label, "after"))
             return value
 
-        return Continuation.call(lambda: call_next(ctx)).then(finish).unwrap()
+        return run(execute())
 
     outer, inner = around(label="outer"), around(label="inner")
     wrappers = [outer, inner]
@@ -72,17 +122,12 @@ async def test_compose_preserves_context_replacement_and_multiple_next_calls(
 
     @wrapper
     def twice(ctx: Context, wrapped: Node, call_next: Callable, /):
-        return (
-            Continuation.call(lambda: call_next(ctx))
-            .then(
-                lambda first: (
-                    Continuation.call(lambda: call_next(child))
-                    .then(lambda second: (first, second))
-                    .unwrap()
-                )
-            )
-            .unwrap()
-        )
+        def execute():
+            first = yield call_next(ctx)
+            second = yield call_next(child)
+            return first, second
+
+        return run(execute())
 
     graph = avalue() if asynchronous else value()
     chain = Wrapper.compose([twice()], wrapped=graph, call_next=graph)

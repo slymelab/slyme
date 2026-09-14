@@ -8,7 +8,8 @@ import pytest
 
 from slyme.context import Compose, Context, Schema, Scope
 from slyme.context.core import ContextPathError
-from slyme.utils.continuation import BatchError, Result, await_result
+from slyme.utils.continuation import await_result
+from slyme.utils.exception import BatchError, Result
 
 
 async def test_adispose_runs_sync_cleanup_immediately_without_scheduling() -> None:

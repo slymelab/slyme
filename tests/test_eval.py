@@ -12,7 +12,8 @@ from slyme.context.core import ContextPathError
 from slyme.node import Auto, Node, eval_tree, node, wrapper
 from slyme.node.eval import EVALUATOR_REGISTRY, EvaluatorDef, node_evaluator
 from slyme.node.exception import NodeExceptionRecord
-from slyme.utils.continuation import BatchError, Continuation, Result, await_result
+from slyme.utils.continuation import await_result
+from slyme.utils.exception import BatchError, Result
 from slyme.utils.registry import GeneralRegistry
 from slyme.utils.tree import TreeAux, TreeEngine
 
@@ -92,11 +93,9 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
         def call(ctx):
             return eval_tree(ctx, values)
 
-    error = await (
-        Continuation.call(lambda: call(ctx))
-        .catch(lambda error: error, exceptions=BatchError)
-        .aunwrap()
-    )
+    with pytest.raises(BatchError) as caught:
+        await await_result(call(ctx))
+    error = caught.value
     assert isinstance(error, BatchError)
     assert len(error.results) == 2
     ref_errors, node_errors = (result.error for result in error.results)

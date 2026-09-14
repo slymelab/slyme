@@ -10,7 +10,8 @@ from slyme.context import Context
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.eval import EvaluatorDef
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.continuation import BatchError, Result, await_result
+from slyme.utils.continuation import await_result
+from slyme.utils.exception import BatchError, Result
 from slyme.utils.registry import GeneralRegistry
 
 
@@ -87,6 +88,63 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
     ctx.dispose()
 
 
+async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
+    events = []
+
+    @node
+    def child(ctx: Context, /, *, index: int):
+        events.append(("call", index))
+
+        async def finish():
+            events.append(("await", index))
+            await asyncio.sleep(0)
+            return index
+
+        return finish()
+
+    @node
+    def parent(ctx: Context, /, *, values: Auto[list[int]]) -> int:
+        return sum(values)
+
+    ctx = Context()
+    before = asyncio.all_tasks()
+    pending = parent(values=[child(index=1), child(index=2)])(ctx)
+    assert events == [("call", 1), ("call", 2)]
+    assert asyncio.all_tasks() == before
+    assert await await_result(pending) == 3
+    assert events == [("call", 1), ("call", 2), ("await", 1), ("await", 2)]
+    assert not ctx._owned
+    ctx.dispose()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_node_sequence_owns_fail_fast_prefix_collection(asynchronous) -> None:
+    failure = ValueError("sequence")
+    calls = []
+
+    @node
+    def child(ctx: Context, /, *, index: int):
+        def execute():
+            calls.append(index)
+            if index == 1:
+                raise failure
+            return index
+
+        async def finish():
+            await asyncio.sleep(0)
+            return execute()
+
+        return finish() if asynchronous else execute()
+
+    ctx = Context()
+    with pytest.raises(BatchError) as caught:
+        await await_result(sequential_exec(ctx, [child(index=i) for i in range(3)]))
+    assert calls == [0, 1]
+    assert caught.value.results[0] == Result(value=0)
+    assert caught.value.results[1].error.exception is failure
+    ctx.dispose()
+
+
 async def test_sync_wrapper_forwards_completion_and_async_wrapper_waits() -> None:
     events: list[str] = []
 
@@ -149,7 +207,7 @@ async def test_awaited_failures_keep_node_and_wrapper_attribution(
     ctx.dispose()
 
 
-async def test_evaluation_continues_remaining_batches_after_await(
+async def test_evaluation_runs_sync_batches_before_awaiting_async_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -175,7 +233,7 @@ async def test_evaluation_continues_remaining_batches_after_await(
         "X",
         3,
     ]
-    assert calls == ["async", "sync"]
+    assert calls == ["sync", "async"]
     ctx.dispose()
 
 

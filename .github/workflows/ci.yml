@@ -105,7 +105,8 @@ jobs:
           import slyme
           from slyme.context import Compose, Context, Schema
           from slyme.node import node
-          from slyme.utils.continuation import BatchError, Continuation
+          from slyme.utils.continuation import await_result, run
+          from slyme.utils.exception import BatchError, Result
 
           schema = Schema({"value": Schema.leaf()})
           ref = schema.resolve("value")
@@ -117,16 +118,33 @@ jobs:
           async def value(ctx):
               return ctx.get(ref)
 
-          async def evaluate():
-              return await Continuation.batch([value(), value()], lambda item: item(ctx)).aunwrap()
+          def evaluate():
+              return (yield asyncio.gather(value()(ctx), value()(ctx)))
 
-          assert asyncio.run(evaluate()) == [1, 1]
+          async def main():
+              return await await_result(run(evaluate()))
+
+          assert asyncio.run(main()) == [1, 1]
           visited = []
-          assert Continuation.sequential([1, 2], visited.append).unwrap() == [None, None]
+
+          def sequential():
+              for item in (1, 2):
+                  yield visited.append(item)
+
+          assert run(sequential()) is None
           assert visited == [1, 2]
-          assert Continuation.batch(["invalid"], int).catch(
-              lambda error: [i for i, result in enumerate(error.results) if result.error is not None], exceptions=BatchError
-          ).unwrap() == [0]
+
+          async def fail():
+              raise ValueError("invalid")
+
+          def recover():
+              try:
+                  yield fail()
+              except ValueError as error:
+                  return BatchError([Result(error=error)])
+
+          failure = asyncio.run(await_result(run(recover())))
+          assert isinstance(failure.results[0].error, ValueError)
           assert ctx.dispose() is None
           print(slyme.__version__)
           PY

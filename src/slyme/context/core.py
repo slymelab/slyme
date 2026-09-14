@@ -31,7 +31,8 @@ from enum import Enum
 from inspect import isawaitable
 from typing import Any, Generic, Literal, NoReturn, TypeVar, cast, overload
 
-from slyme.utils.continuation import Continuation, await_result
+from slyme.utils.continuation import await_result, run
+from slyme.utils.exception import BatchError, Result
 
 from .compose import Compose
 from .ref import Ref
@@ -157,16 +158,17 @@ class _Effect:
         guarded = owner._enter_sync_disposal_guard() if owner is not None else ()
         cleanup = self._cleanup
         self._cleanup = None
+
+        def execute() -> Generator[Any, Any, None]:
+            try:
+                if cleanup is not None:
+                    yield cleanup()
+            except BaseException as error:
+                self._fail_dispose(error)
+            self._finish()
+
         try:
-            result = (
-                Continuation.call(lambda: cleanup() if cleanup is not None else None)
-                .then(
-                    lambda _: self._finish(),
-                    self._fail_dispose,
-                    exceptions=BaseException,
-                )
-                .unwrap()
-            )
+            result = run(execute())
         finally:
             Context._exit_sync_disposal_guard(guarded)
         return self._await_cleanup(result) if isawaitable(result) else None
@@ -182,12 +184,15 @@ class _Effect:
                 raise self._error
             return None
         self._disposing = True
-        result = (
-            Continuation(self._setup)
-            .catch(self._fail_dispose, exceptions=BaseException)
-            .then(lambda _: self._dispose_cleanup())
-            .unwrap()
-        )
+
+        def execute() -> Generator[Any, Any, None]:
+            try:
+                yield self._setup
+            except BaseException as error:
+                self._fail_dispose(error)
+            yield self._dispose_cleanup()
+
+        result = run(execute())
         if isawaitable(result):
             self._pending = _Completion(result, self._check)
             return self._pending
@@ -315,7 +320,10 @@ class _ContextBinding:
                 return
             binding = binding_ref()
             if binding is not None:
-                binding._remove(identity, token)
+                current = binding._values.get(identity)
+                if current is not None and current[0] is token:
+                    del binding._values[identity]
+                del current
             binding_ref = None
 
         return dispose
@@ -326,11 +334,6 @@ class _ContextBinding:
         except LookupError:
             return
         self._values.pop(identity, None)
-
-    def _remove(self, identity: Hashable, token: object) -> None:
-        current = self._values.get(identity)
-        if current is not None and current[0] is token:
-            del self._values[identity]
 
     def block(self, scope: Scope) -> None:
         self._blocked.add(self._identity_for(scope, create=True))
@@ -442,17 +445,6 @@ class Context(ContextElement):
     _dispose_pending: _Completion[None] | None = field(init=False)
     _dispose_error: BaseException | None = field(init=False)
     _sync_disposal_guard_depth: int = field(init=False)
-
-    @staticmethod
-    def _set_nested_value(
-        tree: _Tree,
-        parts: tuple[str, ...],
-        value: Any,
-    ) -> None:
-        current = tree
-        for part in parts[:-1]:
-            current = current.setdefault(part, {})
-        current[parts[-1]] = value
 
     def __init__(
         self,
@@ -616,13 +608,6 @@ class Context(ContextElement):
     def _forget_owned(self, owned: Context | _Effect) -> None:
         self._owned.pop(owned, None)
 
-    def _adopt_sync_effect(self, cleanup: Callable[[], None]) -> Callable[[], None]:
-        self._assert_mutable()
-        effect = _Effect(self)
-        effect._cleanup = cleanup
-        self._owned[effect] = None
-        return cast(Callable[[], None], effect.dispose)
-
     @overload
     def effect(self, setup: Callable[[], Callable[[], None]]) -> Callable[[], None]: ...
     @overload
@@ -700,13 +685,24 @@ class Context(ContextElement):
             if error is not None:
                 raise error
 
-        result = (
-            Continuation.sequential(
-                owned, lambda item: item.dispose(), continue_on_error=True
-            )
-            .then(lambda _: finish(), finish, exceptions=BaseException)
-            .unwrap()
-        )
+        def execute() -> Generator[Any, Any, None]:
+            results: list[Result[None]] = []
+            try:
+                for item in owned:
+                    try:
+                        value = yield item.dispose()
+                    except BaseException as error:
+                        results.append(Result(error=error))
+                    else:
+                        results.append(Result(value=value))
+                if any(result.error is not None for result in results):
+                    raise BatchError(results)
+            except BaseException as error:
+                finish(error)
+            else:
+                finish()
+
+        result = run(execute())
         if isawaitable(result):
             pending = _Completion(
                 self._await_dispose(result), self._assert_disposal_allowed
@@ -944,7 +940,11 @@ class Context(ContextElement):
 
         result: _Tree = {}
         for leaf, value in visible:
-            self._set_nested_value(result, leaf.parts[len(parts) :], value)
+            relative_parts = leaf.parts[len(parts) :]
+            current = result
+            for part in relative_parts[:-1]:
+                current = current.setdefault(part, {})
+            current[relative_parts[-1]] = value
         return result
 
     def to_dict(
@@ -1049,7 +1049,11 @@ class Context(ContextElement):
                 f"Cannot add existing local path {entry.ref.path!r}."
             ) from error
         try:
-            return self._adopt_sync_effect(cleanup)
+            self._assert_mutable()
+            effect = _Effect(self)
+            effect._cleanup = cleanup
+            self._owned[effect] = None
+            return cast(Callable[[], None], effect.dispose)
         except BaseException:
             cleanup()
             raise

@@ -212,16 +212,6 @@ class Schema:
                 path_parts,
             )
 
-    def _install_entry(
-        self,
-        container: _SchemaContainer,
-        name: str,
-        incoming: _RefEntry[Any],
-    ) -> _RefEntry[Any]:
-        entry = cast(_RefEntry[Any], container.setdefault(name, incoming))
-        self.__entries[entry.ref.path] = entry
-        return entry
-
     def _commit_merge(
         self,
         current: _SchemaContainer,
@@ -231,7 +221,8 @@ class Schema:
     ) -> None:
         for name, incoming_node in incoming.items():
             if isinstance(incoming_node, _RefEntry):
-                entry = self._install_entry(current, name, incoming_node)
+                entry = cast(_RefEntry[Any], current.setdefault(name, incoming_node))
+                self.__entries[entry.ref.path] = entry
                 entry.declarations.add(declaration_id)
                 entries.append(weakref.ref(entry))
                 continue

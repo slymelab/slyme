@@ -46,7 +46,7 @@ Context 拥有子 Context，以及通过 `effect()`、`add()` 和 `declare()` �
 
 `dispose()` 调用时立即标记释放中并运行同步部分，异步部分需要等待后才调度。提前清理的登记项在完成前仍由 Context 持有，owner 释放会加入同一次清理；移除它不会改变其余登记项的释放顺序。
 
-每项清理完成后才开始下一项，包括异步清理。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 通过 `BatchError` 汇总归属项清理错误，其 `results` 按 LIFO 执行顺序保存每项清理的值或错误；后续释放调用观察同一个最终结果，不重复执行 cleanup。内部 Continuation 链负责编排执行，独立的共享完成对象负责防止等待者取消中断 cleanup，并支持重复等待。
+每项清理完成后才开始下一项，包括异步清理。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 通过 `BatchError` 汇总归属项清理错误，其 `results` 按 LIFO 执行顺序保存每项清理的值或错误；后续释放调用观察同一个最终结果，不重复执行 cleanup。Context 的生成器循环负责编排清理，独立的共享完成对象负责防止等待者取消中断 cleanup，并支持重复等待。
 
 ## Auto 值
 
@@ -62,7 +62,7 @@ process(data=R.resolve("items"))(ctx)  # data 是 Context 中保存的 list
 
 Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。求值保持同步，直到子调用或 cleanup 返回 awaitable；被等待后，未完成的 child 和剩余 sibling 并发执行，结果保持输入顺序。成功的子节点立即释放 Context。全部子任务结束后，会完成失败或被中断的释放，再报告错误或执行父函数。
 
-Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling；求值会等待所有节点结束，类似 `asyncio.gather(..., return_exceptions=True)`。错误统一通过 `slyme.utils.continuation` 的 `BatchError` 抛出。其 `results` 列表按照 evaluator 组首次出现的顺序排列，抛出的错误保存在各项 `Result.error` 中；内置 evaluator 的错误是另一层 `BatchError`，使用 Ref 或 Node 在该组内的位置作为索引。最终的子 Context 清理错误组成独立的 `BatchError`，作为 Node batch 的 cause 保留。重复释放不会重复报告同一个已保存的清理错误，Node 和 Wrapper 调用也会保留这些汇总异常。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
+Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling；求值会等待所有节点结束，类似 `asyncio.gather(..., return_exceptions=True)`。错误统一通过 `slyme.utils.exception` 的 `BatchError` 抛出。其 `results` 列表按照 evaluator 组首次出现的顺序排列，抛出的错误保存在各项 `Result.error` 中；内置 evaluator 的错误是另一层 `BatchError`，使用 Ref 或 Node 在该组内的位置作为索引。最终的子 Context 清理错误组成独立的 `BatchError`，作为 Node batch 的 cause 保留。重复释放不会重复报告同一个已保存的清理错误，Node 和 Wrapper 调用也会保留这些汇总异常。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
 
 取消外层求值 Task 时，asyncio 会将取消传播给尚未完成的子任务。Auto 会等待这些任务退出以及子 Context 清理完成，包括收到重复取消的情况。没有其他错误时直接传播取消，否则通过 `BatchError` 保留错误，并将取消保留为 cause。同步子节点在事件循环线程内直接执行，执行期间无法被打断。Task 取消不保证底层网络、线程或进程中的工作已经停止；这些行为由应用适配层负责。
 

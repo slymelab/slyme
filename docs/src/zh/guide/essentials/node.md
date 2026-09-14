@@ -56,56 +56,35 @@ async def execute(ctx):
 
 `await_result()` 只等待外层执行结果，不递归等待容器中的数据。异步 continuation 在被等待或调度前不会执行；同步前缀可能已运行。同步应用可以在应用入口使用 `asyncio.run(await_result(task(ctx)))`，已有事件循环内应 await，不创建嵌套事件循环。框架不会把阻塞函数自动放入线程。
 
-用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。可以使用 `async def` 和 `await child.acall(ctx)`，或返回下面的 Continuation 组合。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
+用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。可以使用 `async def` 和 `await child.acall(ctx)`，或驱动下面的生成器。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
 
-### 惰性结果链
+### 生成器组合
 
-`Continuation` 让普通函数组合同步和异步结果，而不必自行定义异步 continuation：
+`slyme.utils.continuation` 的 `run(generator)` 驱动普通生成器控制流。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
 
 ```python
 from slyme.node import Node
-from slyme.utils.continuation import Continuation, await_result
+from slyme.utils.continuation import run
 
 
 @node
 def increment_child(ctx, *, child: Node[int]):
-    return Continuation.call(lambda: child(ctx)).then(lambda value: value + 1).unwrap()
+    def execute():
+        value = yield child(ctx)
+        return value + 1
+
+    return run(execute())
 ```
 
-`Continuation.call(operation)` 延迟操作本身的调用。`Continuation(value)` 包装已有结果；写成 `Continuation(operation())` 时，Python 会先调用 `operation()`，再构建链。`then(success, failure)` 处理上游的完成结果，配对的 failure 不捕获 success 自己抛出的错误；后续的 `catch(recover)` 可以处理这些错误。两种回调均可返回同步或异步结果。
+创建生成器不会执行函数体。调用 `run()` 立即执行同步前缀，同步错误也立即抛出。通过 `await await_result(run(execute()))` 等待返回的剩余流程，继续异步工作。只在同步应用入口使用 `asyncio.run(await_result(run(execute())))`。驱动器不启动事件循环，也不调度 task。
 
-创建和扩展链不会执行回调。`unwrap()` 立即执行同步前缀，返回最终值或尚未调度的异步剩余流程。`aunwrap()` 保留立即执行的同步操作及其错误，但始终返回 awaitable；异步代码中使用 `await chain.aunwrap()`。链本身不可 await。同步入口可使用 `asyncio.run(await_result(chain.unwrap()))`，已有事件循环内可用 `asyncio.create_task(await_result(chain.unwrap()))` 调度剩余流程。回调返回另一条链时，必须显式调用它的 `unwrap()`；裸链对象只是普通数据。
+只检查显式交给 `yield` 的值；容器和裸生成器仍是普通数据。每次 yield 只等待外层结果，生成器最终 return 的值不隐式等待。需要将操作完成纳入生成器的异常处理时，使用 `return (yield operation())`。通过 `yield from` 委托另一生成器，或显式 yield 它的 `run()` 结果。Node 不会自动驱动作为返回值的生成器。
 
-`then()` 和 `catch()` 向同一个可变操作列表追加步骤，并返回原对象；多个别名不是独立分支，应以流式返回值作为当前类型阶段。每条链只能执行一次，开始执行后不能继续追加步骤；需要再次执行时应创建新链。与 JavaScript Promise 不同，Continuation 没有订阅者或用于通知的完成结果缓存。需要共享同一次执行的调用方可以显式创建并保留 Task。Continuation 不屏蔽取消，也不拥有资源清理；Context 的可重复等待、取消安全的释放逻辑保持独立。
+将生成器的独占推进权交给 `run()`；耗尽和重入遵循 Python 的生成器协议。驱动器不缓存结果、不屏蔽取消、不汇总异常，也不拥有资源。取消会在暂停的 yield 位置抛回，遵循生成器的异常处理逻辑。等待剩余流程时，`finally` 可以 yield 异步清理；但丢弃剩余流程不会完成这些清理。
 
-`catch()` 和 `then()` 的失败回调默认只处理 `Exception`，不拦截取消等其他 `BaseException` 子类。可通过 `exceptions=SomeException` 选择异常类；需要观察取消的生命周期清理可以显式选择 `BaseException`，再决定是否继续传播取消。
+执行顺序、并发和结果收集由调用方决定。逐项 yield 调用的循环会等待当前项完成后再继续。并发实现可以先调用各项、保存返回的 awaitable，再 yield 一个异步聚合操作。若调用方可能还没有运行中的事件循环，应在该异步操作内部创建 `gather()` 或 Task。枚举或调用期间的同步异常遵循调用方的 `try/except/finally`，驱动器不额外定义 batch 策略。
 
-`Continuation.sequential(values, call, *, continue_on_error=False)` 构建一个 `Continuation[list[T]]`，按顺序执行调用并收集返回值。调用 `unwrap()` 或 `aunwrap()` 时才开始迭代，只有前一次调用完成后才获取下一个输入；失败或取消会抛出保存已执行前缀的 `BatchError`。设置 `continue_on_error=True` 时，会继续尝试其余调用再报告错误。展开前可通过 `then()` 或 `catch()` 处理完成结果。
-
-`Continuation.batch(values, call)` 构建一个执行独立调用的 `Continuation[list[T]]`。执行时即使已有失败，也会尝试所有输入；遇到返回 awaitable 的调用前保持同步。等待剩余流程时，会并发调度该调用和其余输入。全部结束后，batch 返回按输入排序的结果列表，或抛出从 `slyme.utils.continuation` 导出的 `BatchError`。`then()` 接收结果列表，`catch()` 仍与其他链一样接收单个异常：
-
-```python
-from slyme.utils.continuation import BatchError
-
-
-def recover(error: BatchError) -> list[str]:
-    return [
-        f"input {index}: {result.error}"
-        if result.error is not None
-        else str(result.value)
-        for index, result in enumerate(error.results)
-    ]
-
-
-result = (
-    Continuation.batch(["1", "invalid", "3"], int)
-    .then(lambda values: [str(value * 2) for value in values])
-    .catch(recover, exceptions=BatchError)
-    .unwrap()
-)
-```
-
-`BatchError.results` 是按输入顺序排列的 `Result(value=..., error=...)` 列表，只有一个调用失败时也使用这一形式。每项完成的调用保存返回值或抛出的异常；成功返回 `None` 表示为 `Result(value=None)`。嵌套 batch 保留各自的局部索引。迭代器失败会停止枚举，以待获取的输入索引记录错误，并等待已开始的调用。正常返回的异常对象仍是数据：`Result(value=ValueError(...))` 不同于 `Result(error=ValueError(...))`。失败的 batch 抛出异常而不是返回，但异常中会保留部分成功结果。单个项目失败或取消不会取消 sibling。取消 batch 等待者时，asyncio 会向尚未完成的调用传播取消；若还存在其他错误，`BatchError` 会保留它们并以取消为 cause，否则直接传播取消。Batch 不提供超时或资源清理策略。
+Auto 独立拥有全部完成后汇总的求值策略。它先内联调用每个 evaluator 组和子节点，再等待异步结果；只有异步结果会调度为 Task。单项失败不会取消 sibling。错误通过 `slyme.utils.exception` 的嵌套 `BatchError` 报告，其按输入排序的 `Result(value=..., error=...)` 分别保存成功返回值与抛出的异常。Context 独立拥有递归 LIFO 清理策略；两个消费者共用生成器驱动器，不共用执行策略 API。
 
 ## 参数与 Auto
 
@@ -165,7 +144,7 @@ def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适用于同步执行：`call_next(ctx)` 返回 awaitable 时，后续语句会在异步完成前运行。仅转发结果的 Wrapper 可以直接返回它。普通函数中的结果依赖操作可以使用 `Continuation.call(lambda: call_next(ctx)).then(transform).unwrap()`；需要以原生 `try/finally` 完成清理时，可以使用 `async def` 与 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
+Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适用于同步执行：`call_next(ctx)` 返回 awaitable 时，后续语句会在异步完成前运行。仅转发结果的 Wrapper 可以直接返回它。需要依赖结果执行后续操作或在完成时清理资源，可以通过 `run()` 驱动生成器，在其中使用 `yield call_next(ctx)` 和 `try/finally`；也可以使用 `async def` 与 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 的 callable。Wrapper 参数保持实时读取；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context，以及返回值类型。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
 

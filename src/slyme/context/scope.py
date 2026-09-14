@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Iterable
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 
 __all__ = ["Scope"]
@@ -29,10 +29,6 @@ class Scope:
     name: Hashable | None = None
     parents: tuple[Scope, ...] = ()
     _mro: tuple[Scope, ...] = field(init=False)
-
-    @staticmethod
-    def _contains_identity(values: Iterable[Scope], target: Scope) -> bool:
-        return any(value is target for value in values)
 
     @staticmethod
     def _merge_mro(parents: tuple[Scope, ...]) -> tuple[Scope, ...]:
@@ -52,7 +48,7 @@ class Scope:
                     sequence[0]
                     for sequence in pending
                     if not any(
-                        Scope._contains_identity(other[1:], sequence[0])
+                        any(value is sequence[0] for value in other[1:])
                         for other in pending
                     )
                 ),

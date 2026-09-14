@@ -430,9 +430,8 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
     root = Context(schema=Schema({"value": Schema.leaf()}))
     identity = object()
     child = root.isolate("value", identity=identity)
-    child.set("value", "old")
     binding = next(iter(root._data.values()))
-    token = binding._values[identity][0]
+    remove = binding.add_value(child.scope, "old")
     assert identity in binding._blocked
 
     child.dispose()
@@ -440,7 +439,7 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
     assert not binding._blocked
     replacement = root.isolate("value", identity=identity)
     replacement.set("value", "new")
-    binding._remove(identity, token)
+    remove()
     assert replacement.get("value") == "new"
     root.dispose()
     assert not binding._values

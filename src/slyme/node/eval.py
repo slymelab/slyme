@@ -13,14 +13,15 @@
 # limitations under the License.
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterable, Sequence
 from dataclasses import dataclass
 from inspect import isawaitable
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar, cast
 
 from slyme.context import Context, Ref
 from slyme.context.tree import CTX_EVAL_ENGINE
-from slyme.utils.continuation import BatchError, Continuation, await_result
+from slyme.utils.continuation import await_result, run
+from slyme.utils.exception import BatchError, Result
 from slyme.utils.registry import GeneralRegistry
 
 from .core import Node
@@ -45,6 +46,80 @@ class EvaluatorDef:
 
 EVALUATOR_REGISTRY = GeneralRegistry[type, EvaluatorDef]("evaluator")
 
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+
+def _batch(
+    values: Iterable[_T], call: Callable[[_T], _R | Awaitable[_R]]
+) -> list[_R] | Awaitable[list[_R]]:
+    """Settle independent evaluations in input order, retaining every outcome.
+
+    Calls run inline before scheduling their asynchronous results. Item failures
+    do not cancel siblings. Iterator failures wait for submitted work and retain
+    item errors as their cause. Caller cancellation propagates through asyncio;
+    simultaneous item failures are reported with cancellation as their cause.
+    """
+
+    def execute() -> Generator[Any, Any, list[_R]]:
+        results: list[Result[_R]] = []
+        pending: dict[int, Awaitable[Result[_R]]] = {}
+
+        def evaluate(value: _T) -> Generator[Any, Any, Result[_R]]:
+            try:
+                return Result(value=(yield call(value)))
+            except BaseException as error:
+                return Result(error=error)
+
+        async def wait_pending() -> asyncio.CancelledError | None:
+            tasks = {
+                index: asyncio.create_task(await_result(value))
+                for index, value in pending.items()
+            }
+            cancellation = None
+            try:
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
+            except asyncio.CancelledError as error:
+                cancellation = error
+            for index, task in tasks.items():
+                try:
+                    results[index] = task.result()
+                except BaseException as error:
+                    results[index] = Result(error=error)
+            return cancellation
+
+        iteration_error: BaseException | None = None
+        try:
+            for value in values:
+                result = run(evaluate(value))
+                if isawaitable(result):
+                    pending[len(results)] = result
+                    results.append(Result())
+                else:
+                    results.append(result)
+        except BaseException as error:
+            iteration_error = error
+
+        cancellation = (yield wait_pending()) if pending else None
+        failed = any(result.error is not None for result in results)
+        if iteration_error is not None:
+            if failed:
+                raise iteration_error from BatchError(results)
+            raise iteration_error
+        if cancellation is not None:
+            if any(
+                result.error is not None
+                and not isinstance(result.error, asyncio.CancelledError)
+                for result in results
+            ):
+                raise BatchError(results) from cancellation
+            raise cancellation
+        if failed:
+            raise BatchError(results)
+        return [cast(_R, result.value) for result in results]
+
+    return run(execute())
+
 
 def eval_tree(ctx: Context, tree: Any) -> Any:
     """Evaluate registered leaves and reconstruct every Tree container.
@@ -66,30 +141,26 @@ def eval_tree(ctx: Context, tree: Any) -> Any:
             values.append(leaf)
     batches = iter(eval_groups.items())
 
-    def store(
-        evaluator: EvaluatorDef, indices: list[int], values: Sequence[Any]
-    ) -> None:
-        if len(values) != len(indices):
-            raise ValueError(
-                f"Evaluator {evaluator} returned {len(values)} results, "
-                f"expected {len(indices)}."
-            )
-        for index, value in zip(indices, values, strict=True):
-            leaves[index] = value
-
     def evaluate(batch: tuple[EvaluatorDef, tuple[list[int], list[Any]]]) -> Any:
         evaluator, (indices, values) = batch
-        return (
-            Continuation(evaluator.func(ctx, values))
-            .then(lambda result: store(evaluator, indices, result))
-            .unwrap()
-        )
 
-    return (
-        Continuation.batch(batches, evaluate)
-        .then(lambda _: CTX_EVAL_ENGINE.unflatten(tree_def, leaves))
-        .unwrap()
-    )
+        def execute() -> Generator[Any, Any, None]:
+            result = yield evaluator.func(ctx, values)
+            if len(result) != len(indices):
+                raise ValueError(
+                    f"Evaluator {evaluator} returned {len(result)} results, "
+                    f"expected {len(indices)}."
+                )
+            for index, value in zip(indices, result, strict=True):
+                leaves[index] = value
+
+        return run(execute())
+
+    def execute() -> Generator[Any, Any, Any]:
+        yield _batch(batches, evaluate)
+        return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
+
+    return run(execute())
 
 
 # --- Evaluator Implementations ---
@@ -97,7 +168,7 @@ def eval_tree(ctx: Context, tree: Any) -> Any:
 def ref_evaluator(
     ctx: Context, refs: Sequence[Ref]
 ) -> Sequence[Any] | Awaitable[Sequence[Any]]:
-    return Continuation.batch(refs, ctx.get).unwrap()
+    return _batch(refs, ctx.get)
 
 
 EVALUATOR_REGISTRY.register(EvaluatorDef(ref_evaluator), key=Ref)
@@ -108,7 +179,7 @@ def node_evaluator(
 ) -> Sequence[Any] | Awaitable[Sequence[Any]]:
     """Evaluate every sibling and report failures after all children settle.
 
-    Execution stays synchronous until a child call or cleanup is awaitable.
+    Calls execute inline before their asynchronous results are scheduled.
     Successful children dispose immediately; failure cleanup follows the batch.
     Child failure never cancels siblings. Caller cancellation follows asyncio
     propagation, with child cleanup completed before leaving the evaluator.
@@ -118,29 +189,26 @@ def node_evaluator(
     def evaluate_one(node: Node) -> Any:
         child = ctx.fork(scope=ctx.scope.fork())
         children.append(child)
-        return (
-            Continuation.call(lambda: node(child))
-            .then(
-                lambda value: (
-                    Continuation.call(child.dispose).then(lambda _: value).unwrap()
-                )
-            )
-            .unwrap()
-        )
+
+        def execute() -> Generator[Any, Any, Any]:
+            value = yield node(child)
+            yield child.dispose()
+            return value
+
+        return run(execute())
 
     def cleanup(error: BaseException) -> Any:
-        def check_failure(failure: BaseException) -> None:
-            if not isinstance(error, BatchError) or all(
-                failure is not previous.error for previous in error.results
-            ):
-                raise failure
-
         def release(child: Context) -> None | Awaitable[None]:
-            return (
-                Continuation.call(child.dispose)
-                .catch(check_failure, exceptions=BaseException)
-                .unwrap()
-            )
+            def execute() -> Generator[Any, Any, None]:
+                try:
+                    yield child.dispose()
+                except BaseException as failure:
+                    if not isinstance(error, BatchError) or all(
+                        failure is not previous.error for previous in error.results
+                    ):
+                        raise
+
+            return run(execute())
 
         def report(outcome: list[None] | BaseException) -> NoReturn:
             if isinstance(outcome, BaseException):
@@ -149,11 +217,13 @@ def node_evaluator(
                 raise error from outcome
             raise error
 
-        pending = (
-            Continuation.batch(children, release)
-            .catch(lambda failure: failure, exceptions=BaseException)
-            .unwrap()
-        )
+        def release_all() -> Generator[Any, Any, list[None] | BaseException]:
+            try:
+                return (yield _batch(children, release))
+            except BaseException as failure:
+                return failure
+
+        pending = run(release_all())
         if not isawaitable(pending):
             return report(pending)
 
@@ -169,11 +239,13 @@ def node_evaluator(
 
         return finish()
 
-    return (
-        Continuation.batch(nodes, evaluate_one)
-        .catch(cleanup, exceptions=BaseException)
-        .unwrap()
-    )
+    def execute() -> Generator[Any, Any, Sequence[Any]]:
+        try:
+            return (yield _batch(nodes, evaluate_one))
+        except BaseException as error:
+            return (yield cleanup(error))
+
+    return run(execute())
 
 
 EVALUATOR_REGISTRY.register(EvaluatorDef(node_evaluator), key=Node)
