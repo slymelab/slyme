@@ -37,20 +37,16 @@ async def test_failed_batch_retains_none_and_exception_return_values(
     assert caught.value.results == [Result(value=error), Result(error=error), Result()]
 
 
-def test_sync_evaluation_batch_runs_immediately() -> None:
+@pytest.mark.parametrize("values", [[1, 2], (1, 2), range(1, 3)])
+def test_sync_evaluation_batch_runs_immediately(values) -> None:
     visited = []
-
-    def values():
-        visited.append("iterate")
-        yield 1
-        yield 2
 
     def call(value):
         visited.append(value)
         return value * 2
 
-    assert _batch(values(), call) == [2, 4]
-    assert visited == ["iterate", 1, 2]
+    assert _batch(values, call) == [2, 4]
+    assert visited == [1, 2]
     assert _batch([], call) == []
 
 
@@ -83,11 +79,6 @@ async def test_batch_calls_all_items_before_scheduling_and_keeps_result_order() 
     events = []
     release = asyncio.Event()
 
-    def values():
-        for value in range(3):
-            events.append(("input", value))
-            yield value
-
     async def waiting():
         events.append("waiting")
         await release.wait()
@@ -102,15 +93,12 @@ async def test_batch_calls_all_items_before_scheduling_and_keeps_result_order() 
         return value
 
     before = asyncio.all_tasks()
-    pending = _batch(values(), call)
+    pending = _batch([0, 1, 2], call)
     assert isawaitable(pending)
     assert asyncio.all_tasks() == before
     assert events == [
-        ("input", 0),
         ("call", 0),
-        ("input", 1),
         ("call", 1),
-        ("input", 2),
         ("call", 2),
     ]
     assert await pending == [0, "async", 2]
@@ -174,96 +162,6 @@ def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
 
     assert run(recover()) == 2
     assert run(postprocess()) == "index"
-
-
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_iterator_failure_waits_for_already_started_calls(
-    asynchronous: bool,
-) -> None:
-    finished = []
-    failure = ValueError("iterator")
-
-    def values():
-        yield 0
-        raise failure
-
-    def call(value):
-        finished.append(value)
-        return value
-
-    async def acall(value):
-        await asyncio.sleep(0)
-        return call(value)
-
-    with pytest.raises(ValueError) as caught:
-        await await_result(_batch(values(), acall if asynchronous else call))
-    assert caught.value is failure
-    assert caught.value.__cause__ is None
-    assert finished == [0]
-
-
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_iterator_failure_retains_only_item_results_in_its_cause(
-    asynchronous: bool,
-) -> None:
-    iteration_error = LookupError("iterator")
-    item_error = ValueError("item")
-    returned_error = ValueError("data")
-    finished = []
-
-    def values():
-        yield 0
-        yield 1
-        yield 2
-        raise iteration_error
-
-    def call(value):
-        finished.append(value)
-        if value == 1:
-            raise item_error
-        return returned_error if value == 2 else None
-
-    async def acall(value):
-        await asyncio.sleep(0)
-        return call(value)
-
-    with pytest.raises(LookupError) as caught:
-        await await_result(_batch(values(), acall if asynchronous else call))
-    assert caught.value is iteration_error
-    cause = caught.value.__cause__
-    assert isinstance(cause, BatchError)
-    assert cause.results == [
-        Result(value=None),
-        Result(error=item_error),
-        Result(value=returned_error),
-    ]
-    assert finished == [0, 1, 2]
-
-
-async def test_iterator_failure_stays_pending_until_submitted_calls_finish() -> None:
-    started = asyncio.Event()
-    release = asyncio.Event()
-    finished = []
-    failure = ValueError("iterator")
-
-    def values():
-        yield 0
-        raise failure
-
-    async def call(value):
-        started.set()
-        await release.wait()
-        finished.append(value)
-        return value
-
-    task = asyncio.create_task(await_result(_batch(values(), call)))
-    await started.wait()
-    assert not task.done()
-    release.set()
-    with pytest.raises(ValueError) as caught:
-        await task
-    assert caught.value is failure
-    assert finished == [0]
 
 
 async def test_batch_schedules_only_asynchronous_items() -> None:
@@ -336,7 +234,9 @@ async def test_caller_cancellation_waits_for_submitted_calls(suppress: bool) -> 
     assert caught.value.__cause__ is None
 
 
-async def test_caller_cancellation_preserves_other_failures() -> None:
+async def test_caller_cancellation_propagates_without_aggregating_partial_failures() -> (
+    None
+):
     started = asyncio.Event()
     failure = ValueError("failed before cancellation")
     finished = []
@@ -353,9 +253,7 @@ async def test_caller_cancellation_preserves_other_failures() -> None:
     task = asyncio.create_task(await_result(_batch([0, 1], call)))
     await started.wait()
     task.cancel()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(asyncio.CancelledError) as caught:
         await task
-    assert caught.value.results[0].error is failure
-    assert isinstance(caught.value.results[1].error, asyncio.CancelledError)
-    assert isinstance(caught.value.__cause__, asyncio.CancelledError)
+    assert caught.value.__cause__ is None
     assert finished == [1]

@@ -150,6 +150,8 @@ breaking changes when they are documented here.
   results, collecting Ref and Node failures
   into nested `BatchError` objects without cancelling siblings. Node and Wrapper
   calls preserve these aggregates; child cleanup finishes before reporting them.
+  Caller cancellation follows asyncio propagation without aggregating partial
+  batch results; owned child cleanup completes before evaluation exits.
 - Renamed `slyme.utils.pytree` to `slyme.utils.tree`, `PyTree*` types to `Tree*`,
   and `PYTREE_ENGINE_REGISTRY` to `TREE_ENGINE_REGISTRY`, including its namespace
   from `pytree_engine` to `tree_engine`. No compatibility aliases are provided.

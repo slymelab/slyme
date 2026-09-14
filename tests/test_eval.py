@@ -334,6 +334,56 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
     assert not ctx._owned
 
 
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_auto_finishes_failure_cleanup_despite_repeated_cancellation(
+    cleanup_fails: bool,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    failure = ValueError("node failed")
+    cleanup_failure = OSError("cleanup failed")
+    events = []
+
+    @node
+    def child(ctx: Context, /) -> int:
+        async def cleanup() -> None:
+            events.append("cleanup started")
+            started.set()
+            await release.wait()
+            events.append("cleanup finished")
+            if cleanup_fails:
+                raise cleanup_failure
+
+        ctx.effect(lambda: cleanup)
+        raise failure
+
+    ctx = Context()
+    task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
+    await started.wait()
+    for _ in range(2):
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    release.set()
+
+    with pytest.raises(BatchError) as caught:
+        await task
+    node_error = caught.value.results[0].error
+    assert isinstance(node_error, NodeExceptionRecord)
+    assert node_error.exception is failure
+    if cleanup_fails:
+        cause = caught.value.__cause__
+        assert isinstance(cause, BatchError)
+        cleanup_error = cause.results[0].error
+        assert isinstance(cleanup_error, BatchError)
+        assert cleanup_error.results == [Result(error=cleanup_failure)]
+    else:
+        assert caught.value.__cause__ is None
+    assert events == ["cleanup started", "cleanup finished"]
+    assert not ctx._owned
+    ctx.dispose()
+
+
 def test_auto_subclasses_require_explicit_evaluator_registration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

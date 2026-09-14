@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import asyncio
-from collections.abc import Awaitable, Callable, Generator, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass
 from inspect import isawaitable
 from typing import Any, NoReturn, TypeVar, cast
@@ -51,14 +51,13 @@ _R = TypeVar("_R")
 
 
 def _batch(
-    values: Iterable[_T], call: Callable[[_T], _R | Awaitable[_R]]
+    values: Sequence[_T], call: Callable[[_T], _R | Awaitable[_R]]
 ) -> list[_R] | Awaitable[list[_R]]:
     """Settle independent evaluations in input order, retaining every outcome.
 
     Calls run inline before scheduling their asynchronous results. Item failures
-    do not cancel siblings. Iterator failures wait for submitted work and retain
-    item errors as their cause. Caller cancellation propagates through asyncio;
-    simultaneous item failures are reported with cancellation as their cause.
+    do not cancel siblings. Caller cancellation follows asyncio.gather without
+    aggregating partial results.
     """
 
     def execute() -> Generator[Any, Any, list[_R]]:
@@ -71,50 +70,22 @@ def _batch(
             except BaseException as error:
                 return Result(error=error)
 
-        async def wait_pending() -> asyncio.CancelledError | None:
-            tasks = {
-                index: asyncio.create_task(await_result(value))
-                for index, value in pending.items()
-            }
-            cancellation = None
-            try:
-                await asyncio.gather(*tasks.values(), return_exceptions=True)
-            except asyncio.CancelledError as error:
-                cancellation = error
-            for index, task in tasks.items():
-                try:
-                    results[index] = task.result()
-                except BaseException as error:
-                    results[index] = Result(error=error)
-            return cancellation
+        async def wait_pending() -> None:
+            settled = await asyncio.gather(*pending.values())
+            for index, result in zip(pending, settled, strict=True):
+                results[index] = result
 
-        iteration_error: BaseException | None = None
-        try:
-            for value in values:
-                result = run(evaluate(value))
-                if isawaitable(result):
-                    pending[len(results)] = result
-                    results.append(Result())
-                else:
-                    results.append(result)
-        except BaseException as error:
-            iteration_error = error
+        for value in values:
+            result = run(evaluate(value))
+            if isawaitable(result):
+                pending[len(results)] = result
+                results.append(Result())
+            else:
+                results.append(result)
 
-        cancellation = (yield wait_pending()) if pending else None
-        failed = any(result.error is not None for result in results)
-        if iteration_error is not None:
-            if failed:
-                raise iteration_error from BatchError(results)
-            raise iteration_error
-        if cancellation is not None:
-            if any(
-                result.error is not None
-                and not isinstance(result.error, asyncio.CancelledError)
-                for result in results
-            ):
-                raise BatchError(results) from cancellation
-            raise cancellation
-        if failed:
+        if pending:
+            yield wait_pending()
+        if any(result.error is not None for result in results):
             raise BatchError(results)
         return [cast(_R, result.value) for result in results]
 
@@ -139,7 +110,7 @@ def eval_tree(ctx: Context, tree: Any) -> Any:
             indices, values = eval_groups[evaluator]
             indices.append(i)
             values.append(leaf)
-    batches = iter(eval_groups.items())
+    batches = list(eval_groups.items())
 
     def evaluate(batch: tuple[EvaluatorDef, tuple[list[int], list[Any]]]) -> Any:
         evaluator, (indices, values) = batch
@@ -210,22 +181,16 @@ def node_evaluator(
 
             return run(execute())
 
-        def report(outcome: list[None] | BaseException) -> NoReturn:
-            if isinstance(outcome, BaseException):
+        def execute() -> Generator[Any, Any, NoReturn]:
+            try:
+                yield _batch(children, release)
+            except BaseException as failure:
                 if isinstance(error, asyncio.CancelledError):
-                    raise outcome from error
-                raise error from outcome
+                    raise failure from error
+                raise error from failure
             raise error
 
-        def release_all() -> Generator[Any, Any, list[None] | BaseException]:
-            try:
-                return (yield _batch(children, release))
-            except BaseException as failure:
-                return failure
-
-        pending = run(release_all())
-        if not isawaitable(pending):
-            return report(pending)
+        pending = run(execute())
 
         async def finish() -> NoReturn:
             task = asyncio.create_task(await_result(pending))
@@ -235,7 +200,7 @@ def node_evaluator(
                 except asyncio.CancelledError:
                     # The original failure or cancellation is reported after cleanup.
                     continue
-            report(task.result())
+            task.result()
 
         return finish()
 

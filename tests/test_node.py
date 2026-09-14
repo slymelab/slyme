@@ -897,19 +897,23 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
     assert not ctx._owned
 
 
-async def test_async_auto_preserves_sibling_cleanup_failure_after_caller_cancellation() -> (
+async def test_cancelled_auto_finishes_sibling_cleanup_without_aggregating_errors() -> (
     None
 ):
     started = asyncio.Event()
     cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
+    children: list[Context] = []
+    cleanup_failure = RuntimeError("sibling cleanup failed")
 
     @node
     async def waiting(ctx: Context, /) -> int:
+        children.append(ctx)
+
         async def cleanup() -> None:
             cleanup_started.set()
             await release_cleanup.wait()
-            raise RuntimeError("sibling cleanup failed")
+            raise cleanup_failure
 
         ctx.effect(lambda: cleanup)
         started.set()
@@ -934,21 +938,13 @@ async def test_async_auto_preserves_sibling_cleanup_failure_after_caller_cancell
     assert not task.done()
 
     release_cleanup.set()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(asyncio.CancelledError) as caught:
         await task
 
-    child_errors = caught.value.results[0].error
-    assert isinstance(child_errors, BatchError)
-    failure = child_errors.results[0].error
-    assert isinstance(failure, NodeExceptionRecord)
-    assert isinstance(failure.exception, ValueError)
-    assert str(failure.exception) == "primary child failure"
-    details = child_errors.__cause__
-    assert isinstance(details, BatchError)
-    cleanup_error = details.results[1].error
-    assert isinstance(cleanup_error, BatchError)
-    assert isinstance(cleanup_error.results[0].error, RuntimeError)
-    assert str(cleanup_error.results[0].error) == "sibling cleanup failed"
+    assert caught.value.__cause__ is None
+    with pytest.raises(BatchError) as cleanup_result:
+        await children[0].adispose()
+    assert cleanup_result.value.results[0].error is cleanup_failure
     assert not ctx._owned
 
 
@@ -986,31 +982,26 @@ async def test_repeated_auto_cancellation_finishes_child_cleanup(
     assert not task.done()
 
     release_cleanup.set()
-    if child_fails:
-        with pytest.raises(BatchError) as caught:
-            await task
-        child_errors = caught.value.results[0].error
-        assert isinstance(child_errors, BatchError)
-        failure = child_errors.results[0].error
-        assert isinstance(failure, NodeExceptionRecord)
-        assert isinstance(failure.exception, ValueError)
-    else:
-        with pytest.raises(asyncio.CancelledError):
-            await task
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert cleanup_finished.is_set()
     assert not ctx._owned
 
 
-async def test_repeated_auto_cancellation_preserves_cleanup_failure() -> None:
+async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
     cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
+    children: list[Context] = []
+    cleanup_failure = RuntimeError("cleanup failed")
 
     @node
     async def child(ctx: Context, /) -> int:
+        children.append(ctx)
+
         async def cleanup() -> None:
             cleanup_started.set()
             await release_cleanup.wait()
-            raise RuntimeError("cleanup failed")
+            raise cleanup_failure
 
         ctx.effect(lambda: cleanup)
         return 1
@@ -1029,15 +1020,12 @@ async def test_repeated_auto_cancellation_preserves_cleanup_failure() -> None:
     assert not task.done()
 
     release_cleanup.set()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(asyncio.CancelledError) as caught:
         await task
-    child_errors = caught.value.results[0].error
-    assert isinstance(child_errors, BatchError)
-    cleanup_error = child_errors.results[0].error
-    assert isinstance(cleanup_error, BatchError)
-    assert isinstance(cleanup_error.results[0].error, RuntimeError)
-    assert str(cleanup_error.results[0].error) == "cleanup failed"
-    assert isinstance(child_errors.__cause__, asyncio.CancelledError)
+    assert caught.value.__cause__ is None
+    with pytest.raises(BatchError) as cleanup_result:
+        await children[0].adispose()
+    assert cleanup_result.value.results[0].error is cleanup_failure
     assert not ctx._owned
 
 
