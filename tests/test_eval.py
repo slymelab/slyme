@@ -10,12 +10,62 @@ import pytest
 from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
 from slyme.node import Auto, Node, eval_tree, node, wrapper
-from slyme.node.eval import EVALUATOR_REGISTRY, EvaluatorDef, node_evaluator
+from slyme.node.eval import EVALUATOR_REGISTRY, BatchEvaluatorFunc, node_evaluator
 from slyme.node.exception import NodeExceptionRecord
 from slyme.utils.continuation import await_result
 from slyme.utils.exception import BatchError, Result
 from slyme.utils.registry import GeneralRegistry
 from slyme.utils.tree import TreeAux, TreeEngine
+
+
+def test_same_evaluator_batches_leaves_registered_under_multiple_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def evaluate(ctx, values):
+        calls.append(list(values))
+        return [str(value) for value in values]
+
+    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
+    registry.register(evaluate, key=int)
+    registry.register(evaluate, key=str)
+    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
+    ctx = Context()
+    assert eval_tree(ctx, [1, "a", 2]) == ["1", "a", "2"]
+    assert calls == [[1, "a", 2]]
+    ctx.dispose()
+
+
+@pytest.mark.parametrize("acall", [False, True])
+def test_auto_async_result_can_be_created_before_starting_event_loop(
+    acall: bool,
+) -> None:
+    events = []
+
+    @node
+    async def child(ctx: Context, /) -> int:
+        async def cleanup() -> None:
+            await asyncio.sleep(0)
+            events.append("cleanup")
+
+        ctx.effect(lambda: cleanup)
+        events.append("child")
+        return 7
+
+    @node
+    def parent(ctx: Context, /, *, value: int) -> int:
+        events.append("parent")
+        return value
+
+    ctx = Context()
+    graph = parent(value=Auto(child()))
+    pending = graph.acall(ctx) if acall else graph(ctx)
+    assert not events
+    assert asyncio.run(await_result(pending)) == 7
+    assert events == ["child", "cleanup", "parent"]
+    assert not ctx._owned
+    ctx.dispose()
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -42,9 +92,9 @@ async def test_evaluator_groups_run_concurrently_and_settle_before_reporting(
             raise failures[1]
         return [value.upper() for value in values]
 
-    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
-    registry.register(EvaluatorDef(integers), key=int)
-    registry.register(EvaluatorDef(strings), key=str)
+    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
+    registry.register(integers, key=int)
+    registry.register(strings, key=str)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
     pending = await_result(eval_tree(ctx, [1, "a", 2, "b"]))
@@ -115,7 +165,9 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_auto_reports_all_child_and_cleanup_failures(asynchronous: bool) -> None:
+async def test_auto_reports_cleanup_failures_with_node_exception_context(
+    asynchronous: bool,
+) -> None:
     events = []
     failures = [ValueError("first"), RuntimeError("second")]
     cleanup_failures = [OSError("first cleanup"), OSError("second cleanup")]
@@ -151,20 +203,22 @@ async def test_auto_reports_all_child_and_cleanup_failures(asynchronous: bool) -
     assert len(caught.value.results) == 3
     assert caught.value.results[2] == Result(value=2)
     for index, failure in enumerate(failures):
-        child_error = caught.value.results[index].error
-        assert isinstance(child_error, NodeExceptionRecord)
-        assert child_error.exception is failure
-    cause = caught.value.__cause__
-    assert isinstance(cause, BatchError)
-    assert len(cause.results) == 3
-    for result, failure in zip(cause.results[:2], cleanup_failures, strict=True):
-        assert isinstance(result.error, BatchError)
-        assert result.error.results == [Result(error=failure)]
-    assert cause.results[2] == Result(value=None)
+        cleanup_error = caught.value.results[index].error
+        assert isinstance(cleanup_error, BatchError)
+        assert cleanup_error.results == [Result(error=cleanup_failures[index])]
+        node_error = cleanup_error.__context__
+        assert isinstance(node_error, NodeExceptionRecord)
+        assert node_error.exception is failure
+    assert caught.value.__cause__ is None
     for index in range(3):
         assert events.count(("run", index)) == 1
         assert events.count(("cleanup", index)) == 1
+    if not asynchronous:
+        assert events == [
+            (event, index) for index in range(3) for event in ("run", "cleanup")
+        ]
     assert not ctx._owned
+    ctx.dispose()
 
 
 def test_auto_reports_retained_cleanup_failure_once() -> None:
@@ -238,13 +292,17 @@ async def test_auto_keeps_exception_objects_returned_as_data() -> None:
     assert not ctx._owned
 
 
-async def test_auto_disposes_successful_child_before_siblings_finish() -> None:
+@pytest.mark.parametrize("fails", [False, True])
+async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
     cleaned = asyncio.Event()
     release = asyncio.Event()
+    failure = ValueError("child failed")
 
     @node
-    async def successful(ctx: Context, /) -> int:
+    async def child(ctx: Context, /) -> int:
         ctx.effect(lambda: cleaned.set)
+        if fails:
+            raise failure
         return 1
 
     @node
@@ -253,14 +311,21 @@ async def test_auto_disposes_successful_child_before_siblings_finish() -> None:
         return 2
 
     ctx = Context()
-    task = asyncio.create_task(
-        await_result(node_evaluator(ctx, [successful(), waiting()]))
-    )
+    task = asyncio.create_task(await_result(node_evaluator(ctx, [child(), waiting()])))
     await cleaned.wait()
     assert not task.done()
     release.set()
-    assert await task == [1, 2]
+    if fails:
+        with pytest.raises(BatchError) as caught:
+            await task
+        node_error = caught.value.results[0].error
+        assert isinstance(node_error, NodeExceptionRecord)
+        assert node_error.exception is failure
+        assert caught.value.results[1] == Result(value=2)
+    else:
+        assert await task == [1, 2]
     assert not ctx._owned
+    ctx.dispose()
 
 
 async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
@@ -335,7 +400,7 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
-async def test_auto_finishes_failure_cleanup_despite_repeated_cancellation(
+async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
     cleanup_fails: bool,
 ) -> None:
     started = asyncio.Event()
@@ -343,9 +408,12 @@ async def test_auto_finishes_failure_cleanup_despite_repeated_cancellation(
     failure = ValueError("node failed")
     cleanup_failure = OSError("cleanup failed")
     events = []
+    children: list[Context] = []
 
     @node
     def child(ctx: Context, /) -> int:
+        children.append(ctx)
+
         async def cleanup() -> None:
             events.append("cleanup started")
             started.set()
@@ -360,25 +428,22 @@ async def test_auto_finishes_failure_cleanup_despite_repeated_cancellation(
     ctx = Context()
     task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
     await started.wait()
-    for _ in range(2):
+    try:
         task.cancel()
         await asyncio.sleep(0)
-        assert not task.done()
-    release.set()
-
-    with pytest.raises(BatchError) as caught:
-        await task
-    node_error = caught.value.results[0].error
-    assert isinstance(node_error, NodeExceptionRecord)
-    assert node_error.exception is failure
-    if cleanup_fails:
-        cause = caught.value.__cause__
-        assert isinstance(cause, BatchError)
-        cleanup_error = cause.results[0].error
-        assert isinstance(cleanup_error, BatchError)
-        assert cleanup_error.results == [Result(error=cleanup_failure)]
-    else:
-        assert caught.value.__cause__ is None
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert events == ["cleanup started"]
+        assert children[0] in ctx._owned
+    finally:
+        release.set()
+        if cleanup_fails:
+            with pytest.raises(BatchError) as caught:
+                await children[0].adispose()
+            assert caught.value.results == [Result(error=cleanup_failure)]
+        else:
+            await children[0].adispose()
     assert events == ["cleanup started", "cleanup finished"]
     assert not ctx._owned
     ctx.dispose()
@@ -393,7 +458,7 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
     class CustomNode(Node[int]):
         pass
 
-    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
+    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
     for key, evaluator in EVALUATOR_REGISTRY.items():
         registry.register(evaluator, key=key)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
@@ -422,10 +487,8 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
 def test_integer_evaluator_does_not_evaluate_booleans(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
-    registry.register(
-        EvaluatorDef(lambda _ctx, values: [value + 1 for value in values]), key=int
-    )
+    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
+    registry.register(lambda _ctx, values: [value + 1 for value in values], key=int)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
     result = eval_tree(ctx, [1, True])

@@ -8,7 +8,7 @@ import pytest
 
 from slyme.context import Context
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
-from slyme.node.eval import EvaluatorDef
+from slyme.node.eval import BatchEvaluatorFunc
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.continuation import await_result
 from slyme.utils.exception import BatchError, Result
@@ -118,7 +118,7 @@ async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_node_sequence_owns_fail_fast_prefix_collection(asynchronous) -> None:
+async def test_node_sequence_stops_at_first_failure(asynchronous) -> None:
     failure = ValueError("sequence")
     calls = []
 
@@ -137,11 +137,10 @@ async def test_node_sequence_owns_fail_fast_prefix_collection(asynchronous) -> N
         return finish() if asynchronous else execute()
 
     ctx = Context()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(NodeExceptionRecord) as caught:
         await await_result(sequential_exec(ctx, [child(index=i) for i in range(3)]))
     assert calls == [0, 1]
-    assert caught.value.results[0] == Result(value=0)
-    assert caught.value.results[1].error.exception is failure
+    assert caught.value.exception is failure
     ctx.dispose()
 
 
@@ -211,7 +210,7 @@ async def test_evaluation_runs_sync_batches_before_awaiting_async_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    registry = GeneralRegistry[type, EvaluatorDef]("test_evaluator")
+    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
 
     async def asynchronous(ctx, values):
         calls.append("async")
@@ -222,8 +221,8 @@ async def test_evaluation_runs_sync_batches_before_awaiting_async_results(
         calls.append("sync")
         return [value.upper() for value in values]
 
-    registry.register(EvaluatorDef(asynchronous), key=int)
-    registry.register(EvaluatorDef(synchronous), key=str)
+    registry.register(asynchronous, key=int)
+    registry.register(synchronous, key=str)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
     marker = object()
@@ -428,9 +427,7 @@ async def test_sequential_continues_sync_and_async_steps_after_first_await() -> 
     ctx.dispose()
 
 
-async def test_sync_auto_failure_waits_for_async_cleanup_and_keeps_both_errors() -> (
-    None
-):
+async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> None:
     failure = ValueError("node")
     cleanup_failure = RuntimeError("cleanup")
 
@@ -452,13 +449,13 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_keeps_both_errors()
         await await_result(parent(value=Auto(child()))(ctx))
     child_errors = caught.value.results[0].error
     assert isinstance(child_errors, BatchError)
-    node_error = child_errors.results[0].error
-    assert isinstance(node_error, NodeExceptionRecord)
-    assert node_error.exception is failure
-    assert isinstance(child_errors.__cause__, BatchError)
-    cleanup_error = child_errors.__cause__.results[0].error
+    cleanup_error = child_errors.results[0].error
     assert isinstance(cleanup_error, BatchError)
     assert cleanup_error.results == [Result(error=cleanup_failure)]
+    node_error = cleanup_error.__context__
+    assert isinstance(node_error, NodeExceptionRecord)
+    assert node_error.exception is failure
+    assert child_errors.__cause__ is None
     assert not ctx._owned
     ctx.dispose()
 

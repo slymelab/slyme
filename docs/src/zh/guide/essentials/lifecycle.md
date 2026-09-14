@@ -60,16 +60,16 @@ process(data=Auto([R.resolve("a"), R.resolve("b")]))(ctx)  # Auto 生成求值�
 process(data=Auto(R.resolve("items")))(ctx)  # data 是 Context 中保存的 list
 ```
 
-Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。求值保持同步，直到子调用或 cleanup 返回 awaitable；被等待后，未完成的 child 和剩余 sibling 并发执行，结果保持输入顺序。成功的子节点立即释放 Context。全部子任务结束后，会完成失败或被中断的释放，再报告错误或执行父函数。
+Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。子调用和同步清理内联执行；异步结果在被等待时并发调度，结果保持输入顺序。每个子节点无论成功还是失败，都在自己的 `finally` 中释放 Context，不等待其他 sibling。在调用者未取消的情况下，求值会等待所有子节点及其清理完成，再报告错误或执行父函数。
 
-Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling；求值会等待所有节点结束，类似 `asyncio.gather(..., return_exceptions=True)`。错误统一通过 `slyme.utils.exception` 的 `BatchError` 抛出。其 `results` 列表按照 evaluator 组首次出现的顺序排列，抛出的错误保存在各项 `Result.error` 中；内置 evaluator 的错误是另一层 `BatchError`，使用 Ref 或 Node 在该组内的位置作为索引。最终的子 Context 清理错误组成独立的 `BatchError`，作为 Node batch 的 cause 保留。重复释放不会重复报告同一个已保存的清理错误，Node 和 Wrapper 调用也会保留这些汇总异常。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
+Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling；求值会等待所有节点结束，类似 `asyncio.gather(..., return_exceptions=True)`。错误统一通过 `slyme.utils.exception` 的 `BatchError` 抛出。其 `results` 列表按照 evaluator 组首次出现的顺序排列，抛出的错误保存在各项 `Result.error` 中；内置 evaluator 的错误是另一层 `BatchError`，使用 Ref 或 Node 在该组内的位置作为索引。子 Context 的清理错误保存在对应子节点的错误项中；如果 Node 本身也失败，Python 的 `finally` 语义会将 Node 异常保留为清理错误的 `__context__`，检查异常链可以看到两者。Node 和 Wrapper 调用会保留这些汇总异常。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
 
-取消外层求值 Task 时，asyncio 会将取消传播给尚未完成的子任务。Auto 会等待这些任务退出以及子 Context 清理完成，包括收到重复取消的情况。没有其他错误时直接传播取消，否则通过 `BatchError` 保留错误，并将取消保留为 cause。同步子节点在事件循环线程内直接执行，执行期间无法被打断。Task 取消不保证底层网络、线程或进程中的工作已经停止；这些行为由应用适配层负责。
+取消外层求值 Task 时，asyncio 会将取消传播给尚未完成的子任务，不汇总部分求值结果。每个子节点都会进入自己的 `finally` 清理。等待清理期间的取消可能使求值先退出，而由 Context 管理的清理继续在后台运行。同步子节点在事件循环线程内直接执行，执行期间无法被打断。Task 取消不保证底层网络、线程或进程中的工作已经停止；这些行为由应用适配层负责。
 
 Auto child 返回的值不得依赖其子 Context 拥有的资源，因为这些资源会在父函数运行前关闭；返回这类值时应显式转移所有权，或者使用生命周期更长的 Context。子 Context 仍会共享可变 leaf 对象，也无法撤销没有注册 cleanup 的文件、网络请求或其他外部副作用。
 
 显式编排采用不同语义。直接调用 Node 或使用 `sequential_exec(ctx, children)` 时会传入指定的 Context 本身，因此这些步骤会有意观察到彼此的局部写入。
 
-直接等待 `await await_result(ctx.dispose())` 的调用者取消时，已调度的清理不会取消，但该调用者可能先退出。应用退出前应再次等待同一次释放，观察保留的结果。Auto 则会先等子 Context 清理结束，再传播取消，包括清理期间的重复取消。
+直接等待 `await await_result(ctx.dispose())` 的调用者取消时，已调度的清理不会取消，但该调用者可能先退出。应用退出前应再次等待同一次释放，观察保留的结果。父 Context 只能等待仍由它持有的子 Context 的清理。Auto 不返回临时子 Context；求值取消后，后台清理失败可能既不会传给调用者，也不会传给之后才开始的父 Context 释放。
 
 Context 创建、外部输入校验和输出提取由应用代码负责。使用 `node(ctx)` 执行图，或者通过 `await node.acall(ctx)` 获得始终可等待的结果。`await ctx.adispose()` 同样只适配释放的返回值，不改变执行与所有权规则。

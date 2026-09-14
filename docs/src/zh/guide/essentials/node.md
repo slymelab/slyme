@@ -83,7 +83,7 @@ def increment_child(ctx, *, child: Node[int]):
 
 执行顺序、并发和结果收集由调用方决定。逐项 yield 调用的循环会等待当前项完成后再继续。并发实现可以先调用各项、保存返回的 awaitable，再 yield 一个异步聚合操作。若调用方可能还没有运行中的事件循环，应在该异步操作内部创建 `gather()` 或 Task。枚举或调用期间的同步异常遵循调用方的 `try/except/finally`，驱动器不额外定义 batch 策略。
 
-Auto 独立拥有全部完成后汇总的求值策略。它先内联调用每个 evaluator 组和子节点，再等待异步结果；只有异步结果会调度为 Task。单项失败不会取消 sibling。错误通过 `slyme.utils.exception` 的嵌套 `BatchError` 报告，其按输入排序的 `Result(value=..., error=...)` 分别保存成功返回值与抛出的异常。取消批次遵循 asyncio 的传播规则，不再汇总部分结果；求值退出前会完成所拥有的子 Context 的清理。Context 独立拥有递归 LIFO 清理策略；两个消费者共用生成器驱动器，不共用执行策略 API。
+Auto 独立拥有全部完成后汇总的求值策略。它先内联调用每个 evaluator 组和子节点，再等待异步结果；只有异步结果会调度为 Task。单项失败不会取消 sibling。每个子节点无论成功还是失败，都在自己的 `finally` 中释放 Context。错误通过 `slyme.utils.exception` 的嵌套 `BatchError` 报告，其按输入排序的 `Result(value=..., error=...)` 分别保存成功返回值与抛出的异常。取消批次遵循 asyncio 的传播规则，不再汇总部分结果，并可能在 Context 管理的清理结束前返回，详见 [Auto 生命周期](./lifecycle.md#auto-值)。Context 独立拥有递归 LIFO 清理策略；两个消费者共用生成器驱动器，不共用执行策略 API。
 
 ## 参数与 Auto
 
@@ -156,4 +156,4 @@ Node 与 Wrapper 参数可以保存任意值和嵌套 Tree，包括其他 Node �
 
 ## 顺序组合
 
-声明式顺序组合使用 `sequential(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部完成后返回 `None`，所有步骤同步时保持同步。失败会停止执行，并抛出保存已尝试前缀的 `BatchError`。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。
+声明式顺序组合使用 `sequential(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部完成后返回 `None`，所有步骤同步时保持同步。失败会停止执行并传播失败 Node 的异常，不收集此前的结果。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。
