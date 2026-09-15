@@ -41,15 +41,14 @@ class Ref(Generic[_T]):
         return parts
 
     @staticmethod
-    def _validate_name(name: Any, path: str) -> str:
+    def _validate_name(name: Any) -> str:
         if not isinstance(name, str):
             raise TypeError(
-                f"Invalid Schema key at {path or '<root>'}: expected str, "
-                f"got {type(name).__name__}."
+                f"Invalid Schema key, expected str, got {type(name).__name__}."
             )
         if not name or "." in name:
             raise ValueError(
-                f"Invalid Schema key {name!r} at {path or '<root>'}; "
+                f"Invalid Schema key {name!r}; "
                 "keys must be non-empty strings without dots."
             )
         return name

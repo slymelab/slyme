@@ -22,6 +22,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
+from slyme.utils.exception import enrich_exception
+
 from .ref import Ref
 
 __all__ = ["Schema"]
@@ -122,7 +124,11 @@ class Schema:
             for raw_name, child in value.items():
                 if raw_name == _REF_ENTRY_KEY:
                     continue
-                name = Ref._validate_name(raw_name, path)
+                try:
+                    name = Ref._validate_name(raw_name)
+                except (TypeError, ValueError) as e:
+                    enrich_exception(e, f"at path {path!r}")
+                    raise
                 child_path = f"{path}.{name}"
                 result[name] = Schema._build_entry(
                     child,
@@ -144,7 +150,11 @@ class Schema:
         active_mappings = {id(declarations)}
         result: _SchemaContainer = {}
         for raw_name, value in declarations.items():
-            name = Ref._validate_name(raw_name, "")
+            try:
+                name = Ref._validate_name(raw_name)
+            except (TypeError, ValueError) as e:
+                enrich_exception(e, "at <root>")
+                raise
             result[name] = Schema._build_entry(
                 value,
                 name,
