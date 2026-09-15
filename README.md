@@ -149,7 +149,7 @@ R = Schema({"hooks": Schema.leaf(replaceable=False)})
 root = Context(schema=R)
 hooks = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("hooks"), hooks)
-agent = root.fork(scope=root.scope.fork(name="agent"))
+agent = root.fork(scope=root.scope.fork(label="agent"))
 
 root.effect(lambda: hooks.add(root.scope, "root"))
 agent.effect(lambda: agent.get(R.resolve("hooks")).add(agent.scope, "agent"))

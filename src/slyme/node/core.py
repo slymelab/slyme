@@ -37,6 +37,7 @@ __all__ = ["Auto", "node", "wrapper", "NodeElement", "Node", "Wrapper", "NODE_EN
 
 _R = TypeVar("_R")
 _E = TypeVar("_E", bound="NodeElement")
+_MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,9 +83,14 @@ class NodeElement:
         """Return a live, read-only view of explicitly bound parameters."""
         return MappingProxyType(self._params)
 
-    def get(self, name: str) -> Any:
-        """Return a bound parameter, raising KeyError when it is absent."""
-        return self._params[name]
+    def get(self, name: str, default: Any = _MISSING) -> Any:
+        """Return a binding or default; absent bindings otherwise raise KeyError."""
+        try:
+            return self._params[name]
+        except KeyError:
+            if default is _MISSING:
+                raise
+            return default
 
     def set(self, name: str, value: Any) -> None:
         """Store a parameter without inspecting the function signature."""

@@ -16,17 +16,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, overload
 
 __all__ = ["Scope"]
+
+_Missing = Enum("_Missing", ["MARK"])
+_MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True, eq=False, repr=False)
 class Scope:
     """One immutable position in a C3-linearized visibility graph."""
 
-    name: Hashable | None = None
+    label: Any | None = None
     parents: tuple[Scope, ...] = ()
     _mro: tuple[Scope, ...] = field(init=False)
 
@@ -64,19 +68,9 @@ class Scope:
 
     def __post_init__(self) -> None:
         direct_parents = tuple(self.parents)
-        if any(
-            left is right
-            for index, left in enumerate(direct_parents)
-            for right in direct_parents[index + 1 :]
-        ):
+        if len(direct_parents) != len(set(direct_parents)):
             raise TypeError("A Scope cannot contain duplicate direct parents.")
-        if self.name is not None:
-            try:
-                hash(self.name)
-            except TypeError as error:
-                raise TypeError("Scope names must be hashable.") from error
 
-        object.__setattr__(self, "parents", direct_parents)
         object.__setattr__(
             self,
             "_mro",
@@ -91,20 +85,29 @@ class Scope:
     def fork(
         self,
         *,
-        name: Hashable | None = None,
+        label: Any | None = None,
     ) -> Scope:
         """Create a child Scope with this Scope as its only direct parent."""
-        return type(self)(name=name, parents=(self,))
+        return type(self)(label=label, parents=(self,))
 
-    def find(self, name: Hashable) -> Scope:
-        """Find the unique visible Scope carrying *name*."""
-        try:
-            hash(name)
-        except TypeError as error:
-            raise TypeError("Scope names must be hashable.") from error
-        matches = tuple(scope for scope in self.mro if scope.name == name)
-        if not matches:
-            raise LookupError(f"No visible Scope is named {name!r}.")
-        if len(matches) > 1:
-            raise LookupError(f"Multiple visible Scopes are named {name!r}.")
-        return matches[0]
+    @overload
+    def find(self, label: Any, default: Scope | _Missing = _MISSING) -> Scope: ...
+    @overload
+    def find(self, label: Any, default: Scope | None) -> Scope | None: ...
+    def find(
+        self, label: Any, default: Scope | None | _Missing = _MISSING
+    ) -> Scope | None:
+        """Return the first label match in C3 order, or the explicit default.
+
+        If no Scope matches and no default is supplied, raise LookupError.
+        """
+        for scope in self.mro:
+            if scope.label == label:
+                return scope
+        if default is _MISSING:
+            raise LookupError(f"No visible Scope has label {label!r}.")
+        return default
+
+    def find_all(self, label: Any) -> tuple[Scope, ...]:
+        """Return all label matches in C3 order, or an empty tuple."""
+        return tuple(scope for scope in self.mro if scope.label == label)

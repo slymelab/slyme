@@ -200,9 +200,9 @@ root.set(R.resolve("settings.timeout"), 30)
 plugin = root.fork()
 assert plugin.scope is root.scope
 
-feature_scope = root.scope.fork(name="feature")
-mixin_scope = root.scope.fork(name="mixin")
-agent_scope = Scope(name="agent", parents=(feature_scope, mixin_scope))
+feature_scope = root.scope.fork(label="feature")
+mixin_scope = root.scope.fork(label="mixin")
+agent_scope = Scope(label="agent", parents=(feature_scope, mixin_scope))
 
 feature = root.fork(scope=feature_scope)
 mixin = root.fork(scope=mixin_scope)
@@ -222,6 +222,8 @@ assert agent.to_dict() == {
 Context parentage and Scope ancestry are independent. The parent determines lifetime ownership and the application root that holds Schema and data; the Scope determines lookup. `scope.fork()` always creates a single-parent child. Multiple parents require explicit `Scope(parents=(...))` construction and a consistent C3 linearization; those parents may come from otherwise unrelated Scope roots. Separate Context roots never share Context data, even when they use the same Scope object.
 
 A single-parent Scope prepends itself to its parent's existing MRO, even when the parent itself uses multiple inheritance. Its construction is linear in the length of that MRO.
+
+`scope.find(label)` returns the first equal label in C3 order and raises `LookupError` when none matches. Pass `scope.find(label, default)` to return an explicit Scope or `None` instead; passing that `None` to `ctx.fork(scope=...)` shares the current Scope. `scope.find_all(label)` returns all matches in C3 order, or an empty tuple. Labels need not be hashable or unique and do not determine Scope identity.
 
 Deleting a local value normally reveals the next value in the Scope MRO.
 
@@ -290,7 +292,7 @@ tools = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("tools"), tools)
 
 root.effect(lambda: tools.add(root.scope, "read"))
-agent = root.fork(scope=root.scope.fork(name="agent"))
+agent = root.fork(scope=root.scope.fork(label="agent"))
 remove_agent = agent.effect(
     lambda: agent.get(R.resolve("tools")).add(
         agent.scope, "shell", metadata={"plugin": "shell"}

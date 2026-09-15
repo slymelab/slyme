@@ -880,8 +880,8 @@ def test_context_explicit_child_scope_has_live_inheritance_and_local_writes() ->
 def test_context_lifecycle_parent_and_scope_visibility_are_orthogonal() -> None:
     value = R.resolve("value")
     root = Context(schema=R)
-    left_scope = Scope(name="left")
-    right_scope = Scope(name="right")
+    left_scope = Scope(label="left")
+    right_scope = Scope(label="right")
     left = root.fork(scope=left_scope)
     right = root.fork(scope=right_scope)
 
@@ -890,7 +890,7 @@ def test_context_lifecycle_parent_and_scope_visibility_are_orthogonal() -> None:
     assert left.get(value) == "left"
     assert right.get(value) == "right"
 
-    combined_scope = Scope(name="combined", parents=(left_scope, right_scope))
+    combined_scope = Scope(label="combined", parents=(left_scope, right_scope))
     combined = right.fork(scope=combined_scope)
     assert combined.parent is right
     assert combined.get(value) == "left"
@@ -898,7 +898,7 @@ def test_context_lifecycle_parent_and_scope_visibility_are_orthogonal() -> None:
 
 def test_independent_context_roots_do_not_share_data_through_a_scope() -> None:
     value = R.resolve("value")
-    shared_scope = Scope(name="shared")
+    shared_scope = Scope(label="shared")
     left = Context(schema=R, scope=shared_scope)
     right = Context(schema=R, scope=shared_scope)
 
@@ -989,10 +989,10 @@ def test_context_views_follow_later_parent_and_child_changes() -> None:
 
 def test_scope_uses_c3_for_multiple_parents() -> None:
     value = R.resolve("value")
-    root_scope = Scope(name="root")
-    left_scope = root_scope.fork(name="left")
-    right_scope = root_scope.fork(name="right")
-    child_scope = Scope(name="child", parents=(left_scope, right_scope))
+    root_scope = Scope(label="root")
+    left_scope = root_scope.fork(label="left")
+    right_scope = root_scope.fork(label="right")
+    child_scope = Scope(label="child", parents=(left_scope, right_scope))
     root = Context(schema=R, scope=root_scope)
     left = root.fork(scope=left_scope)
     right = root.fork(scope=right_scope)

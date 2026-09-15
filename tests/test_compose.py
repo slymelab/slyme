@@ -20,7 +20,7 @@ def test_compose_is_the_only_public_composition_type() -> None:
 
 def test_one_uses_scope_and_entry_precedence() -> None:
     root = Scope("root")
-    agent = root.fork(name="agent")
+    agent = root.fork(label="agent")
     values = Compose[str, str].one()
 
     remove_root = values.add(root, "root")
@@ -46,8 +46,8 @@ def test_one_uses_scope_and_entry_precedence() -> None:
 
 def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
     root = Scope("root")
-    left = root.fork(name="left")
-    right = root.fork(name="right")
+    left = root.fork(label="left")
+    right = root.fork(label="right")
     child = Scope("child", parents=(left, right))
     values = Compose[str, tuple[str, ...]].collect()
 
@@ -69,7 +69,7 @@ def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
 
 def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
     root = Scope("root")
-    child = root.fork(name="child")
+    child = root.fork(label="child")
     values = Compose.merge()
 
     remove_root = values.add(root, {"shared": "root", "root": 1})
@@ -99,7 +99,7 @@ def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
 
 def test_compose_accepts_a_custom_resolver() -> None:
     root = Scope("root")
-    child = root.fork(name="child")
+    child = root.fork(label="child")
     values = Compose[int, int](sum)
     values.add(root, 2)
     values.add(child, 3)
@@ -213,8 +213,8 @@ def test_empty_binding_does_not_retain_an_unreferenced_scope() -> None:
 
 def test_c3_lookup_visits_a_shared_identity_only_once() -> None:
     root = Scope("root")
-    left = root.fork(name="left")
-    right = root.fork(name="right")
+    left = root.fork(label="left")
+    right = root.fork(label="right")
     child = Scope("child", parents=(left, right))
     identity = object()
     values = Compose[str, tuple[str, ...]].collect()
@@ -465,7 +465,7 @@ def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> No
 def test_context_fork_shares_scope_unless_one_is_explicit() -> None:
     root = Context(schema=R)
     shared = root.fork()
-    child_scope = root.scope.fork(name="child")
+    child_scope = root.scope.fork(label="child")
     isolated = root.fork(scope=child_scope)
 
     assert shared.scope is root.scope
@@ -509,7 +509,7 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
     root = Context(schema=R)
     inherited = Compose[str, tuple[str, ...]].collect()
     root.add(tools_ref, inherited)
-    child = root.fork(scope=root.scope.fork(name="child"))
+    child = root.fork(scope=root.scope.fork(label="child"))
 
     inherited.add(root.scope, "root-tool")
     inherited.add(child.scope, "agent-tool")
@@ -528,7 +528,7 @@ def test_context_effect_owns_contributions_to_explicit_scopes() -> None:
     root = Context(schema=R)
     hooks = Compose[str, tuple[str, ...]].collect()
     root.add(hooks_ref, hooks)
-    child = root.fork(scope=root.scope.fork(name="child"))
+    child = root.fork(scope=root.scope.fork(label="child"))
     external = Scope("external")
 
     remove_bound = child.effect(

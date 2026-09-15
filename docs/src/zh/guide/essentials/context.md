@@ -187,9 +187,9 @@ root.set(R.resolve("settings.timeout"), 30)
 plugin = root.fork()
 assert plugin.scope is root.scope
 
-feature_scope = root.scope.fork(name="feature")
-mixin_scope = root.scope.fork(name="mixin")
-agent_scope = Scope(name="agent", parents=(feature_scope, mixin_scope))
+feature_scope = root.scope.fork(label="feature")
+mixin_scope = root.scope.fork(label="mixin")
+agent_scope = Scope(label="agent", parents=(feature_scope, mixin_scope))
 
 feature = root.fork(scope=feature_scope)
 mixin = root.fork(scope=mixin_scope)
@@ -209,6 +209,8 @@ assert agent.to_dict() == {
 Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周期归属，以及保存 Schema 和数据的应用根；Scope 决定查找顺序。`scope.fork()` 始终创建单 parent 子级；多 parent 必须显式使用 `Scope(parents=(...))` 构造，并满足一致的 C3 线性化，这些 parent 可以来自彼此无关的 Scope 根。即使复用同一个 Scope 对象，不同 Context 根也不会共享 Context 数据。
 
 单 parent Scope 直接在 parent 已有的 MRO 前加入自身，即使 parent 本身使用多继承也成立。构造成本与该 MRO 的长度呈线性关系。
+
+`scope.find(label)` 按 C3 顺序返回首个 label 相等的 Scope，找不到时抛出 `LookupError`。可以通过 `scope.find(label, default)` 显式提供 Scope 或 `None` 作为回退值；将这个 `None` 传给 `ctx.fork(scope=...)` 会共享当前 Scope。`scope.find_all(label)` 按 C3 顺序返回全部匹配，找不到时返回空 tuple。label 无须可哈希或唯一，也不决定 Scope identity。
 
 删除局部值通常会让 Scope MRO 中的下一个值重新可见。
 
@@ -277,7 +279,7 @@ tools = Compose[str, tuple[str, ...]].collect()
 root.add(R.resolve("tools"), tools)
 
 root.effect(lambda: tools.add(root.scope, "read"))
-agent = root.fork(scope=root.scope.fork(name="agent"))
+agent = root.fork(scope=root.scope.fork(label="agent"))
 remove_agent = agent.effect(
     lambda: agent.get(R.resolve("tools")).add(
         agent.scope, "shell", metadata={"plugin": "shell"}

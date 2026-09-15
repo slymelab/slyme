@@ -32,6 +32,8 @@ def test_bindings_are_explicit_and_defaults_belong_to_the_function(kind: str) ->
     assert instance.func is function
     with pytest.raises(KeyError):
         instance.get("value")
+    assert instance.get("value", None) is None
+    assert instance.params == {}
 
     instance.set("value", None)
     instance.set("extra", 3)
@@ -45,6 +47,28 @@ def test_bindings_are_explicit_and_defaults_belong_to_the_function(kind: str) ->
     instance.delete("extra")
     assert params == {}
     ctx.dispose()
+
+
+@pytest.mark.parametrize("kind", ["node", "wrapper"])
+def test_get_uses_explicit_defaults_without_changing_bindings(kind: str) -> None:
+    def function(*runtime, **kwargs):
+        return kwargs
+
+    factory = node(function) if kind == "node" else wrapper(function)
+    instance = factory(value=None, count=0, enabled=False)
+    fallback = []
+
+    assert instance.get("missing", fallback) is fallback
+    assert instance.get("missing", default=None) is None
+    assert instance.get("missing", 0) == 0
+    assert instance.get("missing", False) is False
+    assert instance.get("value", fallback) is None
+    assert instance.get("count", fallback) == 0
+    assert instance.get("enabled", fallback) is False
+    assert instance.params == {"value": None, "count": 0, "enabled": False}
+    with pytest.raises(KeyError) as missing:
+        instance.get("missing")
+    assert missing.value.args == ("missing",)
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])
