@@ -15,12 +15,48 @@
 """Drive generator control flow with immediate or asynchronous yielded values."""
 
 from collections.abc import Awaitable, Callable, Generator
+from functools import wraps
 from inspect import isawaitable
-from typing import Any, TypeVar, cast, overload
+from typing import Any, ParamSpec, TypeVar, cast, overload
 
-__all__ = ["run", "await_result"]
+__all__ = ["continuation", "run", "await_result"]
 
+_P = ParamSpec("_P")
 _T = TypeVar("_T")
+
+
+@overload
+def continuation(
+    func: Callable[_P, Generator[Any, Any, _T]], /
+) -> Callable[_P, _T | Awaitable[_T]]: ...
+@overload
+def continuation(
+    func: None = None, /
+) -> Callable[
+    [Callable[_P, Generator[Any, Any, _T]]], Callable[_P, _T | Awaitable[_T]]
+]: ...
+def continuation(
+    func: Callable[_P, Generator[Any, Any, _T]] | None = None, /
+) -> (
+    Callable[_P, _T | Awaitable[_T]]
+    | Callable[
+        [Callable[_P, Generator[Any, Any, _T]]], Callable[_P, _T | Awaitable[_T]]
+    ]
+):
+    """Decorate a generator function, with or without parentheses.
+
+    Each call drives a fresh generator through run(), immediately returning its
+    result or an unscheduled asynchronous remainder. Arguments and function
+    metadata are preserved; calls do not share execution state.
+    """
+    if func is None:
+        return continuation
+
+    @wraps(func)
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _T | Awaitable[_T]:
+        return run(func(*args, **kwargs))
+
+    return wrapped
 
 
 @overload

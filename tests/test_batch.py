@@ -6,7 +6,7 @@ from inspect import isawaitable
 import pytest
 
 from slyme.node.eval import _batch
-from slyme.utils.continuation import await_result, run
+from slyme.utils.continuation import await_result, continuation
 from slyme.utils.exception import BatchError, Result
 
 
@@ -146,6 +146,7 @@ def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
     def fail(value):
         raise LookupError(value)
 
+    @continuation
     def recover():
         try:
             values = yield _batch([1], fail)
@@ -153,6 +154,7 @@ def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
             values = [len(error.results)]
         return values[0] + 1
 
+    @continuation
     def postprocess():
         try:
             values = yield _batch([], str)
@@ -160,8 +162,8 @@ def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
         except IndexError:
             return "index"
 
-    assert run(recover()) == 2
-    assert run(postprocess()) == "index"
+    assert recover() == 2
+    assert postprocess() == "index"
 
 
 async def test_batch_schedules_only_asynchronous_items() -> None:

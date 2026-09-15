@@ -19,7 +19,7 @@ from typing import Any, TypeVar, cast
 
 from slyme.context import Context, Ref
 from slyme.context.tree import CTX_EVAL_ENGINE
-from slyme.utils.continuation import run
+from slyme.utils.continuation import continuation
 from slyme.utils.exception import BatchError, Result
 from slyme.utils.registry import GeneralRegistry
 
@@ -41,9 +41,10 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 
 
+@continuation
 def _batch(
     values: Sequence[_T], call: Callable[[_T], _R | Awaitable[_R]]
-) -> list[_R] | Awaitable[list[_R]]:
+) -> Generator[Any, Any, list[_R]]:
     """Settle independent evaluations in input order, retaining every outcome.
 
     Calls run inline before scheduling their asynchronous results. Item failures
@@ -51,42 +52,41 @@ def _batch(
     aggregating partial results.
     """
 
-    def execute() -> Generator[Any, Any, list[_R]]:
-        results: list[Result[_R]] = []
-        pending: dict[int, Awaitable[Result[_R]]] = {}
+    results: list[Result[_R]] = []
+    pending: dict[int, Awaitable[Result[_R]]] = {}
 
-        def evaluate(value: _T) -> Generator[Any, Any, Result[_R]]:
-            try:
-                return Result(value=(yield call(value)))
-            except BaseException as error:
-                return Result(error=error)
+    @continuation
+    def evaluate(value: _T) -> Generator[Any, Any, Result[_R]]:
+        try:
+            return Result(value=(yield call(value)))
+        except BaseException as error:
+            return Result(error=error)
 
-        for index, value in enumerate(values):
-            result = run(evaluate(value))
-            if isawaitable(result):
-                pending[index] = result
-                results.append(Result())
-            else:
-                results.append(result)
+    for index, value in enumerate(values):
+        result = evaluate(value)
+        if isawaitable(result):
+            pending[index] = result
+            results.append(Result())
+        else:
+            results.append(result)
 
-        if pending:
+    if pending:
 
-            async def gather() -> list[Result[_R]]:
-                # NOTE: There may be no running event loop when calling asyncio.gather,
-                # so we wrap it in a coroutine.
-                return await asyncio.gather(*pending.values())
+        async def gather() -> list[Result[_R]]:
+            # NOTE: There may be no running event loop when calling asyncio.gather,
+            # so we wrap it in a coroutine.
+            return await asyncio.gather(*pending.values())
 
-            settled = yield gather()
-            for index, result in zip(pending, settled, strict=True):
-                results[index] = result
-        if any(result.error is not None for result in results):
-            raise BatchError(results)
-        return [cast(_R, result.value) for result in results]
-
-    return run(execute())
+        settled = yield gather()
+        for index, result in zip(pending, settled, strict=True):
+            results[index] = result
+    if any(result.error is not None for result in results):
+        raise BatchError(results)
+    return [cast(_R, result.value) for result in results]
 
 
-def eval_tree(ctx: Context, tree: Any) -> Any:
+@continuation
+def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
     """Evaluate registered leaves and reconstruct every Tree container.
 
     Ordinary leaves and evaluator results retain their identities. Results are
@@ -105,21 +105,17 @@ def eval_tree(ctx: Context, tree: Any) -> Any:
             values.append(leaf)
     batches = list(eval_groups.items())
 
-    def evaluate(batch: tuple[BatchEvaluatorFunc, tuple[list[int], list[Any]]]) -> Any:
+    @continuation
+    def evaluate(
+        batch: tuple[BatchEvaluatorFunc, tuple[list[int], list[Any]]],
+    ) -> Generator[Any, Any, None]:
         evaluator, (indices, values) = batch
+        result = yield evaluator(ctx, values)
+        for index, value in zip(indices, result, strict=True):
+            leaves[index] = value
 
-        def execute() -> Generator[Any, Any, None]:
-            result = yield evaluator(ctx, values)
-            for index, value in zip(indices, result, strict=True):
-                leaves[index] = value
-
-        return run(execute())
-
-    def execute() -> Generator[Any, Any, Any]:
-        yield _batch(batches, evaluate)
-        return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
-
-    return run(execute())
+    yield _batch(batches, evaluate)
+    return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
 
 
 # --- Evaluator Implementations ---
@@ -145,21 +141,15 @@ def node_evaluator(
     may leave Context-owned cleanup running after the evaluator exits.
     """
 
-    def evaluate_one(node: Node) -> Any:
+    @continuation
+    def evaluate_one(node: Node) -> Generator[Any, Any, Any]:
         child = ctx.fork(scope=ctx.scope.fork())
+        try:
+            return (yield node(child))
+        finally:
+            yield child.dispose()
 
-        def execute() -> Generator[Any, Any, Any]:
-            try:
-                return (yield node(child))
-            finally:
-                yield child.dispose()
-
-        return run(execute())
-
-    def execute() -> Generator[Any, Any, Sequence[Any]]:
-        return (yield _batch(nodes, evaluate_one))
-
-    return run(execute())
+    return _batch(nodes, evaluate_one)
 
 
 EVALUATOR_REGISTRY.register(node_evaluator, key=Node)

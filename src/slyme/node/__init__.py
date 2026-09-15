@@ -21,6 +21,8 @@ from .core import (
     Node,
     NodeElement,
     Wrapper,
+    create_node,
+    create_wrapper,
     node,
     wrapper,
 )
@@ -34,6 +36,8 @@ __all__ = [
     "Wrapper",
     "node",
     "wrapper",
+    "create_node",
+    "create_wrapper",
     "sequential_exec",
     "sequential",
     "Auto",

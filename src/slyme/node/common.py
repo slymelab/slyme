@@ -16,21 +16,18 @@ from collections.abc import Awaitable, Generator, Iterable, Sequence
 from typing import Any
 
 from slyme.context import Context
-from slyme.utils.continuation import run
+from slyme.utils.continuation import continuation
 
 from .core import Node, node
 
 __all__ = ["sequential_exec", "sequential"]
 
 
-def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> None | Awaitable[None]:
+@continuation
+def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> Generator[Any, Any, None]:
     """Execute nodes in order."""
-
-    def execute() -> Generator[Any, Any, None]:
-        for item in nodes:
-            yield item(ctx)
-
-    return run(execute())
+    for item in nodes:
+        yield item(ctx)
 
 
 @node

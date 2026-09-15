@@ -16,14 +16,14 @@
 
 from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
-from functools import partial, update_wrapper
+from functools import partial, wraps
 from types import MappingProxyType
-from typing import Any, Generic, Protocol, TypeVar, cast, overload
+from typing import Any, Generic, Protocol, TypeVar, overload
 
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.continuation import await_result, run
+from slyme.utils.continuation import await_result, continuation
 from slyme.utils.exception import BatchError
 
 from .exception import (
@@ -33,10 +33,19 @@ from .exception import (
     WrapperExceptionRecord,
 )
 
-__all__ = ["Auto", "node", "wrapper", "NodeElement", "Node", "Wrapper", "NODE_ENGINE"]
+__all__ = [
+    "Auto",
+    "node",
+    "wrapper",
+    "create_node",
+    "create_wrapper",
+    "NodeElement",
+    "Node",
+    "Wrapper",
+    "NODE_ENGINE",
+]
 
 _R = TypeVar("_R")
-_E = TypeVar("_E", bound="NodeElement")
 _MISSING = object()
 
 
@@ -125,24 +134,20 @@ class Node(NodeElement, Generic[_R]):
         self.wrappers.extend(wrappers)
         return self
 
-    def __call__(self, ctx: Context, /, **kwargs: Any) -> _R | Awaitable[_R]:
-        def execute() -> Generator[Any, Any, _R]:
-            try:
-                return (yield self._call(ctx, kwargs))
-            except BaseException as error:
-                if not isinstance(error, Exception):
-                    raise
-                if isinstance(error, NodeTerminate):
-                    if error.source_node is None:
-                        error.source_node = self
-                    raise
-                if isinstance(error, (NodeException, BatchError)):
-                    raise
-                raise NodeExceptionRecord(
-                    exception_node=self, exception=error
-                ) from error
-
-        return run(execute())
+    @continuation
+    def __call__(self, ctx: Context, /, **kwargs: Any) -> Generator[Any, Any, _R]:
+        try:
+            return (yield self._call(ctx, kwargs))
+        except BaseException as error:
+            if not isinstance(error, Exception):
+                raise
+            if isinstance(error, NodeTerminate):
+                if error.source_node is None:
+                    error.source_node = self
+                raise
+            if isinstance(error, (NodeException, BatchError)):
+                raise
+            raise NodeExceptionRecord(exception_node=self, exception=error) from error
 
     def acall(self, ctx: Context, /, **kwargs: Any) -> Awaitable[_R]:
         """Call with an always-awaitable result, preserving immediate execution.
@@ -164,12 +169,10 @@ class Node(NodeElement, Generic[_R]):
             )
         else:
 
-            def chain(call_ctx: Context) -> _R | Awaitable[_R]:
-                def execute() -> Generator[Any, Any, _R]:
-                    evaluated = yield eval_tree(call_ctx, eval_kwargs)
-                    return (yield self._func(call_ctx, **raw_kwargs, **evaluated))
-
-                return run(execute())
+            @continuation
+            def chain(call_ctx: Context) -> Generator[Any, Any, _R]:
+                evaluated = yield eval_tree(call_ctx, eval_kwargs)
+                return (yield self._func(call_ctx, **raw_kwargs, **evaluated))
 
         return Wrapper.compose(wrappers, wrapped=self, call_next=chain)(ctx)
 
@@ -208,6 +211,7 @@ class Wrapper(NodeElement, Generic[_R]):
     ):
         super().__init__(func=func, params=params)
 
+    @continuation
     def __call__(
         self,
         ctx: Context,
@@ -215,20 +219,17 @@ class Wrapper(NodeElement, Generic[_R]):
         call_next: Callable[[Context], Any | Awaitable[Any]],
         /,
         **kwargs: Any,
-    ) -> _R | Awaitable[_R]:
-        def execute() -> Generator[Any, Any, _R]:
-            try:
-                return (yield self._call(ctx, wrapped, call_next, kwargs))
-            except BaseException as error:
-                if not isinstance(error, Exception):
-                    raise
-                if isinstance(error, (NodeException, BatchError)):
-                    raise
-                raise WrapperExceptionRecord(
-                    exception_node=self, wrapped_node=wrapped, exception=error
-                ) from error
-
-        return run(execute())
+    ) -> Generator[Any, Any, _R]:
+        try:
+            return (yield self._call(ctx, wrapped, call_next, kwargs))
+        except BaseException as error:
+            if not isinstance(error, Exception):
+                raise
+            if isinstance(error, (NodeException, BatchError)):
+                raise
+            raise WrapperExceptionRecord(
+                exception_node=self, wrapped_node=wrapped, exception=error
+            ) from error
 
     def _call(
         self,
@@ -243,90 +244,126 @@ class Wrapper(NodeElement, Generic[_R]):
         if not eval_kwargs:
             return self._func(ctx, wrapped, call_next, **raw_kwargs)
 
+        @continuation
         def execute() -> Generator[Any, Any, _R]:
             evaluated = yield eval_tree(ctx, eval_kwargs)
             return (
                 yield self._func(ctx, wrapped, call_next, **raw_kwargs, **evaluated)
             )
 
-        return run(execute())
+        return execute()
 
 
-class _FactoryBase(Generic[_R, _E]):
-    """Construct graph elements from explicit keyword bindings.
+@overload
+def create_node(
+    func: Callable[..., Awaitable[_R]],
+    /,
+    params: Mapping[str, Any] | None = None,
+    *,
+    wrappers: Iterable[Wrapper[Any]] | None = None,
+) -> Node[_R]: ...
+@overload
+def create_node(
+    func: Callable[..., _R | Awaitable[_R]],
+    /,
+    params: Mapping[str, Any] | None = None,
+    *,
+    wrappers: Iterable[Wrapper[Any]] | None = None,
+) -> Node[_R]: ...
+def create_node(
+    func: Callable[..., _R | Awaitable[_R]],
+    /,
+    params: Mapping[str, Any] | None = None,
+    *,
+    wrappers: Iterable[Wrapper[Any]] | None = None,
+) -> Node[_R]:
+    """Create a Node with shallow-copied bindings and assembly-time wrappers.
 
-    Binding names and values are dynamic: calls may be partial and may supply
-    Auto trees instead of the values accepted by the underlying function.
+    Parameter values and Wrapper objects retain their identities. Construction
+    does not invoke the function or evaluate Auto bindings.
     """
-
-    _element_type: type[NodeElement]
-
-    def __init__(self, func: Callable[..., _R | Awaitable[_R]]):
-        update_wrapper(self, func)
-        self._func = func
-
-    @property
-    def element_type(self) -> type[_E]:
-        return cast(type[_E], self._element_type)
-
-    @property
-    def func(self) -> Callable[..., _R | Awaitable[_R]]:
-        return self._func
-
-    def __call__(self, /, **kwargs: Any) -> _E:
-        return self.element_type(func=self._func, params=kwargs)
+    return Node(func=func, params={} if params is None else params, wrappers=wrappers)
 
 
-class NodeFactory(_FactoryBase[_R, Node[_R]]):
-    """Build a Node without selecting a synchronous or asynchronous mode."""
-
-    _element_type = Node
-
-
-class WrapperFactory(_FactoryBase[_R, Wrapper[_R]]):
-    """Build a Wrapper without selecting an execution mode."""
-
-    _element_type = Wrapper
+@overload
+def create_wrapper(
+    func: Callable[..., Awaitable[_R]],
+    /,
+    params: Mapping[str, Any] | None = None,
+) -> Wrapper[_R]: ...
+@overload
+def create_wrapper(
+    func: Callable[..., _R | Awaitable[_R]],
+    /,
+    params: Mapping[str, Any] | None = None,
+) -> Wrapper[_R]: ...
+def create_wrapper(
+    func: Callable[..., _R | Awaitable[_R]],
+    /,
+    params: Mapping[str, Any] | None = None,
+) -> Wrapper[_R]:
+    """Create a Wrapper with shallow-copied bindings without invoking it."""
+    return Wrapper(func=func, params={} if params is None else params)
 
 
 class _NodeDecorator(Protocol):
     @overload
-    def __call__(self, func: Callable[..., Awaitable[_R]], /) -> NodeFactory[_R]: ...
+    def __call__(
+        self, func: Callable[..., Awaitable[_R]], /
+    ) -> Callable[..., Node[_R]]: ...
     @overload
     def __call__(
         self, func: Callable[..., _R | Awaitable[_R]], /
-    ) -> NodeFactory[_R]: ...
+    ) -> Callable[..., Node[_R]]: ...
 
 
 class _WrapperDecorator(Protocol):
     @overload
-    def __call__(self, func: Callable[..., Awaitable[_R]], /) -> WrapperFactory[_R]: ...
+    def __call__(
+        self, func: Callable[..., Awaitable[_R]], /
+    ) -> Callable[..., Wrapper[_R]]: ...
     @overload
     def __call__(
         self, func: Callable[..., _R | Awaitable[_R]], /
-    ) -> WrapperFactory[_R]: ...
+    ) -> Callable[..., Wrapper[_R]]: ...
 
 
 @overload
-def node(func: Callable[..., Awaitable[_R]], /) -> NodeFactory[_R]: ...
+def node(func: Callable[..., Awaitable[_R]], /) -> Callable[..., Node[_R]]: ...
 @overload
-def node(func: Callable[..., _R | Awaitable[_R]], /) -> NodeFactory[_R]: ...
+def node(func: Callable[..., _R | Awaitable[_R]], /) -> Callable[..., Node[_R]]: ...
 @overload
 def node(func: None = None, /) -> _NodeDecorator: ...
 def node(func: Callable[..., Any] | None = None, /) -> Any:
     """Create a keyword-only Node factory without inspecting its function."""
-    return NodeFactory if func is None else NodeFactory(func)
+    if func is None:
+        return node
+
+    @wraps(func)
+    def factory(**kwargs: Any) -> Node[Any]:
+        return create_node(func, kwargs)
+
+    return factory
 
 
 @overload
-def wrapper(func: Callable[..., Awaitable[_R]], /) -> WrapperFactory[_R]: ...
+def wrapper(func: Callable[..., Awaitable[_R]], /) -> Callable[..., Wrapper[_R]]: ...
 @overload
-def wrapper(func: Callable[..., _R | Awaitable[_R]], /) -> WrapperFactory[_R]: ...
+def wrapper(
+    func: Callable[..., _R | Awaitable[_R]], /
+) -> Callable[..., Wrapper[_R]]: ...
 @overload
 def wrapper(func: None = None, /) -> _WrapperDecorator: ...
 def wrapper(func: Callable[..., Any] | None = None, /) -> Any:
     """Create a keyword-only Wrapper factory without inspecting its function."""
-    return WrapperFactory if func is None else WrapperFactory(func)
+    if func is None:
+        return wrapper
+
+    @wraps(func)
+    def factory(**kwargs: Any) -> Wrapper[Any]:
+        return create_wrapper(func, kwargs)
+
+    return factory
 
 
 from .eval import eval_tree

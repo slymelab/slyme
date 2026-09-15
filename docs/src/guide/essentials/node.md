@@ -25,6 +25,16 @@ task = add(x=Auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
 
 Slyme does not inspect function signatures or resolve type annotations. Functions may declare `*args` and `**kwargs`; Python binds the positional Context and supplied keywords normally. Node's framework `ctx` argument is positional-only, so a business keyword named `ctx` can be forwarded independently.
 
+`@node` and `@node()` both return an ordinary factory function; each call creates a separate Node. Use `create_node()` to construct an instance directly, without defining a factory:
+
+```python
+from slyme.node import create_node
+
+inline = create_node(lambda ctx, *, value: value + 1, {"value": 3})
+```
+
+`create_node(func, params=None, *, wrappers=None)` accepts business bindings as a mapping and assembly configuration separately. Each instance copies its parameter mapping and wrapper list, but keeps the referenced values and Wrapper objects. Construction does not execute the function or evaluate Auto bindings. Attach wrappers during assembly through `create_node(..., wrappers=[...])` or `task.add_wrappers(...)`; `@node` does not accept wrappers. Decorated factories preserve function metadata and expose the wrapped function through `.__wrapped__`.
+
 ## Execute
 
 Call a Node directly when managing Context yourself:
@@ -59,25 +69,25 @@ Calls inside user functions still need explicit handling: synchronous code canno
 
 ### Generator-based composition
 
-`run(generator)` from `slyme.utils.continuation` drives ordinary generator control flow. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
+`@continuation` from `slyme.utils.continuation` turns a generator function into a directly callable synchronous-or-asynchronous function. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
 
 ```python
 from slyme.node import Node
-from slyme.utils.continuation import run
+from slyme.utils.continuation import continuation
 
 
 @node
+@continuation
 def increment_child(ctx, *, child: Node[int]):
-    def execute():
-        value = yield child(ctx)
-        return value + 1
-
-    return run(execute())
+    value = yield child(ctx)
+    return value + 1
 ```
 
-Creating the generator does not execute its body. Calling `run()` executes its synchronous prefix immediately, including synchronous errors. Await the returned remainder to continue asynchronous work: `await await_result(run(execute()))`. Use `asyncio.run(await_result(run(execute())))` only at a synchronous application entry point. The driver neither starts an event loop nor schedules tasks.
+`@continuation()` is equivalent to `@continuation`. The decorator preserves function metadata and argument types, and each call creates a fresh generator without sharing execution state. Place it inside `@node` or `@wrapper`: first adapt execution, then define the factory. A decorated function can also be called directly without either graph decorator.
 
-Only values explicitly handed to `yield` are inspected. Containers and bare generators remain ordinary data. Each yield awaits only its outer result; the generator's final return value is not implicitly awaited. Use `return (yield operation())` when completion belongs inside the generator's exception handling. Delegate another generator with `yield from`, or explicitly yield its `run()` result. Node does not automatically drive a returned generator.
+Calling the decorated function executes its synchronous prefix immediately, including synchronous errors. Await the returned remainder to continue asynchronous work: `await await_result(execute(...))`. Use `asyncio.run(await_result(execute(...)))` only at a synchronous application entry point. The driver neither starts an event loop nor schedules tasks. `run(generator)` remains available for an already-created generator; the decorator delegates to it.
+
+Only values explicitly handed to `yield` are inspected. Containers and bare generators remain ordinary data. Each yield awaits only its outer result; the generator's final return value is not implicitly awaited. Use `return (yield operation())` when completion belongs inside the generator's exception handling. Delegate an undecorated generator with `yield from`, or yield the result of a continuation-decorated function. Node does not automatically drive a returned generator.
 
 Hand exclusive driving of the generator to `run()`; generator exhaustion and reentrancy follow Python's protocol. The driver does not cache results, shield cancellation, aggregate errors, or own resources. Cancellation is thrown at the suspended yield and follows the generator's exception handling. A `finally` block may yield asynchronous cleanup while the remainder is being awaited, but discarding a remainder does not finish that cleanup.
 
@@ -128,25 +138,30 @@ Call the Node factory or an assembly function again when another independently c
 
 ## Wrappers
 
+`@wrapper` and `@wrapper()` define reusable factories. `create_wrapper(func, params=None)` directly creates a Wrapper with its own shallow-copied bindings.
+
 `@wrapper` factories also accept only keyword bindings. Execution passes Context, the wrapped Node, and the next callable positionally, followed by the merged keyword bindings. User functions may receive them with named parameters or `*args`/`**kwargs`. The framework's `Wrapper.__call__` parameters are positional-only; direct calls may independently override business keywords named `ctx`, `wrapped`, or `call_next`.
 
 ```python
 from collections.abc import Callable
 from slyme.node import Node, wrapper
+from slyme.utils.continuation import continuation
 
 
 @wrapper
+@continuation
 def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
     print(name, "start")
-    result = call_next(ctx)
-    print(name, "end")
-    return result
+    try:
+        return (yield call_next(ctx))
+    finally:
+        print(name, "end")
 
 
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrappers use onion ordering and read their live parameters when invoked. The example above is synchronous-only: when `call_next(ctx)` returns an awaitable, its following statements run before that completion. A forwarding wrapper may return it unchanged. Use a generator driven by `run()` with `yield call_next(ctx)`, or `async def` with `await await_result(call_next(ctx))`, for result-dependent work and completion-time `try/finally` cleanup. Slyme does not rewrite a wrapper's `try/finally`.
+Wrappers use onion ordering and read their live parameters when invoked. The example waits for synchronous or asynchronous completion and runs its `finally` block on success or failure. A forwarding wrapper may return `call_next(ctx)` unchanged without `@continuation`. An `async def` wrapper can instead use `await await_result(call_next(ctx))`. Slyme does not rewrite a wrapper's `try/finally`.
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context. Wrapper parameters remain live. Each wrapper controls whether and how often it invokes the next layer, which Context it passes, and the result type. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
 

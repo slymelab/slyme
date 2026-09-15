@@ -6,7 +6,74 @@ from inspect import isawaitable
 
 import pytest
 
-from slyme.utils.continuation import await_result, run
+from slyme.utils.continuation import await_result, continuation, run
+
+
+@pytest.mark.parametrize("parentheses", [False, True])
+def test_decorator_preserves_arguments_metadata_and_restarts_each_call(parentheses):
+    events = []
+
+    def execute(value, /, *extra, scale=2, **kwargs):
+        """Scale the supplied values."""
+        events.append(value)
+        total = yield value + sum(extra) + sum(kwargs.values())
+        return total * scale
+
+    wrapped = (continuation() if parentheses else continuation)(execute)
+    assert events == []
+    assert wrapped.__wrapped__ is execute
+    assert wrapped.__name__ == execute.__name__
+    assert wrapped.__doc__ == execute.__doc__
+    assert wrapped(1, 2, scale=3, value=4) == 21
+    assert wrapped(5) == 10
+    assert events == [1, 5]
+
+
+@pytest.mark.parametrize("parentheses", [False, True])
+async def test_decorated_calls_have_independent_unscheduled_async_remainders(
+    parentheses,
+):
+    events = []
+
+    async def pending(value):
+        events.append(("await", value))
+        await asyncio.sleep(0)
+        return value * 2
+
+    def execute(value):
+        events.append(("call", value))
+        result = yield pending(value)
+        return result + 1
+
+    wrapped = (continuation() if parentheses else continuation)(execute)
+    tasks = asyncio.all_tasks()
+    first, second = wrapped(1), wrapped(2)
+    assert events == [("call", 1), ("call", 2)]
+    assert asyncio.all_tasks() == tasks
+    assert await asyncio.gather(first, second) == [3, 5]
+
+
+@pytest.mark.parametrize("parentheses", [False, True])
+async def test_decorated_errors_propagate_at_their_execution_point(parentheses):
+    failure = ValueError("failure")
+
+    async def fail():
+        raise failure
+
+    def execute(asynchronous):
+        if asynchronous:
+            yield fail()
+        else:
+            raise failure
+
+    wrapped = (continuation() if parentheses else continuation)(execute)
+    with pytest.raises(ValueError) as synchronous:
+        wrapped(False)
+    assert synchronous.value is failure
+    result = wrapped(True)
+    with pytest.raises(ValueError) as asynchronous:
+        await result
+    assert asynchronous.value is failure
 
 
 def test_generator_building_is_lazy_and_run_is_immediate() -> None:

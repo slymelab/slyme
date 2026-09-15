@@ -25,6 +25,16 @@ task = add(x=Auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
 
 Slyme 不分析函数签名或解析类型注解。函数可以声明 `*args` 和 `**kwargs`，由 Python 正常绑定位置 Context 和传入的关键字。Node 的框架参数 `ctx` 为仅位置参数，因此可以独立传递名为 `ctx` 的业务关键字。
 
+`@node` 和 `@node()` 都返回普通工厂函数，每次调用创建独立的 Node。无需定义工厂时，可以用 `create_node()` 直接创建实例：
+
+```python
+from slyme.node import create_node
+
+inline = create_node(lambda ctx, *, value: value + 1, {"value": 3})
+```
+
+`create_node(func, params=None, *, wrappers=None)` 通过 mapping 接收业务绑定，组装配置独立传入。每个实例复制自己的参数 mapping 和 wrapper 列表，但保持内部值与 Wrapper 对象的引用。构造时不执行函数，也不求值 Auto 绑定。组装时通过 `create_node(..., wrappers=[...])` 或 `task.add_wrappers(...)` 添加 wrappers；`@node` 不接收 wrappers。装饰后的工厂保留函数元信息，通过 `.__wrapped__` 可获得原函数。
+
 ## 执行
 
 自行管理 Context 时直接调用 Node：
@@ -59,25 +69,25 @@ async def execute(ctx):
 
 ### 生成器组合
 
-`slyme.utils.continuation` 的 `run(generator)` 驱动普通生成器控制流。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
+`slyme.utils.continuation` 的 `@continuation` 将生成器函数转换为可直接调用的同步或异步函数。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
 
 ```python
 from slyme.node import Node
-from slyme.utils.continuation import run
+from slyme.utils.continuation import continuation
 
 
 @node
+@continuation
 def increment_child(ctx, *, child: Node[int]):
-    def execute():
-        value = yield child(ctx)
-        return value + 1
-
-    return run(execute())
+    value = yield child(ctx)
+    return value + 1
 ```
 
-创建生成器不会执行函数体。调用 `run()` 立即执行同步前缀，同步错误也立即抛出。通过 `await await_result(run(execute()))` 等待返回的剩余流程，继续异步工作。只在同步应用入口使用 `asyncio.run(await_result(run(execute())))`。驱动器不启动事件循环，也不调度 task。
+`@continuation()` 等价于 `@continuation`。装饰器保留函数元信息与参数类型，每次调用都会创建新的生成器，不共享执行状态。叠加使用时，将它放在 `@node` 或 `@wrapper` 内侧：先适配执行，再定义工厂。也可以不加图装饰器，直接调用装饰后的函数。
 
-只检查显式交给 `yield` 的值；容器和裸生成器仍是普通数据。每次 yield 只等待外层结果，生成器最终 return 的值不隐式等待。需要将操作完成纳入生成器的异常处理时，使用 `return (yield operation())`。通过 `yield from` 委托另一生成器，或显式 yield 它的 `run()` 结果。Node 不会自动驱动作为返回值的生成器。
+调用装饰后的函数会立即执行同步前缀，同步错误也立即抛出。通过 `await await_result(execute(...))` 等待返回的剩余流程，继续异步工作。只在同步应用入口使用 `asyncio.run(await_result(execute(...)))`。驱动器不启动事件循环，也不调度 task。已有生成器仍可直接交给 `run(generator)`；装饰器内部委托给它。
+
+只检查显式交给 `yield` 的值；容器和裸生成器仍是普通数据。每次 yield 只等待外层结果，生成器最终 return 的值不隐式等待。需要将操作完成纳入生成器的异常处理时，使用 `return (yield operation())`。通过 `yield from` 委托未装饰的生成器，或 yield 经 continuation 装饰的函数调用结果。Node 不会自动驱动作为返回值的生成器。
 
 将生成器的独占推进权交给 `run()`；耗尽和重入遵循 Python 的生成器协议。驱动器不缓存结果、不屏蔽取消、不汇总异常，也不拥有资源。取消会在暂停的 yield 位置抛回，遵循生成器的异常处理逻辑。等待剩余流程时，`finally` 可以 yield 异步清理；但丢弃剩余流程不会完成这些清理。
 
@@ -128,25 +138,30 @@ assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
 
 ## Wrapper
 
+`@wrapper` 和 `@wrapper()` 定义可复用的工厂；`create_wrapper(func, params=None)` 直接创建拥有独立浅拷贝绑定的 Wrapper。
+
 `@wrapper` 工厂同样只接受关键字绑定。执行时依次按位置传入 Context、被包装的 Node 和下一层 callable，再传入合并后的关键字绑定。用户函数可以使用具名参数或 `*args`/`**kwargs` 接收。框架的 `Wrapper.__call__` 参数为仅位置参数，直接调用时可以独立覆盖名为 `ctx`、`wrapped` 或 `call_next` 的业务关键字。
 
 ```python
 from collections.abc import Callable
 from slyme.node import Node, wrapper
+from slyme.utils.continuation import continuation
 
 
 @wrapper
+@continuation
 def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
     print(name, "start")
-    result = call_next(ctx)
-    print(name, "end")
-    return result
+    try:
+        return (yield call_next(ctx))
+    finally:
+        print(name, "end")
 
 
 task.add_wrappers(trace(name="add"))
 ```
 
-Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例只适用于同步执行：`call_next(ctx)` 返回 awaitable 时，后续语句会在异步完成前运行。仅转发结果的 Wrapper 可以直接返回它。需要依赖结果执行后续操作或在完成时清理资源，可以通过 `run()` 驱动生成器，在其中使用 `yield call_next(ctx)` 和 `try/finally`；也可以使用 `async def` 与 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
+Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例等待同步或异步调用完成，无论成功还是失败都会执行 `finally`。仅转发结果的 Wrapper 可以直接返回 `call_next(ctx)`，不需要 `@continuation`；`async def` Wrapper 也可以使用 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 的 callable。Wrapper 参数保持实时读取；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context，以及返回值类型。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
 

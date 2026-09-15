@@ -1,13 +1,41 @@
 """Static checks for the awaited result type of unified execution APIs."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
 from typing import Any
 
 from typing_extensions import assert_type
 
 from slyme.context import Context
-from slyme.node import Auto, Node, Wrapper, node, wrapper
-from slyme.utils.continuation import await_result
+from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
+from slyme.utils.continuation import await_result, continuation
+
+
+def direct(*runtime: Any, **kwargs: Any) -> int:
+    return 1
+
+
+async def direct_async(*runtime: Any, **kwargs: Any) -> int:
+    return 1
+
+
+def direct_mixed(*runtime: Any, **kwargs: Any) -> int | Awaitable[int]:
+    return 1
+
+
+@node
+@continuation
+def composed(ctx: Context, /) -> Generator[Any, Any, int]:
+    yield direct_async(ctx)
+    return 1
+
+
+@wrapper()
+@continuation()
+def composed_wrapper(
+    ctx: Context, wrapped: Node, call_next: Callable, /
+) -> Generator[Any, Any, int]:
+    yield call_next(ctx)
+    return 1
 
 
 @node
@@ -43,6 +71,15 @@ def mixed_wrapper(
 
 
 async def check_types(ctx: Context) -> None:
+    assert_type(create_node(direct), Node[int])
+    assert_type(create_node(direct_async), Node[int])
+    assert_type(create_node(direct_mixed, {"value": 1}), Node[int])
+    assert_type(create_node(direct, wrappers=[composed_wrapper()]), Node[int])
+    assert_type(create_wrapper(direct), Wrapper[int])
+    assert_type(create_wrapper(direct_async), Wrapper[int])
+    assert_type(create_wrapper(direct_mixed), Wrapper[int])
+    assert_type(composed(), Node[int])
+    assert_type(composed_wrapper(), Wrapper[int])
     assert_type(immediate(), Node[int])
     assert_type(asynchronous(), Node[int])
     assert_type(mixed(), Node[int])

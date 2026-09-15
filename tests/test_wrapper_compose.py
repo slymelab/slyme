@@ -7,7 +7,7 @@ import pytest
 
 from slyme.context import Context, Schema
 from slyme.node import Node, Wrapper, node, wrapper
-from slyme.utils.continuation import await_result, run
+from slyme.utils.continuation import await_result, continuation
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -69,16 +69,13 @@ def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
     graph = target()
 
     @wrapper
+    @continuation
     def around(ctx: Context, wrapped: Node, call_next: Callable, /, *, label: str):
         assert wrapped is graph
         events.append((label, "before"))
-
-        def execute():
-            value = yield call_next(ctx)
-            events.append((label, "after"))
-            return value
-
-        return run(execute())
+        value = yield call_next(ctx)
+        events.append((label, "after"))
+        return value
 
     outer, inner = around(label="outer"), around(label="inner")
     wrappers = [outer, inner]
@@ -121,13 +118,11 @@ async def test_compose_preserves_context_replacement_and_multiple_next_calls(
         return ctx.get("value")
 
     @wrapper
+    @continuation
     def twice(ctx: Context, wrapped: Node, call_next: Callable, /):
-        def execute():
-            first = yield call_next(ctx)
-            second = yield call_next(child)
-            return first, second
-
-        return run(execute())
+        first = yield call_next(ctx)
+        second = yield call_next(child)
+        return first, second
 
     graph = avalue() if asynchronous else value()
     chain = Wrapper.compose([twice()], wrapped=graph, call_next=graph)

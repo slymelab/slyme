@@ -31,7 +31,7 @@ from enum import Enum
 from inspect import isawaitable
 from typing import Any, Generic, Literal, NoReturn, TypeVar, cast, overload
 
-from slyme.utils.continuation import await_result, run
+from slyme.utils.continuation import await_result, continuation
 from slyme.utils.exception import BatchError, Result
 
 from .compose import Compose
@@ -159,6 +159,7 @@ class _Effect:
         cleanup = self._cleanup
         self._cleanup = None
 
+        @continuation
         def execute() -> Generator[Any, Any, None]:
             try:
                 if cleanup is not None:
@@ -168,7 +169,7 @@ class _Effect:
             self._finish()
 
         try:
-            result = run(execute())
+            result = execute()
         finally:
             Context._exit_sync_disposal_guard(guarded)
         return self._await_cleanup(result) if isawaitable(result) else None
@@ -185,6 +186,7 @@ class _Effect:
             return None
         self._disposing = True
 
+        @continuation
         def execute() -> Generator[Any, Any, None]:
             try:
                 yield self._setup
@@ -192,7 +194,7 @@ class _Effect:
                 self._fail_dispose(error)
             yield self._dispose_cleanup()
 
-        result = run(execute())
+        result = execute()
         if isawaitable(result):
             self._pending = _Completion(result, self._check)
             return self._pending
@@ -685,6 +687,7 @@ class Context(ContextElement):
             if error is not None:
                 raise error
 
+        @continuation
         def execute() -> Generator[Any, Any, None]:
             results: list[Result[None]] = []
             try:
@@ -702,7 +705,7 @@ class Context(ContextElement):
             else:
                 finish()
 
-        result = run(execute())
+        result = execute()
         if isawaitable(result):
             pending = _Completion(
                 self._await_dispose(result), self._assert_disposal_allowed
