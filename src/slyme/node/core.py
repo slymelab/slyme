@@ -231,6 +231,7 @@ class Wrapper(NodeElement, Generic[_R]):
                 exception_node=self, wrapped_node=wrapped, exception=error
             ) from error
 
+    @continuation
     def _call(
         self,
         ctx: Context,
@@ -238,20 +239,12 @@ class Wrapper(NodeElement, Generic[_R]):
         call_next: Callable[[Context], Any | Awaitable[Any]],
         overrides: Mapping[str, Any],
         /,
-    ) -> _R | Awaitable[_R]:
+    ) -> Generator[Any, Any, _R]:
         kwargs = {**self._params, **overrides}
         raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
-        if not eval_kwargs:
-            return self._func(ctx, wrapped, call_next, **raw_kwargs)
-
-        @continuation
-        def execute() -> Generator[Any, Any, _R]:
-            evaluated = yield eval_tree(ctx, eval_kwargs)
-            return (
-                yield self._func(ctx, wrapped, call_next, **raw_kwargs, **evaluated)
-            )
-
-        return execute()
+        if eval_kwargs:
+            raw_kwargs.update((yield eval_tree(ctx, eval_kwargs)))
+        return (yield self._func(ctx, wrapped, call_next, **raw_kwargs))
 
 
 @overload
