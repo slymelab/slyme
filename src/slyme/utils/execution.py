@@ -136,9 +136,7 @@ def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
             if failure is not None:
                 raise failure
             return result
-        current = pending
-        pending = None
-        running = True
+        current, pending, running = pending, None, True
 
         try:
             value = current(*args, **kwargs)

@@ -316,19 +316,16 @@ class _ContextBinding:
         identity = self._identity_for(scope, create=True)
         token = object()
         self._values[identity] = (token, value)
-        binding_ref: weakref.ReferenceType[_ContextBinding] | None = weakref.ref(self)
+        values: dict[Hashable, tuple[object, Any]] | None = self._values
 
         def dispose() -> None:
-            nonlocal binding_ref
-            if binding_ref is None:
+            nonlocal values
+            current_values, values = values, None
+            if current_values is None:
                 return
-            binding = binding_ref()
-            if binding is not None:
-                current = binding._values.get(identity)
-                if current is not None and current[0] is token:
-                    del binding._values[identity]
-                del current
-            binding_ref = None
+            current = current_values.get(identity)
+            if current is not None and current[0] is token:
+                del current_values[identity]
 
         return dispose
 
@@ -359,7 +356,7 @@ class _ContextBinding:
             self._values.pop(identity, None)
 
 
-_ContextData = weakref.WeakKeyDictionary[RefEntry[Any], _ContextBinding]
+_ContextData = dict[RefEntry[Any], _ContextBinding]
 _ScopeBindings = dict[Scope, set[str]]
 _Tree = dict[str, Any]
 
@@ -473,7 +470,7 @@ class Context(ContextElement):
             seen_scopes = application_root._seen_scopes
         else:
             root_schema = Schema() if schema is None else schema
-            root_data = weakref.WeakKeyDictionary()
+            root_data = {}
             application_root = self
             bound_scope = Scope() if scope is None else scope
             scope_viewers = {}

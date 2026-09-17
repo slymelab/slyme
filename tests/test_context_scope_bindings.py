@@ -13,10 +13,15 @@ from slyme.utils.exception import BaseExceptionGroup
 def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class NoScan(dict):
+        def values(self):
+            pytest.fail("Scope lifecycle must not scan all application bindings.")
+
     root = Context(
         {f"value{i}": i for i in range(100)},
         schema=Schema({f"value{i}": Schema.leaf() for i in range(100)}),
     )
+    object.__setattr__(root, "_data", NoScan(root._data))
     previous = root.isolate("value0", identity="shared")
     saved_scope = previous.scope
     previous.dispose()
@@ -28,9 +33,6 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     acquire = _ContextBinding.acquire_scope
     release = _ContextBinding.release_scope
 
-    def reject_scan():
-        pytest.fail("Scope lifecycle must not scan all application bindings.")
-
     def record_acquire(self, scope):
         restored.append((self, scope))
         acquire(self, scope)
@@ -40,7 +42,6 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
         release(self, scope)
 
     with monkeypatch.context() as patch:
-        patch.setattr(root._data, "values", reject_scan)
         patch.setattr(_ContextBinding, "acquire_scope", record_acquire)
         patch.setattr(_ContextBinding, "release_scope", record_release)
         empty = root.fork(scope=root.scope.fork())
@@ -109,7 +110,7 @@ def test_reverse_index_does_not_retain_withdrawn_schema_values() -> None:
     remove_schema = root.declare({"value": Schema.leaf()})
     payload = Payload()
     payload_ref = weakref.ref(payload)
-    root.add("value", payload)
+    remove_value = root.add("value", payload)
     binding = next(iter(root._data.values()))
     binding_ref = weakref.ref(binding)
     index = root._scope_bindings[root.scope]
@@ -123,6 +124,8 @@ def test_reverse_index_does_not_retain_withdrawn_schema_values() -> None:
 
     root.declare({"value": Schema.leaf()})
     root.set("value", "new")
+    remove_value()
+    remove_value()
     assert not index
     assert root._scope_bindings[root.scope] == {"value"}
     assert root.get("value") == "new"

@@ -330,7 +330,7 @@ finally:
     remove_schema()
 ```
 
-An inherited Scope value does not prevent adding a value at a more specific Scope. `add()` itself does not decide whether later replacement is allowed: `Schema.leaf(replaceable=False)` rejects `set()` while a normal value exists at the same Scope, whereas the default permits replacement. Deletion and child-Scope shadowing remain allowed. If another operation has already replaced or removed the exact entry created by `add()`, its disposer does nothing. Removing the final Schema declaration for a path also releases its hidden bindings; an owned stale `add()` disposer does not retain the removed value.
+An inherited Scope value does not prevent adding a value at a more specific Scope. `add()` itself does not decide whether later replacement is allowed: `Schema.leaf(replaceable=False)` rejects `set()` while a normal value exists at the same Scope, whereas the default permits replacement. Deletion and child-Scope shadowing remain allowed. If another operation has already replaced or removed the exact entry created by `add()`, its disposer does nothing. Context strongly owns its binding table; removing the final Schema declaration explicitly removes and clears the corresponding binding. An `add()` cleanup holds only that binding's value table until called, so an owned stale disposer neither retains removed values nor affects a redeclared path.
 
 ## Effects and disposal
 

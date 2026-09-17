@@ -7,6 +7,39 @@ from collections.abc import Hashable
 import pytest
 
 from slyme.context import Compose, Context, Schema, Scope
+from slyme.context.core import _ContextBinding
+
+
+@pytest.mark.parametrize("remove_first", [False, True])
+def test_add_disposer_owns_only_the_value_table_until_called(
+    remove_first: bool,
+) -> None:
+    class Payload:
+        pass
+
+    scope = Scope()
+    binding = _ContextBinding("value", {})
+    payload = Payload()
+    other_payload = Payload()
+    payload_ref = weakref.ref(payload)
+    other_ref = weakref.ref(other_payload)
+    binding_ref = weakref.ref(binding)
+    remove = binding.add_value(scope, payload)
+    binding.set_value(scope.fork(), other_payload, replaceable=True)
+    if remove_first:
+        remove()
+
+    del binding, payload, other_payload
+    gc.collect()
+    assert binding_ref() is None
+    assert (payload_ref() is None) is remove_first
+    assert (other_ref() is None) is remove_first
+
+    remove()
+    gc.collect()
+    assert payload_ref() is None
+    assert other_ref() is None
+    remove()
 
 
 def test_shared_identity_has_one_current_value_and_a_persistent_barrier() -> None:

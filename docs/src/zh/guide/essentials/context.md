@@ -317,7 +317,7 @@ finally:
     remove_schema()
 ```
 
-Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add()` 本身不决定之后能否替换：`Schema.leaf(replaceable=False)` 会在同一个 Scope 已有普通值时拒绝 `set()`，默认策略则允许替换。删除和 child Scope shadow 始终允许。如果 `add()` 创建的精确 entry 已被其他操作删除或替换，原 disposer 不会影响当前值。撤销某路径的最后一个 Schema 声明也会释放其隐藏 binding；仍由 Context 持有的旧 `add()` disposer 不会继续保留已移除的值。
+Scope 祖先已有同路径值不会阻止在更具体的 Scope 添加值。`add()` 本身不决定之后能否替换：`Schema.leaf(replaceable=False)` 会在同一个 Scope 已有普通值时拒绝 `set()`，默认策略则允许替换。删除和 child Scope shadow 始终允许。如果 `add()` 创建的精确 entry 已被其他操作删除或替换，原 disposer 不会影响当前值。Context 强持有 binding 表；撤销某路径的最后一个 Schema 声明时，会显式移除并清空对应的 binding。`add()` cleanup 在调用前只持有该 binding 的值表，因此由 Context 持有的旧 disposer 既不会滞留已移除的值，也不会影响重新声明后的路径。
 
 ## Effect 与 dispose
 
