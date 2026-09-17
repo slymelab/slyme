@@ -6,19 +6,12 @@ from inspect import isawaitable
 import pytest
 
 from slyme.node.eval import _batch
-from slyme.utils.continuation import await_result, continuation
-from slyme.utils.exception import BatchError, Result
-
-
-def test_result_supports_typed_construction_and_exception_values() -> None:
-    error = ValueError("data or failure")
-    assert Result[ValueError](value=error) == Result(value=error)
-    assert Result[ValueError](value=error) != Result[ValueError](error=error)
-    assert Result[None](value=None) == Result()
+from slyme.utils.exception import BaseExceptionGroup
+from slyme.utils.execution import await_result, continuation
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_failed_batch_retains_none_and_exception_return_values(
+async def test_batch_only_groups_raised_errors_not_returned_exceptions(
     asynchronous: bool,
 ) -> None:
     error = ValueError("data and failure")
@@ -32,9 +25,14 @@ async def test_failed_batch_retains_none_and_exception_return_values(
         await asyncio.sleep(0)
         return call(value)
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(_batch(range(3), acall if asynchronous else call))
-    assert caught.value.results == [Result(value=error), Result(error=error), Result()]
+    assert caught.value.exceptions == (error,)
+    assert caught.value.message == "Evaluation failed at input indices [1]"
+    assert await await_result(_batch([0, 2], acall if asynchronous else call)) == [
+        error,
+        None,
+    ]
 
 
 @pytest.mark.parametrize("values", [[1, 2], (1, 2), range(1, 3)])
@@ -65,13 +63,10 @@ async def test_batch_collects_failures_at_input_indices(asynchronous: bool) -> N
         await asyncio.sleep(0)
         return call(value)
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(_batch(range(3), acall if asynchronous else call))
-    assert caught.value.results == [
-        Result(error=failure),
-        Result(value=7),
-        Result(error=failure),
-    ]
+    assert caught.value.exceptions == (failure, failure)
+    assert caught.value.message == "Evaluation failed at input indices [0, 2]"
     assert visited == [0, 1, 2]
 
 
@@ -104,6 +99,32 @@ async def test_batch_calls_all_items_before_scheduling_and_keeps_result_order() 
     assert await pending == [0, "async", 2]
 
 
+async def test_batch_orders_errors_by_input_not_completion() -> None:
+    release = asyncio.Event()
+    finished = []
+    failures = [ValueError(str(index)) for index in range(3)]
+
+    async def delayed(index):
+        if index == 0:
+            await release.wait()
+        else:
+            release.set()
+        finished.append(index)
+        raise failures[index]
+
+    def call(index):
+        if index == 2:
+            finished.append(index)
+            raise failures[index]
+        return delayed(index)
+
+    with pytest.raises(BaseExceptionGroup) as caught:
+        await await_result(_batch(range(3), call))
+    assert finished == [2, 1, 0]
+    assert caught.value.exceptions == tuple(failures)
+    assert caught.value.message == "Evaluation failed at input indices [0, 1, 2]"
+
+
 async def test_batch_waits_for_later_calls_after_sync_failure() -> None:
     visited = []
 
@@ -116,11 +137,10 @@ async def test_batch_waits_for_later_calls_after_sync_failure() -> None:
             raise ValueError("first")
         return later()
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(_batch([0, 1], call))
-    results = caught.value.results
-    assert isinstance(results[0].error, ValueError)
-    assert results[1] == Result(value=2)
+    assert len(caught.value.exceptions) == 1
+    assert isinstance(caught.value.exceptions[0], ValueError)
     assert visited == ["later"]
 
 
@@ -135,11 +155,11 @@ async def test_batch_keeps_exceptions_as_data_and_nested_error_indices() -> None
     def fail(value):
         raise data
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         _batch([1], lambda value: _batch([2], fail))
-    inner = caught.value.results[0].error
-    assert isinstance(inner, BatchError)
-    assert inner.results == [Result(error=data)]
+    inner = caught.value.exceptions[0]
+    assert isinstance(inner, BaseExceptionGroup)
+    assert inner.exceptions == (data,)
 
 
 def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
@@ -150,8 +170,8 @@ def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
     def recover():
         try:
             values = yield _batch([1], fail)
-        except BatchError as error:
-            values = [len(error.results)]
+        except BaseExceptionGroup as error:
+            values = [len(error.exceptions)]
         return values[0] + 1
 
     @continuation
@@ -204,9 +224,10 @@ async def test_item_cancellation_is_a_batch_failure_without_cancelling_siblings(
         finished.append(value)
         return value
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(_batch([0, 1], call))
-    assert isinstance(caught.value.results[0].error, asyncio.CancelledError)
+    assert isinstance(caught.value.exceptions[0], asyncio.CancelledError)
+    assert not isinstance(caught.value, Exception)
     assert finished == [1]
 
 

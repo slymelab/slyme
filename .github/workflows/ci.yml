@@ -105,8 +105,8 @@ jobs:
           import slyme
           from slyme.context import Compose, Context, Schema
           from slyme.node import node
-          from slyme.utils.continuation import await_result, run
-          from slyme.utils.exception import BatchError, Result
+          from slyme.utils.execution import await_result, run
+          from slyme.utils.exception import ExceptionGroup, exception_group
 
           schema = Schema({"value": Schema.leaf()})
           ref = schema.resolve("value")
@@ -141,10 +141,11 @@ jobs:
               try:
                   yield fail()
               except ValueError as error:
-                  return BatchError([Result(error=error)])
+                  return exception_group("Evaluation failed", [error])
 
           failure = asyncio.run(await_result(run(recover())))
-          assert isinstance(failure.results[0].error, ValueError)
+          assert isinstance(failure, ExceptionGroup)
+          assert isinstance(failure.exceptions[0], ValueError)
           assert ctx.dispose() is None
           print(slyme.__version__)
           PY

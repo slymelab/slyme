@@ -123,11 +123,15 @@ if __name__ == "__main__":
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 构建从外到内的 callable 链，不执行它。Wrapper 顺序采用快照，参数仍实时读取；每个 wrapper 控制对下一层的调用，并可返回同步或异步结果。
 
-需要混合执行时，编写普通生成器并传给 `slyme.utils.continuation` 的 `run()`。每个 `value = yield operation()` 都可以接收同步或异步结果。驱动器同步执行到第一个被 yield 的 awaitable，再返回尚未调度的异步剩余流程。循环、分支和 `try/except/finally` 留在生成器内。返回模式不确定时，使用 `await await_result(run(generator))`。驱动器不调度 task、不汇总错误，也不拥有资源生命周期。
+需要混合执行时，编写普通生成器并传给 `slyme.utils.execution` 的 `run()`。每个 `value = yield operation()` 都可以接收同步或异步结果。驱动器同步执行到第一个被 yield 的 awaitable，再返回尚未调度的异步剩余流程。循环、分支和 `try/except/finally` 留在生成器内。返回模式不确定时，使用 `await await_result(run(generator))`。驱动器不调度 task、不汇总错误，也不拥有资源生命周期。
 
-Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递归 LIFO 清理；二者的 `BatchError` 和 `Result` 记录从 `slyme.utils.exception` 导入。成功返回的异常对象仍是值，与抛出的异常区分保存。
+Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递归 LIFO 清理。两者都通过异常组报告失败，不提供部分成功结果。Auto 按输入索引排列错误，Context 按清理执行顺序排列错误；正常返回的异常对象仍是普通数据。Node 和 Wrapper 会将普通异常（包括普通异常组）包装成异常记录，由 `__cause__` 保存原始异常；已有 Node 异常记录及非 `Exception` 控制异常原样传播。
+
+`slyme.utils.exception.exception_group(message, excs)` 将非空异常序列组成异常组，同一模块导出 `ExceptionGroup` 和 `BaseExceptionGroup` 供捕获异常组。Python 3.11+ 使用原生异常组；Python 3.10 使用提供 `message` 和有序 `exceptions` 的简单兼容类，不支持 `except*`、子组操作或分组堆栈显示。仅包含 `Exception` 的组可以被 `except Exception` 捕获；包含取消或其他非 `Exception` 异常的组则不会被捕获。
 
 ## Context 生命周期、Scope 可见性与 Compose
+
+使用 `schema.resolve_entry(path)` 查询单个字段，通过 `schema.entries` tuple 枚举 root、container 和 leaf entry。公开的 `RefEntry` 提供 `ref`、`config` 和 `alive`；metadata 通过 `entry.config.metadata` 读取。配置采用 `slyme.context` 导出的公开类型 `RefConfig`、`RefLeafConfig` 和 `RefContainerConfig`。
 
 `set` 和 `delete` 修改单个本地路径。`update` 和 `drop` 会在应用修改前校验整个批次；预检失败时 binding 保持不变，实际应用修改时发生的失败不会触发回滚。
 

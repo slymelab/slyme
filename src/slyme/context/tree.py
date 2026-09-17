@@ -18,7 +18,15 @@ from slyme.utils.tree import (
     TREE_ENGINE_REGISTRY,
     TreeEngine,
 )
-from slyme.utils.tree.common import flatten_mapping_proxy, unflatten_mapping_proxy
+from slyme.utils.tree.common import (
+    flatten_dict,
+    flatten_mapping_proxy,
+    unflatten_dict,
+    unflatten_mapping_proxy,
+)
+
+SCHEMA_ENGINE = TreeEngine("schema_engine", register_defaults=False)
+SCHEMA_ENGINE.register(dict, flatten_dict, unflatten_dict)
 
 CTX_EVAL_ENGINE = TreeEngine("ctx_eval_engine", register_defaults=True)
 TREE_ENGINE_REGISTRY.register(CTX_EVAL_ENGINE, key="ctx_eval_engine")

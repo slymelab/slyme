@@ -31,12 +31,12 @@ from enum import Enum
 from inspect import isawaitable
 from typing import Any, Generic, Literal, NoReturn, TypeVar, cast, overload
 
-from slyme.utils.continuation import await_result, continuation
-from slyme.utils.exception import BatchError, Result
+from slyme.utils.exception import exception_group
+from slyme.utils.execution import await_result, continuation
 
 from .compose import Compose
 from .ref import Ref
-from .schema import Schema, _RefEntry, _RefLeafConfig
+from .schema import RefEntry, RefLeafConfig, Schema, _Declaration
 from .scope import Scope
 
 _T = TypeVar("_T")
@@ -222,6 +222,7 @@ class _ContextBinding:
     """One current value and an optional inheritance barrier per identity."""
 
     __slots__ = (
+        "_path",
         "_values",
         "_blocked",
         "_scope_identities",
@@ -230,7 +231,8 @@ class _ContextBinding:
         "__weakref__",
     )
 
-    def __init__(self, scope_bindings: _ScopeBindings) -> None:
+    def __init__(self, path: str, scope_bindings: _ScopeBindings) -> None:
+        self._path = path
         self._values: dict[Hashable, tuple[object, Any]] = {}
         self._blocked: set[Hashable] = set()
         self._scope_identities: weakref.WeakKeyDictionary[Scope, Hashable] = (
@@ -247,10 +249,10 @@ class _ContextBinding:
             if scope in scopes:
                 return
             scopes.add(scope)
-        bindings = self._scope_bindings.get(scope)
-        if bindings is None:
-            bindings = self._scope_bindings[scope] = weakref.WeakKeyDictionary()
-        bindings[self] = None
+        paths = self._scope_bindings.get(scope)
+        if paths is None:
+            paths = self._scope_bindings[scope] = set()
+        paths.add(self._path)
 
     def bind(self, *scopes: Scope, identity: Hashable) -> None:
         Compose._bind_identities(self._scope_identities, scopes, identity=identity)
@@ -357,11 +359,8 @@ class _ContextBinding:
             self._values.pop(identity, None)
 
 
-_ContextData = weakref.WeakKeyDictionary[_RefEntry[Any], _ContextBinding]
-# Saved Scopes can regain viewers without retaining withdrawn Schema bindings.
-_ScopeBindings = weakref.WeakKeyDictionary[
-    Scope, weakref.WeakKeyDictionary[_ContextBinding, None]
-]
+_ContextData = weakref.WeakKeyDictionary[RefEntry[Any], _ContextBinding]
+_ScopeBindings = dict[Scope, set[str]]
 _Tree = dict[str, Any]
 
 
@@ -443,6 +442,7 @@ class Context(ContextElement):
     _owned: dict[Context | _Effect, None] = field(init=False)
     _scope_viewers: dict[Scope, set[Context]] | None = field(init=False)
     _scope_bindings: _ScopeBindings = field(init=False)
+    _seen_scopes: weakref.WeakSet[Scope] = field(init=False)
     _state: _ContextState = field(init=False)
     _dispose_pending: _Completion[None] | None = field(init=False)
     _dispose_error: BaseException | None = field(init=False)
@@ -470,13 +470,15 @@ class Context(ContextElement):
             bound_scope = parent.scope if scope is None else scope
             scope_viewers = None
             scope_bindings = application_root._scope_bindings
+            seen_scopes = application_root._seen_scopes
         else:
             root_schema = Schema() if schema is None else schema
             root_data = weakref.WeakKeyDictionary()
             application_root = self
             bound_scope = Scope() if scope is None else scope
             scope_viewers = {}
-            scope_bindings = weakref.WeakKeyDictionary()
+            scope_bindings = {}
+            seen_scopes = weakref.WeakSet()
 
         object.__setattr__(self, "parent", parent)
         object.__setattr__(self, "scope", bound_scope)
@@ -486,12 +488,15 @@ class Context(ContextElement):
         object.__setattr__(self, "_owned", {})
         object.__setattr__(self, "_scope_viewers", scope_viewers)
         object.__setattr__(self, "_scope_bindings", scope_bindings)
+        object.__setattr__(self, "_seen_scopes", seen_scopes)
         object.__setattr__(self, "_state", _ContextState.ACTIVE)
         object.__setattr__(self, "_dispose_pending", None)
         object.__setattr__(self, "_dispose_error", None)
         object.__setattr__(self, "_sync_disposal_guard_depth", 0)
 
         self._acquire_scope()
+        if root_schema is not None:
+            root_schema._contexts.add(self)
         if parent is not None:
             parent._owned[self] = None
         try:
@@ -569,8 +574,15 @@ class Context(ContextElement):
             contexts.add(self)
         try:
             for scope in acquired:
-                for binding in tuple(self._scope_bindings.get(scope, ())):
-                    binding.acquire_scope(scope)
+                if scope not in self._seen_scopes:
+                    self._seen_scopes.add(scope)
+                    continue
+                # Active indexes end with their viewers; saved Scopes retain
+                # their immutable identities and restore ownership on reuse.
+                for entry in tuple(self.schema._entries.values()):
+                    binding = self._data.get(entry)
+                    if binding is not None and scope in binding._scope_identities:
+                        binding.acquire_scope(scope)
         except BaseException as error:
             try:
                 self._release_scope()
@@ -592,15 +604,23 @@ class Context(ContextElement):
 
         first_error: BaseException | None = None
         for scope in expired:
-            for binding in tuple(self._scope_bindings.get(scope, ())):
+            for path in tuple(self._scope_bindings.get(scope, ())):
                 # Value finalizers may register new viewers for this Scope.
                 if scope in viewers:
                     break
+                entry = self.schema._entries.get(path)
+                if entry is None:
+                    continue
+                binding = self._data.get(entry)
+                if binding is None:
+                    continue
                 try:
                     binding.release_scope(scope)
                 except BaseException as error:
                     if first_error is None:
                         first_error = error
+            if scope not in viewers:
+                self._scope_bindings.pop(scope, None)
         if not viewers:
             self._data.clear()
             self._scope_bindings.clear()
@@ -655,6 +675,8 @@ class Context(ContextElement):
                 error.__cause__ = release_error
         if self.parent is not None:
             self.parent._forget_owned(self)
+        else:
+            self.schema._contexts.discard(self)
         object.__setattr__(self, "_dispose_error", error)
         object.__setattr__(self, "_state", _ContextState.DISPOSED)
         return error
@@ -665,7 +687,7 @@ class Context(ContextElement):
         Synchronous cleanup runs immediately. Await asynchronous completion;
         once awaited, waiter cancellation does not cancel cleanup. Repeated
         calls share that completion and reproduce its terminal failure.
-        Owned cleanup failures are retained together in BatchError.results.
+        Owned cleanup failures are grouped in cleanup execution order.
         Mutations in the entire ownership subtree are forbidden before the
         first cleanup; each Context remains readable until its own release.
         """
@@ -689,17 +711,15 @@ class Context(ContextElement):
 
         @continuation
         def execute() -> Generator[Any, Any, None]:
-            results: list[Result[None]] = []
+            errors = []
             try:
                 for item in owned:
                     try:
-                        value = yield item.dispose()
-                    except BaseException as error:
-                        results.append(Result(error=error))
-                    else:
-                        results.append(Result(value=value))
-                if any(result.error is not None for result in results):
-                    raise BatchError(results)
+                        yield item.dispose()
+                    except BaseException as e:
+                        errors.append(e)
+                if errors:
+                    raise exception_group("Context dispose failed", errors)
             except BaseException as error:
                 finish(error)
             else:
@@ -741,22 +761,22 @@ class Context(ContextElement):
 
     def declare(
         self,
-        declarations: Schema | Mapping[str, Any],
+        declaration: Schema | _Declaration,
     ) -> Callable[[], None]:
         """Declare shared Schema paths owned by this Context."""
-        return self.effect(lambda: self.schema.declare(declarations))
+        return self.effect(lambda: self.schema.declare(declaration))
 
     def _validate_entry(
         self,
         key: ContextKey,
         *,
         role: _RefRole = "any",
-    ) -> _RefEntry[Any]:
+    ) -> RefEntry[Any]:
         self._assert_readable()
         path = key if isinstance(key, str) else key.path
 
         try:
-            entry = self.schema._resolve_entry(path)
+            entry = self.schema.resolve_entry(path)
         except (KeyError, ValueError) as error:
             if isinstance(key, Ref):
                 raise ContextPathError(
@@ -765,7 +785,7 @@ class Context(ContextElement):
             raise ContextPathError(str(error)) from error
 
         kind: Literal["leaf", "container"]
-        if isinstance(entry.config, _RefLeafConfig):
+        if isinstance(entry.config, RefLeafConfig):
             kind = "leaf"
         else:
             kind = "container"
@@ -813,7 +833,7 @@ class Context(ContextElement):
     @overload
     def _binding(
         self,
-        entry: _RefEntry[Any],
+        entry: RefEntry[Any],
         *,
         create: Literal[True],
     ) -> _ContextBinding: ...
@@ -821,24 +841,45 @@ class Context(ContextElement):
     @overload
     def _binding(
         self,
-        entry: _RefEntry[Any],
+        entry: RefEntry[Any],
         *,
         create: Literal[False],
     ) -> _ContextBinding | None: ...
 
     def _binding(
         self,
-        entry: _RefEntry[Any],
+        entry: RefEntry[Any],
         *,
         create: bool,
     ) -> _ContextBinding | None:
         binding = self._data.get(entry)
         if binding is None and create:
-            binding = _ContextBinding(self._scope_bindings)
+            binding = _ContextBinding(entry.ref.path, self._scope_bindings)
             self._data[entry] = binding
         return binding
 
-    def _leaf_value(self, entry: _RefEntry[Any], *, local: bool) -> Any:
+    def _remove_binding(self, entry: RefEntry[Any]) -> None:
+        """Withdraw one Schema definition from this application's active index."""
+        binding = self._data.pop(entry, None)
+        if binding is None:
+            return
+        current = self.schema._entries.get(entry.ref.path)
+        replacement = self._data.get(current) if current is not None else None
+        for scopes in binding._identity_scopes.values():
+            for scope in scopes:
+                # Another application's cleanup may have redeclared this path.
+                if replacement is not None and scope in replacement._scope_identities:
+                    continue
+                paths = self._scope_bindings.get(scope)
+                if paths is not None:
+                    paths.discard(entry.ref.path)
+                    if not paths:
+                        del self._scope_bindings[scope]
+        binding._identity_scopes.clear()
+        binding._blocked.clear()
+        binding._values.clear()
+
+    def _leaf_value(self, entry: RefEntry[Any], *, local: bool) -> Any:
         binding = self._binding(entry, create=False)
         if binding is None:
             raise ContextPathError(entry.ref.path)
@@ -860,10 +901,10 @@ class Context(ContextElement):
                 continue
             yield entry.ref, value
 
-    def _entry_value(self, entry: _RefEntry[Any], *, local: bool) -> Any:
-        if isinstance(entry.config, _RefLeafConfig):
+    def _entry_value(self, entry: RefEntry[Any], *, local: bool) -> Any:
+        if isinstance(entry.config, RefLeafConfig):
             return self._leaf_value(entry, local=local)
-        if not any(self._leaf_items(entry.ref.parts, local=local)):
+        if entry.ref.parts and not any(self._leaf_items(entry.ref.parts, local=local)):
             raise ContextPathError(entry.ref.path)
         return ContextView(self, entry.ref.parts)
 
@@ -890,6 +931,7 @@ class Context(ContextElement):
         *,
         local: bool = False,
     ) -> Any:
+        """Read a value or container view; the empty path always has a root view."""
         entry = self._validate_entry(ref)
         try:
             return self._entry_value(entry, local=local)
@@ -900,13 +942,15 @@ class Context(ContextElement):
 
     def exists(self, ref: ContextKey, *, local: bool = False) -> bool:
         entry = self._validate_entry(ref)
-        if isinstance(entry.config, _RefLeafConfig):
+        if isinstance(entry.config, RefLeafConfig):
             try:
                 self._leaf_value(entry, local=local)
                 return True
             except ContextPathError:
                 return False
-        return any(self._leaf_items(entry.ref.parts, local=local))
+        return not entry.ref.parts or any(
+            self._leaf_items(entry.ref.parts, local=local)
+        )
 
     def keys(
         self,
@@ -917,7 +961,7 @@ class Context(ContextElement):
         self._assert_readable()
         parts = () if ref is None else self._validate_ref(ref, role="container").parts
         visible = tuple(self._leaf_items(parts, local=local))
-        if ref is not None and not visible:
+        if parts and not visible:
             raise ContextPathError(".".join(parts))
 
         result: list[str] = []
@@ -938,7 +982,7 @@ class Context(ContextElement):
         self._assert_readable()
         parts = () if ref is None else self._validate_ref(ref, role="container").parts
         visible = tuple(self._leaf_items(parts, local=local))
-        if ref is not None and not visible:
+        if parts and not visible:
             raise ContextPathError(".".join(parts))
 
         result: _Tree = {}
@@ -959,8 +1003,8 @@ class Context(ContextElement):
         return self._snapshot_tree(ref, local=local)
 
     # --- Write Operations ---
-    def _set_entry(self, entry: _RefEntry[Any], value: Any) -> None:
-        config = cast(_RefLeafConfig[Any], entry.config)
+    def _set_entry(self, entry: RefEntry[Any], value: Any) -> None:
+        config = cast(RefLeafConfig[Any], entry.config)
         try:
             self._binding(entry, create=True).set_value(
                 self.scope, value, replaceable=config.replaceable
@@ -971,7 +1015,7 @@ class Context(ContextElement):
                 "delete it or use a Context bound to a child Scope."
             ) from error
 
-    def _delete_leaf(self, entry: _RefEntry[Any]) -> None:
+    def _delete_leaf(self, entry: RefEntry[Any]) -> None:
         binding = self._binding(entry, create=False)
         if binding is not None:
             binding.delete_value(self.scope)
@@ -983,14 +1027,22 @@ class Context(ContextElement):
         self._set_entry(entry, value)
 
     def delete(self, ref: ContextKey) -> None:
-        """Delete a local leaf value or the local values under a container."""
+        """Delete local values under a path; the empty path covers all leaves.
+
+        Deletion changes only the identity bound to this Scope for each leaf.
+        Schema declarations, inheritance barriers, and effects remain intact.
+        """
         self._assert_mutable()
         entry = self._validate_entry(ref)
-        if isinstance(entry.config, _RefLeafConfig):
+        if isinstance(entry.config, RefLeafConfig):
             self._delete_leaf(entry)
         else:
-            for leaf in tuple(self.schema._leaf_entries(entry.ref.parts)):
-                self._delete_leaf(leaf)
+            leaves = {
+                leaf.ref.path: leaf
+                for leaf in self.schema._leaf_entries(entry.ref.parts)
+            }
+            for path in leaves.keys() & self._scope_bindings.get(self.scope, set()):
+                self._delete_leaf(leaves[path])
 
     def update(self, updates: Mapping[ContextKey, Any]) -> None:
         """Set local bindings after validating every path and replacement policy.
@@ -1004,7 +1056,7 @@ class Context(ContextElement):
             for ref, value in updates.items()
         }
         for entry in entries:
-            config = cast(_RefLeafConfig[Any], entry.config)
+            config = cast(RefLeafConfig[Any], entry.config)
             if config.replaceable:
                 continue
             binding = self._binding(entry, create=False)
@@ -1027,14 +1079,17 @@ class Context(ContextElement):
         """
         self._assert_mutable()
         entries = {self._validate_entry(ref) for ref in refs}
-        leaves: set[_RefEntry[Any]] = set()
+        leaves: dict[str, RefEntry[Any]] = {}
         for entry in entries:
-            if isinstance(entry.config, _RefLeafConfig):
-                leaves.add(entry)
+            if isinstance(entry.config, RefLeafConfig):
+                leaves[entry.ref.path] = entry
             else:
-                leaves.update(self.schema._leaf_entries(entry.ref.parts))
-        for entry in leaves:
-            self._delete_leaf(entry)
+                leaves.update(
+                    (leaf.ref.path, leaf)
+                    for leaf in self.schema._leaf_entries(entry.ref.parts)
+                )
+        for path in leaves.keys() & self._scope_bindings.get(self.scope, set()):
+            self._delete_leaf(leaves[path])
 
     def add(self, ref: ContextKey, value: _T) -> Callable[[], None]:
         """Add one local binding owned by this Context."""
@@ -1156,7 +1211,7 @@ class ContextView(ContextElement):
             role="container",
         )
         items = tuple(self._context._leaf_items(entry.ref.parts, local=local))
-        if not items:
+        if entry.ref.parts and not items:
             raise ContextPathError(entry.ref.path)
         return items
 

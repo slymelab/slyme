@@ -61,7 +61,7 @@ async def execute(ctx):
         await ctx.adispose()
 ```
 
-`task.acall(ctx)` 和 `ctx.adispose()` 始终返回 awaitable。它们通过 `slyme.utils.continuation` 的 `await_result()` 委托给普通调用与释放方法；同步工作和同步错误仍在调用时立即发生。它们不会创建 task 或调度异步工作。
+`task.acall(ctx)` 和 `ctx.adispose()` 始终返回 awaitable。它们通过 `slyme.utils.execution` 的 `await_result()` 委托给普通调用与释放方法；同步工作和同步错误仍在调用时立即发生。它们不会创建 task 或调度异步工作。
 
 `await_result()` 只等待外层执行结果，不递归等待容器中的数据。异步 continuation 在被等待或调度前不会执行；同步前缀可能已运行。同步应用可以在应用入口使用 `asyncio.run(await_result(task(ctx)))`，已有事件循环内应 await，不创建嵌套事件循环。框架不会把阻塞函数自动放入线程。
 
@@ -69,11 +69,11 @@ async def execute(ctx):
 
 ### 生成器组合
 
-`slyme.utils.continuation` 的 `@continuation` 将生成器函数转换为可直接调用的同步或异步函数。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
+`slyme.utils.execution` 的 `@continuation` 将生成器函数转换为可直接调用的同步或异步函数。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
 
 ```python
 from slyme.node import Node
-from slyme.utils.continuation import continuation
+from slyme.utils.execution import continuation
 
 
 @node
@@ -93,7 +93,7 @@ def increment_child(ctx, *, child: Node[int]):
 
 执行顺序、并发和结果收集由调用方决定。逐项 yield 调用的循环会等待当前项完成后再继续。并发实现可以先调用各项、保存返回的 awaitable，再 yield 一个异步聚合操作。若调用方可能还没有运行中的事件循环，应在该异步操作内部创建 `gather()` 或 Task。枚举或调用期间的同步异常遵循调用方的 `try/except/finally`，驱动器不额外定义 batch 策略。
 
-Auto 独立拥有全部完成后汇总的求值策略。它先内联调用每个 evaluator 组和子节点，再等待异步结果；只有异步结果会调度为 Task。单项失败不会取消 sibling。每个子节点无论成功还是失败，都在自己的 `finally` 中释放 Context。错误通过 `slyme.utils.exception` 的嵌套 `BatchError` 报告，其按输入排序的 `Result(value=..., error=...)` 分别保存成功返回值与抛出的异常。取消批次遵循 asyncio 的传播规则，不再汇总部分结果，并可能在 Context 管理的清理结束前返回，详见 [Auto 生命周期](./lifecycle.md#auto-值)。Context 独立拥有递归 LIFO 清理策略；两个消费者共用生成器驱动器，不共用执行策略 API。
+Auto 独立拥有全部完成后汇总的求值策略。它先内联调用每个 evaluator 组和子节点，再等待异步结果；只有异步结果会调度为 Task。单项失败不会取消 sibling。每个子节点无论成功还是失败，都在自己的 `finally` 中释放 Context。错误按输入顺序组成嵌套异常组，各组消息包含失败项的输入索引；只有整个批次成功时才返回结果。Node 和 Wrapper 会将普通异常（包括普通异常组）包装成异常记录，由 `__cause__` 保存原始异常；已有 Node 异常记录及非 `Exception` 控制异常原样传播。取消批次遵循 asyncio 的传播规则，不再汇总部分结果，并可能在 Context 管理的清理结束前返回，详见 [Auto 生命周期](./lifecycle.md#auto-值)。Context 独立拥有递归 LIFO 清理策略；两个消费者共用生成器驱动器，不共用执行策略 API。
 
 ## 参数与 Auto
 
@@ -145,7 +145,7 @@ assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
 ```python
 from collections.abc import Callable
 from slyme.node import Node, wrapper
-from slyme.utils.continuation import continuation
+from slyme.utils.execution import continuation
 
 
 @wrapper

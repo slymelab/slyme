@@ -11,9 +11,9 @@ from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
 from slyme.node import Auto, Node, eval_tree, node, wrapper
 from slyme.node.eval import EVALUATOR_REGISTRY, BatchEvaluatorFunc, node_evaluator
-from slyme.node.exception import NodeExceptionRecord
-from slyme.utils.continuation import await_result
-from slyme.utils.exception import BatchError, Result
+from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
+from slyme.utils.exception import BaseExceptionGroup
+from slyme.utils.execution import await_result
 from slyme.utils.registry import GeneralRegistry
 from slyme.utils.tree import TreeAux, TreeEngine
 
@@ -99,9 +99,9 @@ async def test_evaluator_groups_run_concurrently_and_settle_before_reporting(
     ctx = Context()
     pending = await_result(eval_tree(ctx, [1, "a", 2, "b"]))
     if fail:
-        with pytest.raises(BatchError) as caught:
+        with pytest.raises(BaseExceptionGroup) as caught:
             await asyncio.wait_for(pending, timeout=1)
-        assert caught.value.results == [Result(error=failure) for failure in failures]
+        assert caught.value.exceptions == tuple(failures)
     else:
         assert await asyncio.wait_for(pending, timeout=1) == [2, "A", 3, "B"]
     assert sorted(finished) == [0, 1]
@@ -143,22 +143,25 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
         def call(ctx):
             return eval_tree(ctx, values)
 
-    with pytest.raises(BatchError) as caught:
+    expected = {
+        "node": NodeExceptionRecord,
+        "wrapper": WrapperExceptionRecord,
+        "eval_tree": BaseExceptionGroup,
+    }[target]
+    with pytest.raises(expected) as caught:
         await await_result(call(ctx))
-    error = caught.value
-    assert isinstance(error, BatchError)
-    assert len(error.results) == 2
-    ref_errors, node_errors = (result.error for result in error.results)
-    assert isinstance(ref_errors, BatchError)
-    assert len(ref_errors.results) == 2
-    assert all(
-        isinstance(result.error, ContextPathError) for result in ref_errors.results
-    )
-    assert isinstance(node_errors, BatchError)
-    assert len(node_errors.results) == 1
-    child_error = node_errors.results[0].error
+    error = caught.value if target == "eval_tree" else caught.value.__cause__
+    assert isinstance(error, BaseExceptionGroup)
+    assert len(error.exceptions) == 2
+    ref_errors, node_errors = error.exceptions
+    assert isinstance(ref_errors, BaseExceptionGroup)
+    assert len(ref_errors.exceptions) == 2
+    assert all(isinstance(error, ContextPathError) for error in ref_errors.exceptions)
+    assert isinstance(node_errors, BaseExceptionGroup)
+    assert len(node_errors.exceptions) == 1
+    child_error = node_errors.exceptions[0]
     assert isinstance(child_error, NodeExceptionRecord)
-    assert child_error.exception is failure
+    assert child_error.__cause__ is failure
     assert visited == ["child", "cleanup"]
     assert not ctx._owned
     ctx.dispose()
@@ -196,19 +199,18 @@ async def test_auto_reports_cleanup_failures_with_node_exception_context(
         return 2
 
     ctx = Context()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(
             node_evaluator(ctx, [failing(index=0), failing(index=1), successful()])
         )
-    assert len(caught.value.results) == 3
-    assert caught.value.results[2] == Result(value=2)
+    assert len(caught.value.exceptions) == 2
     for index, failure in enumerate(failures):
-        cleanup_error = caught.value.results[index].error
-        assert isinstance(cleanup_error, BatchError)
-        assert cleanup_error.results == [Result(error=cleanup_failures[index])]
+        cleanup_error = caught.value.exceptions[index]
+        assert isinstance(cleanup_error, BaseExceptionGroup)
+        assert cleanup_error.exceptions == (cleanup_failures[index],)
         node_error = cleanup_error.__context__
         assert isinstance(node_error, NodeExceptionRecord)
-        assert node_error.exception is failure
+        assert node_error.__cause__ is failure
     assert caught.value.__cause__ is None
     for index in range(3):
         assert events.count(("run", index)) == 1
@@ -240,12 +242,12 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
         return 2
 
     ctx = Context()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         node_evaluator(ctx, [first(), second()])
-    cleanup_error = caught.value.results[0].error
-    assert isinstance(cleanup_error, BatchError)
-    assert cleanup_error.results == [Result(error=failure)]
-    assert caught.value.results[1] == Result(value=2)
+    cleanup_error = caught.value.exceptions[0]
+    assert isinstance(cleanup_error, BaseExceptionGroup)
+    assert cleanup_error.exceptions == (failure,)
+    assert len(caught.value.exceptions) == 1
     assert caught.value.__cause__ is None
     assert events == ["cleanup", "second"]
     assert not ctx._owned
@@ -268,7 +270,7 @@ async def test_sync_auto_failure_still_starts_async_siblings() -> None:
     pending = node_evaluator(ctx, [failing(), asynchronous()])
     assert inspect.isawaitable(pending)
     assert visited == ["sync"]
-    with pytest.raises(BatchError):
+    with pytest.raises(BaseExceptionGroup):
         await pending
     assert visited == ["sync", "async"]
     assert not ctx._owned
@@ -316,12 +318,12 @@ async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
     assert not task.done()
     release.set()
     if fails:
-        with pytest.raises(BatchError) as caught:
+        with pytest.raises(BaseExceptionGroup) as caught:
             await task
-        node_error = caught.value.results[0].error
+        node_error = caught.value.exceptions[0]
         assert isinstance(node_error, NodeExceptionRecord)
-        assert node_error.exception is failure
-        assert caught.value.results[1] == Result(value=2)
+        assert node_error.__cause__ is failure
+        assert len(caught.value.exceptions) == 1
     else:
         assert await task == [1, 2]
     assert not ctx._owned
@@ -358,9 +360,9 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
     await asyncio.sleep(0)
     assert not task.done()
     release.set()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await task
-    assert isinstance(caught.value.results[0].error, asyncio.CancelledError)
+    assert isinstance(caught.value.exceptions[0], asyncio.CancelledError)
     assert "sibling finished" in events
     assert events.count("cleanup:cancelled") == 1
     assert events.count("cleanup:sibling") == 1
@@ -439,9 +441,9 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
     finally:
         release.set()
         if cleanup_fails:
-            with pytest.raises(BatchError) as caught:
+            with pytest.raises(BaseExceptionGroup) as caught:
                 await children[0].adispose()
-            assert caught.value.results == [Result(error=cleanup_failure)]
+            assert caught.value.exceptions == (cleanup_failure,)
         else:
             await children[0].adispose()
     assert events == ["cleanup started", "cleanup finished"]

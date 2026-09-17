@@ -6,7 +6,7 @@ from inspect import isawaitable
 
 import pytest
 
-from slyme.utils.continuation import await_result, continuation, run
+from slyme.utils.execution import SharedAwaitable, await_result, continuation, once, run
 
 
 @pytest.mark.parametrize("parentheses", [False, True])
@@ -402,3 +402,116 @@ def test_caller_controls_batch_scheduling_and_sync_fast_path() -> None:
     assert events == [("call", value) for value in range(4)]
     assert asyncio.run(await_result(result)) == [0, 2, 4, 6]
     assert started == {1, 3}
+
+
+@pytest.mark.parametrize("result", [None, False, 0, ValueError("returned")])
+def test_once_preserves_first_arguments_and_result(result) -> None:
+    calls = []
+
+    @once
+    def operation(value, *, option):
+        calls.append((value, option))
+        return result
+
+    assert operation(1, option=2) is result
+    assert operation(3, option=4) is result
+    assert calls == [(1, 2)]
+
+
+@pytest.mark.parametrize("failure", [ValueError("failed"), asyncio.CancelledError()])
+def test_once_replays_sync_failure_without_retry(failure) -> None:
+    calls = []
+
+    @once
+    def operation():
+        calls.append(1)
+        raise failure
+
+    for _ in range(2):
+        with pytest.raises(type(failure)) as caught:
+            operation()
+        assert caught.value is failure
+    assert calls == [1]
+
+
+def test_once_reentry_can_be_handled_by_the_original_call() -> None:
+    @once
+    def operation():
+        with pytest.raises(RuntimeError, match="re-enter"):
+            operation()
+        return 42
+
+    assert operation() == operation() == 42
+
+
+def test_once_releases_callback_after_sync_success() -> None:
+    class Callback:
+        def __call__(self):
+            return 42
+
+    callback = Callback()
+    reference = weakref.ref(callback)
+    operation = once(callback)
+    del callback
+    assert operation() == 42
+    assert reference() is None
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_once_shares_lazy_async_result_and_failure(fail) -> None:
+    calls = []
+    failure = ValueError("failed")
+
+    @once
+    async def operation():
+        calls.append(1)
+        await asyncio.sleep(0)
+        if fail:
+            raise failure
+        return 42
+
+    result = operation()
+    assert isinstance(result, SharedAwaitable)
+    assert calls == []
+    for _ in range(2):
+        assert operation() is result
+        if fail:
+            with pytest.raises(ValueError) as caught:
+                await result
+            assert caught.value is failure
+        else:
+            assert await result == 42
+    assert calls == [1]
+
+
+async def test_shared_waiter_cancellation_does_not_cancel_operation() -> None:
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    calls = []
+
+    async def operation():
+        calls.append(1)
+        started.set()
+        await finish.wait()
+        return 42
+
+    shared = SharedAwaitable(operation())
+    first = asyncio.create_task(await_result(shared))
+    second = asyncio.ensure_future(shared)
+    await started.wait()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    finish.set()
+    assert await second == 42
+    assert await shared == 42
+    assert calls == [1]
+
+
+async def test_shared_operation_cannot_wait_for_itself() -> None:
+    @once
+    async def operation():
+        return await operation()
+
+    with pytest.raises(RuntimeError, match="own completion"):
+        await asyncio.wait_for(await_result(operation()), 1)

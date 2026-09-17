@@ -122,14 +122,14 @@ def test_native_parameter_errors_are_reported_at_invocation() -> None:
     ctx = Context()
     with pytest.raises(NodeExceptionRecord) as missing:
         instance(ctx)
-    assert isinstance(missing.value.exception, TypeError)
-    assert "value" in str(missing.value.exception)
+    assert isinstance(missing.value.__cause__, TypeError)
+    assert "value" in str(missing.value.__cause__)
 
     instance.set("unknown", 1)
     with pytest.raises(NodeExceptionRecord) as unexpected:
         instance(ctx, value=Auto(child()))
-    assert isinstance(unexpected.value.exception, TypeError)
-    assert "unknown" in str(unexpected.value.exception)
+    assert isinstance(unexpected.value.__cause__, TypeError)
+    assert "unknown" in str(unexpected.value.__cause__)
     assert calls == ["child"]
     assert not ctx._owned
     instance.delete("unknown")
@@ -142,7 +142,7 @@ def test_native_parameter_errors_are_reported_at_invocation() -> None:
     wrapped = required(value=1).add_wrappers(middleware())
     with pytest.raises(WrapperExceptionRecord) as missing_wrapper:
         wrapped(ctx)
-    assert isinstance(missing_wrapper.value.exception, TypeError)
+    assert isinstance(missing_wrapper.value.__cause__, TypeError)
     ctx.dispose()
 
 

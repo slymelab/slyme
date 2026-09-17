@@ -10,8 +10,8 @@ from slyme.context import Context
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.eval import BatchEvaluatorFunc
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.continuation import await_result
-from slyme.utils.exception import BatchError, Result
+from slyme.utils.exception import BaseExceptionGroup
+from slyme.utils.execution import await_result
 from slyme.utils.registry import GeneralRegistry
 
 
@@ -140,7 +140,7 @@ async def test_node_sequence_stops_at_first_failure(asynchronous) -> None:
     with pytest.raises(NodeExceptionRecord) as caught:
         await await_result(sequential_exec(ctx, [child(index=i) for i in range(3)]))
     assert calls == [0, 1]
-    assert caught.value.exception is failure
+    assert caught.value.__cause__ is failure
     ctx.dispose()
 
 
@@ -201,7 +201,7 @@ async def test_awaited_failures_keep_node_and_wrapper_attribution(
     error_type = WrapperExceptionRecord if failure_in_wrapper else NodeExceptionRecord
     with pytest.raises(error_type) as caught:
         await await_result(graph(ctx))
-    assert caught.value.exception is failure
+    assert caught.value.__cause__ is failure
     assert caught.value.exception_node is (wrapping if failure_in_wrapper else graph)
     ctx.dispose()
 
@@ -345,9 +345,9 @@ async def test_setup_failure_during_owner_disposal_keeps_cleaning_and_replays() 
     registration = ctx.effect(setup)
     ctx.effect(lambda: lambda: events.append("last"))
     for _ in range(2):
-        with pytest.raises(BatchError) as caught:
+        with pytest.raises(BaseExceptionGroup) as caught:
             await await_result(ctx.dispose())
-        assert caught.value.results == [Result(), Result(error=failure), Result()]
+        assert caught.value.exceptions == (failure,)
     with pytest.raises(ValueError) as caught:
         await await_result(registration)
     assert caught.value is failure
@@ -445,16 +445,18 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
         return value
 
     ctx = Context()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(NodeExceptionRecord) as caught:
         await await_result(parent(value=Auto(child()))(ctx))
-    child_errors = caught.value.results[0].error
-    assert isinstance(child_errors, BatchError)
-    cleanup_error = child_errors.results[0].error
-    assert isinstance(cleanup_error, BatchError)
-    assert cleanup_error.results == [Result(error=cleanup_failure)]
+    group = caught.value.__cause__
+    assert isinstance(group, BaseExceptionGroup)
+    child_errors = group.exceptions[0]
+    assert isinstance(child_errors, BaseExceptionGroup)
+    cleanup_error = child_errors.exceptions[0]
+    assert isinstance(cleanup_error, BaseExceptionGroup)
+    assert cleanup_error.exceptions == (cleanup_failure,)
     node_error = cleanup_error.__context__
     assert isinstance(node_error, NodeExceptionRecord)
-    assert node_error.exception is failure
+    assert node_error.__cause__ is failure
     assert child_errors.__cause__ is None
     assert not ctx._owned
     ctx.dispose()
@@ -469,10 +471,10 @@ async def test_cleanup_cannot_await_saved_owner_completion() -> None:
 
     ctx.effect(lambda: cleanup)
     completion = ctx.dispose()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await asyncio.wait_for(await_result(completion), 1)
-    assert isinstance(caught.value.results[0].error, RuntimeError)
-    assert "setup or cleanup" in str(caught.value.results[0].error)
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert "setup or cleanup" in str(caught.value.exceptions[0])
     assert not ctx._owned
 
 
@@ -494,11 +496,10 @@ async def test_disposal_preserves_sync_failure_while_finishing_async_cleanup() -
     ctx.effect(lambda: fail)
     pending = ctx.dispose()
     assert events == ["sync"]
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(pending)
-    assert len(caught.value.results) == 3
-    assert caught.value.results[0].error is first_error
-    assert isinstance(caught.value.results[1].error, RuntimeError)
-    assert str(caught.value.results[1].error) == "second failure"
-    assert caught.value.results[2] == Result()
+    assert len(caught.value.exceptions) == 2
+    assert caught.value.exceptions[0] is first_error
+    assert isinstance(caught.value.exceptions[1], RuntimeError)
+    assert str(caught.value.exceptions[1]) == "second failure"
     assert events == ["sync", "async", "last"]

@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Generator, Iterable, Sequence
 from typing import Any
 
 from slyme.context import Context
-from slyme.utils.continuation import continuation
+from slyme.utils.execution import continuation
 
 from .core import Node, node
 

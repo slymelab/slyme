@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import builtins
 import sys
+from asyncio import CancelledError
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -9,7 +11,12 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from slyme.utils.exception import enrich_exception
+from slyme.utils.exception import (
+    BaseExceptionGroup,
+    ExceptionGroup,
+    enrich_exception,
+    exception_group,
+)
 from slyme.utils.registry import GeneralRegistry, Registry
 from slyme.utils.tree import (
     AttributeKey,
@@ -295,6 +302,64 @@ def test_mapping_proxy_helpers_and_aux_immutability() -> None:
         unflatten_mapping_proxy([], TreeAux())
     with pytest.raises(ValueError, match="Missing keys"):
         unflatten_dict([], TreeAux())
+
+
+def test_exception_group_preserves_members_and_message() -> None:
+    errors = [ValueError("first"), RuntimeError("second")]
+    group = exception_group("operations failed", errors)
+
+    assert type(group) is ExceptionGroup
+    assert group.message == "operations failed"
+    assert group.exceptions == tuple(errors)
+    assert all(
+        actual is expected
+        for actual, expected in zip(group.exceptions, errors, strict=True)
+    )
+    assert str(group) == "operations failed (2 sub-exceptions)"
+    with pytest.raises(Exception) as caught:
+        raise group
+    assert caught.value is group
+    if sys.version_info >= (3, 11):
+        assert type(group) is builtins.ExceptionGroup
+
+    errors.clear()
+    assert len(group.exceptions) == 2
+
+
+@pytest.mark.parametrize("error", [CancelledError(), KeyboardInterrupt(), SystemExit()])
+def test_exception_group_preserves_base_exception_catch_semantics(
+    error: BaseException,
+) -> None:
+    ordinary = ValueError("failure")
+    group = exception_group("interrupted", [ordinary, error])
+
+    assert type(group) is BaseExceptionGroup
+    assert group.exceptions == (ordinary, error)
+    assert not isinstance(group, Exception)
+    with pytest.raises(BaseException) as caught:
+        try:
+            raise group
+        except Exception:
+            pytest.fail("Base exception groups must bypass except Exception.")
+    assert caught.value is group
+    if sys.version_info >= (3, 11):
+        assert type(group) is builtins.BaseExceptionGroup
+
+
+@pytest.mark.parametrize("error", [ValueError("failure"), CancelledError()])
+def test_exception_group_preserves_nested_groups(error: BaseException) -> None:
+    inner = exception_group("inner", (error,))
+    outer = exception_group("outer", (inner,))
+
+    assert inner.exceptions == (error,)
+    assert outer.exceptions == (inner,)
+    assert isinstance(outer, Exception) == isinstance(error, Exception)
+    assert str(outer) == "outer (1 sub-exception)"
+
+
+def test_exception_group_rejects_empty_members() -> None:
+    with pytest.raises(ValueError):
+        exception_group("empty", [])
 
 
 @pytest.mark.parametrize("args", [(), ("failure",), (123,), ("failure", 123)])

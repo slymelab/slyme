@@ -23,13 +23,11 @@ from typing import Any, Generic, Protocol, TypeVar, overload
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.continuation import await_result, continuation
-from slyme.utils.exception import BatchError
+from slyme.utils.execution import await_result, continuation
 
 from .exception import (
     NodeException,
     NodeExceptionRecord,
-    NodeTerminate,
     WrapperExceptionRecord,
 )
 
@@ -138,16 +136,10 @@ class Node(NodeElement, Generic[_R]):
     def __call__(self, ctx: Context, /, **kwargs: Any) -> Generator[Any, Any, _R]:
         try:
             return (yield self._call(ctx, kwargs))
-        except BaseException as error:
-            if not isinstance(error, Exception):
-                raise
-            if isinstance(error, NodeTerminate):
-                if error.source_node is None:
-                    error.source_node = self
-                raise
-            if isinstance(error, (NodeException, BatchError)):
-                raise
-            raise NodeExceptionRecord(exception_node=self, exception=error) from error
+        except NodeException:
+            raise
+        except Exception as error:
+            raise NodeExceptionRecord(exception_node=self) from error
 
     def acall(self, ctx: Context, /, **kwargs: Any) -> Awaitable[_R]:
         """Call with an always-awaitable result, preserving immediate execution.
@@ -222,13 +214,11 @@ class Wrapper(NodeElement, Generic[_R]):
     ) -> Generator[Any, Any, _R]:
         try:
             return (yield self._call(ctx, wrapped, call_next, kwargs))
-        except BaseException as error:
-            if not isinstance(error, Exception):
-                raise
-            if isinstance(error, (NodeException, BatchError)):
-                raise
+        except NodeException:
+            raise
+        except Exception as error:
             raise WrapperExceptionRecord(
-                exception_node=self, wrapped_node=wrapped, exception=error
+                exception_node=self, wrapped_node=wrapped
             ) from error
 
     @continuation

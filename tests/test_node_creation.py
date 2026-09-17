@@ -8,7 +8,7 @@ import pytest
 
 from slyme.context import Context
 from slyme.node import Auto, create_node, create_wrapper, node, wrapper
-from slyme.utils.continuation import continuation
+from slyme.utils.execution import continuation
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])

@@ -17,16 +17,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 __all__ = ["Ref"]
 
 _T = TypeVar("_T")
 
 
-@dataclass(frozen=True, repr=False)
+@dataclass(frozen=True)
 class Ref(Generic[_T]):
-    """Immutable Context dependency handle for one declared dotted path."""
+    """Immutable Context path; the empty path identifies the root container."""
 
     path: str
     parts: tuple[str, ...] = field(init=False)
@@ -34,24 +34,11 @@ class Ref(Generic[_T]):
     @staticmethod
     def _split_path(path: str) -> tuple[str, ...]:
         if not path:
-            raise ValueError("Ref path cannot be empty.")
+            return ()
         parts = tuple(path.split("."))
         if any(not part for part in parts):
             raise ValueError(f"Invalid Ref path: {path!r}.")
         return parts
-
-    @staticmethod
-    def _validate_name(name: Any) -> str:
-        if not isinstance(name, str):
-            raise TypeError(
-                f"Invalid Schema key, expected str, got {type(name).__name__}."
-            )
-        if not name or "." in name:
-            raise ValueError(
-                f"Invalid Schema key {name!r}; "
-                "keys must be non-empty strings without dots."
-            )
-        return name
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parts", self._split_path(self.path))

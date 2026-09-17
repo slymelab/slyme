@@ -8,8 +8,8 @@ import pytest
 
 from slyme.context import Compose, Context, Schema, Scope
 from slyme.context.core import ContextPathError
-from slyme.utils.continuation import await_result
-from slyme.utils.exception import BatchError, Result
+from slyme.utils.exception import BaseExceptionGroup
+from slyme.utils.execution import await_result
 
 
 async def test_adispose_runs_sync_cleanup_immediately_without_scheduling() -> None:
@@ -36,9 +36,9 @@ def test_adispose_preserves_immediate_cleanup_errors() -> None:
     ctx.effect(lambda: cleanup)
     previous = None
     for _ in range(2):
-        with pytest.raises(BatchError) as caught:
+        with pytest.raises(BaseExceptionGroup) as caught:
             ctx.adispose()
-        assert caught.value.results == [Result(error=failure)]
+        assert caught.value.exceptions == (failure,)
         if previous is not None:
             assert caught.value is previous
         previous = caught.value
@@ -72,9 +72,9 @@ async def test_adispose_retains_cleanup_result_after_waiter_cancellation() -> No
     finish.set()
     await completed.wait()
     for _ in range(2):
-        with pytest.raises(BatchError) as caught:
+        with pytest.raises(BaseExceptionGroup) as caught:
             await ctx.adispose()
-        assert caught.value.results == [Result(error=failure)]
+        assert caught.value.exceptions == (failure,)
     assert calls == 1 and not ctx._owned
 
 
@@ -174,16 +174,12 @@ def test_sync_disposal_snapshot_handles_sibling_cleanup_and_failure() -> None:
     root.effect(lambda: lambda: events.append("middle"))
     root.effect(lambda: child.dispose)
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         root.dispose()
-    child_error = caught.value.results[0].error
-    assert isinstance(child_error, BatchError)
-    assert child_error.results == [Result(error=failure)]
-    assert caught.value.results == [
-        Result(error=child_error),
-        Result(),
-        Result(error=child_error),
-    ]
+    child_error = caught.value.exceptions[0]
+    assert isinstance(child_error, BaseExceptionGroup)
+    assert child_error.exceptions == (failure,)
+    assert caught.value.exceptions == (child_error, child_error)
     assert events == ["child", "middle"]
     assert not root._owned
 
@@ -253,11 +249,11 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
     finish.set()
     for _ in range(2):
         if fails:
-            with pytest.raises(BatchError) as caught:
+            with pytest.raises(BaseExceptionGroup) as caught:
                 await root.adispose()
-            child_error = caught.value.results[1].error
-            assert isinstance(child_error, BatchError)
-            assert child_error.results == [Result(error=failure)]
+            child_error = caught.value.exceptions[0]
+            assert isinstance(child_error, BaseExceptionGroup)
+            assert child_error.exceptions == (failure,)
         else:
             await root.adispose()
     assert events == ["last", "child:start", "child:finish", "first"]
@@ -495,7 +491,8 @@ def test_scope_release_only_notifies_bindings_used_by_that_scope(
     with monkeypatch.context() as patch:
         patch.setattr(type(bindings[0]), "release_scope", record)
         child.dispose()
-    assert calls == [(binding, child_scope) for binding in bindings]
+    assert len(calls) == len(bindings)
+    assert set(calls) == {(binding, child_scope) for binding in bindings}
     root.dispose()
 
 
@@ -535,13 +532,15 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
     with monkeypatch.context() as patch:
         patch.setattr(type(bindings[0]), "release_scope", fail)
         for _ in range(2):
-            with pytest.raises(BatchError if effect_failure else ValueError) as raised:
+            with pytest.raises(
+                BaseExceptionGroup if effect_failure else ValueError
+            ) as raised:
                 if asynchronous:
                     await await_result(child.dispose())
                 else:
                     child.dispose()
             if effect_failure:
-                assert raised.value.results == [Result(error=primary)]
+                assert raised.value.exceptions == (primary,)
                 assert raised.value.__cause__ is failures[0]
             else:
                 assert raised.value is failures[0]
@@ -549,11 +548,13 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
                 assert raised.value is previous
             previous = raised.value
 
-    assert calls == [
-        (binding, scope)
-        for scope in (child.scope, parent_scope)
-        for binding in bindings
-    ]
+    assert len(calls) == 2 * len(bindings)
+    assert set(calls[: len(bindings)]) == {
+        (binding, child.scope) for binding in bindings
+    }
+    assert set(calls[len(bindings) :]) == {
+        (binding, parent_scope) for binding in bindings
+    }
     assert not root._owned
     assert root._scope_viewers is not None
     assert set(root._scope_viewers) == {root.scope}
@@ -601,18 +602,26 @@ def test_scope_reacquired_during_value_finalization_keeps_remaining_bindings() -
     scope = root.scope.fork()
     writer = root.fork(scope=scope)
     readers = []
+    finalized = []
 
     class Payload:
-        def __del__(self):
-            readers.append(root.fork(scope=scope))
+        def __init__(self, path):
+            self.path = path
 
-    writer.set("first", Payload())
-    writer.set("second", "retained")
+        def __del__(self):
+            finalized.append(self.path)
+            if not readers:
+                readers.append(root.fork(scope=scope))
+
+    writer.set("first", Payload("first"))
+    writer.set("second", Payload("second"))
     writer.dispose()
     assert len(readers) == 1
+    assert len(finalized) == 1
     reader = readers[0]
-    assert reader.get("second") == "retained"
-    assert not reader.exists("first")
+    remaining = ({"first", "second"} - set(finalized)).pop()
+    assert reader.get(remaining).path == remaining
+    assert not reader.exists(finalized[0])
     root.dispose()
 
 
@@ -656,8 +665,10 @@ def test_failed_scope_acquisition_preserves_error_when_rollback_also_fails(
     acquisition_error = ValueError("restore failed")
     cleanup_error = ValueError("cleanup failed")
     original = type(binding).release_scope
+    original_acquire = type(binding).acquire_scope
 
     def fail_restore(self, scope):
+        original_acquire(self, scope)
         raise acquisition_error
 
     def fail_release(self, scope):
@@ -1077,11 +1088,11 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
         await asyncio.wait({disposal_task})
         repeated = asyncio.create_task(await_result(ctx.dispose()))
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await repeated
-    assert isinstance(caught.value.results[0].error, ValueError)
-    assert str(caught.value.results[0].error) == "late cleanup failure"
-    with pytest.raises(BatchError) as replayed:
+    assert isinstance(caught.value.exceptions[0], ValueError)
+    assert str(caught.value.exceptions[0]) == "late cleanup failure"
+    with pytest.raises(BaseExceptionGroup) as replayed:
         await await_result(ctx.dispose())
     assert replayed.value is caught.value
 
@@ -1114,10 +1125,10 @@ async def test_async_cleanup_cannot_reenter_owner_disposal() -> None:
         await await_result(ctx.dispose())
 
     ctx.effect(lambda: cleanup)
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(ctx.dispose())
-    assert isinstance(caught.value.results[0].error, RuntimeError)
-    assert "cannot be re-entered" in str(caught.value.results[0].error)
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert "cannot be re-entered" in str(caught.value.exceptions[0])
 
 
 async def test_early_async_effect_disposal_cannot_dispose_its_owner() -> None:
@@ -1242,10 +1253,10 @@ async def test_async_effect_disposal_cannot_await_itself() -> None:
         await dispose_effect()
 
     dispose_effect = ctx.effect(lambda: cleanup)
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(ctx.dispose())
-    assert isinstance(caught.value.results[0].error, RuntimeError)
-    assert "cannot await its own" in str(caught.value.results[0].error)
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert "cannot await its own" in str(caught.value.exceptions[0])
 
 
 async def test_cancelling_a_dispose_waiter_does_not_cancel_cleanup() -> None:
@@ -1287,11 +1298,11 @@ async def test_async_cleanup_failure_does_not_skip_remaining_cleanup() -> None:
     ctx.effect(lambda: fail)
     ctx.effect(lambda: lambda: cleanup("last"))
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(ctx.dispose())
-    assert isinstance(caught.value.results[1].error, ValueError)
-    assert str(caught.value.results[1].error) == "cleanup failed"
-    with pytest.raises(BatchError) as replayed:
+    assert isinstance(caught.value.exceptions[0], ValueError)
+    assert str(caught.value.exceptions[0]) == "cleanup failed"
+    with pytest.raises(BaseExceptionGroup) as replayed:
         await await_result(ctx.dispose())
     assert replayed.value is caught.value
     assert events == ["last", "fail", "first"]
@@ -1312,10 +1323,10 @@ async def test_cancelled_async_cleanup_does_not_skip_remaining_cleanup() -> None
     ctx.effect(lambda: cancel)
     ctx.effect(lambda: lambda: cleanup("last"))
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(ctx.dispose())
-    assert isinstance(caught.value.results[1].error, asyncio.CancelledError)
-    with pytest.raises(BatchError) as replayed:
+    assert isinstance(caught.value.exceptions[0], asyncio.CancelledError)
+    with pytest.raises(BaseExceptionGroup) as replayed:
         await await_result(ctx.dispose())
     assert replayed.value is caught.value
     assert events == ["last", "cancel", "first"]
@@ -1330,10 +1341,10 @@ def test_parent_disposal_blocks_new_effects_in_active_children() -> None:
 
     root.effect(lambda: lambda: child.effect(lambda: async_cleanup))
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         root.dispose()
-    assert isinstance(caught.value.results[0].error, RuntimeError)
-    assert "ancestor Context is being disposed" in str(caught.value.results[0].error)
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert "ancestor Context is being disposed" in str(caught.value.exceptions[0])
     with pytest.raises(RuntimeError, match="disposed"):
         child.fork()
 
@@ -1444,16 +1455,16 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
     )
     if fail:
         child_error, parent_error = results
-        assert isinstance(child_error, BatchError)
-        assert isinstance(parent_error, BatchError)
-        assert child_error.results == [Result(error=failure), Result()]
-        assert parent_error.results == [Result(error=child_error)]
+        assert isinstance(child_error, BaseExceptionGroup)
+        assert isinstance(parent_error, BaseExceptionGroup)
+        assert child_error.exceptions == (failure,)
+        assert parent_error.exceptions == (child_error,)
     else:
         assert results == [None, None]
     assert calls == 1
     assert not root._owned and not child._owned
     if fail:
-        with pytest.raises(BatchError) as caught:
+        with pytest.raises(BaseExceptionGroup) as caught:
             await root.adispose()
         assert caught.value is parent_error
 
@@ -1507,10 +1518,10 @@ async def test_cancelled_dispose_waiter_does_not_reopen_descendants() -> None:
     with pytest.raises(RuntimeError, match="being disposed"):
         grandchild.fork()
     finish.set()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await root.adispose()
-    assert isinstance(caught.value.results[0].error, ValueError)
-    assert str(caught.value.results[0].error) == "parent cleanup failed"
+    assert isinstance(caught.value.exceptions[0], ValueError)
+    assert str(caught.value.exceptions[0]) == "parent cleanup failed"
     assert cleaned == ["child"]
     with pytest.raises(RuntimeError, match="disposed"):
         grandchild.get("value")
@@ -1529,10 +1540,10 @@ def test_cleanup_failures_do_not_skip_remaining_cleanup_or_scope_release() -> No
     ctx.effect(lambda: fail)
     ctx.effect(lambda: lambda: events.append("last"))
 
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         ctx.dispose()
-    assert isinstance(caught.value.results[1].error, RuntimeError)
-    assert str(caught.value.results[1].error) == "cleanup failed"
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert str(caught.value.exceptions[0]) == "cleanup failed"
     assert events == ["last", "fail", "first"]
     with pytest.raises(RuntimeError, match="disposed"):
         ctx.get("value")
@@ -1548,11 +1559,11 @@ def test_failed_sync_context_disposal_replays_error_without_repeating_cleanup() 
         raise ValueError("cleanup failed")
 
     ctx.effect(lambda: cleanup)
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         ctx.dispose()
-    assert isinstance(caught.value.results[0].error, ValueError)
-    assert str(caught.value.results[0].error) == "cleanup failed"
-    with pytest.raises(BatchError) as replayed:
+    assert isinstance(caught.value.exceptions[0], ValueError)
+    assert str(caught.value.exceptions[0]) == "cleanup failed"
+    with pytest.raises(BaseExceptionGroup) as replayed:
         ctx.dispose()
     assert replayed.value is caught.value
     assert calls == 1

@@ -7,7 +7,7 @@ from typing_extensions import assert_type
 
 from slyme.context import Context
 from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
-from slyme.utils.continuation import await_result, continuation
+from slyme.utils.execution import await_result, continuation
 
 
 def direct(*runtime: Any, **kwargs: Any) -> int:

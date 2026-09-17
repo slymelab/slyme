@@ -15,14 +15,26 @@
 from .compose import Compose
 from .core import Context, ContextKey
 from .ref import Ref
-from .schema import Schema
+from .schema import (
+    Metadata,
+    RefConfig,
+    RefContainerConfig,
+    RefEntry,
+    RefLeafConfig,
+    Schema,
+)
 from .scope import Scope
 
 __all__ = [
     "Compose",
     "Context",
     "ContextKey",
+    "Metadata",
     "Ref",
+    "RefConfig",
+    "RefContainerConfig",
+    "RefEntry",
+    "RefLeafConfig",
     "Schema",
     "Scope",
 ]

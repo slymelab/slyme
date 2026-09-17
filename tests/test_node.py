@@ -22,12 +22,11 @@ from slyme.node import (
 from slyme.node.eval import BatchEvaluatorFunc
 from slyme.node.exception import (
     NodeExceptionRecord,
-    NodeTerminate,
     WrapperExceptionRecord,
 )
 from slyme.node.tree import NODE_ENGINE
-from slyme.utils.continuation import await_result
-from slyme.utils.exception import BatchError
+from slyme.utils.exception import BaseExceptionGroup
+from slyme.utils.execution import await_result
 from slyme.utils.registry import GeneralRegistry
 
 R = Schema(
@@ -81,7 +80,7 @@ def test_acall_preserves_immediate_node_errors() -> None:
     instance = failing()
     with pytest.raises(NodeExceptionRecord) as caught:
         instance.acall(ctx)
-    assert caught.value.exception is failure
+    assert caught.value.__cause__ is failure
     assert caught.value.exception_node is instance
     ctx.dispose()
 
@@ -106,7 +105,7 @@ async def test_acall_awaits_async_results_and_preserves_errors(fails: bool) -> N
     if fails:
         with pytest.raises(NodeExceptionRecord) as caught:
             await result
-        assert caught.value.exception is failure
+        assert caught.value.__cause__ is failure
         assert caught.value.exception_node is instance
     else:
         assert await result == 42
@@ -157,8 +156,9 @@ def test_schema_integrates_with_auto_during_graph_assembly() -> None:
     def misspelled() -> Node[int]:
         return increment(value=Auto(schema.resolve("input.vlaue")))
 
-    with pytest.raises(KeyError, match="Did you mean 'value'"):
+    with pytest.raises(KeyError) as caught:
         misspelled()
+    assert caught.value.args == ("input.vlaue",)
 
 
 def test_prebuilt_node_uses_schema_declared_after_runtime_fork() -> None:
@@ -305,17 +305,20 @@ def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:
 
 
 def test_node_and_wrapper_exceptions_preserve_provenance() -> None:
+    failure = RuntimeError("boom")
+    wrapper_failure = LookupError("wrapper boom")
+
     @node
     def fails(ctx: Context, /) -> None:
-        raise RuntimeError("boom")
+        raise failure
 
     instance = fails()
     with pytest.raises(NodeExceptionRecord) as exc_info:
         instance(Context(schema=R))
     assert exc_info.value.exception_node is instance
-    assert isinstance(exc_info.value.exception, RuntimeError)
+    assert exc_info.value.__cause__ is failure
     assert "exception_node" in str(exc_info.value)
-    assert exc_info.value.__cause__ is exc_info.value.exception
+    assert exc_info.value.args == (instance,)
 
     @wrapper
     def broken_wrapper(
@@ -324,29 +327,19 @@ def test_node_and_wrapper_exceptions_preserve_provenance() -> None:
         call_next: Callable[[Context], Any],
         /,
     ) -> Any:
-        raise LookupError("wrapper boom")
+        raise wrapper_failure
 
     wrapped_instance = fails().add_wrappers(broken_wrapper())
     with pytest.raises(WrapperExceptionRecord) as wrapper_exc:
         wrapped_instance(Context(schema=R))
     assert wrapper_exc.value.wrapped_node is wrapped_instance
     assert isinstance(wrapper_exc.value.exception_node, Wrapper)
-    assert isinstance(wrapper_exc.value.exception, LookupError)
+    assert wrapper_exc.value.__cause__ is wrapper_failure
+    assert wrapper_exc.value.args == (
+        wrapper_exc.value.exception_node,
+        wrapped_instance,
+    )
     assert "exception_wrapper" in str(wrapper_exc.value)
-
-
-def test_node_terminate_sets_source_once() -> None:
-    @node
-    def stop(ctx: Context, /) -> None:
-        raise NodeTerminate("done")
-
-    instance = stop()
-    with pytest.raises(NodeTerminate) as exc_info:
-        instance(Context(schema=R))
-    assert exc_info.value.source_node is instance
-    assert exc_info.value.msg == "done"
-    exc_info.value.msg = "changed"
-    assert "changed" in str(exc_info.value)
 
 
 async def test_async_node_wrapper_and_mixed_evaluation() -> None:
@@ -427,9 +420,9 @@ async def test_evaluator_result_count_is_validated(
     registry.register(evaluate if asynchronous else lambda ctx, values: result, key=int)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context(schema=R)
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(eval_tree(ctx, [1]))
-    assert isinstance(caught.value.results[0].error, ValueError)
+    assert isinstance(caught.value.exceptions[0], ValueError)
     ctx.dispose()
 
 
@@ -643,18 +636,20 @@ def test_sync_auto_chains_node_failure_under_cleanup_failure() -> None:
         return value
 
     child_node = child()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(NodeExceptionRecord) as caught:
         parent(value=Auto(child_node))(Context(schema=R))
 
-    child_errors = caught.value.results[0].error
-    assert isinstance(child_errors, BatchError)
-    cleanup_error = child_errors.results[0].error
-    assert isinstance(cleanup_error, BatchError)
-    assert isinstance(cleanup_error.results[0].error, RuntimeError)
+    group = caught.value.__cause__
+    assert isinstance(group, BaseExceptionGroup)
+    child_errors = group.exceptions[0]
+    assert isinstance(child_errors, BaseExceptionGroup)
+    cleanup_error = child_errors.exceptions[0]
+    assert isinstance(cleanup_error, BaseExceptionGroup)
+    assert isinstance(cleanup_error.exceptions[0], RuntimeError)
     failure = cleanup_error.__context__
     assert isinstance(failure, NodeExceptionRecord)
     assert failure.exception_node is child_node
-    assert isinstance(failure.exception, ValueError)
+    assert isinstance(failure.__cause__, ValueError)
     assert child_errors.__cause__ is None
 
 
@@ -672,18 +667,20 @@ async def test_async_auto_chains_node_failure_under_cleanup_failure() -> None:
         return value
 
     child_node = child()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(NodeExceptionRecord) as caught:
         await parent(value=Auto(child_node))(Context(schema=R))
 
-    child_errors = caught.value.results[0].error
-    assert isinstance(child_errors, BatchError)
-    cleanup_error = child_errors.results[0].error
-    assert isinstance(cleanup_error, BatchError)
-    assert isinstance(cleanup_error.results[0].error, RuntimeError)
+    group = caught.value.__cause__
+    assert isinstance(group, BaseExceptionGroup)
+    child_errors = group.exceptions[0]
+    assert isinstance(child_errors, BaseExceptionGroup)
+    cleanup_error = child_errors.exceptions[0]
+    assert isinstance(cleanup_error, BaseExceptionGroup)
+    assert isinstance(cleanup_error.exceptions[0], RuntimeError)
     failure = cleanup_error.__context__
     assert isinstance(failure, NodeExceptionRecord)
     assert failure.exception_node is child_node
-    assert isinstance(failure.exception, ValueError)
+    assert isinstance(failure.__cause__, ValueError)
     assert child_errors.__cause__ is None
 
 
@@ -726,14 +723,16 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
     assert not cancelled.is_set()
     assert not cleaned.is_set()
     release.set()
-    with pytest.raises(BatchError) as caught:
+    with pytest.raises(NodeExceptionRecord) as caught:
         await task
-    child_errors = caught.value.results[0].error
-    assert isinstance(child_errors, BatchError)
-    failure = child_errors.results[1].error
+    group = caught.value.__cause__
+    assert isinstance(group, BaseExceptionGroup)
+    child_errors = group.exceptions[0]
+    assert isinstance(child_errors, BaseExceptionGroup)
+    failure = child_errors.exceptions[0]
     assert isinstance(failure, NodeExceptionRecord)
-    assert isinstance(failure.exception, RuntimeError)
-    assert str(failure.exception) == "child failed"
+    assert isinstance(failure.__cause__, RuntimeError)
+    assert str(failure.__cause__) == "child failed"
     assert cleaned.is_set()
     assert not cancelled.is_set()
     assert not ctx._owned
@@ -781,9 +780,9 @@ async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_e
         assert children[0] in ctx._owned
     finally:
         release_cleanup.set()
-        with pytest.raises(BatchError) as cleanup_result:
+        with pytest.raises(BaseExceptionGroup) as cleanup_result:
             await children[0].adispose()
-    assert cleanup_result.value.results[0].error is cleanup_failure
+    assert cleanup_result.value.exceptions[0] is cleanup_failure
     assert not ctx._owned
     ctx.dispose()
 
@@ -863,9 +862,9 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
         assert children[0] in ctx._owned
     finally:
         release_cleanup.set()
-        with pytest.raises(BatchError) as cleanup_result:
+        with pytest.raises(BaseExceptionGroup) as cleanup_result:
             await children[0].adispose()
-    assert cleanup_result.value.results[0].error is cleanup_failure
+    assert cleanup_result.value.exceptions[0] is cleanup_failure
     assert not ctx._owned
     ctx.dispose()
 

@@ -19,8 +19,8 @@ from typing import Any, TypeVar, cast
 
 from slyme.context import Context, Ref
 from slyme.context.tree import CTX_EVAL_ENGINE
-from slyme.utils.continuation import continuation
-from slyme.utils.exception import BatchError, Result
+from slyme.utils.exception import exception_group
+from slyme.utils.execution import continuation
 from slyme.utils.registry import GeneralRegistry
 
 from .core import Node
@@ -45,44 +45,45 @@ _R = TypeVar("_R")
 def _batch(
     values: Sequence[_T], call: Callable[[_T], _R | Awaitable[_R]]
 ) -> Generator[Any, Any, list[_R]]:
-    """Settle independent evaluations in input order, retaining every outcome.
+    """Return ordered values, or group failures after every item settles.
 
     Calls run inline before scheduling their asynchronous results. Item failures
     do not cancel siblings. Caller cancellation follows asyncio.gather without
-    aggregating partial results.
+    aggregating partial results. Failure groups contain only errors, in input
+    order, with their original input indices recorded in the group message.
     """
 
-    results: list[Result[_R]] = []
-    pending: dict[int, Awaitable[Result[_R]]] = {}
+    results: list[_R | None] = [None] * len(values)
+    errors: list[tuple[int, BaseException]] = []
+    pending: list[Awaitable[None]] = []
 
     @continuation
-    def evaluate(value: _T) -> Generator[Any, Any, Result[_R]]:
+    def evaluate(index: int, value: _T) -> Generator[Any, Any, None]:
         try:
-            return Result(value=(yield call(value)))
+            results[index] = yield call(value)
         except BaseException as error:
-            return Result(error=error)
+            errors.append((index, error))
 
     for index, value in enumerate(values):
-        result = evaluate(value)
+        result = evaluate(index, value)
         if isawaitable(result):
-            pending[index] = result
-            results.append(Result())
-        else:
-            results.append(result)
+            pending.append(result)
 
     if pending:
 
-        async def gather() -> list[Result[_R]]:
+        async def gather() -> None:
             # NOTE: There may be no running event loop when calling asyncio.gather,
             # so we wrap it in a coroutine.
-            return await asyncio.gather(*pending.values())
+            await asyncio.gather(*pending)
 
-        settled = yield gather()
-        for index, result in zip(pending, settled, strict=True):
-            results[index] = result
-    if any(result.error is not None for result in results):
-        raise BatchError(results)
-    return [cast(_R, result.value) for result in results]
+        yield gather()
+    if errors:
+        errors.sort(key=lambda item: item[0])
+        raise exception_group(
+            f"Evaluation failed at input indices {[index for index, _ in errors]}",
+            [error for _, error in errors],
+        )
+    return cast(list[_R], results)
 
 
 @continuation

@@ -10,7 +10,7 @@ A Context tree and its mutable Schema and Compose objects are single-thread-owne
 
 ## Ref and Schema {#ref}
 
-Schema maintains a complete-path index and a structural tree referencing the same entries. Context leaf reads and writes use the path index; container traversal uses the tree. Declaration and final withdrawal update both indexes, so reusing a removed path creates a new definition without restoring its old values.
+Schema maintains a complete-path index and a structural tree referencing the same entries. Context leaf reads and writes use the path index; container traversal uses the tree. Private per-path setters and deleters update both indexes. Structural ancestor dicts can exist temporarily without declarations; installing or removing a container entry preserves its children, and deletion prunes empty dicts. These operations do not require parents before children or children before parents. Complete declarations still own every ancestor. Reusing a removed path creates a new definition without restoring its old values.
 
 `Ref` is an immutable path value identifying a Context dependency. A Schema
 records the paths available to an application, and `resolve()` returns their
@@ -30,6 +30,8 @@ path against `ctx.schema`, which remains the source of path roles, declared
 value types, and replacement policies. A Ref itself contains only its path and
 cached path parts.
 
+`Ref("")` identifies the root container and has `parts == ()`; `schema.resolve("")` returns its canonical Ref. The root is permanently declared by Schema itself. Empty segments inside other paths, such as `".user"`, `"user."`, or `"user..name"`, remain invalid.
+
 For an application, describe its available paths with `Schema`:
 
 ```python
@@ -48,10 +50,14 @@ R = Schema(
 name = R.resolve("user.name")
 ```
 
-`Schema()` may start empty or receive an initial declaration mapping. Slyme does
+`Schema()` starts with only the root container or receives an initial declaration dict or another Schema. Slyme does
 not export a global `R` object. Composition code may use `R` as a short local
 name for its application Schema, while `ctx.schema` exposes the complete live
 Schema used by that application.
+
+Schema is a frozen dataclass with identity equality and weak-reference support. Its attribute bindings cannot be reassigned or deleted, but `declare()` and declaration disposers still mutate its contents. Initial declarations are an initialization-only input. Declaration dicts are copied without changing the input; importing another Schema copies its definitions without sharing declaration owners. Every Schema has its own declaration indexes and registered root Contexts.
+
+A Schema strongly retains each root Context using it until that Context finishes disposal, even if cleanup fails. Child Contexts share their root's registration. Failed construction removes its registration. Dropping the last external Context reference does not release an application while its Schema remains reachable; explicitly call `dispose()` and await any asynchronous cleanup. Withdrawing a field removes its bindings from all registered roots without disposing those Contexts. The order of field cleanup between roots is unspecified.
 
 Schema validates path declarations and rejects conflicting declared value types
 or replacement policies. It does not validate the runtime type of stored values.
@@ -81,21 +87,23 @@ R = Schema(
 
 assert R.resolve("input").path == "input"
 assert R.resolve("input.name").path == "input.name"
-R.resolve("input.naem")  # raises KeyError and suggests "name"
+R.resolve("input.naem")  # raises KeyError
 ```
 
-Every named `Schema.leaf()` entry declares a leaf. Every mapping entry declares
-a container, including an empty mapping. An optional empty-key
+Every named `Schema.leaf()` entry declares a leaf. Every dict entry declares
+a container, including an empty dict. An optional empty-key
 `Schema.container()` supplies that container's configuration; Schema uses the
 default container configuration when it is omitted. Schema exposes declared
 paths through `resolve()`, so application paths cannot collide with future
 Schema methods.
 
-`declare()` extends the same Schema object recursively and atomically, then
-returns an idempotent disposer for that exact declaration. Equivalent active
-declarations coexist independently. A different configuration for an existing
-Ref, or a leaf/container structural conflict, raises without changing the
-Schema. After the final declaration of a path is disposed, that path and its
+The root dict follows the same rule: `Schema({"": Schema.container()})` explicitly supplies its container configuration. Declaration dicts must form a finite tree; cycles are unsupported and fail through Python's recursive execution. After normalizing the declaration structure, registration merges and updates paths individually, preserving existing entries. A failure reverses that declaration's successful registrations, removing new paths and restoring previous owners and effective configs. Registration is not isolated from synchronous callbacks; config merges must depend only on their inputs, not inspect or modify Schema. Rollback does not compensate external side effects.
+
+`declare()` extends the same Schema object with rollback on failure, then
+returns an idempotent disposer for that exact declaration. Compatible active
+declarations coexist independently. Incompatible behavior settings or metadata
+for an existing Ref, or a leaf/container structural conflict, raise after undoing the
+current declaration's registrations. After the final declaration of a non-root path is disposed, that path and its
 runtime bindings disappear; a later declaration may therefore reuse it with a
 different definition without reviving old values.
 
@@ -104,10 +112,51 @@ remove_score = R.declare({"output": {"score": Schema.leaf()}})
 remove_score()
 ```
 
-Schema keys must be non-empty strings without dots. Names such as `declare`,
+Path segment names must be non-empty strings without dots; the empty dict key is reserved for the containing entry's configuration. Names such as `declare`,
 Python keywords, and names beginning with `_` are valid because Schema does not
 project paths as attributes. Unbounded dynamic names belong inside a value such
 as `Compose`, rather than becoming Context paths.
+
+### Metadata
+
+`Schema.resolve_entry(path)` returns the current `RefEntry`; `Schema.entries` returns a tuple of all registered root, container, and leaf entries. The tuple snapshots membership, not configurations: each entry exposes its immutable `ref`, current merged `config`, and `alive` status. `RefEntry`, `RefConfig`, `RefLeafConfig`, and `RefContainerConfig` are exported by `slyme.context`. Prefer `Schema.leaf()` and `Schema.container()` for declarations; registration and withdrawal remain Schema operations.
+
+```python
+entry = schema.resolve_entry("user.name")
+metadata = entry.config.metadata
+for entry in schema.entries:
+    print(entry.ref.path, entry.config.metadata)
+```
+
+Lookup and enumeration do not merge configs; reading `entry.config` rebuilds an invalidated cache when needed. A config already obtained remains an immutable snapshot. After an entry's final declaration is withdrawn, `alive` is false and reading its config raises `LookupError`. Resolving a missing path raises `KeyError`; redeclaring that path creates a new entry rather than reviving the old one.
+
+Both `Schema.leaf(metadata=...)` and `Schema.container(metadata=...)` accept a mapping from string keys to `Metadata` instances. Use application-qualified keys such as `cli.option` or `docs.description`. Metadata does not change a path's leaf/container role, declared value type, or replacement policy.
+
+`Metadata` is a frozen dataclass, not an abstract base class. Its default `merge()` accepts only the same instance; distinct instances conflict even when their dataclass fields compare equal. Override `merge()` for content-based compatibility or combination:
+
+```python
+from dataclasses import dataclass
+from slyme.context import Metadata, Schema
+
+
+@dataclass(frozen=True)
+class Labels(Metadata):
+    values: tuple[str, ...]
+
+    def merge(self, other: Metadata) -> "Labels":
+        if not isinstance(other, Labels):
+            raise ValueError("Incompatible labels")
+        return Labels(self.values + other.values)
+
+
+schema = Schema({"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("core",))})})
+remove = schema.declare({"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("plugin",))})})
+remove()
+```
+
+Distinct metadata keys coexist. For matching keys, Schema calls the existing item's `merge(incoming)`, including when both references point to the same object. It neither infers equality nor recursively merges payloads. Each call must be synchronous, side-effect-free, and depend only on the input items. Each path merges its incoming config once during registration; invalidated caches may first require merging the remaining declarations. Return an immutable compatible item or raise a conflict. Accepted contributions must remain mergeable after arbitrary withdrawals, in their remaining declaration order; commutativity and idempotence are not required. Withdrawal and rollback invalidate config caches without calling metadata merge.
+
+The metadata mapping is copied and exposed read-only; items are retained by reference. Frozen dataclasses prevent attribute reassignment, not mutation of nested lists or dicts. Implementations must keep their payloads immutable. The cross-language model uses the same string keys, declaration order, object-identity default, and explicit merge method; a JS implementation can store keys in `Map<string, Metadata>` without relying on object-property names or Python equality.
 
 ## Read and write
 
@@ -169,9 +218,33 @@ plugin; `ctx.schema` is the application-wide union. `Schema.declare()` returns a
 caller-managed disposer. `ctx.declare()` additionally makes that declaration an
 effect owned by `ctx`, while preserving the same exact early disposer.
 
-Each declared leaf and ancestor container stores the unique IDs of its declaration owners in a set. Each declare call returns one disposer, which releases child paths before parents and removes a definition only after its last owner leaves. Cleanup continues after a failure and subsequent calls reproduce the first failure. Pending and successfully released disposers do not keep the Schema or its old definitions alive; failure tracebacks can retain cleanup state.
+The `declaration` argument of `Schema(...)`, `Schema.declare(...)`, and `Context.declare(...)` describes one registration tree, which may contain multiple paths. Each declared leaf and ancestor container maps unique declaration IDs to their original configs and caches the merged config. Config merging rejects incompatible types and settings. Adding a declaration merges it into the current config; withdrawal only invalidates the cache. The next config read rebuilds it in the remaining declarations' insertion order. Consecutive withdrawals without config reads do not repeatedly merge the same remaining declarations. Framework withdrawal, rollback, and Context disposal do not read config; user cleanup that reads config can trigger rebuilding. Each declare call returns one disposer, which reverses registration order and removes a definition only after its last owner leaves. Cleanup continues across entries after a failure and raises all failures as an exception group; subsequent calls reproduce the same group without repeating cleanup. A pending disposer retains the Schema and its entries. Its first call releases those references even on failure, although failure tracebacks can retain cleanup state.
 
 `set` and `update` accept only paths declared as leaves. `keys` and `to_dict(ref)` accept only paths declared as containers. `get`, `exists`, `delete`, and `drop` accept either role. Deleting a container removes its local descendant values, not its Schema declarations or inherited values.
+
+### Root container
+
+While Context is readable, `ctx.get("")` returns its live root `ContextView` and `ctx.exists("")` is true, including when no values are visible. `ctx.keys("")` and `ctx.to_dict("")` are equivalent to their argument-free forms. An empty root view returns `()` from `keys()` and `{}` from `to_dict()` and `flatten()`; non-root containers without visible leaves still count as absent.
+
+```python
+from slyme.context import Context, Ref, Schema
+
+root_ctx = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+child_ctx = root_ctx.fork(scope=root_ctx.scope.fork())
+root_view = child_ctx.get(Ref(""))
+child_ctx.set("value", 2)
+assert root_view.to_dict() == {"value": 2}
+
+child_ctx.delete("")
+assert root_view.to_dict(local=True) == {}
+assert root_view.to_dict() == {"value": 1}
+assert root_ctx.get("value") == 1
+root_ctx.dispose()
+```
+
+`delete("")` and `drop([""])` delete local values across all declared leaves, using the identity bound to the current Scope for each leaf. They do not clear the application-wide data store, revoke declarations, remove isolation barriers, or dispose effects. Contexts sharing those identities observe the same removal; unrelated identities remain unchanged. Inherited values can become visible again. Root assignment through `set`, `add`, or `update` is rejected because the root is a container.
+
+### Bulk updates
 
 `update` validates every path and replacement policy before writing; `drop` consumes and validates all input paths and collects their descendant leaves before deleting. Preflight failures leave bindings unchanged. Errors or reentrant side effects during application of the changes do not trigger rollback. Deleting and then updating are separate calls, not a combined transaction.
 
@@ -263,7 +336,7 @@ An inherited Scope value does not prevent adding a value at a more specific Scop
 
 `ctx.effect(setup)` owns one setup and its cleanup. A synchronous setup runs immediately and returns an early disposer. If setup returns an awaitable, `effect()` returns an awaitable resolving to that disposer; use `await await_result(ctx.effect(setup))` when either form is possible. Async setup is owned before it starts: owner disposal waits for it and then runs its cleanup, even if its caller never awaited registration. Await setup before using the resource it acquires. Setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
 
-A parent strongly owns its child Contexts. Each Context processes directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` runs synchronous cleanup immediately and returns `None` when complete, or an awaitable for the unfinished asynchronous cleanup. Use `await await_result(ctx.dispose())` for either case, importing `await_result` from `slyme.utils.continuation`. An async continuation is not scheduled until awaited; merely discarding it leaves disposal unfinished. Once scheduled, its task survives waiter cancellation. Early effect disposers follow the same completion protocol. Cleanup continues after failure, then raises `BatchError` with ordered `results` for the directly owned cleanup calls; repeated calls share the completion and reproduce its terminal failure without repeating cleanup. A disposed Context rejects further data and lifecycle operations.
+A parent strongly owns its child Contexts. Each Context processes directly owned effects and child Contexts in last-in-first-out order, recursively. `dispose()` runs synchronous cleanup immediately and returns `None` when complete, or an awaitable for the unfinished asynchronous cleanup. Use `await await_result(ctx.dispose())` for either case, importing `await_result` from `slyme.utils.execution`. An async continuation is not scheduled until awaited; merely discarding it leaves disposal unfinished. Once scheduled, its task survives waiter cancellation. Early effect disposers follow the same completion protocol. Cleanup continues after failure, then raises an exception group containing only failures in cleanup execution order; repeated calls share the completion and reproduce its terminal failure without repeating cleanup. A disposed Context rejects further data and lifecycle operations.
 
 Before running any cleanup, `dispose()` synchronously forbids mutations throughout its owned Context subtree, including new effects and child Contexts. Mutation checks inspect only the receiving Context's state, independent of lifetime depth. Each Context remains readable until its own release. A child awaiting its turn may still be disposed early; cleanup already in progress keeps its shared completion. Contexts outside the ownership subtree remain mutable even when they share or inherit its Scopes. This does not cancel running Node tasks or freeze the objects stored in Context values.
 
@@ -275,7 +348,9 @@ Disposing a Context removes it from the viewer sets for every Scope in `ctx.scop
 
 Context bindings track the observed Scopes for each identity and remove its values when the last viewer leaves, without scanning unrelated Scope bindings. Reusing a retained Scope, directly or as an ancestor, restores its viewer registration and preserves its original identity binding; values already cleared are not restored.
 
-Each application indexes Scopes to their previously bound Context leaves. Viewer registration and release visit only those bindings, not every application field. The index weakly references both Scopes and bindings, so it supports saved Scope reuse without keeping withdrawn Schema values or unused Scopes alive. Ordinary inherited reads do not add index entries.
+Each application keeps a `dict[Scope, set[str]]` index of paths participating in each observed Scope's bindings. Writes and isolation register paths; ordinary inherited reads do not. Container deletion intersects Schema descendant paths with this index before accessing bindings. Deleting a value preserves its index entry, identity ownership, and isolation barrier. Scope release visits only indexed bindings and removes the Scope's index after its last viewer leaves. Final Schema withdrawal removes the path and its binding from every application using that Schema.
+
+A weak membership set records which Scopes have previously had viewers, without enumerating weak references. New Scopes need no binding scan. Reusing a released Scope, including as an ancestor, scans current Schema entries to restore its surviving identity ownership; withdrawn definitions and cleared values are not restored. Data bindings have no cleanup order guarantee; dependencies requiring ordered cleanup belong in effects.
 
 Scope viewers and binding identities store their owners directly in sets. Context disposal removes its viewer registrations and releases each unobserved Scope in the bindings; the final bound Scope's release removes the identity and its data. These internal registrations do not allocate per-member disposal callbacks. Cleanup continues across bindings and Scopes after a failure, and Context disposal reproduces its terminal failure on subsequent calls. If Scope release also fails after owned cleanup failures, its first error is retained as the aggregate's cause. A Scope reacquired during value finalization keeps the data still visible to its new viewers.
 
@@ -320,7 +395,7 @@ A Context bound to a child Scope can replace an inherited Compose object at its 
 
 Context accepts Ref Trees for batch reads and writes. `extract` flattens the input once, validates all Refs, reads their values, and reconstructs the requested structure once. Leaf values retain their identities. `update_tree` assigns values from a matching tree using `update`'s preflight checks.
 
-`keys()`, `ContextView`, and `to_dict()` traverse Schema structure before reading the flat leaf cells. Empty containers therefore have a stable declared role but do not appear in the effective data view. `to_dict()` projects visible Context leaves into nested ordinary dictionaries for display or serialization. Across different Schemas, this projection cannot distinguish a mapping-valued leaf from equivalent nested Context paths. `flatten()` instead returns the exact visible `dict[Ref, Any]` leaf mapping:
+`keys()`, `ContextView`, and `to_dict()` traverse Schema structure before reading the flat leaf cells. Empty non-root containers therefore have a stable declared role but do not appear in the effective data view; the root view remains available. `to_dict()` projects visible Context leaves into nested ordinary dictionaries for display or serialization. Across different Schemas, this projection cannot distinguish a mapping-valued leaf from equivalent nested Context paths. `flatten()` instead returns the exact visible `dict[Ref, Any]` leaf mapping:
 
 ```python
 leaf_schema = Schema({"settings": Schema.leaf()})
@@ -337,4 +412,4 @@ assert mapping_leaf.flatten() == {leaf_schema.resolve("settings"): {"theme": "da
 assert nested_path.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 
-Both methods resolve the bound Scope's effective C3 view by default and accept `local=True`. A `ContextView` accepts relative string paths for subtree access, while resolved Ref objects remain absolute; its `flatten()` result therefore contains absolute Schema refs. Neither method copies leaf values. `Context(ctx.flatten(), schema=ctx.schema)` explicitly materializes a new application root with the same declarations and visible leaf objects. It receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.
+Both methods resolve the bound Scope's effective C3 view by default and accept `local=True`. A `ContextView` accepts relative string paths for subtree access, while resolved Ref objects remain absolute; its `flatten()` result therefore contains absolute Schema refs. The empty string addresses the view itself, whereas `Ref("")` addresses the application root and is outside a non-root view. Neither method copies leaf values. `Context(ctx.flatten(), schema=ctx.schema)` explicitly materializes a new application root with the same declarations and visible leaf objects. It receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.

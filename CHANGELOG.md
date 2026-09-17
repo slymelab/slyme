@@ -10,19 +10,23 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Exposed `RefEntry`, `RefConfig`, `RefLeafConfig`, and `RefContainerConfig`,
+  plus `Schema.resolve_entry()` and the `Schema.entries` tuple property for
+  metadata introspection. Withdrawn entries reject config reads with `LookupError`.
+- Added `slyme.utils.exception.exception_group(message, excs)` with native groups
+  on Python 3.11+ and a simple Python 3.10 fallback preserving catch semantics.
+- Added `slyme.utils.execution.once()` to share a callback's first result or
+  failure, and `SharedAwaitable` for lazy, cancellation-isolated shared waits.
 - Added explicit `Auto(tree)` parameter bindings and per-call keyword overrides
   for Node and Wrapper. `delete(name)` removes a saved binding.
 - Added `Wrapper.compose()` to assemble outermost-first callable chains without
   execution, preserving live wrapper parameters and caller-controlled Contexts.
-- Added `slyme.utils.continuation.run(generator)` to drive ordinary generator
+- Added `slyme.utils.execution.run(generator)` to drive ordinary generator
   control flow, returning synchronously until a yielded awaitable requires an
   asynchronous remainder. Awaited errors are thrown at the suspended yield.
-- Added `Result(value=..., error=...)` and `BatchError` in `slyme.utils.exception`
-  for consumer-owned evaluation and cleanup diagnostics, retaining successful
-  values separately from raised errors.
 - Added `Node.acall()` and `Context.adispose()` as always-awaitable adapters
   that preserve immediate synchronous execution and the unified completion rules.
-- Added `slyme.utils.continuation.await_result()` to await an immediate or asynchronous
+- Added `slyme.utils.execution.await_result()` to await an immediate or asynchronous
   result without starting a loop or offloading synchronous work.
 - Unified Node, Auto, and Wrapper execution around actual returned values;
   async dependencies and child cleanup can promote a synchronous parent call.
@@ -92,10 +96,11 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `NodeTerminate` and its automatic source-node annotation.
 - Removed the `Continuation` class and its chain, batch, and sequential APIs.
   Use `run(generator)` with native loops and exception handling; consumers own
   scheduling, result collection, and error aggregation.
-- Removed `slyme.utils.awaitable`; import `await_result` from `slyme.utils.continuation`.
+- Removed `slyme.utils.awaitable`; import `await_result` from `slyme.utils.execution`.
 - Removed `TypeRegistry` and `TreeEngine.allow_inheritance`. Tree handlers and
   Auto evaluators use exact type keys through `GeneralRegistry`; subclasses
   require explicit registration. Explicit Tree resolvers remain supported.
@@ -142,16 +147,21 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Schema retains its root Contexts until explicit disposal and directly clears
+  their bindings when a field is withdrawn. Field cleanup order between roots
+  is unspecified.
 - Context and effect disposal use generator control flow for immediate and
   asynchronous cleanup, preserving recursive LIFO order, continued cleanup
   after failure, repeatable results, and cancellation and reentrancy protection.
-  Context owns the cleanup loop and reports failures through `BatchError.results`.
+  Context owns the cleanup loop and groups failures in cleanup execution order.
 - Auto calls all independent evaluator groups before scheduling asynchronous
   results, collecting Ref and Node failures
-  into nested `BatchError` objects without cancelling siblings. Node and Wrapper
-  calls preserve these aggregates; child cleanup finishes before reporting them.
+  into nested exception groups without cancelling siblings. Group messages list
+  failed input indices; partial successful results are not exposed. Node and
+  Wrapper records retain ordinary failures, including ordinary exception groups,
+  through `__cause__` without a duplicate exception field.
   Caller cancellation follows asyncio propagation without aggregating partial
-  batch results; owned child cleanup completes before evaluation exits.
+  batch results; Context-owned child cleanup may continue after evaluation exits.
 - Renamed `slyme.utils.pytree` to `slyme.utils.tree`, `PyTree*` types to `Tree*`,
   and `PYTREE_ENGINE_REGISTRY` to `TREE_ENGINE_REGISTRY`, including its namespace
   from `pytree_engine` to `tree_engine`. No compatibility aliases are provided.

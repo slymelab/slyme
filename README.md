@@ -132,17 +132,25 @@ Use `await task.acall(ctx)` and `await ctx.adispose()` when execution or cleanup
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` builds an outermost-first callable chain without running it. Wrapper order is snapshotted; their parameters remain live. Each wrapper controls calls to the next layer and may return an immediate or asynchronous result.
 
-For mixed execution, decorate an ordinary generator function with `@continuation` or `@continuation()` from `slyme.utils.continuation`. Each call drives a fresh generator: `value = yield operation()` accepts an immediate or asynchronous result. The driver runs synchronously until an awaitable is yielded, then returns an unscheduled awaitable remainder. Loops, branches, and `try/except/finally` stay in the generator. Use `await await_result(execute(...))` when either return mode is possible. Place `@node` or `@wrapper` outside `@continuation` to create graph-element factories from these functions. `run(generator)` remains available for directly driving a generator. Neither interface schedules tasks, aggregates errors, or owns resource lifetimes.
+For mixed execution, decorate an ordinary generator function with `@continuation` or `@continuation()` from `slyme.utils.execution`. Each call drives a fresh generator: `value = yield operation()` accepts an immediate or asynchronous result. The driver runs synchronously until an awaitable is yielded, then returns an unscheduled awaitable remainder. Loops, branches, and `try/except/finally` stay in the generator. Use `await await_result(execute(...))` when either return mode is possible. Place `@node` or `@wrapper` outside `@continuation` to create graph-element factories from these functions. `run(generator)` remains available for directly driving a generator. Neither interface schedules tasks, aggregates errors, or owns resource lifetimes.
 
-Auto owns its independent all-settled evaluation policy; Context owns recursive LIFO cleanup. Their `BatchError` and `Result` records are available from `slyme.utils.exception`. A successful returned exception remains a value, distinct from a raised error.
+Auto owns its independent all-settled evaluation policy; Context owns recursive LIFO cleanup. Both report failures as exception groups without exposing partial successful results. Auto orders errors by input index; Context orders them by cleanup execution. A returned exception remains ordinary data. Node and Wrapper wrap ordinary failures, including ordinary exception groups, in records whose `__cause__` retains the original error; existing Node records and non-`Exception` control failures propagate unchanged.
+
+`slyme.utils.exception.exception_group(message, excs)` groups a non-empty sequence of errors. The module exports `ExceptionGroup` and `BaseExceptionGroup` for catching groups. Python 3.11+ uses native exception groups; Python 3.10 provides a simple fallback with `message` and ordered `exceptions`, without `except*`, subgroup operations, or grouped traceback rendering. Groups containing only `Exception` instances are caught by `except Exception`; groups containing cancellation or other non-`Exception` errors are not.
 
 ## Context lifetimes, Scope visibility, and Compose
+
+Use `schema.resolve_entry(path)` to inspect one field and the `schema.entries` tuple to enumerate root, container, and leaf entries. Each public `RefEntry` exposes `ref`, `config`, and `alive`; read metadata through `entry.config.metadata`. Configs use the public `RefConfig`, `RefLeafConfig`, and `RefContainerConfig` types exported by `slyme.context`.
+
+`Schema.leaf()` and `Schema.container()` accept `metadata={"namespace.key": item}`. Items derive from the frozen `Metadata` dataclass exported by `slyme.context`: its default merge accepts the same instance, while subclasses can override `merge()` for immutable content-based composition. Distinct keys coexist, matching keys merge in declaration order, and withdrawal invalidates the merged config for lazy rebuilding. See [Schema metadata](docs/src/guide/essentials/context.md#metadata).
+
+`Ref("")` identifies Schema's permanently declared root container. `ctx.get("")` returns a live root view even without visible values. `ctx.delete("")` deletes only local values under the current Scope's leaf identities; it preserves inherited data, isolation barriers, declarations, and effects. Root assignment is rejected like any other container assignment.
 
 `set` and `delete` change individual local paths. `update` and `drop` validate
 the complete batch before applying changes; preflight failures leave bindings
 unchanged, while failures during application do not trigger rollback.
 
-A Context root holds a live `Schema` reference and owns an application data store and lifetime tree. Each Context has at most one parent and is bound to one immutable `Scope`. `Context.fork()` creates an owned child that shares the current Scope by default; pass `scope=ctx.scope.fork()` when the child needs its own local visibility identity. `Scope.fork()` is single-parent, while explicit `Scope(parents=(...))` construction provides C3 multiple inheritance. Reads follow the bound Scope's C3 order, and writes target the leaf-local identity bound to that Scope. `Compose.bind()` can make selected Scopes share one identity without changing visibility for any other Compose. `effect()` owns immediate or asynchronous setup and cleanup; `add()` and `declare()` own synchronous registration cleanup. `dispose()` returns `None` when finished synchronously or an awaitable for remaining cleanup. Use `await await_result(ctx.dispose())` with `await_result` from `slyme.utils.continuation` when either is possible. A Context tree and its mutable Schema and Compose objects belong to one thread, and to one event loop during asynchronous execution; this requirement is not enforced through thread-identity checks. Worker threads or processes should receive ordinary input values and return results for mutation on the owner thread. Registrations return exact disposers for optional early removal:
+A Context root holds a live `Schema` reference and owns an application data store and lifetime tree. Each Context has at most one parent and is bound to one immutable `Scope`. `Context.fork()` creates an owned child that shares the current Scope by default; pass `scope=ctx.scope.fork()` when the child needs its own local visibility identity. `Scope.fork()` is single-parent, while explicit `Scope(parents=(...))` construction provides C3 multiple inheritance. Reads follow the bound Scope's C3 order, and writes target the leaf-local identity bound to that Scope. `Compose.bind()` can make selected Scopes share one identity without changing visibility for any other Compose. `effect()` owns immediate or asynchronous setup and cleanup; `add()` and `declare()` own synchronous registration cleanup. `dispose()` returns `None` when finished synchronously or an awaitable for remaining cleanup. Use `await await_result(ctx.dispose())` with `await_result` from `slyme.utils.execution` when either is possible. A Context tree and its mutable Schema and Compose objects belong to one thread, and to one event loop during asynchronous execution; this requirement is not enforced through thread-identity checks. Worker threads or processes should receive ordinary input values and return results for mutation on the owner thread. Registrations return exact disposers for optional early removal:
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -162,13 +170,17 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
-Scope viewers, shared Context-binding identities, and Schema declarations track their owners directly in sets. Internal registration and cleanup methods remove empty ownership records and their data; Compose removes entries by unique token and drops empty buckets. Only operations exposed for explicit undo return disposers. A later registration can reuse the Scope or identity, but cleared data does not return.
+Scope viewers and shared Context-binding identities track their owners directly in sets. Schema entries map declaration IDs to their original configs and cache the merged config; withdrawal invalidates this cache, and the next config read recomputes it from remaining declarations. Internal registration and cleanup methods remove empty ownership records and their data; Compose removes entries by unique token and drops empty buckets. Only operations exposed for explicit undo return disposers. A later registration can reuse the Scope or identity, but cleared data does not return.
 
 Disposal forbids mutations throughout the owned Context subtree before any cleanup runs. Each Context remains readable until its own release; Contexts outside that subtree are unaffected even when they share a Scope.
 
-A weak Scope-to-binding index limits viewer registration and release to the
-affected Context leaves, without scanning unrelated application fields or
-retaining withdrawn Schema values.
+A Scope-to-path index limits binding cleanup to the participating leaves.
+Container deletion intersects this index with the Schema's descendant paths;
+deleting a value preserves its identity ownership and isolation barrier.
+The last viewer's release removes the Scope index, and final Schema withdrawal
+removes the path from every application's index. Reusing a previously released
+Scope scans current declarations to restore its surviving identity bindings;
+new Scopes do not require that scan.
 
 ## Core Advantages
 

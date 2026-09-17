@@ -61,7 +61,7 @@ async def execute(ctx):
         await ctx.adispose()
 ```
 
-`task.acall(ctx)` and `ctx.adispose()` always return awaitables. They delegate to the ordinary call and disposal methods through `await_result()` from `slyme.utils.continuation`; synchronous work and errors still occur immediately when called. They do not create tasks or schedule asynchronous work.
+`task.acall(ctx)` and `ctx.adispose()` always return awaitables. They delegate to the ordinary call and disposal methods through `await_result()` from `slyme.utils.execution`; synchronous work and errors still occur immediately when called. They do not create tasks or schedule asynchronous work.
 
 `await_result()` awaits only the outer execution result, not values inside containers. Async continuations run when awaited or scheduled, although their synchronous prefix may already have run. Synchronous applications can use `asyncio.run(await_result(task(ctx)))` at their entry point; await within an existing loop instead of nesting loops. Slyme never automatically offloads blocking functions to threads.
 
@@ -69,11 +69,11 @@ Calls inside user functions still need explicit handling: synchronous code canno
 
 ### Generator-based composition
 
-`@continuation` from `slyme.utils.continuation` turns a generator function into a directly callable synchronous-or-asynchronous function. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
+`@continuation` from `slyme.utils.execution` turns a generator function into a directly callable synchronous-or-asynchronous function. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
 
 ```python
 from slyme.node import Node
-from slyme.utils.continuation import continuation
+from slyme.utils.execution import continuation
 
 
 @node
@@ -93,7 +93,7 @@ Hand exclusive driving of the generator to `run()`; generator exhaustion and ree
 
 Execution order, concurrency, and result collection belong to the caller. A loop that yields each call waits for that call before proceeding. A concurrent implementation can first call its items, retain the returned awaitables, and yield one asynchronous aggregation operation. Create `gather()` or Tasks inside that asynchronous operation when the caller may not yet have a running event loop. Synchronous exceptions during enumeration or calls follow the caller's `try/except/finally`; the driver invents no batch policy.
 
-Auto independently owns its all-settled evaluation policy. It calls every evaluator group and child inline before awaiting asynchronous results; only asynchronous results are scheduled as Tasks. Failed items do not cancel siblings. Each child disposes its Context in `finally`, on success or failure. It reports nested `BatchError` objects from `slyme.utils.exception`, with input-ordered `Result(value=..., error=...)` records retaining successful values and raised errors separately. Cancelling a batch follows asyncio propagation without aggregating partial results and may return before Context-owned cleanup finishes; see [Auto lifetimes](./lifecycle.md#auto-values). Context owns its separate recursive LIFO cleanup policy; both consumers use the generator driver without sharing an execution-policy API.
+Auto independently owns its all-settled evaluation policy. It calls every evaluator group and child inline before awaiting asynchronous results; only asynchronous results are scheduled as Tasks. Failed items do not cancel siblings. Each child disposes its Context in `finally`, on success or failure. Failures form nested exception groups in input order, with failed input indices in each group's message; successful results are returned only when the entire batch succeeds. Node and Wrapper wrap ordinary failures, including ordinary exception groups, in records whose `__cause__` retains the original error. Existing Node records and non-`Exception` control failures propagate unchanged. Cancelling a batch follows asyncio propagation without aggregating partial results and may return before Context-owned cleanup finishes; see [Auto lifetimes](./lifecycle.md#auto-values). Context owns its separate recursive LIFO cleanup policy; both consumers use the generator driver without sharing an execution-policy API.
 
 ## Parameters and Auto
 
@@ -145,7 +145,7 @@ Call the Node factory or an assembly function again when another independently c
 ```python
 from collections.abc import Callable
 from slyme.node import Node, wrapper
-from slyme.utils.continuation import continuation
+from slyme.utils.execution import continuation
 
 
 @wrapper

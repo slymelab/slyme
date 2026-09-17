@@ -1,11 +1,11 @@
-"""Generator return types survive synchronous and asynchronous driving."""
+"""Execution adapters preserve parameter types and synchronous return values."""
 
 from collections.abc import Awaitable, Generator
 from typing import Any, TypeVar
 
 from typing_extensions import assert_type
 
-from slyme.utils.continuation import await_result, continuation, run
+from slyme.utils.execution import SharedAwaitable, await_result, continuation, once, run
 
 _T = TypeVar("_T")
 
@@ -33,6 +33,21 @@ async def asynchronous() -> int:
     return 1
 
 
+@once
+def once_sync(value: int, *, scale: int = 1) -> int:
+    return value * scale
+
+
+@once
+async def once_async(value: int) -> int:
+    return value
+
+
+@once
+def once_mixed(value: int) -> int | Awaitable[int]:
+    return value
+
+
 def immediate() -> Generator[int, int, str]:
     value = yield 1
     return str(value)
@@ -56,3 +71,7 @@ async def check_types() -> None:
     assert_type(result, Awaitable[str])
     assert_type(await await_result(run(immediate())), str)
     assert_type(await await_result(run(mixed())), str)
+    assert_type(once_sync(1, scale=2), int)
+    assert_type(once_async(1), SharedAwaitable[int])
+    assert_type(once_mixed(1), int | Awaitable[int])
+    assert_type(await once_async(1), int)

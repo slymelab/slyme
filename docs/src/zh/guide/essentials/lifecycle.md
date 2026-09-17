@@ -46,7 +46,7 @@ Context 拥有子 Context，以及通过 `effect()`、`add()` 和 `declare()` �
 
 `dispose()` 调用时立即标记释放中并运行同步部分，异步部分需要等待后才调度。提前清理的登记项在完成前仍由 Context 持有，owner 释放会加入同一次清理；移除它不会改变其余登记项的释放顺序。
 
-每项清理完成后才开始下一项，包括异步清理。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 通过 `BatchError` 汇总归属项清理错误，其 `results` 按 LIFO 执行顺序保存每项清理的值或错误；后续释放调用观察同一个最终结果，不重复执行 cleanup。Context 的生成器循环负责编排清理，独立的共享完成对象负责防止等待者取消中断 cleanup，并支持重复等待。
+每项清理完成后才开始下一项，包括异步清理。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 将归属项清理错误组成异常组，只按清理执行顺序保存失败；后续释放调用观察同一个最终结果，不重复执行 cleanup。Context 的生成器循环负责编排清理，独立的共享完成对象负责防止等待者取消中断 cleanup，并支持重复等待。
 
 ## Auto 值
 
@@ -62,7 +62,7 @@ process(data=Auto(R.resolve("items")))(ctx)  # data 是 Context 中保存的 lis
 
 Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。子调用和同步清理内联执行；异步结果在被等待时并发调度，结果保持输入顺序。每个子节点无论成功还是失败，都在自己的 `finally` 中释放 Context，不等待其他 sibling。在调用者未取消的情况下，求值会等待所有子节点及其清理完成，再报告错误或执行父函数。
 
-Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling；求值会等待所有节点结束，类似 `asyncio.gather(..., return_exceptions=True)`。错误统一通过 `slyme.utils.exception` 的 `BatchError` 抛出。其 `results` 列表按照 evaluator 组首次出现的顺序排列，抛出的错误保存在各项 `Result.error` 中；内置 evaluator 的错误是另一层 `BatchError`，使用 Ref 或 Node 在该组内的位置作为索引。子 Context 的清理错误保存在对应子节点的错误项中；如果 Node 本身也失败，Python 的 `finally` 语义会将 Node 异常保留为清理错误的 `__context__`，检查异常链可以看到两者。Node 和 Wrapper 调用会保留这些汇总异常。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
+Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling，求值会等待所有节点结束。错误组成嵌套异常组：外层按 evaluator 组首次出现的顺序排列，内置 evaluator 的组按其输入顺序排列。组内只包含失败，每个求值组的消息列出失败项的原始输入索引，不提供部分成功结果。子 Context 的清理错误作为该子节点的错误；如果 Node 本身也失败，Python 的 `finally` 语义会将 Node 异常保留为清理错误的 `__context__`。Node 和 Wrapper 通过异常记录的 `__cause__` 保存普通异常组；包含非 `Exception` 控制异常的组原样传播。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
 
 取消外层求值 Task 时，asyncio 会将取消传播给尚未完成的子任务，不汇总部分求值结果。每个子节点都会进入自己的 `finally` 清理。等待清理期间的取消可能使求值先退出，而由 Context 管理的清理继续在后台运行。同步子节点在事件循环线程内直接执行，执行期间无法被打断。Task 取消不保证底层网络、线程或进程中的工作已经停止；这些行为由应用适配层负责。
 

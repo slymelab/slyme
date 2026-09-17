@@ -13,38 +13,58 @@
 # limitations under the License.
 
 import sys
-from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from collections.abc import Sequence
 
-_T = TypeVar("_T")
+__all__ = [
+    "BaseExceptionGroup",
+    "ExceptionGroup",
+    "exception_group",
+    "enrich_exception",
+]
 
 
-@dataclass(frozen=True)
-class Result(Generic[_T]):
-    """One completed call: a returned value or a raised error.
+if sys.version_info >= (3, 11):
+    from builtins import BaseExceptionGroup, ExceptionGroup
+else:
 
-    Successful values, including None and exception objects, use ``value``.
-    Failed calls use ``error`` and leave ``value`` as None.
+    class BaseExceptionGroup(BaseException):
+        """Minimal pre-3.11 group; construct through exception_group()."""
+
+        def __init__(self, message: str, excs: Sequence[BaseException], /) -> None:
+            if not excs:
+                raise ValueError("An exception group requires a non-empty sequence.")
+            self.message = message
+            self.exceptions = tuple(excs)
+            super().__init__(message, excs)
+
+        def __str__(self) -> str:
+            count = len(self.exceptions)
+            suffix = "" if count == 1 else "s"
+            return f"{self.message} ({count} sub-exception{suffix})"
+
+    class ExceptionGroup(BaseExceptionGroup, Exception):
+        pass
+
+
+def exception_group(
+    message: str, excs: Sequence[BaseException], /
+) -> BaseExceptionGroup:
+    """Group errors, using an Exception subclass only when every member is one.
+
+    Python 3.11+ returns a native BaseExceptionGroup or ExceptionGroup. Earlier
+    versions preserve message, ordered exceptions, and catch semantics, but do
+    not provide except*, subgroup(), split(), or grouped traceback rendering.
+    Empty sequences raise ValueError.
     """
-
-    value: _T | None = None
-    error: BaseException | None = None
-
-
-class BatchError(Exception):
-    """Ordered completed results retained by an evaluation or cleanup failure.
-
-    Each consumer defines which calls are attempted and when errors are reported.
-    Nested errors preserve their own results and local indices.
-    """
-
-    def __init__(self, results: Iterable[Result[Any]]) -> None:
-        self.results = list(results)
-        failed = [
-            i for i, result in enumerate(self.results) if result.error is not None
-        ]
-        super().__init__(f"Batch failed at input indices {failed}.")
+    if sys.version_info >= (3, 11):
+        return BaseExceptionGroup(message, excs)
+    else:
+        group = (
+            ExceptionGroup
+            if all(isinstance(error, Exception) for error in excs)
+            else BaseExceptionGroup
+        )
+        return group(message, excs)
 
 
 def enrich_exception(error: Exception, info: str) -> None:

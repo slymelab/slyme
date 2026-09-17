@@ -6,21 +6,37 @@ from collections.abc import Callable
 import pytest
 
 from slyme.context import Context, Schema
-from slyme.node import Node, Wrapper, node, wrapper
-from slyme.utils.continuation import await_result, continuation
+from slyme.node import Node, Wrapper, create_node, create_wrapper, node, wrapper
+from slyme.node.exception import (
+    NodeException,
+    NodeExceptionRecord,
+    WrapperExceptionRecord,
+)
+from slyme.utils.exception import exception_group
+from slyme.utils.execution import await_result, continuation
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("origin", ["node", "wrapper"])
 @pytest.mark.parametrize(
-    "error_type", [asyncio.CancelledError, KeyboardInterrupt, SystemExit]
+    "failure_factory",
+    [
+        asyncio.CancelledError,
+        KeyboardInterrupt,
+        SystemExit,
+        NodeException,
+        pytest.param(
+            lambda: exception_group("cancelled", [asyncio.CancelledError()]),
+            id="control_exception_group",
+        ),
+    ],
 )
-async def test_node_and_wrapper_preserve_control_exceptions(
+async def test_node_and_wrapper_preserve_control_and_framework_exceptions(
     asynchronous: bool,
     origin: str,
-    error_type: type[BaseException],
+    failure_factory: Callable[[], BaseException],
 ) -> None:
-    failure = error_type()
+    failure = failure_factory()
 
     def run():
         if origin == "node":
@@ -51,9 +67,41 @@ async def test_node_and_wrapper_preserve_control_exceptions(
     graph.add_wrappers(aaround() if asynchronous else around())
     ctx = Context()
     try:
-        with pytest.raises(error_type) as caught:
+        with pytest.raises(type(failure)) as caught:
             await graph.acall(ctx)
         assert caught.value is failure
+    finally:
+        await ctx.adispose()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("origin", ["node", "wrapper"])
+async def test_node_and_wrapper_record_exception_groups_as_cause(
+    asynchronous: bool, origin: str
+) -> None:
+    failure = exception_group("failed", [ValueError("first"), LookupError("second")])
+
+    @continuation
+    def fail():
+        if asynchronous:
+            yield asyncio.sleep(0)
+        raise failure
+
+    graph = create_node(lambda ctx: fail() if origin == "node" else None)
+    around = create_wrapper(
+        lambda ctx, wrapped, call_next: (
+            fail() if origin == "wrapper" else call_next(ctx)
+        )
+    )
+    if origin == "wrapper":
+        graph.add_wrappers(around)
+    expected = NodeExceptionRecord if origin == "node" else WrapperExceptionRecord
+    ctx = Context()
+    try:
+        with pytest.raises(expected) as caught:
+            await graph.acall(ctx)
+        assert caught.value.__cause__ is failure
+        assert caught.value.exception_node is (graph if origin == "node" else around)
     finally:
         await ctx.adispose()
 

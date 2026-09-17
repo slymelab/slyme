@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import gc
 import inspect
 import weakref
+from dataclasses import FrozenInstanceError
 from typing import Any
 
 import pytest
@@ -13,6 +15,7 @@ import slyme.context as context_module
 from slyme.context import (
     Context,
     Ref,
+    RefEntry,
     Schema,
     Scope,
 )
@@ -20,6 +23,7 @@ from slyme.context.core import ContextPathError
 from slyme.context.ref import Ref as PathRef
 from slyme.context.schema import Schema as PathSchema
 from slyme.context.tree import CTX_EVAL_ENGINE
+from slyme.utils.exception import exception_group
 
 
 def test_schema_module_preserves_public_ref_and_context_interoperation() -> None:
@@ -107,8 +111,7 @@ def test_ref_is_a_directly_constructible_path_handle() -> None:
     manual = Ref("input.value")
     assert manual == value
 
-    with pytest.raises(ValueError, match="cannot be empty"):
-        Ref("")
+    assert Ref("").parts == ()
     with pytest.raises(ValueError, match="Invalid Ref path"):
         Ref("input..value")
 
@@ -129,27 +132,26 @@ def test_schema_resolves_leaf_and_container_refs() -> None:
     assert schema.resolve("input.articles").path == "input.articles"
     assert schema.resolve("input.count").path == "input.count"
     assert schema.resolve("args").path == "args"
-    with pytest.raises(KeyError, match="Did you mean 'articles'"):
+    with pytest.raises(KeyError, match=r"input\.artcles"):
         schema.resolve("input.artcles")
-    with pytest.raises(KeyError, match="has no entry 'child'"):
+    with pytest.raises(KeyError, match=r"args\.child"):
         schema.resolve("args.child")
-    with pytest.raises(ValueError, match="cannot be empty"):
-        schema.resolve("")
+    assert schema.resolve("") == Ref("")
 
 
 def test_schema_snapshots_input_and_has_no_attribute_path_api() -> None:
-    declarations: dict[str, Any] = {"input": {"value": Schema.leaf()}}
-    schema = Schema(declarations)
-    declarations["late"] = Schema.leaf()
+    declaration: dict[str, Any] = {"input": {"value": Schema.leaf()}}
+    schema = Schema(declaration=declaration)
+    declaration["late"] = Schema.leaf()
 
     assert schema.resolve("input.value").path == "input.value"
     with pytest.raises(KeyError, match="late"):
         schema.resolve("late")
     with pytest.raises(AttributeError):
         schema.input  # type: ignore[attr-defined]
-    with pytest.raises(AttributeError, match="read-only"):
+    with pytest.raises(FrozenInstanceError):
         schema.input = 1  # type: ignore[attr-defined]
-    with pytest.raises(AttributeError, match="read-only"):
+    with pytest.raises(FrozenInstanceError):
         del schema.input
 
 
@@ -158,28 +160,27 @@ def test_schema_declaration_validation() -> None:
     assert not hasattr(context_module, "Refs")
     assert isinstance(Schema(), Schema)
     assert isinstance(Schema(None), Schema)
-    with pytest.raises(ValueError, match="root.*empty-key"):
-        Schema({"": Schema.container()})
+    assert Schema({"": Schema.container()}).resolve("").parts == ()
     with pytest.raises(ValueError, match="without dots"):
         Schema({"bad.path": Schema.leaf()})
-    with pytest.raises(TypeError, match=r"mapping or Schema\.leaf"):
+    with pytest.raises(TypeError, match=r"dict or Schema\.leaf"):
         Schema({"bad": None})
-    with pytest.raises(TypeError, match=r"mapping or Schema\.leaf"):
+    with pytest.raises(TypeError, match=r"dict or Schema\.leaf"):
         Schema({"bad": ...})
     with pytest.raises(TypeError, match=r"empty key.*Schema\.container"):
         Schema({"bad": {"": None}})
     with pytest.raises(TypeError, match=r"empty key.*Schema\.container"):
         Schema({"bad": {"": Schema.leaf()}})
-    with pytest.raises(TypeError, match=r"Schema\.container.*empty key"):
+    with pytest.raises(TypeError, match=r"dict or Schema\.leaf"):
         Schema({"bad": Schema.container()})
 
     resolved = Schema({"source": Schema.leaf()}).resolve("source")
-    with pytest.raises(TypeError, match=r"mapping or Schema\.leaf"):
+    with pytest.raises(TypeError, match=r"dict or Schema\.leaf"):
         Schema({"copied": resolved})
 
     cyclic: dict[str, Any] = {}
     cyclic["again"] = cyclic
-    with pytest.raises(ValueError, match="Cyclic"):
+    with pytest.raises(RecursionError):
         Schema({"cycle": cyclic})
 
     names = Schema(
@@ -195,7 +196,7 @@ def test_schema_declaration_validation() -> None:
         assert names.resolve(path).path == path
 
 
-def test_schema_declare_is_reversible_independent_and_atomic() -> None:
+def test_schema_declare_has_independent_disposers_and_rolls_back_conflicts() -> None:
     base = Schema(
         {
             "input": {
@@ -230,7 +231,7 @@ def test_schema_declare_is_reversible_independent_and_atomic() -> None:
         base.resolve("output.result")
     assert base.resolve("input.a").path == "input.a"
 
-    with pytest.raises(ValueError, match="Ref configuration.*input.a"):
+    with pytest.raises(ValueError, match="Conflicting Ref configurations"):
         base.declare(
             {
                 "partial": Schema.leaf(),
@@ -245,11 +246,11 @@ def test_schema_declare_is_reversible_independent_and_atomic() -> None:
     container = Schema({"entry": {"child": Schema.leaf()}})
     empty_container = Schema({"entry": {}})
     assert empty_container.resolve("entry").path == "entry"
-    with pytest.raises(ValueError, match="leaf.*container"):
+    with pytest.raises(ValueError, match="RefLeafConfig.*RefContainerConfig"):
         leaf.declare(container)
-    with pytest.raises(ValueError, match="leaf.*container"):
+    with pytest.raises(ValueError, match="RefLeafConfig.*RefContainerConfig"):
         leaf.declare(empty_container)
-    with pytest.raises(ValueError, match="container.*leaf"):
+    with pytest.raises(ValueError, match="RefContainerConfig.*RefLeafConfig"):
         container.declare(leaf)
     remove_child = empty_container.declare(container)
     assert empty_container.resolve("entry.child").path == "entry.child"
@@ -275,7 +276,7 @@ def test_schema_declare_is_reversible_independent_and_atomic() -> None:
     with pytest.raises(KeyError, match="right"):
         implicit.resolve("group.right")
 
-    with pytest.raises(ValueError, match="Ref configuration.*fixed"):
+    with pytest.raises(ValueError, match="Conflicting Ref configurations"):
         Schema({"fixed": Schema.leaf(replaceable=False)}).declare(
             {"fixed": Schema.leaf()}
         )
@@ -314,13 +315,13 @@ def test_schema_claims_release_definitions_in_child_first_order(reverse) -> None
     schema = Schema()
     declaration = {"group": {"value": Schema.leaf()}}
     first = schema.declare(declaration)
-    parent = schema._resolve_entry("group").declarations
-    leaf = schema._resolve_entry("group.value").declarations
+    parent = schema.resolve_entry("group")._declarations
+    leaf = schema.resolve_entry("group.value")._declarations
     second = schema.declare(declaration)
-    assert schema._resolve_entry("group").declarations is parent
-    assert schema._resolve_entry("group.value").declarations is leaf
+    assert schema.resolve_entry("group")._declarations is parent
+    assert schema.resolve_entry("group.value")._declarations is leaf
     assert len(parent) == len(leaf) == 2
-    assert parent == leaf
+    assert parent.keys() == leaf.keys()
 
     early, last = (second, first) if reverse else (first, second)
     early()
@@ -330,7 +331,7 @@ def test_schema_claims_release_definitions_in_child_first_order(reverse) -> None
     assert not parent and not leaf
 
     remove_new = schema.declare({"group": Schema.leaf()})
-    current = schema._resolve_entry("group").declarations
+    current = schema.resolve_entry("group")._declarations
     first()
     second()
     assert current is not parent
@@ -339,31 +340,36 @@ def test_schema_claims_release_definitions_in_child_first_order(reverse) -> None
     remove_new()
 
 
-def test_schema_disposer_does_not_keep_the_schema_or_entries_alive() -> None:
+def test_schema_disposer_retains_schema_and_entries_until_called() -> None:
     schema = Schema()
     remove = schema.declare({"group": {"value": Schema.leaf()}})
-    entry_ref = weakref.ref(schema._resolve_entry("group.value"))
+    entry_ref = weakref.ref(schema.resolve_entry("group.value"))
     schema_ref = weakref.ref(schema)
     del schema
+    gc.collect()
+    assert schema_ref() is not None
+    assert entry_ref() is not None
+    remove()
     gc.collect()
     assert schema_ref() is None
     assert entry_ref() is None
     remove()
-    remove()
 
 
-def test_schema_disposal_releases_claims_on_a_retained_entry_without_owning_schema():
+def test_released_schema_disposer_and_retained_entry_do_not_keep_schema_alive():
     schema = Schema()
     remove = schema.declare({"value": Schema.leaf()})
-    entry = schema._resolve_entry("value")
+    entry = schema.resolve_entry("value")
     schema_ref = weakref.ref(schema)
     del schema
     gc.collect()
+    assert schema_ref() is not None
+    assert len(entry._declarations) == 1
+    remove()
+    remove()
+    gc.collect()
     assert schema_ref() is None
-    assert len(entry.declarations) == 1
-    remove()
-    remove()
-    assert not entry.declarations
+    assert not entry._declarations
 
 
 @pytest.mark.parametrize("failure_path", ["group", "group.value", "group.nested.value"])
@@ -371,20 +377,19 @@ def test_failed_schema_registration_rolls_back_only_its_claims(
     monkeypatch: pytest.MonkeyPatch, failure_path: str
 ) -> None:
     schema = Schema({"stable": Schema.leaf()})
-    original = Schema._commit_merge
-    stable = schema._resolve_entry("stable").declarations
-    original_claims = set(stable)
+    original = RefEntry._declare
+    stable = schema.resolve_entry("stable")._declarations
+    original_claims = stable.copy()
+    root = schema.resolve_entry("")
+    root_claims = root._declarations.copy()
 
-    def fail(self, current, incoming, declaration_id, entries):
-        original(self, current, incoming, declaration_id, entries)
-        if any(
-            (entry := entry_ref()) is not None and entry.ref.path == failure_path
-            for entry_ref in entries
-        ):
+    def fail(self, declaration_id, config):
+        if self.ref.path == failure_path:
             raise ValueError("registration failed")
+        original(self, declaration_id, config)
 
     with monkeypatch.context() as patch:
-        patch.setattr(Schema, "_commit_merge", fail)
+        patch.setattr(RefEntry, "_declare", fail)
         with pytest.raises(ValueError, match="registration failed"):
             schema.declare(
                 {
@@ -397,8 +402,10 @@ def test_failed_schema_registration_rolls_back_only_its_claims(
                 }
             )
     assert schema._child_names(()) == ("stable",)
-    assert schema._resolve_entry("stable").declarations is stable
+    assert schema.resolve_entry("stable")._declarations is stable
     assert stable == original_claims
+    assert schema.resolve_entry("") is root
+    assert root._declarations == root_claims
     for path in ("temporary", "group", "group.value", "group.nested.value"):
         with pytest.raises(KeyError):
             schema.resolve(path)
@@ -407,29 +414,69 @@ def test_failed_schema_registration_rolls_back_only_its_claims(
     assert schema._child_names(()) == ("stable",)
 
 
-def test_schema_disposal_continues_after_one_definition_cleanup_fails(monkeypatch):
+@pytest.mark.parametrize(
+    "failures",
+    [
+        [ValueError("right failed")],
+        [ValueError("right failed"), RuntimeError("left failed")],
+        [asyncio.CancelledError("right cancelled"), ValueError("left failed")],
+    ],
+)
+def test_schema_disposal_collects_failures_and_replays_without_repeating(
+    monkeypatch, failures: list[BaseException]
+) -> None:
     schema = Schema()
-    remove = schema.declare({"left": Schema.leaf(), "right": Schema.leaf()})
-    left = schema._resolve_entry("left").declarations
-    right = schema._resolve_entry("right").declarations
-    original = Schema._remove_entry
+    remove = schema.declare(
+        {"left": Schema.leaf(), "middle": Schema.leaf(), "right": Schema.leaf()}
+    )
+    left = schema.resolve_entry("left")._declarations
+    right = schema.resolve_entry("right")._declarations
+    original = Schema._delete_entry
     calls = []
-    failure = ValueError("cleanup failed")
+    by_path = dict(zip(("right", "left"), failures, strict=False))
 
     def cleanup(self, entry):
         calls.append(entry.ref.path)
         original(self, entry)
-        if entry.ref.path == "right":
-            raise failure
+        if entry.ref.path in by_path:
+            raise by_path[entry.ref.path]
 
-    monkeypatch.setattr(Schema, "_remove_entry", cleanup)
+    monkeypatch.setattr(Schema, "_delete_entry", cleanup)
+    first_error = None
     for _ in range(2):
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(type(exception_group("expected", failures))) as caught:
             remove()
-        assert caught.value is failure
-    assert calls == ["right", "left"]
+        assert caught.value.exceptions == tuple(failures)
+        if first_error is None:
+            first_error = caught.value
+        else:
+            assert caught.value is first_error
+    assert calls == ["right", "middle", "left"]
     assert not left and not right
     assert schema._child_names(()) == ()
+    assert len(schema.resolve_entry("")._declarations) == 1
+
+
+def test_schema_rollback_cleanup_failure_preserves_registration_error(monkeypatch):
+    schema = Schema({"stable": Schema.leaf(int)})
+    cleanup_failure = RuntimeError("rollback failed")
+    original = Schema._delete_entry
+
+    def cleanup(self, entry):
+        original(self, entry)
+        raise cleanup_failure
+
+    monkeypatch.setattr(Schema, "_delete_entry", cleanup)
+    with pytest.raises(type(exception_group("expected", [cleanup_failure]))) as caught:
+        schema.declare({"temporary": Schema.leaf(), "stable": Schema.leaf(str)})
+
+    assert caught.value.exceptions == (cleanup_failure,)
+    assert isinstance(caught.value.__context__, ValueError)
+    assert "Conflicting Ref configurations" in str(caught.value.__context__)
+    assert caught.value.__cause__ is None
+    assert schema._child_names(()) == ("stable",)
+    assert len(schema.resolve_entry("stable")._declarations) == 1
+    assert len(schema.resolve_entry("")._declarations) == 2
 
 
 def test_schema_disposal_prevents_old_context_values_from_reappearing() -> None:
@@ -481,14 +528,14 @@ def test_schema_can_be_built_before_or_through_context() -> None:
     root = Context(schema=core)
     child = root.fork()
 
-    remove_core_extension = core.declare(extension)
+    remove_core_extension = core.declare(declaration=extension)
 
     assert root.schema is core
     assert child.schema is root.schema
     child.set(plugin_ref, 1)
     assert child.get(root.schema.resolve("plugin.extra")) == 1
 
-    remove_root_extension = root.declare(extension)
+    remove_root_extension = root.declare(declaration=extension)
     remove_context_only = root.declare({"context_only": Schema.leaf()})
     root.set("context_only", 2)
     assert child.get("context_only") == 2
