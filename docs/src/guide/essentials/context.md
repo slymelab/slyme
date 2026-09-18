@@ -4,9 +4,13 @@
 
 Context privately holds three cooperating objects: `Schema` defines paths and metadata, `ContextStore` stores scoped values and tracks their viewers, and `Lifecycle` owns effects and child lifetimes. Contexts in one application share Schema and Store, but each owns a distinct Lifecycle. Context exposes `declare()`, `resolve()`, `resolve_entry()`, and `entries`; callers do not need access to those private objects. `entries` includes declared containers and unset leaves, whereas `keys()` and `flatten()` describe visible values.
 
+Context coordinates component ownership; ContextView delegates access through Context. Store alone maintains viewer and reverse indexes, while each private binding owns its identities, values, and registration tokens without retaining Store state. Field withdrawal detaches Store indexes before clearing binding data, so value finalizers can redeclare the same path without the old cleanup removing its replacement. Schema registers and detaches its own Store consumers and only notifies them of withdrawn fields; Lifecycle invokes the supplied finalizer without depending on Schema or Store. Scope holds visibility information, not mutable data or cleanup ownership.
+
 Normal Context access checks its Lifecycle before delegating. During disposal, reads remain allowed until that Context finishes releasing, but writes, declarations, effects, and child creation are forbidden. Internal withdrawal and Scope release use exact ownership records and remain allowed during cleanup. Shared Schema and Store do not adopt one caller's lifecycle state: other active Contexts may continue using them.
 
-Each Context binding stores one record per identity: its current value, inheritance barrier, and observed Scopes. Only registrations need an undo token. Context storage is independent of Compose, which stores ordered contributions with metadata.
+Each Context binding stores one data-only record per identity: its current value, inheritance barrier, and observed Scopes. Only registrations need an undo token. Binding owns all operations on these records; writes do not expose them. Context storage is independent of Compose, which stores ordered contributions with metadata.
+
+Store enforces Schema write modes and the requirement that registration cannot overwrite a local value. Binding provides token-aware writes and deletions: a stored `None` token is unprotected, while a non-`None` token requires that exact token, including when the caller supplies `None`. Store registration creates a unique token and a `once()` disposer that calls Binding's local ownership check and deletion. The ownership check always requires an exact token match, so an old disposer cannot delete a replacement, even an unprotected one.
 
 Reads visit the complete Scope MRO, skip unbound Scopes, and select the first value or inheritance barrier. They do not create bindings or cache their results, so later writes and removals are visible on the next read.
 
@@ -189,7 +193,7 @@ assert ctx.extract({"name": R.resolve("user.name"), "age": R.resolve("user.age")
 }
 ```
 
-`Context(*, parent=None, scope=None)` only establishes ownership and visibility. A root creates an empty Schema and Store; a child shares its parent's Schema and Store. `root` is a fixed field, pointing to itself for a root and to the same application root for every child. Context attribute bindings cannot be reassigned, while declared data remains mutable. Call `declare()` to add paths, then `update()` or `set()` to assign values. Every data access requires a declared path, including reads with a default and `exists()` checks. `update()` accepts only `assign` fields.
+`Context(*, parent=None, scope=None)` establishes ownership and visibility. A root creates its Schema and Store and installs independent framework configuration under `$`; a child shares its parent's Schema and Store without reinstalling defaults. `root` is a fixed field, pointing to itself for a root and to the same application root for every child. Context attribute bindings cannot be reassigned, while declared data remains mutable. Call `declare()` to add paths, then `update()` or `set()` to assign values. Every data access requires a declared path, including reads with a default and `exists()` checks. `update()` accepts only `assign` fields.
 
 Applications can build a Schema before creating a Context and import it with `ctx.declare(schema)`, or declare a dict directly. Import copies the current definitions into the application's Schema with independent declaration ownership; later source-Schema additions or withdrawals do not propagate. Separate roots have independent schemas even when importing the same source. Existing forks see changes declared through any Context in their application immediately:
 
@@ -226,9 +230,15 @@ The `declaration` argument of `Schema(...)`, `Schema.declare(...)`, and `Context
 
 `set` and `update` accept only paths declared as leaves. `keys` and `to_dict(ref)` accept only paths declared as containers. `get`, `exists`, `delete`, and `drop` accept either role. Deleting a container removes its local descendant values, not its Schema declarations or inherited values.
 
+### Framework configuration
+
+`context/default.py` installs three register-mode Composes at the root: `$.tree.data`, `$.tree.node`, and `$.eval.handlers`. Access them through `DATA_TREE_REF`, `NODE_TREE_REF`, and `EVALUATORS_REF`, exported by `slyme.context`. Root lifetime owns these values and their default contributions; there is no mutable process-global registry.
+
+These paths follow ordinary Context/Scope rules. Child Scopes inherit them; unrelated Scopes must explicitly acquire configuration, with no implicit fallback to root. Contribute rules through Compose, or isolate a field and register an independent Compose. See [Tree rules](../slyme-in-depth/tree-in-slyme.md).
+
 ### Root container
 
-While Context is readable, `ctx.get("")` returns its live root `ContextView` and `ctx.exists("")` is true, including when no values are visible. `ctx.keys("")` and `ctx.to_dict("")` are equivalent to their argument-free forms. An empty root view returns `()` from `keys()` and `{}` from `to_dict()` and `flatten()`; non-root containers without visible leaves still count as absent.
+While Context is readable, `ctx.get("")` returns its live root `ContextView` and `ctx.exists("")` is true, including when no values are visible. `ctx.keys("")` and `ctx.to_dict("")` are equivalent to their argument-free forms. A fresh root includes `$` in `keys()`, `to_dict()`, and `flatten()`; these methods do not hide framework fields. Non-root containers without visible leaves still count as absent.
 
 ```python
 from slyme.context import Context, Ref, Schema
@@ -239,16 +249,16 @@ root_ctx.update({"value": 1})
 child_ctx = root_ctx.fork(scope=root_ctx.scope.fork())
 root_view = child_ctx.get(Ref(""))
 child_ctx.set("value", 2)
-assert root_view.to_dict() == {"value": 2}
+assert root_view.get("value") == 2
 
-child_ctx.delete("")
+child_ctx.delete("value")
 assert root_view.to_dict(local=True) == {}
-assert root_view.to_dict() == {"value": 1}
+assert root_view.get("value") == 1
 assert root_ctx.get("value") == 1
 root_ctx.dispose()
 ```
 
-`delete("")` and `drop([""])` delete local values across all declared leaves, using the identity bound to the current Scope for each leaf. They do not clear the application-wide data store, revoke declarations, remove isolation barriers, or dispose effects. Contexts sharing those identities observe the same removal; unrelated identities remain unchanged. Inherited values can become visible again. Root assignment through `set`, `register`, or `update` is rejected because the root is a container.
+`delete("")` and `drop([""])` reject the register-mode framework descendants before deleting any values. Delete an assign-only business subtree instead. Container deletion preserves declarations, inherited values, isolation barriers, and effects. Root assignment through `set`, `register`, or `update` is rejected because the root is a container.
 
 ### Bulk updates
 
@@ -294,9 +304,7 @@ assert agent.parent is feature
 assert agent.root is root
 assert agent.scope.mro == (agent_scope, feature_scope, mixin_scope, root.scope)
 assert agent.scope.find("mixin") is mixin_scope
-assert agent.to_dict() == {
-    "settings": {"mode": "fast", "timeout": 45},
-}
+assert agent.to_dict("settings") == {"mode": "fast", "timeout": 45}
 ```
 
 Context parentage and Scope ancestry are independent. The parent determines lifetime ownership and the application root that holds Schema and data; the Scope determines lookup. `scope.fork()` always creates a single-parent child. Multiple parents require explicit `Scope(parents=(...))` construction and a consistent C3 linearization; those parents may come from otherwise unrelated Scope roots. Separate Context roots never share Context data, even when they use the same Scope object.
@@ -341,7 +349,7 @@ finally:
 
 An inherited value can be shadowed by a registration in a child Scope. Contexts sharing the same local identity cannot register competing values: remove the existing registration before installing another. `set()`, `update()`, `update_tree()`, `delete()`, and `drop()` reject `register` fields, including fields with no local value. Container deletion rejects the entire operation if any descendant uses `register` mode. `assign` fields reject `register()` instead. These modes govern the binding, not the mutability of the stored object.
 
-Context strongly owns its binding table. Final Schema withdrawal clears the corresponding binding, including records retained by registration disposers. Each disposer captures only its own identity record and installation token, so it neither retains unrelated identities nor removes a later registration. Scope release also clears records when their final viewer leaves.
+Context strongly owns its binding table. A registration disposer captures its Binding, Scope, and installation token, not the Store or an internal value record. Its closure drops the Binding reference in `finally` when called, even if cleanup fails; an exception traceback may separately retain method frames. Until called, it retains the Binding and its remaining identity data. Final Schema withdrawal clears the entire Binding, and Scope release clears identity data when its final viewer leaves, regardless of retained disposers.
 
 ## Effects and disposal
 
@@ -419,9 +427,12 @@ nested_path = Context()
 nested_path.declare(tree_schema)
 nested_path.update({tree_schema.resolve("settings.theme"): "dark"})
 
-assert mapping_leaf.to_dict() == nested_path.to_dict()
-assert mapping_leaf.flatten() == {leaf_schema.resolve("settings"): {"theme": "dark"}}
-assert nested_path.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
+assert mapping_leaf.get("settings") == nested_path.to_dict("settings")
+assert mapping_leaf.flatten() == {
+    **mapping_leaf.get("$").flatten(),
+    leaf_schema.resolve("settings"): {"theme": "dark"},
+}
+assert nested_path.get("settings").flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 
-Both methods resolve the bound Scope's effective C3 view by default and accept `local=True`. A `ContextView` accepts relative string paths for subtree access, while resolved Ref objects remain absolute; its `flatten()` result therefore contains absolute Schema refs. The empty string addresses the view itself, whereas `Ref("")` addresses the application root and is outside a non-root view. Neither method copies leaf values. To materialize values into a new root, create it, declare all copied paths, then call `snapshot.update(ctx.flatten())`. All copied fields must use `assign` mode. `register` fields require explicit `register()` calls on the new owner; a snapshot does not transfer ownership. A new root receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.
+Both methods resolve the bound Scope's effective C3 view by default and accept `local=True`. A `ContextView` accepts relative string paths for subtree access, while resolved Ref objects remain absolute; its `flatten()` result therefore contains absolute Schema refs. The empty string addresses the view itself, whereas `Ref("")` addresses the application root and is outside a non-root view. Neither method copies leaf values. To materialize values into a new root, create it, declare all copied paths, then call `snapshot.update(ctx.get("app").flatten())`. Select an application subtree such as `app`; all copied fields must use `assign` mode. Root flattening also includes the register-mode framework configuration. `register` fields require explicit `register()` calls on the new owner; a snapshot does not transfer ownership. A new root receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.

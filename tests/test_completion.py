@@ -7,12 +7,11 @@ from collections.abc import Awaitable, Callable
 import pytest
 
 from slyme.context import Context
+from slyme.context.default import EVALUATORS_REF
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
-from slyme.node.eval import BatchEvaluatorFunc
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
-from slyme.utils.registry import GeneralRegistry
 
 
 async def test_await_result_preserves_values_and_only_awaits_outer_completion() -> None:
@@ -55,13 +54,14 @@ async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
         return value + 1
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     graph = parent(value=Auto(child()))
     pending = graph(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["call"]
     assert await await_result(pending) == 5
     assert events == ["call", "await", "parent"]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -82,9 +82,10 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
         return sum(values)
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     result = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
     assert await asyncio.wait_for(await_result(result), 1) == 3
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -107,13 +108,14 @@ async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
         return sum(values)
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     before = asyncio.all_tasks()
     pending = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
     assert events == [("call", 1), ("call", 2)]
     assert asyncio.all_tasks() == before
     assert await await_result(pending) == 3
     assert events == [("call", 1), ("call", 2), ("await", 1), ("await", 2)]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -210,7 +212,6 @@ async def test_evaluation_runs_sync_batches_before_awaiting_async_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
 
     async def asynchronous(ctx, values):
         calls.append("async")
@@ -221,10 +222,12 @@ async def test_evaluation_runs_sync_batches_before_awaiting_async_results(
         calls.append("sync")
         return [value.upper() for value in values]
 
-    registry.register(asynchronous, key=int)
-    registry.register(synchronous, key=str)
-    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
+    ctx.effect(
+        lambda: ctx.get(EVALUATORS_REF).add(
+            ctx.scope, {int: asynchronous, str: synchronous}
+        )
+    )
     marker = object()
     assert await await_result(eval_tree(ctx, [1, marker, "x", 2])) == [
         2,
@@ -317,6 +320,7 @@ async def test_async_setup_cannot_dispose_owner_or_ancestor(ancestor: bool) -> N
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_setup_failure_detaches_registration(asynchronous: bool) -> None:
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     failure = ValueError("setup")
 
     def fail():
@@ -329,7 +333,7 @@ async def test_setup_failure_detaches_registration(asynchronous: bool) -> None:
     with pytest.raises(ValueError) as caught:
         await await_result(ctx.effect(async_fail if asynchronous else fail))
     assert caught.value is failure
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     assert ctx.dispose() is None
 
 
@@ -398,10 +402,11 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
         return call_next(ctx) + extra
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     assert (
         await await_result(value().add_wrappers(add(extra=Auto(parameter())))(ctx)) == 5
     )
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -445,6 +450,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
         return value
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     with pytest.raises(NodeExceptionRecord) as caught:
         await await_result(parent(value=Auto(child()))(ctx))
     group = caught.value.__cause__
@@ -458,7 +464,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
     assert isinstance(node_error, NodeExceptionRecord)
     assert node_error.__cause__ is failure
     assert child_errors.__cause__ is None
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 

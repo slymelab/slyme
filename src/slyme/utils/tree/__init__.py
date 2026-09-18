@@ -17,9 +17,10 @@ slyme tree utility module.
 """
 
 from .core import (
-    TREE_ENGINE_REGISTRY,
     AttributeKey,
     ContainerDef,
+    FlattenFunc,
+    IsLeafFunc,
     KeyPath,
     LeafDef,
     MappingKey,
@@ -28,7 +29,11 @@ from .core import (
     TreeAux,
     TreeDef,
     TreeEngine,
+    TreeHandler,
     TreeKey,
+    TreeResolver,
+    TreeRules,
+    UnflattenFunc,
 )
 
 __all__ = [
@@ -43,5 +48,10 @@ __all__ = [
     "ContainerDef",
     "TraverseAux",
     "TreeEngine",
-    "TREE_ENGINE_REGISTRY",
+    "TreeHandler",
+    "TreeRules",
+    "TreeResolver",
+    "FlattenFunc",
+    "UnflattenFunc",
+    "IsLeafFunc",
 ]

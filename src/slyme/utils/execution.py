@@ -151,6 +151,37 @@ def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
     return wrapped
 
 
+def _advance_generator(
+    generator: Generator[Any, Any, Any],
+    method: Callable[[Any], Any],
+    argument: Any,
+) -> tuple[bool, Any]:
+    # Different yields may exchange unrelated types.
+    while True:
+        try:
+            value = method(argument)
+        except StopIteration as finished:
+            return True, finished.value
+        if isawaitable(value):
+            return False, value
+        method, argument = generator.send, value
+
+
+async def _resume_generator(
+    generator: Generator[Any, Any, _T], pending: Awaitable[Any]
+) -> _T:
+    while True:
+        try:
+            value = await pending
+        except BaseException as error:
+            done, value = _advance_generator(generator, generator.throw, error)
+        else:
+            done, value = _advance_generator(generator, generator.send, value)
+        if done:
+            return cast(_T, value)
+        pending = value
+
+
 def run(generator: Generator[Any, Any, _T]) -> _T | Awaitable[_T]:
     """Advance a generator immediately until completion or an awaitable yield.
 
@@ -163,29 +194,5 @@ def run(generator: Generator[Any, Any, _T]) -> _T | Awaitable[_T]:
     asynchronous remainder. No tasks, error aggregation, cancellation shielding,
     or result caching are provided. Generator reuse follows Python's protocol.
     """
-
-    # Different yields may exchange unrelated types; the return type stays _T.
-    def advance(method: Callable[[Any], Any], argument: Any) -> tuple[bool, Any]:
-        while True:
-            try:
-                value = method(argument)
-            except StopIteration as finished:
-                return True, finished.value
-            if isawaitable(value):
-                return False, value
-            method, argument = generator.send, value
-
-    async def resume(pending: Awaitable[Any]) -> _T:
-        while True:
-            try:
-                value = await pending
-            except BaseException as error:
-                done, value = advance(generator.throw, error)
-            else:
-                done, value = advance(generator.send, value)
-            if done:
-                return cast(_T, value)
-            pending = value
-
-    done, value = advance(generator.send, None)
-    return cast(_T, value) if done else resume(value)
+    done, value = _advance_generator(generator, generator.send, None)
+    return cast(_T, value) if done else _resume_generator(generator, value)

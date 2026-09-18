@@ -14,20 +14,20 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable, Generator, Sequence
+from functools import partial
 from inspect import isawaitable
 from typing import Any, TypeVar, cast
 
 from slyme.context import Context, Ref
-from slyme.context.store import CTX_EVAL_ENGINE
+from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import continuation
-from slyme.utils.registry import GeneralRegistry
+from slyme.utils.tree import TreeEngine
 
 from .core import Node
 
 __all__ = [
     "eval_tree",
-    "EVALUATOR_REGISTRY",
     "BatchEvaluatorFunc",
 ]
 
@@ -35,10 +35,23 @@ __all__ = [
 BatchEvaluatorFunc = Callable[
     [Context, Sequence[Any]], Sequence[Any] | Awaitable[Sequence[Any]]
 ]
-EVALUATOR_REGISTRY = GeneralRegistry[type, BatchEvaluatorFunc]("evaluator")
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
+
+
+@continuation
+def _evaluate_item(
+    call: Callable[[_T], _R | Awaitable[_R]],
+    results: list[_R | None],
+    errors: list[tuple[int, BaseException]],
+    index: int,
+    value: _T,
+) -> Generator[Any, Any, None]:
+    try:
+        results[index] = yield call(value)
+    except BaseException as error:
+        errors.append((index, error))
 
 
 @continuation
@@ -57,15 +70,8 @@ def _batch(
     errors: list[tuple[int, BaseException]] = []
     pending: list[Awaitable[None]] = []
 
-    @continuation
-    def evaluate(index: int, value: _T) -> Generator[Any, Any, None]:
-        try:
-            results[index] = yield call(value)
-        except BaseException as error:
-            errors.append((index, error))
-
     for index, value in enumerate(values):
-        result = evaluate(index, value)
+        result = _evaluate_item(call, results, errors, index, value)
         if isawaitable(result):
             pending.append(result)
 
@@ -87,6 +93,18 @@ def _batch(
 
 
 @continuation
+def _evaluate_group(
+    ctx: Context,
+    leaves: list[Any],
+    batch: tuple[BatchEvaluatorFunc, tuple[list[int], list[Any]]],
+) -> Generator[Any, Any, None]:
+    evaluator, (indices, values) = batch
+    result = yield evaluator(ctx, values)
+    for index, value in zip(indices, result, strict=True):
+        leaves[index] = value
+
+
+@continuation
 def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
     """Evaluate registered leaves and reconstruct every Tree container.
 
@@ -94,11 +112,14 @@ def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
     not recursively evaluated. Return an awaitable only for asynchronous work.
     Evaluators match the exact leaf type; subclasses require registration.
     Evaluator groups are independent batches and may execute concurrently.
+    Effective tree rules and evaluator mappings are captured before traversal.
     """
-    leaves, tree_def = CTX_EVAL_ENGINE.flatten(tree)
+    rules = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
+    evaluators = ctx.get(EVALUATORS_REF).resolve(ctx.scope)
+    leaves, tree_def = TreeEngine.flatten(tree, rules=rules)
     eval_groups: dict[BatchEvaluatorFunc, tuple[list[int], list[Any]]] = {}
     for i, leaf in enumerate(leaves):
-        if (evaluator := EVALUATOR_REGISTRY.get(type(leaf), None)) is not None:
+        if (evaluator := evaluators.get(type(leaf))) is not None:
             if evaluator not in eval_groups:
                 eval_groups[evaluator] = ([], [])
             indices, values = eval_groups[evaluator]
@@ -106,17 +127,8 @@ def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
             values.append(leaf)
     batches = list(eval_groups.items())
 
-    @continuation
-    def evaluate(
-        batch: tuple[BatchEvaluatorFunc, tuple[list[int], list[Any]]],
-    ) -> Generator[Any, Any, None]:
-        evaluator, (indices, values) = batch
-        result = yield evaluator(ctx, values)
-        for index, value in zip(indices, result, strict=True):
-            leaves[index] = value
-
-    yield _batch(batches, evaluate)
-    return CTX_EVAL_ENGINE.unflatten(tree_def, leaves)
+    yield _batch(batches, partial(_evaluate_group, ctx, leaves))
+    return TreeEngine.unflatten(tree_def, leaves)
 
 
 # --- Evaluator Implementations ---
@@ -127,7 +139,13 @@ def ref_evaluator(
     return _batch(refs, ctx.get)
 
 
-EVALUATOR_REGISTRY.register(ref_evaluator, key=Ref)
+@continuation
+def _evaluate_node(ctx: Context, node: Node) -> Generator[Any, Any, Any]:
+    child = ctx.fork(scope=ctx.scope.fork())
+    try:
+        return (yield node(child))
+    finally:
+        yield child.dispose()
 
 
 def node_evaluator(
@@ -142,15 +160,4 @@ def node_evaluator(
     may leave Context-owned cleanup running after the evaluator exits.
     """
 
-    @continuation
-    def evaluate_one(node: Node) -> Generator[Any, Any, Any]:
-        child = ctx.fork(scope=ctx.scope.fork())
-        try:
-            return (yield node(child))
-        finally:
-            yield child.dispose()
-
-    return _batch(nodes, evaluate_one)
-
-
-EVALUATOR_REGISTRY.register(node_evaluator, key=Node)
+    return _batch(nodes, partial(_evaluate_node, ctx))

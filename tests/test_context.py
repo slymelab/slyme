@@ -20,10 +20,11 @@ from slyme.context import (
     Scope,
 )
 from slyme.context.core import ContextPathError
+from slyme.context.default import DATA_RULES
 from slyme.context.schema import Ref as PathRef
 from slyme.context.schema import Schema as PathSchema
-from slyme.context.store import CTX_EVAL_ENGINE
 from slyme.utils.exception import exception_group
+from slyme.utils.tree import TreeEngine
 
 
 def test_schema_module_preserves_public_ref_and_context_interoperation() -> None:
@@ -41,7 +42,9 @@ def test_schema_module_preserves_public_ref_and_context_interoperation() -> None
     remove()
     with pytest.raises(ContextPathError):
         ctx.get(ref)
-    assert not ctx._store._data
+    assert set(ctx._store._data) == {
+        ctx.resolve_entry(ref.path) for ref in ctx.get("$").flatten()
+    }
     ctx.dispose()
 
 
@@ -566,7 +569,7 @@ def test_context_requires_declared_keys_and_inherits_its_parent_schema() -> None
     foreign = Schema({"value": Schema.leaf(str)}).resolve("value")
     root.set("value", 1)
     assert root.get(foreign) == 1
-    assert root.flatten() == {root.resolve("value"): 1}
+    assert root.flatten() == {**root.get("$").flatten(), root.resolve("value"): 1}
 
     unrelated = Context()
     unrelated.declare(R)
@@ -633,9 +636,10 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
     assert ctx.get(R.resolve("missing"), "fallback") == "fallback"
     assert ctx.exists(R.resolve("user.age"))
     assert not ctx.exists(R.resolve("user.unknown"))
-    assert set(ctx.keys()) == {"user", "settings"}
+    assert set(ctx.keys()) == {"$", "user", "settings"}
     assert set(ctx.keys(R.resolve("user"))) == {"name", "age"}
     assert ctx.to_dict() == {
+        "$": ctx.get("$").to_dict(),
         "user": {"name": "Ada", "age": 37},
         "settings": {"theme": "dark"},
     }
@@ -649,6 +653,7 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
         user.get(R.resolve("name"))
     assert set(user.keys()) == {"name", "age"}
     assert ctx.flatten() == {
+        **ctx.get("$").flatten(),
         R.resolve("user.name"): "Ada",
         R.resolve("user.age"): 37,
         R.resolve("settings"): settings,
@@ -663,7 +668,9 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
     ctx.delete(R.resolve("user.name"))
     assert not ctx.exists(R.resolve("user"))
     ctx.drop([R.resolve("settings"), R.resolve("not_present")])
-    assert ctx.to_dict() == {}
+    assert ctx.to_dict() == {
+        "$": ctx.get("$").to_dict(),
+    }
 
 
 def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
@@ -672,8 +679,18 @@ def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
     assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters.values())
     assert all(p.default is None for p in parameters.values())
     ctx = Context()
-    assert ctx.to_dict() == {}
-    assert [entry.ref.path for entry in ctx.entries] == [""]
+    assert ctx.to_dict() == {
+        "$": ctx.get("$").to_dict(),
+    }
+    assert [entry.ref.path for entry in ctx.entries] == [
+        "",
+        "$",
+        "$.tree",
+        "$.tree.data",
+        "$.tree.node",
+        "$.eval",
+        "$.eval.handlers",
+    ]
     with pytest.raises(ContextPathError, match="value"):
         ctx.update({"value": 1})
     ctx.declare({"value": Schema.leaf()})
@@ -699,7 +716,11 @@ def test_context_constructor_accepts_only_keyword_parent_and_scope() -> None:
     assert "_root" not in vars(child)
     with pytest.raises(FrozenInstanceError):
         child.root = child
-    assert child.to_dict() == {"c": 3, "a": {"b": {"c": 1}}}
+    assert child.to_dict() == {
+        "$": child.get("$").to_dict(),
+        "c": 3,
+        "a": {"b": {"c": 1}},
+    }
     assert child.to_dict(local=True) == {"c": 3}
 
     root.dispose()
@@ -712,11 +733,11 @@ def test_context_path_errors_do_not_partially_mutate() -> None:
 
     with pytest.raises(ContextPathError, match="blocked.*not a leaf"):
         ctx.set(R.resolve("blocked"), 2)
-    assert ctx.to_dict() == {"blocked": {"child": 1}}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "blocked": {"child": 1}}
 
     with pytest.raises(ContextPathError, match="parent.*not a leaf"):
         ctx.update({R.resolve("other"): 2, R.resolve("parent"): 1})
-    assert ctx.to_dict() == {"blocked": {"child": 1}}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "blocked": {"child": 1}}
 
     ctx.set(R.resolve("short"), 3)
     with pytest.raises(ContextPathError, match="short.*not a container"):
@@ -740,11 +761,11 @@ def test_context_drop_and_update_are_separate_operations() -> None:
 
     ctx.drop([R.resolve("a")])
     ctx.update({R.resolve("a.new"): 4})
-    assert ctx.to_dict() == {"a": {"new": 4}, "other": 3}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "a": {"new": 4}, "other": 3}
 
     ctx.drop([R.resolve("a"), R.resolve("a.new")])
     ctx.update({R.resolve("other"): 5})
-    assert ctx.to_dict() == {"other": 5}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "other": 5}
 
     before = ctx.to_dict()
     assert ctx.update({}) is None
@@ -759,14 +780,14 @@ def test_context_deletion_does_not_change_schema_structure_roles() -> None:
 
     with pytest.raises(ContextPathError, match="a.*not a leaf"):
         ctx.set(R.resolve("a"), 2)
-    assert ctx.to_dict() == {"a": {"b": {"c": 1}}}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "a": {"b": {"c": 1}}}
 
     ctx.delete(R.resolve("a"))
     assert not ctx.exists(R.resolve("a"))
     with pytest.raises(ContextPathError, match="a.*not a leaf"):
         ctx.set(R.resolve("a"), 5)
     ctx.set(R.resolve("a.b.d"), 6)
-    assert ctx.to_dict() == {"a": {"b": {"d": 6}}}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "a": {"b": {"d": 6}}}
 
     ctx.set(R.resolve("settings"), {"theme": "dark"})
     ctx.delete(R.resolve("settings"))
@@ -787,6 +808,7 @@ def test_context_mutation_validates_before_inplace_apply() -> None:
     with pytest.raises(ContextPathError, match="blocked.*not a leaf"):
         ctx.update({R.resolve("a.new"): 4, R.resolve("blocked"): 5})
     assert ctx.to_dict() == {
+        "$": ctx.get("$").to_dict(),
         "a": {"b": {"c": 1}},
         "blocked": {"child": 2},
         "other": 3,
@@ -826,8 +848,8 @@ def test_update_tree_and_structured_extract() -> None:
     )
 )
 def test_context_eval_engine_flatten_round_trip(tree: Any) -> None:
-    leaves, definition = CTX_EVAL_ENGINE.flatten(tree)
-    assert CTX_EVAL_ENGINE.unflatten(definition, leaves) == tree
+    leaves, definition = TreeEngine.flatten(tree, rules=DATA_RULES)
+    assert TreeEngine.unflatten(definition, leaves) == tree
 
 
 def test_context_is_an_opaque_tree_leaf() -> None:
@@ -835,8 +857,8 @@ def test_context_is_an_opaque_tree_leaf() -> None:
     ctx.declare(R)
     ctx.update({R.resolve("a.b.c"): 1, R.resolve("c"): 2})
 
-    leaves, definition = CTX_EVAL_ENGINE.flatten(ctx)
-    rebuilt = CTX_EVAL_ENGINE.unflatten(definition, leaves)
+    leaves, definition = TreeEngine.flatten(ctx, rules=DATA_RULES)
+    rebuilt = TreeEngine.unflatten(definition, leaves)
     assert rebuilt is ctx
 
 
@@ -853,7 +875,9 @@ def test_flatten_reconstructs_context_without_copying_leaf_values() -> None:
         }
     )
 
-    flattened = ctx.flatten()
+    flattened = {
+        ref: value for ref, value in ctx.flatten().items() if ref.parts[0] != "$"
+    }
     rebuilt = Context()
     rebuilt.declare(R)
     rebuilt.update(flattened)
@@ -892,11 +916,15 @@ def test_to_dict_is_a_nested_projection_while_flatten_preserves_leaf_paths() -> 
     structured.declare(tree_schema)
     structured.update({tree_schema.resolve("settings.theme"): "dark"})
 
-    assert mapping_leaf.to_dict() == structured.to_dict()
+    assert mapping_leaf.get("settings") == structured.to_dict("settings")
     assert mapping_leaf.flatten() == {
-        leaf_schema.resolve("settings"): {"theme": "dark"}
+        **mapping_leaf.get("$").flatten(),
+        leaf_schema.resolve("settings"): {"theme": "dark"},
     }
-    assert structured.flatten() == {tree_schema.resolve("settings.theme"): "dark"}
+    assert structured.flatten() == {
+        **structured.get("$").flatten(),
+        tree_schema.resolve("settings.theme"): "dark",
+    }
 
 
 def test_context_fork_shares_its_scope_by_default() -> None:
@@ -1028,9 +1056,13 @@ def test_context_read_operations_can_select_local_or_effective_data() -> None:
 
     assert tuple(child.keys(R.resolve("group"))) == ("child", "parent")
     assert tuple(child.keys(R.resolve("group"), local=True)) == ("child",)
-    assert child.to_dict() == {"group": {"child": 2, "parent": 1}}
+    assert child.to_dict() == {
+        "$": child.get("$").to_dict(),
+        "group": {"child": 2, "parent": 1},
+    }
     assert child.to_dict(local=True) == {"group": {"child": 2}}
     assert child.flatten() == {
+        **child.get("$").flatten(),
         R.resolve("group.child"): 2,
         R.resolve("group.parent"): 1,
     }
@@ -1047,7 +1079,11 @@ def test_context_views_follow_later_parent_and_child_changes() -> None:
 
     root.set(R.resolve("group.later"), 2)
     child.set(R.resolve("group.local"), 3)
-    assert view.to_dict() == {"local": 3, "initial": 1, "later": 2}
+    assert view.to_dict() == {
+        "local": 3,
+        "initial": 1,
+        "later": 2,
+    }
 
     child.delete(R.resolve("group.local"))
     root.drop([R.resolve("group.initial"), R.resolve("group.later")])
@@ -1372,7 +1408,7 @@ def test_context_keeps_user_mappings_as_atomic_leaves() -> None:
     assert ctx.get(R.resolve("settings")) is settings
     with pytest.raises(ContextPathError, match="theme"):
         ctx.exists("settings.theme")
-    assert ctx.flatten() == {R.resolve("settings"): settings}
+    assert ctx.flatten() == {**ctx.get("$").flatten(), R.resolve("settings"): settings}
 
 
 def test_flatten_can_materialize_an_effective_context() -> None:
@@ -1384,7 +1420,7 @@ def test_flatten_can_materialize_an_effective_context() -> None:
 
     snapshot = Context()
     snapshot.declare(R)
-    snapshot.update(child.flatten())
+    snapshot.update({value: child.get(value)})
     assert snapshot.parent is None
     assert snapshot.get(value) == 1
 

@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import once
-from slyme.utils.tree import MappingKey, TreeEngine
+from slyme.utils.tree import MappingKey, TreeEngine, TreeHandler, TreeRules
 from slyme.utils.tree.common import flatten_dict, unflatten_dict
 
 if TYPE_CHECKING:
@@ -43,8 +43,7 @@ __all__ = [
 
 _T = TypeVar("_T")
 
-SCHEMA_ENGINE = TreeEngine("schema_engine", register_defaults=False)
-SCHEMA_ENGINE.register(dict, flatten_dict, unflatten_dict)
+_SCHEMA_RULES = TreeRules(handlers={dict: TreeHandler(flatten_dict, unflatten_dict)})
 
 
 @dataclass(frozen=True)
@@ -157,7 +156,7 @@ class RefEntry(Generic[_T]):
         """Return the merged config; raise LookupError if no declarations remain."""
         config = self._config
         if config is None:
-            if not self._declarations:
+            if not self.alive:
                 raise LookupError(f"Ref path {self.ref.path!r} is no longer declared.")
             config = reduce(
                 lambda current, incoming: current.merge(incoming),
@@ -205,6 +204,14 @@ class Schema:
         self._set_entry(root)
         if declaration is not None:
             self.declare(declaration)
+
+    def _attach_store(self, store: ContextStore) -> None:
+        """Retain a Store that must be notified when a field is withdrawn."""
+        self._stores.add(store)
+
+    def _detach_store(self, store: ContextStore) -> None:
+        """Stop retaining and notifying a disposed Store."""
+        self._stores.discard(store)
 
     @staticmethod
     def leaf(
@@ -270,7 +277,9 @@ class Schema:
             if isinstance(declaration, Schema)
             else self._normalize_declaration(declaration)
         )
-        for key_path, value in SCHEMA_ENGINE.iter_with_key_path(source):
+        for key_path, value in TreeEngine.iter_with_key_path(
+            source, rules=_SCHEMA_RULES
+        ):
             parts = tuple(cast(str, cast(MappingKey, key).key) for key in key_path)
             is_container = parts[-1] == _CONTAINER_ENTRY_KEY
             path = ".".join(parts[:-1] if is_container else parts)

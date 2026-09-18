@@ -1,25 +1,71 @@
 # Trees in Slyme
 
-A tree is a nested structure whose containers define topology and whose unregistered objects are leaves. `slyme.utils.tree` provides `TreeEngine`, `TreeDef`, `TreeKey`, and `TreeAux` for traversal and reconstruction. Slyme uses separate engines for separate semantics rather than assuming that every traversal should follow the same objects.
+A tree is a nested structure whose containers define topology and whose unregistered objects are leaves. `slyme.utils.tree` provides stateless `TreeEngine` algorithms and immutable `TreeRules`. Every traversal receives `rules=` explicitly; the engine owns no registrations or Context.
 
-## Type registration
+## Rules and dispatch
 
-`TreeEngine` uses `GeneralRegistry` with exact type keys. Default handlers expand `list`, `tuple`, and `dict`; a subclass remains an opaque leaf until explicitly registered with `engine.register()`. Register each custom container with its own reconstruction function when its type or extra state must survive rebuilding. Optional pre- and post-resolvers provide explicitly configured dynamic dispatch; there is no automatic Python MRO lookup.
+`TreeRules` contains an exact-type handler mapping plus ordered `pre_resolvers` and `post_resolvers`. `TreeHandler(flatten, unflatten)` describes one container; `unflatten=None` permits traversal but rejects reconstruction. Dispatch checks an explicit `is_leaf` predicate, pre-resolvers, the exact type, then post-resolvers. Subclasses remain opaque unless explicitly handled; Python MRO lookup is not implicit.
 
-## `NODE_ENGINE`
+A rule snapshot copies its handler mapping. `TreeRules.merge()` keeps the first handler for each type and concatenates each resolver phase independently. A `TreeDef` retains the reconstruction functions used during flattening, so rebuilding does not look up current rules.
 
-Import `NODE_ENGINE` from `slyme.node.core`; its traversal handlers are registered alongside Node and Wrapper.
+For traversal without a Context, explicitly import `DATA_RULES` from `slyme.context.default` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not included in `__all__` or re-exported at package level. `_install` and Schema's declaration rules remain private implementation details.
 
-`NODE_ENGINE` registers `Node`, `Wrapper`, `Auto`, ordinary containers, and `MappingProxyType`. It traverses explicit parameter bindings and Auto payloads for physical graph inspection and Ref discovery; function defaults are not included. Parameters may contain heterogeneous nested values; the engine describes traversal, not which combinations are legal. `Node`, `Wrapper`, and `Auto` register with `unflatten_func=None`: traversal and flattening are supported, but reconstruction raises `TypeError`.
+## Context-owned defaults
 
-## Object identity
+Root `Context()` installs three register-mode fields from `slyme.context.default`. Each contains its own Compose:
 
-Slyme does not expose a generic Node graph clone. Tree reconstruction cannot decide which shared references should remain aliases, which values should be copied, or how cyclic application graphs should behave. Call the relevant Node factory or assembly function again and copy application values explicitly when another graph is required.
+| Ref constant | Path | Contributions |
+| --- | --- | --- |
+| `DATA_TREE_REF` | `$.tree.data` | `TreeRules` for Auto, `extract`, and `update_tree` |
+| `NODE_TREE_REF` | `$.tree.node` | `TreeRules` for explicit Node graph inspection |
+| `EVALUATORS_REF` | `$.eval.handlers` | Exact-type evaluator mappings |
 
-Context is not registered as a Tree container. It is an identity-bearing lifetime owner with at most one parent, not a self-contained value tree. Its bound Scope carries the independent C3 visibility graph. `Context.flatten()` provides the visible Ref-to-value mapping when explicit materialization is needed.
+These constants are also exported by `slyme.context`. Data rules expand list, tuple, dict, and MappingProxyType. Node rules additionally traverse Node and Wrapper bindings and Auto payloads. Node, Wrapper, and Auto are traversal-only containers, with no reconstruction function.
 
-## Auto evaluation
+Each operation resolves its rule and evaluator mappings once, before traversal or asynchronous suspension. Contributions added or removed afterward affect subsequent operations, not that operation's dispatch or reconstruction. Capturing a callable does not extend the lifetime of resources managed by its owner.
 
-Auto evaluation uses `CTX_EVAL_ENGINE` to find registered leaves while treating Context itself as opaque. Ref values read the current Context. Each child Node evaluates in an owned child Context with a distinct child Scope; Slyme disposes that Context before reconstructing the Auto tree from returned values. All traversed containers are reconstructed according to their Tree handlers, including subtrees with no evaluatable leaves. Ordinary leaves and evaluator results pass through unchanged.
+Compose resolves contributions in Scope C3 order, then local insertion order; the first handler for a type wins. Use `position="prepend"` to override an earlier contribution in the same Scope. Dispose a contribution to reveal the next applicable definition:
 
-`EVALUATOR_REGISTRY` also matches exact types. Standard Node factories produce the registered `Node` type for both synchronous and asynchronous functions. Custom `Node` or `Ref` subclasses need their own evaluator registration; registering an `int` evaluator does not evaluate `bool` values. These type-registration rules do not change Scope's C3 visibility order.
+```python
+from dataclasses import dataclass
+
+from slyme.context import DATA_TREE_REF, Context
+from slyme.utils.tree import TreeAux, TreeEngine, TreeHandler, TreeRules
+
+@dataclass
+class Box:
+    value: object
+
+ctx = Context()
+plugin = ctx.fork()
+rules = TreeRules({
+    Box: TreeHandler(
+        lambda box: ((box.value,), TreeAux()),
+        lambda items, _: Box(next(iter(items))),
+    ),
+})
+plugin.effect(lambda: ctx.get(DATA_TREE_REF).add(plugin.scope, rules))
+
+effective = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
+leaves, definition = TreeEngine.flatten(Box(1), rules=effective)
+assert leaves == [1]
+assert TreeEngine.unflatten(definition, [2]) == Box(2)
+
+plugin.dispose()
+assert Box not in ctx.get(DATA_TREE_REF).resolve(ctx.scope).handlers
+ctx.dispose()
+```
+
+## Scope isolation
+
+Ordinary forks reuse their parent's configuration. A child Scope inherits it through C3. A fork bound to an unrelated `Scope()` sees no default values: install the required Compose objects and contributions explicitly. There is no fallback to `ctx.root`. A separate root `Context()` installs independent defaults.
+
+Use `ctx.isolate(DATA_TREE_REF)` and `register()` to install an independent rule composition for that field. An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves `NODE_TREE_REF` and passes those rules to TreeEngine.
+
+Schema declaration uses private, immutable dict-only rules and does not read runtime configuration. Configuring a data tree cannot change how Schema interprets declarations.
+
+## Identity and evaluation
+
+Tree traversal treats each occurrence independently. Reconstruction does not preserve shared container aliases and does not support cycles. Ordinary leaves and evaluator results retain their identities. Context is opaque to TreeEngine; `Context.flatten()` exposes its visible Ref-to-value mapping, including `$` when visible.
+
+Auto uses data rules to find leaves. Ref and Node evaluators match exact types; subclasses need separate contributions to `EVALUATORS_REF`. A Ref reads the current Context. Each child Node runs in an owned child Context with a distinct child Scope, which is disposed before the parent receives its result. All traversed containers are reconstructed, even without evaluatable leaves; evaluator results are not traversed again.

@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from slyme.context import Context, Ref, Schema
+from slyme.context.default import EVALUATORS_REF, NODE_TREE_REF
 from slyme.node import (
     Auto,
     Node,
@@ -19,15 +20,13 @@ from slyme.node import (
     sequential_exec,
     wrapper,
 )
-from slyme.node.core import NODE_ENGINE
-from slyme.node.eval import BatchEvaluatorFunc
 from slyme.node.exception import (
     NodeExceptionRecord,
     WrapperExceptionRecord,
 )
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
-from slyme.utils.registry import GeneralRegistry
+from slyme.utils.tree import TreeEngine
 
 R = Schema(
     {
@@ -136,9 +135,10 @@ async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
         return await await_result(call_next(ctx)) + 1
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     graph = parent(value=Auto(child())).add_wrappers(increment())
     assert await graph.acall(ctx) == 13
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -435,10 +435,12 @@ async def test_evaluator_result_count_is_validated(
     async def evaluate(ctx, values):
         return result
 
-    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
-    registry.register(evaluate if asynchronous else lambda ctx, values: result, key=int)
-    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
+    ctx.effect(
+        lambda: ctx.get(EVALUATORS_REF).add(
+            ctx.scope, {int: evaluate if asynchronous else lambda ctx, values: result}
+        )
+    )
     ctx.declare(R)
     with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(eval_tree(ctx, [1]))
@@ -1068,11 +1070,14 @@ def test_node_and_wrapper_trees_support_traversal_without_reconstruction() -> No
     def parent(ctx: Context, /, *, nested: int) -> int:
         return nested
 
-    assert NODE_ENGINE.flatten(child())[0] == []
+    ctx = Context()
+    rules = ctx.get(NODE_TREE_REF).resolve(ctx.scope)
+    assert TreeEngine.flatten(child(), rules=rules)[0] == []
     graph = parent(nested=Auto(child(value=1))).add_wrappers(trace())
     for value, expected_leaves in ((graph, [1]), (trace(), [])):
-        leaves, definition = NODE_ENGINE.flatten(value)
+        leaves, definition = TreeEngine.flatten(value, rules=rules)
         assert leaves == expected_leaves
-        assert list(NODE_ENGINE.iter(value)) == expected_leaves
+        assert list(TreeEngine.iter(value, rules=rules)) == expected_leaves
         with pytest.raises(TypeError, match="registered for traversal only"):
-            NODE_ENGINE.unflatten(definition, leaves)
+            TreeEngine.unflatten(definition, leaves)
+    ctx.dispose()

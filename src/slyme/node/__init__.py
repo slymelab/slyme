@@ -26,8 +26,6 @@ from .core import (
     node,
     wrapper,
 )
-
-# NOTE: register eval funcs here through import
 from .eval import eval_tree
 
 __all__ = [

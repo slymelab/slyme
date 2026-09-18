@@ -7,9 +7,10 @@ import pytest
 
 from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
+from slyme.context.default import DATA_TREE_REF
 from slyme.node.eval import ref_evaluator
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.tree import TreeAux, TreeEngine
+from slyme.utils.tree import TreeAux, TreeHandler, TreeRules
 
 
 @pytest.mark.parametrize("operation", ["update", "update_tree"])
@@ -30,7 +31,7 @@ def test_batch_write_preflight_leaves_all_bindings_unchanged(
             ctx.update({"a": 3, target: 4})
         else:
             ctx.update_tree(["a", target], [3, 4])
-    assert ctx.to_dict() == {"a": 1, "b": 2}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "a": 1, "b": 2}
     ctx.dispose()
 
 
@@ -58,7 +59,9 @@ def test_assignment_cannot_create_an_empty_registration(operation: str) -> None:
             ctx.update({"service": object()})
         else:
             ctx.update_tree(["service"], [object()])
-    assert not ctx._store._data
+    assert set(ctx._store._data) == {
+        ctx.resolve_entry(ref.path) for ref in ctx.get("$").flatten()
+    }
     assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
@@ -96,11 +99,11 @@ def test_failed_update_keeps_the_explicitly_created_context_alive() -> None:
         child.update({"value": "changed", "service": object()})
     assert root.get("value") == "original"
     assert child._lifecycle in root._lifecycle._owned
-    assert root._store._scope_usage[root.scope].viewers == {root, child}
+    assert root._store._scope_usages[root.scope].viewers == {root, child}
     child.update({"value": "valid"})
     assert root.get("value") == "valid"
     child.dispose()
-    assert root._store._scope_usage[root.scope].viewers == {root}
+    assert root._store._scope_usages[root.scope].viewers == {root}
     root.dispose()
 
 
@@ -140,7 +143,11 @@ def test_update_applies_assignments_in_order_after_a_reentrant_write() -> None:
 
     ctx.set("a", WriteOnRelease())
     ctx.update({"a": "updated", "b": "requested"})
-    assert ctx.to_dict() == {"a": "updated", "b": "requested"}
+    assert ctx.to_dict() == {
+        "$": ctx.get("$").to_dict(),
+        "a": "updated",
+        "b": "requested",
+    }
     ctx.dispose()
 
 
@@ -160,7 +167,7 @@ def test_drop_validates_and_consumes_all_inputs_before_deleting(failure: str) ->
     error = RuntimeError if failure == "iteration" else ContextPathError
     with pytest.raises(error):
         ctx.drop(refs())
-    assert ctx.to_dict() == {"group": {"a": 1, "b": 2}}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "group": {"a": 1, "b": 2}}
     ctx.dispose()
 
 
@@ -177,7 +184,11 @@ def test_deleting_containers_only_removes_local_values(batch: bool) -> None:
     else:
         child.delete("group")
     assert child.to_dict(local=True) == {}
-    assert child.to_dict() == root.to_dict() == {"group": {"a": 1, "b": 2}}
+    assert (
+        child.to_dict()
+        == root.to_dict()
+        == {"$": root.get("$").to_dict(), "group": {"a": 1, "b": 2}}
+    )
     root.dispose()
 
 
@@ -208,7 +219,6 @@ def test_extract_traverses_custom_containers_once_and_reconstructs_only_final_va
             self.value = value
 
     events: list[tuple[str, Any]] = []
-    engine = TreeEngine("test_extract", register_defaults=True)
 
     def flatten(box):
         events.append(("flatten", box.value))
@@ -219,12 +229,12 @@ def test_extract_traverses_custom_containers_once_and_reconstructs_only_final_va
         events.append(("unflatten", value))
         return Box(value)
 
-    engine.register(Box, flatten, unflatten)
-    monkeypatch.setattr("slyme.context.core.CTX_EVAL_ENGINE", engine)
+    rules = TreeRules({Box: TreeHandler(flatten, unflatten)})
     schema = Schema({"value": Schema.leaf()})
     ref = schema.resolve("value")
     payload = [object()]
     ctx = Context()
+    ctx.effect(lambda: ctx.get(DATA_TREE_REF).add(ctx.scope, rules))
     ctx.declare(schema)
     ctx.update({ref: payload})
     request = Box(ref)
@@ -269,3 +279,30 @@ def test_ref_evaluator_uses_get_in_input_order_and_preserves_container_views() -
     assert value is payload
     assert view.get("value") is payload
     ctx.dispose()
+
+
+def test_view_flatten_preserves_visibility_and_context_lifetime_checks() -> None:
+    root = Context()
+    root.declare({"group": {"value": Schema.leaf()}})
+    root.set("group.value", "inherited")
+    child = root.fork(scope=root.scope.fork())
+    view = child.get("group")
+    ref = root.resolve("group.value")
+    assert view.flatten() == {ref: "inherited"}
+    with pytest.raises(ContextPathError):
+        view.flatten(local=True)
+    child.set(ref, "local")
+    assert view.flatten(local=True) == {ref: "local"}
+    child.delete(ref)
+    assert view.flatten() == {ref: "inherited"}
+    root.delete(ref)
+    with pytest.raises(ContextPathError):
+        view.flatten()
+    root_view = root.get("")
+    assert root_view.flatten() == root.get("$").flatten()
+    child.dispose()
+    with pytest.raises(RuntimeError, match="disposed"):
+        view.flatten()
+    root.dispose()
+    with pytest.raises(RuntimeError, match="disposed"):
+        root_view.flatten()

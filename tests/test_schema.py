@@ -20,7 +20,8 @@ from slyme.context import (
     RefLeafConfig,
     Schema,
 )
-from slyme.context.schema import SCHEMA_ENGINE, _Declaration
+from slyme.context.schema import _SCHEMA_RULES, _Declaration
+from slyme.utils.tree import TreeEngine
 
 
 @dataclass(frozen=True)
@@ -265,7 +266,7 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
         root.dispose()
     assert_indexes(schema, set())
     assert not left._store._data and not right._store._data
-    assert not left._store._scope_usage and not right._store._scope_usage
+    assert not left._store._scope_usages and not right._store._scope_usages
     assert not schema._stores
 
 
@@ -296,7 +297,7 @@ async def test_context_owned_cleanup_does_not_read_config(
         await root.adispose()
     assert_indexes(root._schema, set())
     assert not root._store._data
-    assert not root._store._scope_usage
+    assert not root._store._scope_usages
     assert not root._lifecycle._owned
 
 
@@ -428,7 +429,9 @@ def test_schema_merges_contributions_without_replacing_runtime_bindings() -> Non
     remove_second()
     assert not entry.alive
     assert_indexes(schema, {"blocked"})
-    assert not ctx._store._data
+    assert set(ctx._store._data) == {
+        ctx.resolve_entry(ref.path) for ref in ctx.get("$").flatten()
+    }
     ctx.dispose()
 
 
@@ -507,7 +510,7 @@ def test_schema_tree_only_traverses_dicts() -> None:
     values = [Schema.leaf()]
     pair = (Schema.container(),)
     tree = {"nested": {"list": values, "tuple": pair}}
-    leaves, structure = SCHEMA_ENGINE.flatten(tree)
+    leaves, structure = TreeEngine.flatten(tree, rules=_SCHEMA_RULES)
     assert leaves == [values, pair]
     rebuilt = structure.unflatten(leaves)
     assert rebuilt == tree
@@ -546,6 +549,15 @@ def assert_indexes(schema: Schema, paths: set[str]) -> None:
 
     collect(schema._element_at(()))
     assert entries == tree_entries
+    if "$" in entries:
+        paths = paths | {
+            "$",
+            "$.tree",
+            "$.tree.data",
+            "$.tree.node",
+            "$.eval",
+            "$.eval.handlers",
+        }
     assert set(entries) == paths | {""}
     for path, entry in entries.items():
         assert schema.resolve_entry(path) is entry
@@ -606,12 +618,12 @@ def test_setting_nested_container_does_not_declare_ancestors() -> None:
 
 
 def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> None:
-    original = SCHEMA_ENGINE.iter_with_key_path
+    original = TreeEngine.iter_with_key_path
 
-    def child_first(tree):
-        return reversed(tuple(original(tree)))
+    def child_first(tree, *, rules):
+        return reversed(tuple(original(tree, rules=rules)))
 
-    monkeypatch.setattr(SCHEMA_ENGINE, "iter_with_key_path", child_first)
+    monkeypatch.setattr(TreeEngine, "iter_with_key_path", staticmethod(child_first))
     ctx = Context()
     schema = ctx._schema
     remove = schema.declare({"group": {"0": Schema.leaf(int), "empty": {}}})
@@ -629,8 +641,13 @@ def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> N
         patch.setattr(RefEntry, "config", property(unexpected_config_read))
         duplicate()
     assert_indexes(schema, set())
-    assert schema._element_at(()) == {"": schema._entries[""]}
-    assert not ctx._store._data and not ctx._store._scope_usage[ctx.scope].entries
+    assert schema._element_at(()) == {
+        "": schema._entries[""],
+        "$": schema._element_at(("$",)),
+    }
+    defaults = {ctx.resolve_entry(ref.path) for ref in ctx.get("$").flatten()}
+    assert set(ctx._store._data) == defaults
+    assert ctx._store._scope_usages[ctx.scope].entries == defaults
     assert_indexes(imported, {"group", "group.0", "group.empty"})
     ctx.dispose()
 
@@ -642,14 +659,14 @@ def test_child_first_conflict_rolls_back_unconfigured_ancestor_dicts(
     ctx = Context()
     ctx.declare(schema)
     ctx.update({"blocked": 1})
-    original = SCHEMA_ENGINE.iter_with_key_path
+    original = TreeEngine.iter_with_key_path
     entries = dict(schema._entries)
     owners = {path: dict(entry._declarations) for path, entry in entries.items()}
 
-    def child_first(tree):
-        return reversed(tuple(original(tree)))
+    def child_first(tree, *, rules):
+        return reversed(tuple(original(tree, rules=rules)))
 
-    monkeypatch.setattr(SCHEMA_ENGINE, "iter_with_key_path", child_first)
+    monkeypatch.setattr(TreeEngine, "iter_with_key_path", staticmethod(child_first))
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
         schema.declare(
             {

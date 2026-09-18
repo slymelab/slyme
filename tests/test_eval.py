@@ -9,13 +9,13 @@ import pytest
 
 from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
+from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
 from slyme.node import Auto, Node, eval_tree, node, wrapper
-from slyme.node.eval import EVALUATOR_REGISTRY, BatchEvaluatorFunc, node_evaluator
+from slyme.node.eval import node_evaluator
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
-from slyme.utils.registry import GeneralRegistry
-from slyme.utils.tree import TreeAux, TreeEngine
+from slyme.utils.tree import TreeAux, TreeHandler, TreeRules
 
 
 def test_same_evaluator_batches_leaves_registered_under_multiple_types(
@@ -27,11 +27,10 @@ def test_same_evaluator_batches_leaves_registered_under_multiple_types(
         calls.append(list(values))
         return [str(value) for value in values]
 
-    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
-    registry.register(evaluate, key=int)
-    registry.register(evaluate, key=str)
-    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
+    ctx.effect(
+        lambda: ctx.get(EVALUATORS_REF).add(ctx.scope, {int: evaluate, str: evaluate})
+    )
     assert eval_tree(ctx, [1, "a", 2]) == ["1", "a", "2"]
     assert calls == [[1, "a", 2]]
     ctx.dispose()
@@ -59,13 +58,41 @@ def test_auto_async_result_can_be_created_before_starting_event_loop(
         return value
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     graph = parent(value=Auto(child()))
     pending = graph.acall(ctx) if acall else graph(ctx)
     assert not events
     assert asyncio.run(await_result(pending)) == 7
     assert events == ["child", "cleanup", "parent"]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
+
+
+async def test_concurrent_evaluations_keep_results_and_children_separate() -> None:
+    root = Context()
+    root.declare({"value": Schema.leaf()})
+    contexts = [root.fork(scope=root.scope.fork()) for _ in range(2)]
+    started = [asyncio.Event(), asyncio.Event()]
+
+    @node
+    async def read(ctx: Context, /, *, index: int) -> int:
+        started[index].set()
+        await started[1 - index].wait()
+        return ctx.get("value") + 1
+
+    for index, ctx in enumerate(contexts):
+        ctx.set("value", index * 10)
+    owned = [tuple(ctx._lifecycle._owned) for ctx in contexts]
+    pending = [
+        await_result(eval_tree(ctx, [ctx.resolve("value"), read(index=index)]))
+        for index, ctx in enumerate(contexts)
+    ]
+    assert await asyncio.wait_for(asyncio.gather(*pending), timeout=1) == [
+        [0, 1],
+        [10, 11],
+    ]
+    assert [tuple(ctx._lifecycle._owned) for ctx in contexts] == owned
+    root.dispose()
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -92,11 +119,10 @@ async def test_evaluator_groups_run_concurrently_and_settle_before_reporting(
             raise failures[1]
         return [value.upper() for value in values]
 
-    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
-    registry.register(integers, key=int)
-    registry.register(strings, key=str)
-    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
+    ctx.effect(
+        lambda: ctx.get(EVALUATORS_REF).add(ctx.scope, {int: integers, str: strings})
+    )
     pending = await_result(eval_tree(ctx, [1, "a", 2, "b"]))
     if fail:
         with pytest.raises(BaseExceptionGroup) as caught:
@@ -201,6 +227,7 @@ async def test_auto_reports_cleanup_failures_with_node_exception_context(
         return 2
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(
             node_evaluator(ctx, [failing(index=0), failing(index=1), successful()])
@@ -221,7 +248,7 @@ async def test_auto_reports_cleanup_failures_with_node_exception_context(
         assert events == [
             (event, index) for index in range(3) for event in ("run", "cleanup")
         ]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -244,6 +271,7 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
         return 2
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     with pytest.raises(BaseExceptionGroup) as caught:
         node_evaluator(ctx, [first(), second()])
     cleanup_error = caught.value.exceptions[0]
@@ -252,7 +280,7 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
     assert len(caught.value.exceptions) == 1
     assert caught.value.__cause__ is None
     assert events == ["cleanup", "second"]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
 
 
 async def test_sync_auto_failure_still_starts_async_siblings() -> None:
@@ -269,13 +297,14 @@ async def test_sync_auto_failure_still_starts_async_siblings() -> None:
         return 1
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     pending = node_evaluator(ctx, [failing(), asynchronous()])
     assert inspect.isawaitable(pending)
     assert visited == ["sync"]
     with pytest.raises(BaseExceptionGroup):
         await pending
     assert visited == ["sync", "async"]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
 
 
 async def test_auto_keeps_exception_objects_returned_as_data() -> None:
@@ -291,9 +320,10 @@ async def test_auto_keeps_exception_objects_returned_as_data() -> None:
         return second
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     result = await await_result(node_evaluator(ctx, [asynchronous(), synchronous()]))
     assert result[0] is first and result[1] is second
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
 
 
 @pytest.mark.parametrize("fails", [False, True])
@@ -315,6 +345,7 @@ async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
         return 2
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     task = asyncio.create_task(await_result(node_evaluator(ctx, [child(), waiting()])))
     await cleaned.wait()
     assert not task.done()
@@ -328,7 +359,7 @@ async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
         assert len(caught.value.exceptions) == 1
     else:
         assert await task == [1, 2]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -353,6 +384,7 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
         return 2
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     task = asyncio.create_task(
         await_result(node_evaluator(ctx, [cancelled(), sibling()]))
     )
@@ -368,7 +400,7 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
     assert "sibling finished" in events
     assert events.count("cleanup:cancelled") == 1
     assert events.count("cleanup:sibling") == 1
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
 
 
 async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None:
@@ -390,6 +422,7 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
         return 1
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
     await started.wait()
     task.cancel()
@@ -400,7 +433,7 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cleaned.is_set()
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
@@ -430,6 +463,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         raise failure
 
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
     await started.wait()
     try:
@@ -449,7 +483,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         else:
             await children[0].adispose()
     assert events == ["cleanup started", "cleanup finished"]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -462,11 +496,9 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
     class CustomNode(Node[int]):
         pass
 
-    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
-    for key, evaluator in EVALUATOR_REGISTRY.items():
-        registry.register(evaluator, key=key)
-    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
+    evaluators = ctx.get(EVALUATORS_REF)
+    defaults = evaluators.resolve(ctx.scope)
     ctx.declare(Schema({"value": Schema.leaf()}))
     ctx.update({"value": 7})
     custom_ref = CustomRef("value")
@@ -480,11 +512,13 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
     result = graph(ctx)
     assert result[0] == 7
     assert result[1] is custom_ref and result[2] is custom_node
-    registry.register(registry.get(Ref), key=CustomRef)
-    registry.register(registry.get(Node), key=CustomNode)
+    remove = ctx.effect(
+        lambda: evaluators.add(
+            ctx.scope, {CustomRef: defaults[Ref], CustomNode: defaults[Node]}
+        )
+    )
     assert graph(ctx) == [7, 7, 3]
-    registry.unregister(CustomRef)
-    registry.unregister(CustomNode)
+    remove()
     result = graph(ctx)
     assert result[1] is custom_ref and result[2] is custom_node
     ctx.dispose()
@@ -493,10 +527,12 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
 def test_integer_evaluator_does_not_evaluate_booleans(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
-    registry.register(lambda _ctx, values: [value + 1 for value in values], key=int)
-    monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
     ctx = Context()
+    ctx.effect(
+        lambda: ctx.get(EVALUATORS_REF).add(
+            ctx.scope, {int: lambda _ctx, values: [value + 1 for value in values]}
+        )
+    )
     result = eval_tree(ctx, [1, True])
     assert result[0] == 2 and result[1] is True
     ctx.dispose()
@@ -588,7 +624,6 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
             self.value = value
 
     calls = 0
-    engine = TreeEngine("test_auto", register_defaults=True)
 
     def flatten(box):
         nonlocal calls
@@ -596,8 +631,9 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
         element.set("other", 2)
         return iter((box.value,)), TreeAux()
 
-    engine.register(Box, flatten, lambda children, aux: Box(next(iter(children))))
-    monkeypatch.setattr("slyme.node.eval.CTX_EVAL_ENGINE", engine)
+    rules = TreeRules(
+        {Box: TreeHandler(flatten, lambda children, aux: Box(next(iter(children))))}
+    )
 
     @node
     def identity(ctx: Context, /, *, value: Any, other: int) -> Any:
@@ -623,6 +659,7 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
         element = capture(value=Auto(box), other=1)
         graph = identity(value=Auto(None), other=0).add_wrappers(element)
     ctx = Context()
+    ctx.effect(lambda: ctx.get(DATA_TREE_REF).add(ctx.scope, rules))
     result, other = graph(ctx)
     assert calls == 1
     assert result is not box
@@ -666,9 +703,7 @@ def test_short_circuiting_wrapper_does_not_traverse_auto_parameters(
     def flatten(box):
         raise AssertionError("Auto traversal was short-circuited")
 
-    engine = TreeEngine("test_auto", register_defaults=True)
-    engine.register(Box, flatten, lambda children, aux: Box())
-    monkeypatch.setattr("slyme.node.eval.CTX_EVAL_ENGINE", engine)
+    rules = TreeRules({Box: TreeHandler(flatten, lambda children, aux: Box())})
 
     @node
     def identity(ctx: Context, /, *, value: Any) -> Any:
@@ -679,5 +714,6 @@ def test_short_circuiting_wrapper_does_not_traverse_auto_parameters(
         return 12
 
     ctx = Context()
+    ctx.effect(lambda: ctx.get(DATA_TREE_REF).add(ctx.scope, rules))
     assert identity(value=Auto(Box())).add_wrappers(stop())(ctx) == 12
     ctx.dispose()

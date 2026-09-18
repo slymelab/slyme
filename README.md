@@ -147,7 +147,7 @@ Use `schema.resolve_entry(path)` to inspect one field and the `schema.entries` t
 
 `Schema.leaf()` and `Schema.container()` accept `metadata={"namespace.key": item}`. Items derive from the frozen `Metadata` dataclass exported by `slyme.context`: its default merge accepts the same instance, while subclasses can override `merge()` for immutable content-based composition. Distinct keys coexist, matching keys merge in declaration order, and withdrawal invalidates the merged config for lazy rebuilding. See [Schema metadata](docs/src/guide/essentials/context.md#metadata).
 
-`Ref("")` identifies Schema's permanently declared root container. `ctx.get("")` returns a live root view even without visible values. `ctx.delete("")` deletes only local values under the current Scope's leaf identities; it preserves inherited data, isolation barriers, declarations, and effects. Root assignment is rejected like any other container assignment.
+`Ref("")` identifies Schema's permanently declared root container. `ctx.get("")` returns a live root view even without visible values. Root `Context()` installs independent rule Composes at `$.tree.data`, `$.tree.node`, and `$.eval.handlers` through `context/default.py`. They appear in root views and use `register` mode, so `ctx.delete("")` rejects them; delete an assign-only business subtree instead. Deletion preserves inherited data, isolation barriers, declarations, and effects. Root assignment is rejected like any other container assignment.
 
 `set` and `delete` change individual local paths. `update` and `drop` validate
 the complete batch before applying changes; preflight failures leave bindings
@@ -199,6 +199,8 @@ new Scopes do not require that scan.
 **Native Python Development Experience:** Eliminates heavy object-oriented boilerplate code. You only need to master basic Python functions and native data structures (dictionaries, lists, tuples) to get started quickly.
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to Tree augmentation, Node containment relationships can be represented directly through native Python structures.
+
+**Context-owned Tree Rules:** `TreeEngine` is stateless and receives `TreeRules` explicitly. Configure runtime traversal and evaluation through `DATA_TREE_REF`, `NODE_TREE_REF`, and `EVALUATORS_REF` from `slyme.context`; contributions follow Scope visibility and Context-owned disposal. See the [Tree guide](docs/src/guide/slyme-in-depth/tree-in-slyme.md).
 
 **Explicit Lifetime and Visibility:** Context provides single-parent lifetime ownership, while Scope provides independent C3 visibility. Every Context path, structural role, and write mode is declared by a shared Schema; `flatten()` exposes the visible Ref-to-value mapping, and `Compose` provides ordered, reversible values across Scope hierarchies.
 

@@ -15,22 +15,24 @@ def test_root_path_does_not_allow_empty_segments_inside_other_paths(path: str) -
 
 @pytest.mark.parametrize("key", ["", Ref("")])
 @pytest.mark.parametrize("local", [False, True])
-def test_empty_root_is_a_readable_view(key: str | Ref, local: bool) -> None:
+def test_root_with_defaults_is_a_readable_view(key: str | Ref, local: bool) -> None:
     ctx = Context()
     view = ctx.get(key, None, local=local)
     assert isinstance(view, ContextView)
     assert ctx.exists(key, local=local)
-    assert ctx.keys(key, local=local) == ()
-    assert ctx.to_dict(key, local=local) == {}
+    assert ctx.keys(key, local=local) == ("$",)
+    assert ctx.to_dict(key, local=local) == {"$": ctx.get("$").to_dict()}
     assert view.exists("", local=local)
     assert view.get("", local=local) == view
-    assert view.keys(local=local) == ()
-    assert view.to_dict(local=local) == {}
-    assert view.flatten(local=local) == {}
+    assert view.keys(local=local) == ("$",)
+    assert view.to_dict(local=local) == {"$": ctx.get("$").to_dict()}
+    assert view.flatten(local=local) == ctx.get("$").flatten()
     assert ctx.extract({"root": key}, local=local) == {"root": view}
-    assert not ctx._store._data
-    ctx.delete(key)
-    ctx.drop([key])
+    assert len(ctx._store._data) == 3
+    with pytest.raises(ContextPathError, match="register"):
+        ctx.delete(key)
+    with pytest.raises(ContextPathError, match="register"):
+        ctx.drop([key])
     assert ctx.get(key) == view
     ctx.dispose()
     with pytest.raises(RuntimeError, match="disposed"):
@@ -44,28 +46,28 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
     view = ctx.get("")
     remove = ctx.declare({"group": {"value": Schema.leaf()}})
     ctx.set("group.value", 3)
-    assert view.keys() == ("group",)
+    assert view.keys() == ("$", "group")
     assert view.get("group.value") == 3
     assert view.get(Ref("group.value")) == 3
-    assert view.to_dict() == {"group": {"value": 3}}
-    assert view.flatten() == {Ref("group.value"): 3}
+    assert view.to_dict() == {"$": ctx.get("$").to_dict(), "group": {"value": 3}}
+    assert view.flatten() == {**ctx.get("$").flatten(), Ref("group.value"): 3}
 
     nested = view.get("group")
     assert nested.get("") == nested
     with pytest.raises(ContextPathError, match="outside"):
         nested.get(Ref(""))
 
-    ctx.delete("")
-    assert view.to_dict() == {}
-    assert view.keys() == ()
-    assert view.flatten() == {}
+    ctx.delete("group")
+    assert view.to_dict() == {"$": ctx.get("$").to_dict()}
+    assert view.keys() == ("$",)
+    assert view.flatten() == ctx.get("$").flatten()
     assert not ctx.exists("group")
     with pytest.raises(ContextPathError):
         nested.to_dict()
     remove()
     assert ctx.get("") == view
     assert ctx.resolve("") == Ref("")
-    assert view.to_dict() == {}
+    assert view.to_dict() == {"$": ctx.get("$").to_dict()}
     ctx.dispose()
 
 
@@ -89,82 +91,31 @@ def test_root_rejects_leaf_operations_without_partial_writes(
             ctx.isolate(key)
         else:
             getattr(ctx, operation)(key, {})
-    assert ctx.to_dict() == {"value": 1}
+    assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "value": 1}
     assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
-@pytest.mark.parametrize("key", ["", Ref("")])
 @pytest.mark.parametrize("batch", [False, True])
-def test_root_deletion_only_changes_local_scope_values(
-    key: str | Ref, batch: bool
-) -> None:
-    schema = Schema({"group": {"value": Schema.leaf()}, "other": Schema.leaf()})
+def test_root_deletion_rejects_inherited_default_registrations(batch: bool) -> None:
     root = Context()
-    root.declare(schema)
-    root.update({"group.value": 1, "other": 2})
+    root.declare({"value": Schema.leaf()})
     child = root.fork(scope=root.scope.fork())
-    shared = child.fork()
-    sibling = root.fork(scope=root.scope.fork())
-    child.update({"group.value": 3, "other": 4})
-    sibling.set("group.value", 5)
-    bindings = dict(root._store._data)
-
-    if batch:
-        child.drop([key, "group", "group.value", key])
-    else:
-        child.delete(key)
-    assert child.to_dict(local=True) == shared.to_dict(local=True) == {}
-    assert (
-        child.to_dict()
-        == shared.to_dict()
-        == root.to_dict()
-        == {
-            "group": {"value": 1},
-            "other": 2,
-        }
-    )
-    assert sibling.to_dict() == {"group": {"value": 5}, "other": 2}
-    assert dict(root._store._data) == bindings
-    assert child.get("").to_dict(local=True) == {}
-    assert child.get("").to_dict() == root.to_dict()
-
-    root.delete(key)
-    assert root.to_dict() == child.to_dict() == {}
-    assert sibling.get("group.value") == 5
-    root.dispose()
-
-
-def test_root_deletion_respects_shared_identities_and_preserves_isolation() -> None:
-    root = Context()
-    root.declare(Schema({"service": Schema.leaf(), "local": Schema.leaf()}))
-    root.update({"service": "root"})
-    identity = object()
-    left = root.isolate("service", identity=identity)
-    right = root.isolate("service", identity=identity)
-    left.set("service", "shared")
-    right.set("local", "right")
-    left.delete("")
-    assert not left.exists("service")
-    assert not right.exists("service")
-    assert right.get("local") == "right"
-    assert root.get("service") == "root"
-    right.set("service", "new")
-    assert left.get("service") == "new"
-    root.dispose()
-
-
-def test_root_deletion_does_not_dispose_effects_or_revoke_later_values() -> None:
-    ctx = Context()
-    ctx.declare(Schema({"value": Schema.leaf()}))
+    child.set("value", "local")
     events = []
-    ctx.effect(lambda: lambda: events.append("cleanup"))
-    ctx.set("value", "old")
-    ctx.delete("")
+    child.effect(lambda: lambda: events.append("cleanup"))
+    before = child.flatten()
+    with pytest.raises(ContextPathError, match="register"):
+        if batch:
+            child.drop(["value", ""])
+        else:
+            child.delete("")
+    assert child.flatten() == before
     assert events == []
-    ctx.set("value", "new")
-    assert ctx.get("value") == "new"
-    ctx.dispose()
+    child.delete("value")
+    child.set("value", "new")
+    assert child.get("value") == "new"
+    root.dispose()
     assert events == ["cleanup"]
 
 
@@ -175,10 +126,10 @@ def test_auto_can_inject_the_root_view() -> None:
 
     ctx = Context()
     graph = snapshot(data=Auto(Ref("")))
-    assert graph(ctx) == {}
+    assert graph(ctx) == {"$": ctx.get("$").to_dict()}
     remove = ctx.declare({"value": Schema.leaf()})
     ctx.set("value", 3)
-    assert graph(ctx) == {"value": 3}
+    assert graph(ctx) == {"$": ctx.get("$").to_dict(), "value": 3}
     remove()
-    assert graph(ctx) == {}
+    assert graph(ctx) == {"$": ctx.get("$").to_dict()}
     ctx.dispose()

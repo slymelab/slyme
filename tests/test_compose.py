@@ -431,8 +431,8 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
     root.declare(Schema({"value": Schema.leaf(mode="register")}))
     identity = object()
     child = root.isolate("value", identity=identity)
-    binding = next(iter(root._store._data.values()))
-    remove = binding.register_value(child.scope, "old")
+    binding = root._store._data[root.resolve_entry("value")]
+    remove = root._store.register(child.scope, "value", "old")
     assert binding._data[identity].blocked
 
     child.dispose()
@@ -568,7 +568,7 @@ def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
 
     snapshot = Context()
     snapshot.declare(R)
-    snapshot.update(ctx.flatten())
+    snapshot.update({ref: ctx.get(ref)})
     assert snapshot.get(ref) is hooks
     assert hooks.resolve(ctx.scope) == ("handler",)
     assert hooks.resolve(snapshot.scope) == ()

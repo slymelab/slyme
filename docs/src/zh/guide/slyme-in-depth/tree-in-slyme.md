@@ -1,25 +1,71 @@
 # Slyme 中的 Tree
 
-Tree 是一种嵌套结构：容器描述拓扑，未注册对象作为叶子。`slyme.utils.tree` 提供 `TreeEngine`、`TreeDef`、`TreeKey` 和 `TreeAux`，用于遍历和重建。Slyme 为不同语义使用不同引擎，而不假定所有遍历都应追踪同一组对象。
+Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 leaf。`slyme.utils.tree` 提供无状态的 `TreeEngine` 算法和不可变的 `TreeRules`。每次遍历显式传入 `rules=`；engine 不持有注册表或 Context。
 
-## 类型注册
+## 规则与分派
 
-`TreeEngine` 使用以精确类型为 key 的 `GeneralRegistry`。默认 handler 展开 `list`、`tuple` 和 `dict`；子类在通过 `engine.register()` 显式注册前保持为不透明叶子。若自定义容器需要在重建后保留类型或额外状态，应为其注册专用的重建函数。可选的 pre-/post-resolver 允许显式配置动态分派，但没有自动的 Python MRO 查找。
+`TreeRules` 包含精确类型 handler 映射，以及有序的 `pre_resolvers` 和 `post_resolvers`。`TreeHandler(flatten, unflatten)` 描述一种 container；`unflatten=None` 允许遍历，但拒绝重建。分派顺序是显式的 `is_leaf` 判断、pre-resolver、精确类型、post-resolver。子类不会自动匹配父类，不隐式查找 Python MRO。
 
-## `NODE_ENGINE`
+规则快照复制 handler 映射。`TreeRules.merge()` 对同一类型保留首个 handler，分别拼接两个阶段的 resolver。`TreeDef` 保存 flatten 时选定的重建函数，因此重建时不查询当前规则。
 
-从 `slyme.node.core` 导入 `NODE_ENGINE`；其遍历 handler 与 Node、Wrapper 在同一模块注册。
+不依赖 Context 的遍历可以显式导入 `slyme.context.default.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不加入 `__all__`，也不在包顶层重导出。`_install` 和 Schema 的声明规则仍是私有实现细节。
 
-`NODE_ENGINE` 注册 `Node`、`Wrapper`、`Auto`、普通容器以及 `MappingProxyType`，通过遍历显式参数绑定和 Auto 内容进行物理图检查与 Ref 收集，不包含函数默认值。参数可以包含异质的嵌套值；该引擎只描述遍历方式，不判断组合是否合法。`Node`、`Wrapper` 和 `Auto` 以 `unflatten_func=None` 注册：支持遍历和展开，但重建时抛出 `TypeError`。
+## Context 持有的默认配置
 
-## 对象 identity
+根 `Context()` 从 `slyme.context.default` 安装三个 register 模式字段，每个字段持有独立的 Compose：
 
-Slyme 不提供通用的 Node 图 clone。Tree 重建无法决定哪些共享引用应继续作为别名、哪些 value 应被复制，以及循环应用图应如何处理。需要另一张图时，应重新调用对应的 Node factory 或 组装函数，并由应用显式复制所需 value。
+| Ref 常量 | 路径 | contribution |
+| --- | --- | --- |
+| `DATA_TREE_REF` | `$.tree.data` | 用于 Auto、`extract` 和 `update_tree` 的 `TreeRules` |
+| `NODE_TREE_REF` | `$.tree.node` | 用于显式 Node 图遍历的 `TreeRules` |
+| `EVALUATORS_REF` | `$.eval.handlers` | 精确类型 evaluator 映射 |
 
-Context 不会被注册为 Tree container。它是最多拥有一个 parent、带 identity 的生命周期 owner，而不是自包含的值树；绑定的 Scope 承载独立的 C3 可见性图。需要显式物化时，`Context.flatten()` 会提供其可见的 Ref 到 value 映射。
+这些常量也由 `slyme.context` 导出。Data 规则展开 list、tuple、dict 和 MappingProxyType；Node 规则额外遍历 Node/Wrapper 参数绑定和 Auto payload。Node、Wrapper 和 Auto 仅用于遍历，没有重建函数。
 
-## Auto 求值
+每次操作在遍历或异步暂停前，只解析一次有效规则与 evaluator 映射。之后新增或撤销 contribution 影响后续操作，不改变本次分派和重建。保留 callable 并不延长其 owner 管理的资源生命周期。
 
-Auto 使用 `CTX_EVAL_ENGINE` 查找已注册 leaf，并把 Context 本身视为不透明对象。Ref 读取当前 Context；每个子 Node 在由父级管理、绑定到独立 child Scope 的 Context 中求值。Slyme dispose 该 Context 后，再使用返回值重建 Auto tree。所有遍历到的容器都按其 Tree handler 重建，包括没有可求值叶子的子树。普通 leaf 与 evaluator 返回值保持不变。
+Compose 按 Scope C3 顺序，再按本层插入顺序处理 contribution；同一类型的首个 handler 生效。同一 Scope 内使用 `position="prepend"` 覆盖较早的贡献；撤销后重新显露下一条适用定义：
 
-`EVALUATOR_REGISTRY` 同样按精确类型匹配。标准 Node factory 对同步和异步函数都创建已注册的 `Node` 类型。自定义 `Node` 或 `Ref` 子类需要单独注册 evaluator；注册 `int` evaluator 不会让 `bool` 参与求值。这些类型注册规则不影响 Scope 的 C3 可见性顺序。
+```python
+from dataclasses import dataclass
+
+from slyme.context import DATA_TREE_REF, Context
+from slyme.utils.tree import TreeAux, TreeEngine, TreeHandler, TreeRules
+
+@dataclass
+class Box:
+    value: object
+
+ctx = Context()
+plugin = ctx.fork()
+rules = TreeRules({
+    Box: TreeHandler(
+        lambda box: ((box.value,), TreeAux()),
+        lambda items, _: Box(next(iter(items))),
+    ),
+})
+plugin.effect(lambda: ctx.get(DATA_TREE_REF).add(plugin.scope, rules))
+
+effective = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
+leaves, definition = TreeEngine.flatten(Box(1), rules=effective)
+assert leaves == [1]
+assert TreeEngine.unflatten(definition, [2]) == Box(2)
+
+plugin.dispose()
+assert Box not in ctx.get(DATA_TREE_REF).resolve(ctx.scope).handlers
+ctx.dispose()
+```
+
+## Scope 隔离
+
+普通 fork 复用父级配置，子 Scope 通过 C3 继承。绑定到无关 `Scope()` 的 fork 看不到默认值，必须显式安装需要的 Compose 和 contribution；框架不会回退到 `ctx.root`。独立创建的根 `Context()` 会安装自己的默认配置。
+
+使用 `ctx.isolate(DATA_TREE_REF)` 和 `register()`，可以为该字段安装独立的规则组合。空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历则显式解析 `NODE_TREE_REF`，再将规则传给 TreeEngine。
+
+Schema 声明使用私有、不可变、仅处理 dict 的规则，不读取运行时配置。修改 data tree 规则不会改变 Schema 对声明的解释方式。
+
+## 对象身份与求值
+
+Tree 按每次出现的位置分别遍历，不保持重建后容器的共享引用，也不支持环。普通 leaf 和 evaluator 返回值保持对象身份。Context 对 TreeEngine 是不透明 leaf；`Context.flatten()` 返回其可见 Ref 到值的映射，包含可见的 `$`。
+
+Auto 使用 data 规则寻找 leaf。Ref 和 Node evaluator 仅匹配精确类型；子类需要向 `EVALUATORS_REF` 单独贡献。Ref 读取当前 Context；每个子 Node 在独立 child Scope、由父级管理的 child Context 内运行，并在父级收到结果前释放。所有被遍历的 container 都会重建，即使其中没有可求值 leaf；evaluator 的返回结果不会再次遍历。

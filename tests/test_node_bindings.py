@@ -7,9 +7,10 @@ from typing import Any
 import pytest
 
 from slyme.context import Context, Schema
+from slyme.context.default import NODE_TREE_REF
 from slyme.node import Auto, Node, node, wrapper
-from slyme.node.core import NODE_ENGINE
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
+from slyme.utils.tree import TreeEngine
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])
@@ -123,6 +124,7 @@ def test_native_parameter_errors_are_reported_at_invocation() -> None:
 
     instance = required()
     ctx = Context()
+    initial_owned = tuple(ctx._lifecycle._owned)
     with pytest.raises(NodeExceptionRecord) as missing:
         instance(ctx)
     assert isinstance(missing.value.__cause__, TypeError)
@@ -134,7 +136,7 @@ def test_native_parameter_errors_are_reported_at_invocation() -> None:
     assert isinstance(unexpected.value.__cause__, TypeError)
     assert "unknown" in str(unexpected.value.__cause__)
     assert calls == ["child"]
-    assert not ctx._lifecycle._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     instance.delete("unknown")
     assert instance(ctx, value=2) == 2
 
@@ -259,10 +261,14 @@ def test_inspection_follows_explicit_bindings_and_auto_trees() -> None:
     schema = Schema({"input": Schema.leaf()})
     ref = schema.resolve("input")
     instance = value(dynamic=Auto({"value": ref}), extra="raw")
-    paths_and_leaves = list(NODE_ENGINE.iter_with_key_path(instance))
+    ctx = Context()
+    rules = ctx.get(NODE_TREE_REF).resolve(ctx.scope)
+    paths_and_leaves = list(TreeEngine.iter_with_key_path(instance, rules=rules))
     assert [leaf for _, leaf in paths_and_leaves] == [ref, "raw"]
-    assert [
-        NODE_ENGINE.get_element(instance, path) for path, _ in paths_and_leaves
-    ] == [ref, "raw"]
+    assert [TreeEngine.get_element(instance, path) for path, _ in paths_and_leaves] == [
+        ref,
+        "raw",
+    ]
     instance.delete("extra")
-    assert list(NODE_ENGINE.iter(instance)) == [ref]
+    assert list(TreeEngine.iter(instance, rules=rules)) == [ref]
+    ctx.dispose()

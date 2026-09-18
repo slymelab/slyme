@@ -14,6 +14,7 @@
 
 from .compose import Compose
 from .core import Context, ContextKey
+from .default import DATA_TREE_REF, EVALUATORS_REF, NODE_TREE_REF
 from .lifecycle import Lifecycle
 from .schema import (
     Metadata,
@@ -32,6 +33,9 @@ __all__ = [
     "Context",
     "ContextKey",
     "ContextStore",
+    "DATA_TREE_REF",
+    "NODE_TREE_REF",
+    "EVALUATORS_REF",
     "Lifecycle",
     "Metadata",
     "Ref",

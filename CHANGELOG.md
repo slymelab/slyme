@@ -10,6 +10,14 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Context-owned Tree rules and Auto evaluators, installed by `context/default.py`
+  in independent Composes at `$.tree.data`, `$.tree.node`, and `$.eval.handlers`.
+  Defaults follow normal Scope visibility with no root fallback and are released
+  with their root Context. Public Ref constants expose these configuration paths.
+- Stateless `TreeEngine` traversal with explicit immutable `TreeRules` and public
+  `TreeHandler`. Each Context operation captures effective rules once; Schema
+  declaration retains separate immutable dict-only rules.
+
 - Exposed `RefEntry`, `RefConfig`, `RefLeafConfig`, and `RefContainerConfig`,
   plus `Schema.resolve_entry()` and the `Schema.entries` tuple property for
   metadata introspection. Withdrawn entries reject config reads with `LookupError`.
@@ -59,10 +67,15 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Combined Scope usage history and active ownership in a weak-key index. Saved
+  Scopes retain empty usage records; their values are released with their final
+  viewer. `ContextStore.dispose()` clears the remaining bindings and detaches
+  the Store from Schema after all viewers have been released.
 - Reused a single parent Scope's C3 order directly when constructing a child,
   making single-parent construction linear in the ancestor count.
-- Replaced exception-driven missing-identity scans with direct lookups, retaining
-  full C3 traversal, shared-identity deduplication, and immediate binding visibility.
+- Replaced exception-driven missing-identity scans with direct lookups. Context
+  lookup stops at the first value or inheritance barrier; Compose traversal
+  deduplicates shared identities.
 - Made Context mutation checks constant-time by closing the ownership subtree
   before cleanup, preserving readable cleanup and recursive LIFO disposal.
 - Separated Context binding storage from Compose: each identity has one record
@@ -96,13 +109,17 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Mutable global Tree/evaluator registries and `utils.registry`; scoped Compose
+  contributions replace registration APIs. Root views include `$`, so bulk
+  assignment snapshots must select assign-mode business fields explicitly.
+
 - Removed `NodeTerminate` and its automatic source-node annotation.
 - Removed the `Continuation` class and its chain, batch, and sequential APIs.
   Use `run(generator)` with native loops and exception handling; consumers own
   scheduling, result collection, and error aggregation.
 - Removed `slyme.utils.awaitable`; import `await_result` from `slyme.utils.execution`.
 - Removed `TypeRegistry` and `TreeEngine.allow_inheritance`. Tree handlers and
-  Auto evaluators use exact type keys through `GeneralRegistry`; subclasses
+  Auto evaluators use exact type keys; subclasses
   require explicit registration. Explicit Tree resolvers remain supported.
 - Removed `Context.mutate()`. Use separate `drop()` and `update()` calls for
   deletion followed by assignment; the two calls are not one transaction.
@@ -147,6 +164,15 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- ContextStore implements registration policy with a `once()` disposer;
+  binding writes and deletions enforce stored ownership tokens. An unprotected
+  (`None`) token accepts any caller token, but a protected value requires identity
+  matching. Revoked registrations cannot delete replacement values. Identity
+  records are data-only and remain internal to Binding; writes return no record.
+  Registration disposers release their Binding reference in `finally`.
+- Store owns viewer and reverse indexes; private bindings own their identities
+  and values without sharing mutable Store state. Schema manages Store attachment,
+  and ContextView delegates all data access through Context.
 - Context coordinates a private shared Schema, shared ContextStore, and one
   owned Lifecycle. Schema access uses Context `resolve()`, `resolve_entry()`,
   and `entries`; direct `ctx.schema` access is removed. Normal access checks
@@ -154,8 +180,7 @@ breaking changes when they are documented here.
 - Exported independently usable `ContextStore` and `Lifecycle`. Ref lives in
   `context.schema`, and tree engines live with their Schema or Store consumers;
   the separate `context.ref` and `context.tree` modules are removed.
-- Moved `NODE_ENGINE` and its traversal handlers into `node.core`, removing
-  `node.tree`. Node, Wrapper, and Auto remain traversal-only containers.
+- Node inspection rules live alongside Node and Wrapper in `node.core`.
 - Schema retains application stores and their Context viewers until explicit
   disposal and directly clears bindings when a field is withdrawn. Field cleanup order between stores
   is unspecified.
@@ -172,7 +197,7 @@ breaking changes when they are documented here.
   Caller cancellation follows asyncio propagation without aggregating partial
   batch results; Context-owned child cleanup may continue after evaluation exits.
 - Renamed `slyme.utils.pytree` to `slyme.utils.tree`, `PyTree*` types to `Tree*`,
-  and `PYTREE_ENGINE_REGISTRY` to `TREE_ENGINE_REGISTRY`, including its namespace
+  and removed the process-global engine registry, including its namespace
   from `pytree_engine` to `tree_engine`. No compatibility aliases are provided.
 - Scope viewers, Context-binding identities, and Schema declarations use direct
   ownership sets managed by internal registration and cleanup methods. Compose
@@ -197,7 +222,7 @@ breaking changes when they are documented here.
   subtrees, while preserving ordinary leaf identities. Each Wrapper `call_next`
   invocation evaluates the current Auto containers without a content pre-scan.
 - Context construction accepts only keyword `parent` and `scope`; roots create
-  their own empty Schema and Store. Declare paths and assign values separately
+  their own Schema and Store with independent framework defaults. Declare application paths and assign values separately
   with `declare()` and `update()`. Importing a Schema copies definitions rather
   than sharing future changes. `root` is a fixed field rather than a property.
   Every Context data access rejects undeclared paths.

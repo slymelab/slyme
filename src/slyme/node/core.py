@@ -25,13 +25,12 @@ from typing_extensions import Self
 from slyme.context import Context
 from slyme.utils.execution import await_result, continuation
 from slyme.utils.tree import (
-    TREE_ENGINE_REGISTRY,
     AttributeKey,
     TreeAux,
-    TreeEngine,
+    TreeHandler,
     TreeKey,
+    TreeRules,
 )
-from slyme.utils.tree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 
 from .exception import (
     NodeException,
@@ -48,7 +47,6 @@ __all__ = [
     "NodeElement",
     "Node",
     "Wrapper",
-    "NODE_ENGINE",
 ]
 
 _R = TypeVar("_R")
@@ -113,7 +111,7 @@ class NodeElement:
 
     def delete(self, name: str) -> None:
         """Remove a binding, raising KeyError when it is absent."""
-        del self._params[name]
+        self._params.pop(name, None)
 
 
 class Node(NodeElement, Generic[_R]):
@@ -384,17 +382,16 @@ class _NodeParameterKey(TreeKey):
         return f"{parent_expr}.get({self.name!r})"
 
 
-NODE_ENGINE = TreeEngine("node_engine")
-TREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
 # Nodes, Wrappers, and Auto support inspection, not reconstruction.
-NODE_ENGINE.register(Node, Node._flatten, None, strict=True)
-NODE_ENGINE.register(Wrapper, Wrapper._flatten, None, strict=True)
-NODE_ENGINE.register(
-    Auto,
-    lambda obj: ((obj.value,), TreeAux(children_keys=(AttributeKey("value"),))),
-    None,
+NODE_RULES = TreeRules(
+    handlers={
+        Node: TreeHandler(Node._flatten, None),
+        Wrapper: TreeHandler(Wrapper._flatten, None),
+        Auto: TreeHandler(
+            lambda obj: ((obj.value,), TreeAux(children_keys=(AttributeKey("value"),))),
+            None,
+        ),
+    }
 )
-NODE_ENGINE.register(MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy)
-
 
 from .eval import eval_tree

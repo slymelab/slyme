@@ -42,4 +42,4 @@ Slyme 在组装与执行期间始终使用同一个可变 Node 图（详见[生�
 
 - **调用之间**：用户可以组装或修改 Node 参数、wrapper 与组合结构。
 - **单次调用内**：当前 Node 直接传递静态参数容器，使用传入的 Context 解析动态值并执行；调用内对静态容器的修改会保留在实时 Node 上。
-- **需要隔离时**：重新调用 Node factory 或 组装函数 可获得可独立配置的图；Context `fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 Scope，需要独立数据层时应传入 child Scope。创建新根并声明相应路径后，用 `snapshot.update(context.flatten())` 显式物化可见的 assignment 值。已存储的应用对象仍然共享。
+- **需要隔离时**：重新调用 Node factory 或组装函数可获得可独立配置的图；Context `fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 Scope，需要独立数据层时应传入 child Scope。创建新根并声明相应路径后，用 `snapshot.update(context.get("app").flatten())` 物化 `app` 等仅含 assign 字段的业务子树，排除 `$` 下的框架注册。已存储的应用对象仍然共享。

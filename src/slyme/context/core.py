@@ -20,10 +20,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, TypeVar, overload
 
+from slyme.utils.tree import TreeEngine
+
+from .default import DATA_TREE_REF, _install
 from .lifecycle import Lifecycle, _Cleanup, _Disposer
 from .schema import Ref, RefEntry, RefLeafConfig, Schema, _Declaration
 from .scope import Scope
-from .store import CTX_EVAL_ENGINE, ContextKey, ContextPathError, ContextStore, _RefRole
+from .store import ContextKey, ContextPathError, ContextStore, _RefRole
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
@@ -88,6 +91,7 @@ class ContextElement(ABC):
     @abstractmethod
     def _flat_items(
         self,
+        ref: ContextKey | None = None,
         *,
         local: bool = False,
     ) -> Iterable[tuple[Ref[Any], Any]]:
@@ -104,6 +108,8 @@ class Context(ContextElement):
 
     Forks retain the same Schema and Store references for their entire lifetime;
     these objects may change their contents, but cannot be replaced on a Context.
+    Roots install independent framework Composes under `$`. All reads, including
+    framework configuration, follow the bound Scope without a root fallback.
     """
 
     parent: Context | None = field(init=False)
@@ -119,7 +125,7 @@ class Context(ContextElement):
         parent: Context | None = None,
         scope: Scope | None = None,
     ) -> None:
-        """Create a lifetime and data view; declare paths and assign values separately."""
+        """Create a lifetime and data view, installing defaults only for a new root."""
         if parent is not None:
             parent._lifecycle.assert_active()
             schema = parent._schema
@@ -139,7 +145,7 @@ class Context(ContextElement):
             store.acquire_scope(self, bound_scope)
         except BaseException:
             if parent is None:
-                store.close()
+                store.dispose()
             raise
         try:
             lifecycle = Lifecycle(
@@ -150,13 +156,19 @@ class Context(ContextElement):
             self._release()
             raise
         object.__setattr__(self, "_lifecycle", lifecycle)
+        if parent is None:
+            try:
+                _install(self)
+            except BaseException:
+                self.dispose()
+                raise
 
     def _release(self) -> None:
         try:
             self._store.release_scope(self, self.scope)
         finally:
             if self.parent is None:
-                self._store.close()
+                self._store.dispose()
 
     @property
     def entries(self) -> tuple[RefEntry[Any], ...]:
@@ -273,16 +285,28 @@ class Context(ContextElement):
         """Project visible leaves into ordinary nested dictionaries without copying values."""
         return self._snapshot_tree(ref, local=local)
 
-    def _flat_items(self, *, local: bool = False) -> Iterable[tuple[Ref[Any], Any]]:
+    def _flat_items(
+        self, ref: ContextKey | None = None, *, local: bool = False
+    ) -> Iterable[tuple[Ref[Any], Any]]:
         self._lifecycle.assert_readable()
-        return self._store.leaf_items(self.scope, (), local=local)
+        parts = (
+            () if ref is None else self._validate_entry(ref, role="container").ref.parts
+        )
+        items = self._store.leaf_items(self.scope, parts, local=local)
+        if not parts:
+            return items
+        visible = tuple(items)
+        if not visible:
+            raise ContextPathError(".".join(parts))
+        return visible
 
     def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
         self._lifecycle.assert_readable()
-        refs, treedef = CTX_EVAL_ENGINE.flatten(ref_tree)
+        rules = self.get(DATA_TREE_REF).resolve(self.scope)
+        refs, treedef = TreeEngine.flatten(ref_tree, rules=rules)
         entries = [self._store.validate_entry(ref) for ref in refs]
         values = [self._entry_value(entry, local=local) for entry in entries]
-        return CTX_EVAL_ENGINE.unflatten(treedef, values)
+        return TreeEngine.unflatten(treedef, values)
 
     def set(self, ref: ContextKey, value: _T) -> None:
         """Assign one local value at an assign-mode leaf."""
@@ -313,7 +337,12 @@ class Context(ContextElement):
     def update_tree(self, ref_tree: Any, value_tree: Any) -> None:
         """Assign values from a matching tree after validating paths and modes."""
         self._lifecycle.assert_active()
-        self._store.update_tree(self.scope, ref_tree, value_tree)
+        rules = self.get(DATA_TREE_REF).resolve(self.scope)
+        updates: dict[ContextKey, Any] = {
+            self._store._validate_ref(ref): TreeEngine.get_element(value_tree, path)
+            for path, ref in TreeEngine.iter_with_key_path(ref_tree, rules=rules)
+        }
+        self._store.update(self.scope, updates)
 
 
 @dataclass(frozen=True, repr=False)
@@ -339,19 +368,12 @@ class ContextView(ContextElement):
             )
         return self._context._validate_entry(ref).ref
 
-    def _adjust_ref_tree(self, ref_tree: Any) -> Any:
-        def adjust(obj):
-            if isinstance(obj, (str, Ref)):
-                return self._adjust_ref(obj)
-            return obj
-
-        return CTX_EVAL_ENGINE.map(adjust, ref_tree)
-
     def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
-        return self._context.extract(
-            self._adjust_ref_tree(ref_tree),
-            local=local,
-        )
+        rules = self._context.get(DATA_TREE_REF).resolve(self._context.scope)
+        refs, treedef = TreeEngine.flatten(ref_tree, rules=rules)
+        adjusted = [self._adjust_ref(ref) for ref in refs]
+        values = [self._context.get(ref, local=local) for ref in adjusted]
+        return TreeEngine.unflatten(treedef, values)
 
     def get(
         self,
@@ -383,21 +405,11 @@ class ContextView(ContextElement):
 
     def _flat_items(
         self,
+        ref: ContextKey | None = None,
         *,
         local: bool = False,
     ) -> Iterable[tuple[Ref[Any], Any]]:
-        entry = self._context._validate_entry(
-            ".".join(self._parts),
-            role="container",
-        )
-        items = tuple(
-            self._context._store.leaf_items(
-                self._context.scope, entry.ref.parts, local=local
-            )
-        )
-        if entry.ref.parts and not items:
-            raise ContextPathError(entry.ref.path)
-        return items
+        return self._context._flat_items(self._adjust_ref(ref), local=local)
 
     def to_dict(
         self,

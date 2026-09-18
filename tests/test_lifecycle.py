@@ -136,11 +136,17 @@ def test_context_shares_store_and_schema_but_not_lifecycle() -> None:
     assert child.entries == schema.entries
     assert [entry.ref.path for entry in child.entries] == [
         "",
+        "$",
+        "$.tree",
+        "$.tree.data",
+        "$.tree.node",
+        "$.eval",
+        "$.eval.handlers",
         "group",
         "group.value",
         "group.unset",
     ]
-    assert child.to_dict() == {}
+    assert child.to_dict() == {"$": child.get("$").to_dict()}
     root.dispose()
     with pytest.raises(RuntimeError, match="disposed"):
         child.resolve("group.value")
@@ -169,7 +175,9 @@ def test_failed_isolation_releases_its_child_lifecycle_and_scope(monkeypatch) ->
         with pytest.raises(ValueError, match="isolation failed"):
             root.isolate("value")
     assert tuple(root._lifecycle._owned) == initial_owned
-    assert set(root._store._scope_usage) == {root.scope}
+    assert {
+        scope for scope, usage in root._store._scope_usages.items() if usage.viewers
+    } == {root.scope}
     assert root.get("value") == "root"
     root.dispose()
 
@@ -226,7 +234,31 @@ def test_store_supports_explicit_ownership_without_a_context() -> None:
     withdraw()
     assert not store._data
     store.release_scope(viewer, scope)
-    store.close()
+    store.dispose()
+    assert not schema._stores
+
+
+def test_disposed_store_detaches_without_changing_other_schema_consumers() -> None:
+    schema = Schema()
+    withdraw = schema.declare({"value": Schema.leaf()})
+    left, right = ContextStore(schema), ContextStore(schema)
+    scope = Scope()
+    left_viewer, right_viewer = object(), object()
+    left.acquire_scope(left_viewer, scope)
+    right.acquire_scope(right_viewer, scope)
+    left.set(scope, "value", "left")
+    right.set(scope, "value", "right")
+    left.release_scope(left_viewer, scope)
+    left.dispose()
+    left.dispose()
+    assert schema._stores == {right}
+    assert (
+        right.leaf_value(scope, schema.resolve_entry("value"), local=False) == "right"
+    )
+    withdraw()
+    assert not right._data
+    right.release_scope(right_viewer, scope)
+    right.dispose()
     assert not schema._stores
 
 
@@ -248,4 +280,4 @@ async def test_context_disposal_releases_store_after_failed_async_cleanup() -> N
         await await_result(root.dispose())
     assert events == ["cleanup"]
     assert not schema._stores
-    assert not store._scope_usage
+    assert not store._scope_usages
