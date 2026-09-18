@@ -87,7 +87,7 @@ def test_behavior_conflict_precedes_metadata_merge() -> None:
     config = Schema.leaf(int, metadata={"key": item})
     for incompatible in (
         Schema.leaf(str, metadata={"key": item}),
-        Schema.leaf(int, replaceable=False, metadata={"key": item}),
+        Schema.leaf(int, mode="register", metadata={"key": item}),
         Schema.container(metadata={"key": item}),
     ):
         with pytest.raises(ValueError, match="Conflicting Ref configurations"):

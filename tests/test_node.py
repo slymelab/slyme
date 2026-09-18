@@ -32,10 +32,11 @@ from slyme.utils.registry import GeneralRegistry
 R = Schema(
     {
         "auto": {
-            "async_temporary": Schema.leaf(),
+            "async_temporary": Schema.leaf(mode="register"),
             "dynamic": Schema.leaf(),
             "inherited": Schema.leaf(),
-            "temporary": Schema.leaf(),
+            "temporary": Schema.leaf(mode="register"),
+            "local": Schema.leaf(),
         },
         "async_value": Schema.leaf(),
         "input": {
@@ -434,7 +435,7 @@ def test_auto_nodes_receive_isolated_child_contexts() -> None:
     @node
     def child(ctx: Context, /) -> int:
         assert ctx.get(inherited) == 4
-        ctx.add(temporary, len(seen))
+        ctx.register(temporary, len(seen))
         seen.append(ctx)
         return len(seen)
 
@@ -497,7 +498,7 @@ async def test_async_auto_nodes_receive_isolated_child_contexts() -> None:
     @node
     async def child(ctx: Context, /) -> int:
         nonlocal started
-        ctx.add(temporary, started)
+        ctx.register(temporary, started)
         seen.append(ctx)
         started += 1
         if started == 2:
@@ -597,9 +598,9 @@ async def test_async_auto_runs_sync_nodes_inline_with_isolated_contexts() -> Non
 
     @node
     def child(ctx: Context, /, *, value: int) -> tuple[int, object]:
-        ctx.set("auto.temporary", value)
+        ctx.set("auto.local", value)
         observed.append((value, threading.get_ident(), ctx.scope))
-        return ctx.get("auto.temporary", local=True), ctx.scope
+        return ctx.get("auto.local", local=True), ctx.scope
 
     @node
     async def parent(
@@ -619,7 +620,7 @@ async def test_async_auto_runs_sync_nodes_inline_with_isolated_contexts() -> Non
         (2, owner_thread),
     ]
     assert results[0][1] is not results[1][1]
-    assert not ctx.exists("auto.temporary")
+    assert not ctx.exists("auto.local")
 
 
 def test_sync_auto_chains_node_failure_under_cleanup_failure() -> None:

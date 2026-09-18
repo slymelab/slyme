@@ -14,8 +14,8 @@ R = Schema(
         },
         "state": {"counter": Schema.leaf()},
         "output": {"result": Schema.leaf()},
-        "request": {"id": Schema.leaf()},
-        "tools": Schema.leaf(replaceable=False),
+        "request": {"id": Schema.leaf(mode="register")},
+        "tools": Schema.leaf(mode="register"),
     }
 )
 
@@ -47,7 +47,7 @@ Factories accept keyword bindings without inspecting function signatures. Node e
 
 An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned child Context with a distinct `ctx.scope.fork()`. Slyme disposes that child, including its effects, before parent execution continues. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe its writes.
 
-`set()`, `update()`, `delete()`, and other ordinary Context mutations modify data in place and return `None`. `add()` and `declare()` return exact early disposers and are also removed automatically with their owning Context. A Node returns an immediate value or an awaitable completion.
+`Schema.leaf()` defaults to `mode="assign"`: `set()`, `update()`, and `delete()` modify data in place and return `None`. Declare `mode="register"` for `register()`, which returns an exact early disposer and is removed automatically with its owning Context. Each mode rejects the other mode's writes. `declare()` also returns an owned early disposer. A Node returns an immediate value or an awaitable completion.
 
 ## Context lifetime, Scope visibility, and Compose
 
@@ -56,10 +56,10 @@ root_ctx = Context(schema=R)
 agent_scope = root_ctx.scope.fork(name="agent")
 agent_ctx = root_ctx.fork(scope=agent_scope)
 
-remove_request = agent_ctx.add(R.resolve("request.id"), "request-1")
+remove_request = agent_ctx.register(R.resolve("request.id"), "request-1")
 
 tools = Compose[str, tuple[str, ...]].collect()
-root_ctx.add(R.resolve("tools"), tools)
+root_ctx.register(R.resolve("tools"), tools)
 root_ctx.effect(lambda: tools.add(root_ctx.scope, "read"))
 remove_agent = agent_ctx.effect(
     lambda: agent_ctx.get(R.resolve("tools")).add(
@@ -75,7 +75,7 @@ agent_ctx.dispose()
 root_ctx.dispose()
 ```
 
-Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's Compose-local identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data. `ctx.isolate(ref, identity=key)` creates an owned child that blocks inherited values for that leaf; calls with the same identity share the selected isolated storage. Independent Context roots keep separate data even when bound to the same Scope. `Context.add()` rejects an existing value at the bound identity. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
+Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's Compose-local identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data. `ctx.isolate(ref, identity=key)` creates an owned child that blocks inherited values for that leaf; calls with the same identity share the selected isolated storage. Independent Context roots keep separate data even when bound to the same Scope. `Context.register()` rejects an existing value at the bound identity. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
 
 Create an application root with `Context(data, schema=R, scope=optional_scope)`. Every path must belong to its Schema declaration tree. A child has one `parent`, inherits `ctx.schema`, and is owned by that parent until disposal. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(name="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree and holds their shared Schema reference. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
 

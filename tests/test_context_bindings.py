@@ -6,26 +6,31 @@ from collections.abc import Hashable
 
 import pytest
 
-from slyme.context import Compose, Context, Schema, Scope
-from slyme.context.core import _ContextBinding
+from slyme.context import Context, Schema, Scope
+from slyme.context.core import _ContextBinding, _ScopeUsage
 
 
 @pytest.mark.parametrize("remove_first", [False, True])
-def test_add_disposer_owns_only_the_value_table_until_called(
+def test_registration_disposer_owns_only_its_identity_data_until_called(
     remove_first: bool,
 ) -> None:
     class Payload:
         pass
 
     scope = Scope()
-    binding = _ContextBinding("value", {})
+    other_scope = scope.fork()
+    schema = Schema({"value": Schema.leaf(mode="register")})
+    binding = _ContextBinding(
+        schema.resolve_entry("value"),
+        {scope: _ScopeUsage(), other_scope: _ScopeUsage()},
+    )
     payload = Payload()
     other_payload = Payload()
     payload_ref = weakref.ref(payload)
     other_ref = weakref.ref(other_payload)
     binding_ref = weakref.ref(binding)
-    remove = binding.add_value(scope, payload)
-    binding.set_value(scope.fork(), other_payload, replaceable=True)
+    remove = binding.register_value(scope, payload)
+    binding.set_value(other_scope, other_payload)
     if remove_first:
         remove()
 
@@ -33,7 +38,7 @@ def test_add_disposer_owns_only_the_value_table_until_called(
     gc.collect()
     assert binding_ref() is None
     assert (payload_ref() is None) is remove_first
-    assert (other_ref() is None) is remove_first
+    assert other_ref() is None
 
     remove()
     gc.collect()
@@ -46,26 +51,25 @@ def test_shared_identity_has_one_current_value_and_a_persistent_barrier() -> Non
     root = Context({"value": "root"}, schema=Schema({"value": Schema.leaf()}))
     left = root.isolate("value", identity="shared")
     right = root.isolate("value", identity="shared")
-    remove = left.add("value", "original")
+    left.set("value", "original")
     binding = next(iter(root._data.values()))
     right.set("value", "updated")
-    remove()
     assert left.get("value") == "updated"
     assert right.get("value") == "updated"
-    assert len(binding._values) == 2
-    assert binding._blocked == {"shared"}
+    assert len(binding._data) == 2
+    assert binding._data["shared"].blocked
 
     right.delete("value")
     assert not left.exists("value")
     assert not right.exists("value")
-    assert binding._blocked == {"shared"}
+    assert binding._data["shared"].blocked
     assert root.get("value") == "root"
-    right.add("value", None)
+    right.set("value", None)
     left.dispose()
     assert right.get("value") is None
     right.dispose()
-    assert len(binding._values) == 1
-    assert not binding._blocked
+    assert len(binding._data) == 1
+    assert not any(data.blocked for data in binding._data.values())
     root.dispose()
 
 
@@ -85,15 +89,26 @@ def test_shared_value_does_not_retain_its_disposed_writers_scope() -> None:
 
 @pytest.mark.parametrize("operation", ["set", "delete", "remove"])
 def test_value_finalizer_can_replace_the_same_path(operation: str) -> None:
-    ctx = Context(schema=Schema({"value": Schema.leaf()}))
+    registration = operation == "remove"
+    ctx = Context(
+        schema=Schema(
+            {"value": Schema.leaf(mode="register" if registration else "assign")}
+        )
+    )
     events: list[str] = []
 
     class Payload:
         def __del__(self) -> None:
             events.append("finalized")
-            ctx.set("value", "reentrant")
+            if registration:
+                ctx.register("value", "reentrant")
+            else:
+                ctx.set("value", "reentrant")
 
-    remove = ctx.add("value", Payload())
+    if registration:
+        remove = ctx.register("value", Payload())
+    else:
+        ctx.set("value", Payload())
     if operation == "set":
         ctx.set("value", "replacement")
     elif operation == "delete":
@@ -102,10 +117,12 @@ def test_value_finalizer_can_replace_the_same_path(operation: str) -> None:
         remove()
     assert events == ["finalized"]
     assert ctx.get("value") == "reentrant"
-    remove()
-    assert ctx.get("value") == "reentrant"
-    ctx.delete("value")
-    assert not ctx.exists("value")
+    if registration:
+        remove()
+        assert ctx.get("value") == "reentrant"
+    else:
+        ctx.delete("value")
+        assert not ctx.exists("value")
     ctx.dispose()
 
 
@@ -130,7 +147,7 @@ def test_identity_release_preserves_a_barrier_created_by_a_value_finalizer() -> 
     root.dispose()
 
 
-def test_context_resolve_uses_the_shared_complete_c3_identity_walk(
+def test_context_resolve_walks_complete_c3_without_creating_identities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = Context({"value": "root"}, schema=Schema({"value": Schema.leaf()}))
@@ -153,11 +170,4 @@ def test_context_resolve_uses_the_shared_complete_c3_identity_walk(
         assert child.get("value") == "child"
         assert tuple(seen) == child.scope.mro
     assert dict(binding._scope_identities) == identities_before
-    assert Compose._scoped_identities(
-        binding._scope_identities, child.scope, local=False
-    ) == [
-        binding._identity_for(child.scope, create=False),
-        "shared",
-        binding._identity_for(root.scope, create=False),
-    ]
     root.dispose()

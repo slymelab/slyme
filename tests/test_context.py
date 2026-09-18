@@ -89,7 +89,7 @@ R = Schema(
         "removed": Schema.leaf(),
         "same": Schema.leaf(),
         "runtime": {"value": Schema.leaf()},
-        "service": Schema.leaf(replaceable=False),
+        "service": Schema.leaf(mode="register"),
         "settings": Schema.leaf(),
         "short": Schema.leaf(),
         "user": {"age": Schema.leaf(), "name": Schema.leaf(), "unknown": Schema.leaf()},
@@ -277,7 +277,7 @@ def test_schema_declare_has_independent_disposers_and_rolls_back_conflicts() -> 
         implicit.resolve("group.right")
 
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
-        Schema({"fixed": Schema.leaf(replaceable=False)}).declare(
+        Schema({"fixed": Schema.leaf(mode="register")}).declare(
             {"fixed": Schema.leaf()}
         )
 
@@ -481,12 +481,12 @@ def test_schema_rollback_cleanup_failure_preserves_registration_error(monkeypatc
 
 def test_schema_disposal_prevents_old_context_values_from_reappearing() -> None:
     schema = Schema()
-    remove_old = schema.declare({"plugin": {"value": Schema.leaf(replaceable=False)}})
+    remove_old = schema.declare({"plugin": {"value": Schema.leaf(mode="register")}})
     left = Context(schema=schema)
     right = Context(schema=schema)
     old_ref = schema.resolve("plugin.value")
-    left.set(old_ref, "left-old")
-    right.set(old_ref, "right-old")
+    left.register(old_ref, "left-old")
+    right.register(old_ref, "right-old")
 
     remove_old()
     with pytest.raises(ContextPathError, match="plugin.value"):
@@ -598,7 +598,7 @@ def test_context_operations_respect_schema_leaf_and_container_roles() -> None:
     with pytest.raises(ContextPathError, match="container.*not a leaf"):
         ctx.set("container", 1)
     with pytest.raises(ContextPathError, match="container.*not a leaf"):
-        ctx.add("container", 1)
+        ctx.register("container", 1)
     with pytest.raises(ContextPathError, match="custom_container.*not a leaf"):
         ctx.set("custom_container", 1)
     with pytest.raises(ContextPathError, match="leaf.*not a container"):
@@ -966,7 +966,7 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
         Context.update,
         Context.drop,
         Context.set,
-        Context.add,
+        Context.register,
         Context.update_tree,
         Context.delete,
     )
@@ -989,15 +989,6 @@ def test_context_isolate_shares_only_the_selected_leaf() -> None:
     right.delete(R.resolve("value"))
     assert not left.exists(R.resolve("value"), local=True)
     root.dispose()
-
-
-def test_context_isolate_validates_identity_before_creating_a_child() -> None:
-    ctx = Context({R.resolve("value"): 1}, schema=R)
-    with pytest.raises(TypeError, match="identities must be hashable"):
-        ctx.isolate(R.resolve("value"), identity=[])  # type: ignore[arg-type]
-    assert not ctx._owned
-    assert ctx.get(R.resolve("value")) == 1
-    ctx.dispose()
 
 
 def test_context_read_operations_can_select_local_or_effective_data() -> None:
@@ -1135,18 +1126,18 @@ def test_scope_c3_branch_merge_uses_nearest_value_for_each_leaf() -> None:
     assert child.to_dict(R.resolve("a")) == {"left": 2, "root": 3}
 
 
-def test_context_add_uses_schema_replaceability_and_is_exactly_reversible() -> None:
+def test_context_registration_shadows_inheritance_and_is_exactly_reversible() -> None:
     value = R.resolve("service")
     root = Context(schema=R)
-    remove_root = root.add(value, "root")
+    remove_root = root.register(value, "root")
 
     with pytest.raises(ContextPathError, match="existing local"):
-        root.add(value, "other")
-    with pytest.raises(ContextPathError, match="non-replaceable"):
+        root.register(value, "other")
+    with pytest.raises(ContextPathError, match="register"):
         root.set(value, "other")
 
     child = root.fork(scope=root.scope.fork())
-    remove_child = child.add(value, "child")
+    remove_child = child.register(value, "child")
     assert child.get(value) == "child"
     remove_child()
     remove_child()
@@ -1156,13 +1147,12 @@ def test_context_add_uses_schema_replaceability_and_is_exactly_reversible() -> N
     assert not root.exists(value)
 
 
-def test_context_add_does_not_define_runtime_replaceability() -> None:
+def test_context_assignment_paths_reject_registration() -> None:
     value = R.resolve("value")
     ctx = Context(schema=R)
-    remove = ctx.add(value, 1)
-
+    with pytest.raises(ContextPathError, match="requires 'register'"):
+        ctx.register(value, 1)
     ctx.set(value, 2)
-    remove()
 
     assert ctx.get(value) == 2
 
@@ -1170,18 +1160,18 @@ def test_context_add_does_not_define_runtime_replaceability() -> None:
 def test_context_isolate_blocks_inheritance_until_the_child_is_discarded() -> None:
     value = R.resolve("service")
     root = Context(schema=R)
-    root.set(value, "root")
+    root.register(value, "root")
 
     isolated = root.isolate(value)
     assert isolated.get(value, "missing") == "missing"
     assert not isolated.exists(value)
     assert not isolated.exists(value, local=True)
 
-    isolated.set(value, "local")
+    remove_local = isolated.register(value, "local")
     assert isolated.get(value) == "local"
-    with pytest.raises(ContextPathError, match="non-replaceable"):
+    with pytest.raises(ContextPathError, match="register"):
         isolated.set(value, "other")
-    isolated.delete(value)
+    remove_local()
     assert isolated.get(value, "missing") == "missing"
     assert root.get(value) == "root"
 
@@ -1217,10 +1207,10 @@ def test_context_isolate_requires_declared_leaves() -> None:
         ctx.isolate(R.resolve("group"))
 
 
-def test_context_add_disposer_prunes_a_temporary_container() -> None:
-    ctx = Context(schema=R)
+def test_context_register_disposer_prunes_a_temporary_container() -> None:
+    ctx = Context(schema=Schema({"a": {"b": {"c": Schema.leaf(mode="register")}}}))
 
-    remove = ctx.add(R.resolve("a.b.c"), "temporary")
+    remove = ctx.register(R.resolve("a.b.c"), "temporary")
     assert ctx.get(R.resolve("a.b.c")) == "temporary"
     remove()
 
@@ -1228,11 +1218,15 @@ def test_context_add_disposer_prunes_a_temporary_container() -> None:
     assert not ctx.exists(R.resolve("a.b"), local=True)
 
 
-def test_context_add_prunes_shared_temporary_branches_in_any_order() -> None:
-    ctx = Context(schema=R)
+def test_context_register_prunes_shared_temporary_branches_in_any_order() -> None:
+    ctx = Context(
+        schema=Schema(
+            {"a": {name: Schema.leaf(mode="register") for name in ("first", "second")}}
+        )
+    )
 
-    remove_first = ctx.add(R.resolve("a.first"), 1)
-    remove_second = ctx.add(R.resolve("a.second"), 2)
+    remove_first = ctx.register(R.resolve("a.first"), 1)
+    remove_second = ctx.register(R.resolve("a.second"), 2)
     remove_first()
     assert ctx.to_dict(R.resolve("a")) == {"second": 2}
     remove_second()
@@ -1240,27 +1234,31 @@ def test_context_add_prunes_shared_temporary_branches_in_any_order() -> None:
     assert not ctx.exists(R.resolve("a"))
 
 
-def test_deleting_an_added_leaf_prunes_its_temporary_branches() -> None:
-    ctx = Context(schema=R)
+def test_revoking_a_registration_prunes_its_temporary_branches() -> None:
+    ctx = Context(
+        schema=Schema(
+            {"a": {name: Schema.leaf(mode="register") for name in ("old", "new")}}
+        )
+    )
 
-    stale_disposer = ctx.add(R.resolve("a.old"), 1)
-    ctx.delete(R.resolve("a.old"))
+    stale_disposer = ctx.register(R.resolve("a.old"), 1)
+    stale_disposer()
     assert not ctx.exists(R.resolve("a"))
 
-    remove_new = ctx.add(R.resolve("a.new"), 2)
+    remove_new = ctx.register(R.resolve("a.new"), 2)
     remove_new()
     assert not ctx.exists(R.resolve("a"))
     stale_disposer()
 
 
-def test_context_add_disposer_does_not_retain_removed_payload() -> None:
+def test_context_register_disposer_does_not_retain_removed_payload() -> None:
     class Payload:
         pass
 
-    ctx = Context(schema=R)
+    ctx = Context(schema=Schema({"payload": Schema.leaf(mode="register")}))
     payload = Payload()
     payload_ref = weakref.ref(payload)
-    dispose = ctx.add(R.resolve("payload"), payload)
+    dispose = ctx.register(R.resolve("payload"), payload)
 
     dispose()
     del payload
@@ -1299,11 +1297,21 @@ def test_context_parent_retains_children_until_explicit_disposal() -> None:
 
 
 def test_context_removes_a_container_after_its_last_local_leaf() -> None:
-    root = Context(schema=R)
+    root = Context(
+        schema=Schema(
+            {
+                "a": {
+                    "root": Schema.leaf(),
+                    "regular": Schema.leaf(),
+                    "temporary": Schema.leaf(mode="register"),
+                }
+            }
+        )
+    )
     root.set(R.resolve("a.root"), "root")
     child = root.fork(scope=root.scope.fork())
 
-    remove = child.add(R.resolve("a.temporary"), 1)
+    remove = child.register(R.resolve("a.temporary"), 1)
     child.set(R.resolve("a.regular"), 2)
     child.delete(R.resolve("a.regular"))
     remove()
@@ -1337,14 +1345,15 @@ def test_flatten_can_materialize_an_effective_context() -> None:
     assert snapshot.get(value) == 1
 
 
-def test_flatten_does_not_copy_add_lifecycle_guards() -> None:
+def test_flatten_cannot_implicitly_recreate_registration_ownership() -> None:
     value = R.resolve("value")
-    ctx = Context(schema=R)
-    dispose = ctx.add(value, 1)
+    ctx = Context(schema=Schema({"value": Schema.leaf(mode="register")}))
+    dispose = ctx.register(value, 1)
 
-    snapshot = Context(ctx.flatten(), schema=ctx.schema)
-    snapshot.set(value, 2)
-
+    with pytest.raises(ContextPathError, match="register"):
+        Context(ctx.flatten(), schema=ctx.schema)
+    snapshot = Context(schema=ctx.schema)
+    snapshot.register(value, 2)
     assert snapshot.get(value) == 2
     assert ctx.get(value) == 1
     dispose()

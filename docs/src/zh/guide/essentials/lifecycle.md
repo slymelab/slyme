@@ -40,9 +40,9 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 参数绑定使用浅快照，不做深拷贝。在 Node 或 Wrapper 内修改非 Auto 的 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。每个 Auto 参数都会按 Tree 规则遍历并重建容器，无论其中是否包含可求值叶子。普通叶子和 evaluator 返回值仍然共享。
 
-需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；需要把当前可见 binding 物化为新应用根时使用 `Context(context.flatten(), schema=context.schema)`。这些操作都不会复制应用值。
+需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；全部可见字段都采用 `assign` 模式时，可以使用 `Context(context.flatten(), schema=context.schema)` 物化为新应用根；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
 
-Context 拥有子 Context，以及通过 `effect()`、`add()` 和 `declare()` 注册的 cleanup，按直接归属项的后进先出顺序递归释放。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
+Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare()` 注册的 cleanup，按直接归属项的后进先出顺序递归释放。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
 
 `dispose()` 调用时立即标记释放中并运行同步部分，异步部分需要等待后才调度。提前清理的登记项在完成前仍由 Context 持有，owner 释放会加入同一次清理；移除它不会改变其余登记项的释放顺序。
 

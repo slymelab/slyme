@@ -71,7 +71,7 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
 
 @pytest.mark.parametrize("key", ["", Ref("")])
 @pytest.mark.parametrize(
-    "operation", ["set", "add", "update", "update_tree", "isolate"]
+    "operation", ["set", "register", "update", "update_tree", "isolate"]
 )
 def test_root_rejects_leaf_operations_without_partial_writes(
     key: str | Ref, operation: str
@@ -154,11 +154,10 @@ def test_root_deletion_does_not_dispose_effects_or_revoke_later_values() -> None
     ctx = Context(schema=Schema({"value": Schema.leaf()}))
     events = []
     ctx.effect(lambda: lambda: events.append("cleanup"))
-    undo = ctx.add("value", "old")
+    ctx.set("value", "old")
     ctx.delete("")
     assert events == []
     ctx.set("value", "new")
-    undo()
     assert ctx.get("value") == "new"
     ctx.dispose()
     assert events == ["cleanup"]

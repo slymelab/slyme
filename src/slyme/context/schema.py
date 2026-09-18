@@ -21,7 +21,7 @@ from collections.abc import Callable, Hashable, Mapping
 from dataclasses import InitVar, dataclass, field, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import once
@@ -87,12 +87,12 @@ class RefLeafConfig(RefConfig[_T]):
     """Behavior of one leaf declared in a Schema."""
 
     value_type: type[_T] | None = None
-    replaceable: bool = True
+    mode: Literal["assign", "register"] = "assign"
 
     def merge(self, other: RefConfig[_T]) -> RefLeafConfig[_T]:
         if not isinstance(other, RefLeafConfig):
             raise ValueError(f"Conflicting Ref configurations: {self!r} and {other!r}.")
-        if self.value_type != other.value_type or self.replaceable != other.replaceable:
+        if self.value_type != other.value_type or self.mode != other.mode:
             raise ValueError(f"Conflicting Ref configurations: {self!r} and {other!r}.")
         return replace(self, metadata=self._merge_metadata(other))
 
@@ -188,13 +188,13 @@ class Schema:
     def leaf(
         value_type: type[_T] | None = None,
         *,
-        replaceable: bool = True,
+        mode: Literal["assign", "register"] = "assign",
         metadata: Mapping[str, Metadata] | None = None,
     ) -> RefLeafConfig[_T]:
-        """Describe one assignable Schema leaf."""
+        """Describe mutable assignments or an owner-managed registration leaf."""
         return RefLeafConfig(
             value_type,
-            replaceable,
+            mode,
             metadata={} if metadata is None else metadata,
         )
 

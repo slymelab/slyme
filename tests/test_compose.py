@@ -427,23 +427,21 @@ def test_clear_bucket_preserves_entries_added_by_old_value_finalizers() -> None:
 
 
 def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context(schema=Schema({"value": Schema.leaf(mode="register")}))
     identity = object()
     child = root.isolate("value", identity=identity)
     binding = next(iter(root._data.values()))
-    remove = binding.add_value(child.scope, "old")
-    assert identity in binding._blocked
+    remove = binding.register_value(child.scope, "old")
+    assert binding._data[identity].blocked
 
     child.dispose()
-    assert not binding._values
-    assert not binding._blocked
+    assert not binding._data
     replacement = root.isolate("value", identity=identity)
-    replacement.set("value", "new")
+    replacement.register("value", "new")
     remove()
     assert replacement.get("value") == "new"
     root.dispose()
-    assert not binding._values
-    assert not binding._blocked
+    assert not binding._data
 
 
 def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> None:
@@ -506,9 +504,9 @@ def test_independent_context_roots_do_not_share_data_with_the_same_scope() -> No
 
 def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
     tools_ref = R.resolve("tools")
-    root = Context(schema=R)
+    root = Context(schema=Schema({"tools": Schema.leaf(mode="register")}))
     inherited = Compose[str, tuple[str, ...]].collect()
-    root.add(tools_ref, inherited)
+    root.register(tools_ref, inherited)
     child = root.fork(scope=root.scope.fork(label="child"))
 
     inherited.add(root.scope, "root-tool")
@@ -517,7 +515,7 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
     assert inherited.resolve(child.scope) == ("agent-tool", "root-tool")
 
     isolated = Compose[str, tuple[str, ...]].collect()
-    child.add(tools_ref, isolated)
+    child.register(tools_ref, isolated)
     isolated.add(child.scope, "isolated-tool")
     assert child.get(tools_ref) is isolated
     assert isolated.resolve(child.scope) == ("isolated-tool",)
@@ -525,9 +523,9 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
 
 def test_context_effect_owns_contributions_to_explicit_scopes() -> None:
     hooks_ref = R.resolve("hooks")
-    root = Context(schema=R)
+    root = Context(schema=Schema({"hooks": Schema.leaf(mode="register")}))
     hooks = Compose[str, tuple[str, ...]].collect()
-    root.add(hooks_ref, hooks)
+    root.register(hooks_ref, hooks)
     child = root.fork(scope=root.scope.fork(label="child"))
     external = Scope("external")
 
@@ -557,7 +555,7 @@ def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
     ref = R.resolve("hooks")
     ctx = Context(schema=R)
     hooks = Compose[str, tuple[str, ...]].collect()
-    ctx.add(ref, hooks)
+    ctx.set(ref, hooks)
     hooks.add(ctx.scope, "handler")
 
     snapshot = Context(ctx.flatten(), schema=ctx.schema)

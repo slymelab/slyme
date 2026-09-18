@@ -46,7 +46,7 @@ breaking changes when they are documented here.
   otherwise unrelated visibility roots, and unique visible-name lookup.
 - Added single-parent Context lifetime trees with synchronous and asynchronous
   effects, recursive owner-local LIFO disposal, and explicit Scope binding.
-- Added lifecycle-owned `Context.add()` and `declare()`
+- Added lifecycle-owned `Context.register()` and `declare()`
   operations, each with an exact disposer for optional early cleanup.
 - Added `Context.flatten()` for exact visible Ref-to-value leaf mappings.
 - Added `Compose` for ordered, reversible values resolved through a Scope's C3
@@ -54,7 +54,7 @@ breaking changes when they are documented here.
 - Added immutable Compose-local identity bindings so selected Scopes can share
   contribution storage without changing other Scope lookup; Context leaves
   support the same identity-sharing rules through `isolate(identity=...)`.
-- Added Schema-owned `replaceable` policies and `Context.isolate()` for owned
+- Added Schema-owned write modes and `Context.isolate()` for owned
   child Contexts that block selected inherited Scope values.
 
 ### Fixed
@@ -65,9 +65,9 @@ breaking changes when they are documented here.
   full C3 traversal, shared-identity deduplication, and immediate binding visibility.
 - Made Context mutation checks constant-time by closing the ownership subtree
   before cleanup, preserving readable cleanup and recursive LIFO disposal.
-- Separated Context binding storage from Compose inheritance, sharing identity
-  operations through Compose static methods while storing values and barriers
-  directly without ordered contribution buckets or metadata wrappers.
+- Separated Context binding storage from Compose: each identity has one record
+  for its value, barrier, registration token, and observed Scopes. Scope usage
+  records combine viewer ownership and a sparse Schema-entry index.
 - Indexed Context bindings by Scope so viewer registration and release visit
   only related leaves, preserving Scope reuse without retaining removed values.
 - Made Context `set()` and `delete()` direct single-path operations while
@@ -84,7 +84,7 @@ breaking changes when they are documented here.
   disposal call observes the same terminal result without repeating cleanup.
 - Rejected disposal of an effect's owner or ancestors during synchronous setup
   and cleanup, preventing reentrant teardown from invalidating live cleanup.
-- Released Context-owned `add()` values when their final Schema declaration is
+- Released Context-owned `register()` values when their final Schema declaration is
   removed, without weakening public Compose ownership.
 - Auto evaluates all sibling Nodes before reporting errors, without cancelling
   siblings on failure. Successful children dispose immediately; failure cleanup
@@ -192,9 +192,10 @@ breaking changes when they are documented here.
   Schema is the only source of container structure; an application root stores
   flat entry-indexed bindings by Scope, uses `to_dict()` for a nested projection,
   and uses `flatten()` for the exact leaf mapping.
-- `Context.add()` now provides only exact reversible installation. Schema's
-  stable `replaceable` policy determines whether `set()` may replace that
-  Scope's current value.
+- Replaced `replaceable` with Schema leaf `mode`: `"assign"` (default)
+  permits `set()`/`delete()`, while `"register"` permits `register()` and
+  exact disposer-based removal. Replaced `Context.add()` with `register()`;
+  assignments and registrations cannot overwrite or delete one another.
 - `Context` now has one lifetime parent and one bound Scope. `fork()` creates an
   owned child and shares the Scope by default; a forked Scope provides an
   explicit local data layer. Context CRUD always uses the bound Scope.

@@ -58,32 +58,46 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     root.dispose()
 
 
-@pytest.mark.parametrize("operation", ["set", "add", "isolate"])
+@pytest.mark.parametrize("operation", ["set", "register", "isolate"])
 def test_first_binding_is_indexed_but_reads_are_not(operation: str) -> None:
-    root = Context({"value": "root"}, schema=Schema({"value": Schema.leaf()}))
+    registration = operation == "register"
+    root = Context(
+        schema=Schema(
+            {"value": Schema.leaf(mode="register" if registration else "assign")}
+        )
+    )
+    if registration:
+        root.register("value", "root")
+    else:
+        root.set("value", "root")
     if operation == "isolate":
         child = root.isolate("value")
     else:
         child = root.fork(scope=root.scope.fork())
         assert child.get("value") == "root"
-        assert child.scope not in root._scope_bindings
+        assert not root._scope_usage[child.scope].entries
         if operation == "set":
             child.set("value", "child")
         else:
-            child.add("value", "child")
+            remove = child.register("value", "child")
 
     binding = next(iter(root._data.values()))
-    assert root._scope_bindings[child.scope] == {"value"}
-    child.set("value", "updated")
-    child.delete("value")
-    assert root._scope_bindings[child.scope] == {"value"}
+    assert root._scope_usage[child.scope].entries == {
+        root.schema.resolve_entry("value")
+    }
+    if registration:
+        remove()
+    else:
+        child.set("value", "updated")
+        child.delete("value")
+    assert root._scope_usage[child.scope].entries == {
+        root.schema.resolve_entry("value")
+    }
     child.dispose()
-    assert not binding._identity_scopes.get(
-        binding._identity_for(child.scope, create=False)
-    )
-    assert child.scope not in root._scope_bindings
+    assert not binding._data.get(binding._identity_for(child.scope, create=False))
+    assert child.scope not in root._scope_usage
     root.dispose()
-    assert not root._scope_bindings
+    assert not root._scope_usage
 
 
 def test_reverse_index_does_not_keep_released_scopes_alive() -> None:
@@ -93,12 +107,12 @@ def test_reverse_index_does_not_keep_released_scopes_alive() -> None:
     for child in children:
         child.set("value", "temporary")
         child.dispose()
-    assert not root._scope_bindings
+    assert not root._scope_usage[root.scope].entries
     del child
     children.clear()
     gc.collect()
     assert all(scope_ref() is None for scope_ref in scope_refs)
-    assert not root._scope_bindings
+    assert not root._scope_usage[root.scope].entries
     root.dispose()
 
 
@@ -107,13 +121,13 @@ def test_reverse_index_does_not_retain_withdrawn_schema_values() -> None:
         pass
 
     root = Context()
-    remove_schema = root.declare({"value": Schema.leaf()})
+    remove_schema = root.declare({"value": Schema.leaf(mode="register")})
     payload = Payload()
     payload_ref = weakref.ref(payload)
-    remove_value = root.add("value", payload)
+    remove_value = root.register("value", payload)
     binding = next(iter(root._data.values()))
     binding_ref = weakref.ref(binding)
-    index = root._scope_bindings[root.scope]
+    index = root._scope_usage[root.scope].entries
     del binding, payload
     remove_schema()
     gc.collect()
@@ -126,8 +140,8 @@ def test_reverse_index_does_not_retain_withdrawn_schema_values() -> None:
     root.set("value", "new")
     remove_value()
     remove_value()
-    assert not index
-    assert root._scope_bindings[root.scope] == {"value"}
+    assert index == {root.schema.resolve_entry("value")}
+    assert root._scope_usage[root.scope].entries is index
     assert root.get("value") == "new"
     root.dispose()
 
@@ -137,12 +151,16 @@ def test_shared_scope_indexes_remain_local_to_each_application() -> None:
     schema = Schema({"value": Schema.leaf()})
     left = Context({"value": "left"}, schema=schema, scope=scope)
     right = Context({"value": "right"}, schema=schema, scope=scope)
-    assert left._scope_bindings is not right._scope_bindings
-    assert left._scope_bindings[scope] == right._scope_bindings[scope] == {"value"}
-    assert left._scope_bindings[scope] is not right._scope_bindings[scope]
+    assert left._scope_usage is not right._scope_usage
+    assert (
+        left._scope_usage[scope].entries
+        == right._scope_usage[scope].entries
+        == {schema.resolve_entry("value")}
+    )
+    assert left._scope_usage[scope].entries is not right._scope_usage[scope].entries
     left.dispose()
     assert right.get("value") == "right"
-    assert right._scope_bindings[scope]
+    assert right._scope_usage[scope].entries
     right.dispose()
 
 
@@ -193,7 +211,9 @@ def test_container_deletion_only_visits_intersecting_bindings(
     assert set(visited) == expected
     assert len(visited) == len(expected)
     assert child.get("group.value0") == 0
-    assert child._scope_bindings[child.scope] == {"group.value0", "other"}
+    assert child._scope_usage[child.scope].entries == {
+        root.schema.resolve_entry(path) for path in ("group.value0", "other")
+    }
     if target:
         assert child.get("other") == "keep"
     root.dispose()
@@ -212,13 +232,17 @@ def test_delete_keeps_shared_identity_ownership_without_a_prior_write(
     else:
         reader.drop(["group"])
     assert not reader.exists("group.value")
-    assert reader._scope_bindings[reader.scope] == {"group.value"}
+    assert reader._scope_usage[reader.scope].entries == {
+        root.schema.resolve_entry("group.value")
+    }
     writer.set("group.value", "new")
     writer.dispose()
     assert reader.get("group.value") == "new"
     reader.delete("group.value")
     assert not reader.exists("group.value")
-    assert reader._scope_bindings[reader.scope] == {"group.value"}
+    assert reader._scope_usage[reader.scope].entries == {
+        root.schema.resolve_entry("group.value")
+    }
     root.dispose()
 
 
@@ -236,18 +260,17 @@ def test_schema_withdrawal_cleans_every_application_before_path_reuse() -> None:
     old_entry = schema.resolve_entry("value")
     old_binding = left._data[old_entry]
     withdraw()
-    assert not left._scope_bindings
-    assert not right._scope_bindings
+    assert not left._scope_usage[left.scope].entries
+    assert not right._scope_usage[right.scope].entries
     assert not left._data
     assert not right._data
-    assert not old_binding._values
-    assert not old_binding._identity_scopes
+    assert not old_binding._data
 
     schema.declare({"value": Schema.leaf()})
     new_writer = left.isolate("value", identity="shared")
     new_writer.set("value", "new")
     reader = left.fork(scope=saved)
-    assert saved not in left._scope_bindings
+    assert not left._scope_usage[saved].entries
     assert not reader.exists("value")
     reader.dispose()
     assert new_writer.get("value") == "new"
@@ -350,7 +373,7 @@ def test_withdrawal_preserves_other_app_reentrant_redeclaration() -> None:
     left.set("value", Payload())
     withdraw()
     assert right.get("value") == "new"
-    assert right._scope_bindings[right.scope] == {"value"}
+    assert right._scope_usage[right.scope].entries == {schema.resolve_entry("value")}
     right.delete("")
     assert not right.exists("value")
     left.dispose()

@@ -135,15 +135,17 @@ Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递�
 
 `set` 和 `delete` 修改单个本地路径。`update` 和 `drop` 会在应用修改前校验整个批次；预检失败时 binding 保持不变，实际应用修改时发生的失败不会触发回滚。
 
-Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 leaf 局部 identity。`Compose.bind()` 可以让选定 Scope 共享 identity，而不改变其他 Compose 的可见性。`effect()` 管理同步或异步 setup 和 cleanup，`add()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await ctx.adispose()`。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
+`Schema.leaf()` 默认使用 `mode="assign"`，允许 `set()`/`delete()`；声明 `mode="register"` 后，改用 `ctx.register(ref, value)` 及其 disposer 撤销。两种模式互不允许对方的写入操作。删除 container（包括 `ctx.delete("")`）时，任何 `register` 后代都会使操作在修改数据前报错。模式约束的是绑定，而不是所存对象是否可变。
+
+Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 leaf 局部 identity。`Compose.bind()` 可以让选定 Scope 共享 identity，而不改变其他 Compose 的可见性。`effect()` 管理同步或异步 setup 和 cleanup，`register()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await ctx.adispose()`。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
 
 ```python
 from slyme.context import Compose, Context, Schema
 
-R = Schema({"hooks": Schema.leaf(replaceable=False)})
+R = Schema({"hooks": Schema.leaf(mode="register")})
 root = Context(schema=R)
 hooks = Compose[str, tuple[str, ...]].collect()
-root.add(R.resolve("hooks"), hooks)
+root.register(R.resolve("hooks"), hooks)
 agent = root.fork(scope=root.scope.fork(name="agent"))
 
 root.effect(lambda: hooks.add(root.scope, "root"))
@@ -165,7 +167,7 @@ Scope viewer、共享的 Context-binding identity 和 Schema 声明直接使用�
 
 **无限可组合性：** 通过完全解耦构建任意复杂的执行流程。得益于 Tree 增强，节点 containment 关系可以直接通过原生 Python 结构表示。
 
-**显式生命周期与可见性：** Context 提供单 parent 的生命周期归属，Scope 提供独立的 C3 可见性。每个 Context 路径、结构角色和替换策略都由共享 Schema 声明；`flatten()` 暴露可见的 Ref 到 value 映射，`Compose` 则沿 Scope 层次管理有序、可撤销的组合值。
+**显式生命周期与可见性：** Context 提供单 parent 的生命周期归属，Scope 提供独立的 C3 可见性。每个 Context 路径、结构角色和写入模式都由共享 Schema 声明；`flatten()` 暴露可见的 Ref 到 value 映射，`Compose` 则沿 Scope 层次管理有序、可撤销的组合值。
 
 **无缝协作：** 高度解耦的节点通过显式 Context 路径与 Compose 对象通信。这允许团队独立开发功能并编写单元测试，减少“胶水代码”和深层系统耦合。
 

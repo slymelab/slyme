@@ -150,15 +150,21 @@ Use `schema.resolve_entry(path)` to inspect one field and the `schema.entries` t
 the complete batch before applying changes; preflight failures leave bindings
 unchanged, while failures during application do not trigger rollback.
 
-A Context root holds a live `Schema` reference and owns an application data store and lifetime tree. Each Context has at most one parent and is bound to one immutable `Scope`. `Context.fork()` creates an owned child that shares the current Scope by default; pass `scope=ctx.scope.fork()` when the child needs its own local visibility identity. `Scope.fork()` is single-parent, while explicit `Scope(parents=(...))` construction provides C3 multiple inheritance. Reads follow the bound Scope's C3 order, and writes target the leaf-local identity bound to that Scope. `Compose.bind()` can make selected Scopes share one identity without changing visibility for any other Compose. `effect()` owns immediate or asynchronous setup and cleanup; `add()` and `declare()` own synchronous registration cleanup. `dispose()` returns `None` when finished synchronously or an awaitable for remaining cleanup. Use `await await_result(ctx.dispose())` with `await_result` from `slyme.utils.execution` when either is possible. A Context tree and its mutable Schema and Compose objects belong to one thread, and to one event loop during asynchronous execution; this requirement is not enforced through thread-identity checks. Worker threads or processes should receive ordinary input values and return results for mutation on the owner thread. Registrations return exact disposers for optional early removal:
+`Schema.leaf()` defaults to `mode="assign"` for `set()`/`delete()`. Declare
+`mode="register"` for `ctx.register(ref, value)` and disposer-based removal.
+Each mode rejects the other mode's writes. Container deletion, including
+`ctx.delete("")`, rejects any `register` descendant before changing data.
+Modes govern bindings, not whether the stored objects are mutable.
+
+A Context root holds a live `Schema` reference and owns an application data store and lifetime tree. Each Context has at most one parent and is bound to one immutable `Scope`. `Context.fork()` creates an owned child that shares the current Scope by default; pass `scope=ctx.scope.fork()` when the child needs its own local visibility identity. `Scope.fork()` is single-parent, while explicit `Scope(parents=(...))` construction provides C3 multiple inheritance. Reads follow the bound Scope's C3 order, and writes target the leaf-local identity bound to that Scope. `Compose.bind()` can make selected Scopes share one identity without changing visibility for any other Compose. `effect()` owns immediate or asynchronous setup and cleanup; `register()` and `declare()` own synchronous registration cleanup. `dispose()` returns `None` when finished synchronously or an awaitable for remaining cleanup. Use `await await_result(ctx.dispose())` with `await_result` from `slyme.utils.execution` when either is possible. A Context tree and its mutable Schema and Compose objects belong to one thread, and to one event loop during asynchronous execution; this requirement is not enforced through thread-identity checks. Worker threads or processes should receive ordinary input values and return results for mutation on the owner thread. Registrations return exact disposers for optional early removal:
 
 ```python
 from slyme.context import Compose, Context, Schema
 
-R = Schema({"hooks": Schema.leaf(replaceable=False)})
+R = Schema({"hooks": Schema.leaf(mode="register")})
 root = Context(schema=R)
 hooks = Compose[str, tuple[str, ...]].collect()
-root.add(R.resolve("hooks"), hooks)
+root.register(R.resolve("hooks"), hooks)
 agent = root.fork(scope=root.scope.fork(label="agent"))
 
 root.effect(lambda: hooks.add(root.scope, "root"))
@@ -174,8 +180,8 @@ Scope viewers and shared Context-binding identities track their owners directly 
 
 Disposal forbids mutations throughout the owned Context subtree before any cleanup runs. Each Context remains readable until its own release; Contexts outside that subtree are unaffected even when they share a Scope.
 
-A Scope-to-path index limits binding cleanup to the participating leaves.
-Container deletion intersects this index with the Schema's descendant paths;
+A Scope usage record holds its viewers and participating Schema leaf entries.
+Container deletion validates write modes, then intersects those entries with this index;
 deleting a value preserves its identity ownership and isolation barrier.
 The last viewer's release removes the Scope index, and final Schema withdrawal
 removes the path from every application's index. Reusing a previously released
@@ -188,7 +194,7 @@ new Scopes do not require that scan.
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to Tree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Explicit Lifetime and Visibility:** Context provides single-parent lifetime ownership, while Scope provides independent C3 visibility. Every Context path, structural role, and replacement policy is declared by a shared Schema; `flatten()` exposes the visible Ref-to-value mapping, and `Compose` provides ordered, reversible values across Scope hierarchies.
+**Explicit Lifetime and Visibility:** Context provides single-parent lifetime ownership, while Scope provides independent C3 visibility. Every Context path, structural role, and write mode is declared by a shared Schema; `flatten()` exposes the visible Ref-to-value mapping, and `Compose` provides ordered, reversible values across Scope hierarchies.
 
 **Seamless Collaboration:** Highly decoupled Nodes communicate through explicit Context paths and Compose objects. This allows teams to independently develop features and write unit tests, reducing "glue code" and deep system coupling.
 

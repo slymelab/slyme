@@ -31,8 +31,8 @@ class _AnnotatedLeaf(RefLeafConfig[str]):
     def merge(self, other: RefConfig[str]) -> _AnnotatedLeaf:
         if not isinstance(other, _AnnotatedLeaf):
             raise ValueError("Incompatible annotation config")
-        Schema.leaf(self.value_type, replaceable=self.replaceable).merge(
-            Schema.leaf(other.value_type, replaceable=other.replaceable)
+        Schema.leaf(self.value_type, mode=self.mode).merge(
+            Schema.leaf(other.value_type, mode=other.mode)
         )
         return replace(self, labels=self.labels + other.labels)
 
@@ -51,7 +51,7 @@ def test_config_merge_returns_a_new_equal_config(config: RefConfig[Any]) -> None
         (Schema.container(), Schema.leaf()),
         (Schema.leaf(int), Schema.leaf(str)),
         (Schema.leaf(int), Schema.leaf()),
-        (Schema.leaf(replaceable=False), Schema.leaf()),
+        (Schema.leaf(mode="register"), Schema.leaf()),
     ],
 )
 def test_config_merge_rejects_incompatible_definitions(
@@ -148,7 +148,7 @@ def test_entry_is_frozen_and_rejects_duplicate_owners_without_mutation() -> None
     assert entry._declarations == {("plugin", 1): config}
     assert entry.config is cached
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
-        entry._declare("conflicting", Schema.leaf(int, replaceable=False))
+        entry._declare("conflicting", Schema.leaf(int, mode="register"))
     assert entry._declarations == {("plugin", 1): config}
     assert entry.config is cached
     with pytest.raises(FrozenInstanceError):
@@ -238,13 +238,13 @@ def test_entry_withdrawal_releases_cached_aggregate() -> None:
 def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -> None:
     schema = Schema()
     declaration: _Declaration = {
-        "group": {"value": Schema.leaf(), "owned": Schema.leaf()}
+        "group": {"value": Schema.leaf(), "owned": Schema.leaf(mode="register")}
     }
     first = schema.declare(declaration)
     second = schema.declare(declaration)
     left = Context({"group.value": "left"}, schema=schema)
     right = Context({"group.value": "right"}, schema=schema)
-    remove_owned = left.add("group.owned", "owned")
+    remove_owned = left.register("group.owned", "owned")
     child = left.isolate("group.value")
     child.set("group.value", "child")
 
@@ -262,7 +262,7 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
         right.dispose()
     assert_indexes(schema, set())
     assert not left._data and not right._data
-    assert not left._scope_bindings and not right._scope_bindings
+    assert not left._scope_usage and not right._scope_usage
     assert not schema._contexts
 
 
@@ -271,12 +271,12 @@ async def test_context_owned_cleanup_does_not_read_config(
     monkeypatch, asynchronous: bool
 ) -> None:
     root = Context()
-    declaration: _Declaration = {"group": {"value": Schema.leaf()}}
+    declaration: _Declaration = {"group": {"value": Schema.leaf(mode="register")}}
     root.declare(declaration)
-    root.set("group.value", "root")
+    root.register("group.value", "root")
     child = root.fork(scope=root.scope.fork())
     child.declare(declaration)
-    child.add("group.value", "child")
+    child.register("group.value", "child")
 
     async def cleanup():
         await asyncio.sleep(0)
@@ -293,7 +293,7 @@ async def test_context_owned_cleanup_does_not_read_config(
         await root.adispose()
     assert_indexes(root.schema, set())
     assert not root._data
-    assert not root._scope_bindings
+    assert not root._scope_usage
     assert not root._owned
 
 
@@ -619,7 +619,7 @@ def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> N
         duplicate()
     assert_indexes(schema, set())
     assert schema._element_at(()) == {"": schema._entries[""]}
-    assert not ctx._data and not ctx._scope_bindings
+    assert not ctx._data and not ctx._scope_usage[ctx.scope].entries
     assert_indexes(imported, {"group", "group.0", "group.empty"})
     ctx.dispose()
 
