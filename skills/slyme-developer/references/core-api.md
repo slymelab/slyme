@@ -52,7 +52,8 @@ An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned c
 ## Context lifetime, Scope visibility, and Compose
 
 ```python
-root_ctx = Context(schema=R)
+root_ctx = Context()
+root_ctx.declare(R)
 agent_scope = root_ctx.scope.fork(name="agent")
 agent_ctx = root_ctx.fork(scope=agent_scope)
 
@@ -77,7 +78,9 @@ root_ctx.dispose()
 
 Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's Compose-local identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data. `ctx.isolate(ref, identity=key)` creates an owned child that blocks inherited values for that leaf; calls with the same identity share the selected isolated storage. Independent Context roots keep separate data even when bound to the same Scope. `Context.register()` rejects an existing value at the bound identity. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
 
-Create an application root with `Context(data, schema=R, scope=optional_scope)`. Every path must belong to its Schema declaration tree. A child has one `parent`, inherits `ctx.schema`, and is owned by that parent until disposal. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(name="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree and holds their shared Schema reference. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
+Create an application root with `Context(scope=optional_scope)`, declare paths with `ctx.declare(R)`, then assign values with `ctx.update(data)`. Schema import copies definitions with independent ownership; later source changes do not propagate. Every path must belong to the application Schema. A child has one `parent`, shares its private Schema and ContextStore, and owns a distinct Lifecycle attached to its parent's Lifecycle. Resolve application-wide declarations through `ctx.resolve(path)`, `ctx.resolve_entry(path)`, and `ctx.entries`; entries include containers and unset leaves. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(name="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
+
+Normal Context operations check the caller's lifecycle state, not a state shared by Schema or Store. Disposal forbids new mutations throughout the owned subtree, but allows reads until each Context finishes releasing. Exact registration disposers and Scope release remain available during cleanup. Another active Context can still modify shared data. Application cleanup belongs in `ctx.effect()`; Lifecycle, not overridden Context methods, traverses child disposal. `Lifecycle` can also own effects independently of Context data.
 
 ## Effects and disposal
 
@@ -107,18 +110,19 @@ Wrapper execution passes Context, the wrapped Node, and the next callable positi
 
 ```python
 root = execute(
-    derived=Auto(calculate(
-        value=Auto(R.resolve("input.value")),
-        scale=2.0,
-    )),
+    derived=Auto(
+        calculate(
+            value=Auto(R.resolve("input.value")),
+            scale=2.0,
+        )
+    ),
     children=(increment(counter=R.resolve("state.counter")),),
     output=R.resolve("output.result"),
 ).add_wrappers(trace(name="execute"))
 
-ctx = Context(
-    {R.resolve("input.value"): 3.0, R.resolve("state.counter"): 0},
-    schema=R,
-)
+ctx = Context()
+ctx.declare(R)
+ctx.update({R.resolve("input.value"): 3.0, R.resolve("state.counter"): 0})
 result = root(ctx)
 assert ctx.get(R.resolve("output.result")) == result
 ```

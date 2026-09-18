@@ -1,5 +1,7 @@
 # Lifecycle
 
+`Lifecycle` is also an independently usable effect owner, exported from `slyme.context`. `Lifecycle(parent=owner)` joins an ownership tree without requiring Schema, Store, or Scope. Its `effect()`, `dispose()`, and `adispose()` follow the same rules as Context. An optional synchronous `finalize` callback runs once after all owned cleanup, including when cleanup fails; it is not an independently revocable effect. Context uses this finalizer to release its data viewers and, for an application root, detach its Store from Schema. Register application cleanup with `ctx.effect()` rather than overriding `Context.dispose()`: the ownership tree is traversed by Lifecycle.
+
 Slyme uses one live `Node` graph rather than separate definition and execution trees. Creating a decorated function builds a mutable Node; calling it executes that same Node with its current parameters.
 
 ## Build and modify
@@ -40,7 +42,7 @@ At the start of each Node or Wrapper call, Slyme:
 
 Parameter bindings are shallow-snapshotted, not deep-copied. Mutating a non-Auto `list`, `dict`, or other leaf from inside a Node or Wrapper mutates the live parameter and is visible to later calls. Every Auto parameter is traversed and its containers reconstructed according to Tree rules, whether or not they contain evaluatable leaves. Ordinary leaves and evaluator results remain shared.
 
-Call the relevant Node factory or assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. Use `Context(context.flatten(), schema=context.schema)` to materialize `assign` fields into a new application root; `register` fields require explicit `register()` calls on the new owner. None of these operations copies application values.
+Call the relevant Node factory or assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. To materialize `assign` fields into a new root, create it, declare the copied paths, then call `snapshot.update(context.flatten())`; `register` fields require explicit `register()` calls on the new owner. None of these operations copies application values.
 
 A Context owns its children and cleanup registered through `effect()`, `register()`, and `declare()`, releasing direct ownership recursively in LIFO order. `dispose()` returns `None` on synchronous completion or an awaitable when cleanup is asynchronous; `await await_result(ctx.dispose())` handles either. Context does not own arbitrary tasks using it: stop and await those tasks before disposal.
 
@@ -53,7 +55,8 @@ Each owned cleanup finishes before the next starts, including asynchronous clean
 Static parameter values and values retrieved from `Context` keep their normal Python mutability:
 
 ```python
-ctx = Context(schema=R)
+ctx = Context()
+ctx.declare(R)
 ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
 process(data=Auto([R.resolve("a"), R.resolve("b")]))(

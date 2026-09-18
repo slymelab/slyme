@@ -427,10 +427,11 @@ def test_clear_bucket_preserves_entries_added_by_old_value_finalizers() -> None:
 
 
 def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf(mode="register")}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf(mode="register")}))
     identity = object()
     child = root.isolate("value", identity=identity)
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     remove = binding.register_value(child.scope, "old")
     assert binding._data[identity].blocked
 
@@ -461,7 +462,8 @@ def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> No
 
 
 def test_context_fork_shares_scope_unless_one_is_explicit() -> None:
-    root = Context(schema=R)
+    root = Context()
+    root.declare(R)
     shared = root.fork()
     child_scope = root.scope.fork(label="child")
     isolated = root.fork(scope=child_scope)
@@ -476,7 +478,8 @@ def test_context_data_and_scope_identity_are_orthogonal() -> None:
     left = Scope("left")
     right = Scope("right")
     combined = Scope("combined", parents=(left, right))
-    root = Context(schema=R, scope=left)
+    root = Context(scope=left)
+    root.declare(R)
     right_context = root.fork(scope=right)
     combined_context = root.fork(scope=combined)
 
@@ -493,8 +496,10 @@ def test_context_data_and_scope_identity_are_orthogonal() -> None:
 def test_independent_context_roots_do_not_share_data_with_the_same_scope() -> None:
     ref = R.resolve("tools")
     scope = Scope("shared-identity")
-    left = Context(schema=R, scope=scope)
-    right = Context(schema=R, scope=scope)
+    left = Context(scope=scope)
+    left.declare(R)
+    right = Context(scope=scope)
+    right.declare(R)
 
     left.set(ref, "left")
 
@@ -504,7 +509,8 @@ def test_independent_context_roots_do_not_share_data_with_the_same_scope() -> No
 
 def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
     tools_ref = R.resolve("tools")
-    root = Context(schema=Schema({"tools": Schema.leaf(mode="register")}))
+    root = Context()
+    root.declare(Schema({"tools": Schema.leaf(mode="register")}))
     inherited = Compose[str, tuple[str, ...]].collect()
     root.register(tools_ref, inherited)
     child = root.fork(scope=root.scope.fork(label="child"))
@@ -523,7 +529,8 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
 
 def test_context_effect_owns_contributions_to_explicit_scopes() -> None:
     hooks_ref = R.resolve("hooks")
-    root = Context(schema=Schema({"hooks": Schema.leaf(mode="register")}))
+    root = Context()
+    root.declare(Schema({"hooks": Schema.leaf(mode="register")}))
     hooks = Compose[str, tuple[str, ...]].collect()
     root.register(hooks_ref, hooks)
     child = root.fork(scope=root.scope.fork(label="child"))
@@ -553,12 +560,15 @@ def test_context_effect_owns_contributions_to_explicit_scopes() -> None:
 
 def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
     ref = R.resolve("hooks")
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     hooks = Compose[str, tuple[str, ...]].collect()
     ctx.set(ref, hooks)
     hooks.add(ctx.scope, "handler")
 
-    snapshot = Context(ctx.flatten(), schema=ctx.schema)
+    snapshot = Context()
+    snapshot.declare(R)
+    snapshot.update(ctx.flatten())
     assert snapshot.get(ref) is hooks
     assert hooks.resolve(ctx.scope) == ("handler",)
     assert hooks.resolve(snapshot.scope) == ()

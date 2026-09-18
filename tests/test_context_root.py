@@ -28,7 +28,7 @@ def test_empty_root_is_a_readable_view(key: str | Ref, local: bool) -> None:
     assert view.to_dict(local=local) == {}
     assert view.flatten(local=local) == {}
     assert ctx.extract({"root": key}, local=local) == {"root": view}
-    assert not ctx._data
+    assert not ctx._store._data
     ctx.delete(key)
     ctx.drop([key])
     assert ctx.get(key) == view
@@ -64,7 +64,7 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
         nested.to_dict()
     remove()
     assert ctx.get("") == view
-    assert ctx.schema.resolve("") == Ref("")
+    assert ctx.resolve("") == Ref("")
     assert view.to_dict() == {}
     ctx.dispose()
 
@@ -76,7 +76,10 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
 def test_root_rejects_leaf_operations_without_partial_writes(
     key: str | Ref, operation: str
 ) -> None:
-    ctx = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    ctx = Context()
+    ctx.declare(Schema({"value": Schema.leaf()}))
+    initial_owned = tuple(ctx._lifecycle._owned)
+    ctx.update({"value": 1})
     with pytest.raises(ContextPathError, match="container, not a leaf"):
         if operation == "update":
             ctx.update({"value": 2, key: {}})
@@ -87,7 +90,7 @@ def test_root_rejects_leaf_operations_without_partial_writes(
         else:
             getattr(ctx, operation)(key, {})
     assert ctx.to_dict() == {"value": 1}
-    assert not ctx._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -97,13 +100,15 @@ def test_root_deletion_only_changes_local_scope_values(
     key: str | Ref, batch: bool
 ) -> None:
     schema = Schema({"group": {"value": Schema.leaf()}, "other": Schema.leaf()})
-    root = Context({"group.value": 1, "other": 2}, schema=schema)
+    root = Context()
+    root.declare(schema)
+    root.update({"group.value": 1, "other": 2})
     child = root.fork(scope=root.scope.fork())
     shared = child.fork()
     sibling = root.fork(scope=root.scope.fork())
     child.update({"group.value": 3, "other": 4})
     sibling.set("group.value", 5)
-    bindings = dict(root._data)
+    bindings = dict(root._store._data)
 
     if batch:
         child.drop([key, "group", "group.value", key])
@@ -120,7 +125,7 @@ def test_root_deletion_only_changes_local_scope_values(
         }
     )
     assert sibling.to_dict() == {"group": {"value": 5}, "other": 2}
-    assert dict(root._data) == bindings
+    assert dict(root._store._data) == bindings
     assert child.get("").to_dict(local=True) == {}
     assert child.get("").to_dict() == root.to_dict()
 
@@ -131,10 +136,9 @@ def test_root_deletion_only_changes_local_scope_values(
 
 
 def test_root_deletion_respects_shared_identities_and_preserves_isolation() -> None:
-    root = Context(
-        {"service": "root"},
-        schema=Schema({"service": Schema.leaf(), "local": Schema.leaf()}),
-    )
+    root = Context()
+    root.declare(Schema({"service": Schema.leaf(), "local": Schema.leaf()}))
+    root.update({"service": "root"})
     identity = object()
     left = root.isolate("service", identity=identity)
     right = root.isolate("service", identity=identity)
@@ -151,7 +155,8 @@ def test_root_deletion_respects_shared_identities_and_preserves_isolation() -> N
 
 
 def test_root_deletion_does_not_dispose_effects_or_revoke_later_values() -> None:
-    ctx = Context(schema=Schema({"value": Schema.leaf()}))
+    ctx = Context()
+    ctx.declare(Schema({"value": Schema.leaf()}))
     events = []
     ctx.effect(lambda: lambda: events.append("cleanup"))
     ctx.set("value", "old")

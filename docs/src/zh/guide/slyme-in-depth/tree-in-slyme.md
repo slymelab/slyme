@@ -8,6 +8,8 @@ Tree 是一种嵌套结构：容器描述拓扑，未注册对象作为叶子。
 
 ## `NODE_ENGINE`
 
+从 `slyme.node.core` 导入 `NODE_ENGINE`；其遍历 handler 与 Node、Wrapper 在同一模块注册。
+
 `NODE_ENGINE` 注册 `Node`、`Wrapper`、`Auto`、普通容器以及 `MappingProxyType`，通过遍历显式参数绑定和 Auto 内容进行物理图检查与 Ref 收集，不包含函数默认值。参数可以包含异质的嵌套值；该引擎只描述遍历方式，不判断组合是否合法。`Node`、`Wrapper` 和 `Auto` 以 `unflatten_func=None` 注册：支持遍历和展开，但重建时抛出 `TypeError`。
 
 ## 对象 identity

@@ -103,22 +103,25 @@ def timing(
 def build_pipeline() -> Node[None]:
     return llm_api(
         responses=R.resolve("output.responses"),
-        prompts=Auto(format_prompts(
-            articles=Auto(R.resolve("input.articles")),
-        )),
+        prompts=Auto(
+            format_prompts(
+                articles=Auto(R.resolve("input.articles")),
+            )
+        ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
 # 5. Execute at Run-Time
 if __name__ == "__main__":
-    ctx = Context(
+    ctx = Context()
+    ctx.declare(R)
+    ctx.update(
         {
             R.resolve("input.articles"): [
                 {"title": "Article 1", "content": "Content 1"},
                 {"title": "Article 2", "content": "Content 2"},
             ]
-        },
-        schema=R,
+        }
     )
     build_pipeline()(ctx)
     print(ctx.get(R.resolve("output.responses")))
@@ -156,13 +159,16 @@ Each mode rejects the other mode's writes. Container deletion, including
 `ctx.delete("")`, rejects any `register` descendant before changing data.
 Modes govern bindings, not whether the stored objects are mutable.
 
+`Context(*, parent=None, scope=None)` creates ownership and visibility only. Call `ctx.declare(schema_or_dict)` and then `ctx.update(values)` to initialize application data. Importing a Schema copies its current definitions, not its future changes. Context privately composes `Schema` for declarations, `ContextStore` for scoped data, and `Lifecycle` for effects and child ownership. Forks share Schema and Store, but each has its own Lifecycle. Use `ctx.resolve(path)`, `ctx.resolve_entry(path)`, and `ctx.entries` to inspect application declarations; `ctx.declare()` also owns their cleanup. Normal access checks the calling Context's lifecycle, while exact registration withdrawal and Scope release remain available during cleanup. `Lifecycle` can also manage effects independently of Context data.
+
 A Context root holds a live `Schema` reference and owns an application data store and lifetime tree. Each Context has at most one parent and is bound to one immutable `Scope`. `Context.fork()` creates an owned child that shares the current Scope by default; pass `scope=ctx.scope.fork()` when the child needs its own local visibility identity. `Scope.fork()` is single-parent, while explicit `Scope(parents=(...))` construction provides C3 multiple inheritance. Reads follow the bound Scope's C3 order, and writes target the leaf-local identity bound to that Scope. `Compose.bind()` can make selected Scopes share one identity without changing visibility for any other Compose. `effect()` owns immediate or asynchronous setup and cleanup; `register()` and `declare()` own synchronous registration cleanup. `dispose()` returns `None` when finished synchronously or an awaitable for remaining cleanup. Use `await await_result(ctx.dispose())` with `await_result` from `slyme.utils.execution` when either is possible. A Context tree and its mutable Schema and Compose objects belong to one thread, and to one event loop during asynchronous execution; this requirement is not enforced through thread-identity checks. Worker threads or processes should receive ordinary input values and return results for mutation on the owner thread. Registrations return exact disposers for optional early removal:
 
 ```python
 from slyme.context import Compose, Context, Schema
 
 R = Schema({"hooks": Schema.leaf(mode="register")})
-root = Context(schema=R)
+root = Context()
+root.declare(R)
 hooks = Compose[str, tuple[str, ...]].collect()
 root.register(R.resolve("hooks"), hooks)
 agent = root.fork(scope=root.scope.fork(label="agent"))

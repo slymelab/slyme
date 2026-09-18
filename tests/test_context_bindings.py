@@ -7,7 +7,7 @@ from collections.abc import Hashable
 import pytest
 
 from slyme.context import Context, Schema, Scope
-from slyme.context.core import _ContextBinding, _ScopeUsage
+from slyme.context.store import _ContextBinding, _ScopeUsage
 
 
 @pytest.mark.parametrize("remove_first", [False, True])
@@ -48,11 +48,13 @@ def test_registration_disposer_owns_only_its_identity_data_until_called(
 
 
 def test_shared_identity_has_one_current_value_and_a_persistent_barrier() -> None:
-    root = Context({"value": "root"}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": "root"})
     left = root.isolate("value", identity="shared")
     right = root.isolate("value", identity="shared")
     left.set("value", "original")
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     right.set("value", "updated")
     assert left.get("value") == "updated"
     assert right.get("value") == "updated"
@@ -74,7 +76,8 @@ def test_shared_identity_has_one_current_value_and_a_persistent_barrier() -> Non
 
 
 def test_shared_value_does_not_retain_its_disposed_writers_scope() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     writer = root.isolate("value", identity="shared")
     reader = root.isolate("value", identity="shared")
     writer.set("value", "retained")
@@ -90,10 +93,9 @@ def test_shared_value_does_not_retain_its_disposed_writers_scope() -> None:
 @pytest.mark.parametrize("operation", ["set", "delete", "remove"])
 def test_value_finalizer_can_replace_the_same_path(operation: str) -> None:
     registration = operation == "remove"
-    ctx = Context(
-        schema=Schema(
-            {"value": Schema.leaf(mode="register" if registration else "assign")}
-        )
+    ctx = Context()
+    ctx.declare(
+        Schema({"value": Schema.leaf(mode="register" if registration else "assign")})
     )
     events: list[str] = []
 
@@ -127,7 +129,9 @@ def test_value_finalizer_can_replace_the_same_path(operation: str) -> None:
 
 
 def test_identity_release_preserves_a_barrier_created_by_a_value_finalizer() -> None:
-    root = Context({"value": "root"}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": "root"})
     writer = root.isolate("value", identity="shared")
     replacements: list[Context] = []
 
@@ -150,13 +154,15 @@ def test_identity_release_preserves_a_barrier_created_by_a_value_finalizer() -> 
 def test_context_resolve_walks_complete_c3_without_creating_identities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root = Context({"value": "root"}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": "root"})
     left = root.isolate("value", identity="shared")
     right = root.isolate("value", identity="shared")
     unbound = Scope(parents=(left.scope, right.scope))
     child = root.fork(scope=unbound.fork())
     child.set("value", "child")
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     seen: list[Scope] = []
     original = binding._scope_identities.get
     identities_before = dict(binding._scope_identities)

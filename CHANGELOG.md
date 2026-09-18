@@ -147,13 +147,22 @@ breaking changes when they are documented here.
 
 ### Changed
 
-- Schema retains its root Contexts until explicit disposal and directly clears
-  their bindings when a field is withdrawn. Field cleanup order between roots
+- Context coordinates a private shared Schema, shared ContextStore, and one
+  owned Lifecycle. Schema access uses Context `resolve()`, `resolve_entry()`,
+  and `entries`; direct `ctx.schema` access is removed. Normal access checks
+  the calling Lifecycle; cleanup uses exact ownership without active-state checks.
+- Exported independently usable `ContextStore` and `Lifecycle`. Ref lives in
+  `context.schema`, and tree engines live with their Schema or Store consumers;
+  the separate `context.ref` and `context.tree` modules are removed.
+- Moved `NODE_ENGINE` and its traversal handlers into `node.core`, removing
+  `node.tree`. Node, Wrapper, and Auto remain traversal-only containers.
+- Schema retains application stores and their Context viewers until explicit
+  disposal and directly clears bindings when a field is withdrawn. Field cleanup order between stores
   is unspecified.
 - Context and effect disposal use generator control flow for immediate and
   asynchronous cleanup, preserving recursive LIFO order, continued cleanup
   after failure, repeatable results, and cancellation and reentrancy protection.
-  Context owns the cleanup loop and groups failures in cleanup execution order.
+  Lifecycle owns the cleanup loop and groups failures in cleanup execution order.
 - Auto calls all independent evaluator groups before scheduling asynchronous
   results, collecting Ref and Node failures
   into nested exception groups without cancelling siblings. Group messages list
@@ -173,7 +182,7 @@ breaking changes when they are documented here.
 - Raised the minimum supported Python version from 3.9 to 3.10, following the
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
 - Renamed `RefFactory` to `Schema` and aligned Context construction and
-  inspection on `Context(..., schema=R)` and `ctx.schema`.
+  inspection on `ctx.declare(R)` and Context declaration queries.
 - `Ref` is now an immutable path-only value. `Schema.leaf()` and
   `Schema.container()` configure declared paths, while `Schema.resolve()`
   returns their Refs.
@@ -187,8 +196,11 @@ breaking changes when they are documented here.
 - Auto parameters always reconstruct Tree containers, including ordinary-only
   subtrees, while preserving ordinary leaf identities. Each Wrapper `call_next`
   invocation evaluates the current Auto containers without a content pre-scan.
-- Context construction now accepts a Ref-to-value mapping and keyword-only
-  `schema`, `parent`, or `scope`. Every Context access rejects undeclared paths.
+- Context construction accepts only keyword `parent` and `scope`; roots create
+  their own empty Schema and Store. Declare paths and assign values separately
+  with `declare()` and `update()`. Importing a Schema copies definitions rather
+  than sharing future changes. `root` is a fixed field rather than a property.
+  Every Context data access rejects undeclared paths.
   Schema is the only source of container structure; an application root stores
   flat entry-indexed bindings by Scope, uses `to_dict()` for a nested projection,
   and uses `flatten()` for the exact leaf mapping.

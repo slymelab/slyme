@@ -24,6 +24,14 @@ from typing_extensions import Self
 
 from slyme.context import Context
 from slyme.utils.execution import await_result, continuation
+from slyme.utils.tree import (
+    TREE_ENGINE_REGISTRY,
+    AttributeKey,
+    TreeAux,
+    TreeEngine,
+    TreeKey,
+)
+from slyme.utils.tree.common import flatten_mapping_proxy, unflatten_mapping_proxy
 
 from .exception import (
     NodeException,
@@ -117,6 +125,15 @@ class Node(NodeElement, Generic[_R]):
 
     __slots__ = ("wrappers",)
 
+    @staticmethod
+    def _flatten(obj: "Node[Any]") -> tuple[Iterable[Any], TreeAux]:
+        children = [obj.wrappers]
+        keys: list[TreeKey] = [AttributeKey("wrappers")]
+        for name, value in obj._params.items():
+            children.append(value)
+            keys.append(_NodeParameterKey(name))
+        return tuple(children), TreeAux(children_keys=tuple(keys), cls=Node)
+
     def __init__(
         self,
         /,
@@ -173,6 +190,11 @@ class Wrapper(NodeElement, Generic[_R]):
     """Wrap a Node call; await its completion before result-dependent work."""
 
     __slots__ = ()
+
+    @staticmethod
+    def _flatten(obj: "Wrapper[Any]") -> tuple[Iterable[Any], TreeAux]:
+        keys = tuple(_NodeParameterKey(name) for name in obj._params)
+        return tuple(obj._params.values()), TreeAux(children_keys=keys, cls=Wrapper)
 
     @staticmethod
     def compose(
@@ -349,5 +371,30 @@ def wrapper(func: Callable[..., Any] | None = None, /) -> Any:
     return factory
 
 
+@dataclass(frozen=True)
+class _NodeParameterKey(TreeKey):
+    """Address one NodeElement build parameter without attribute projection."""
+
+    name: str
+
+    def resolve(self, element: Any) -> Any:
+        return element.get(self.name)
+
+    def codify(self, parent_expr: str) -> str:
+        return f"{parent_expr}.get({self.name!r})"
+
+
+NODE_ENGINE = TreeEngine("node_engine")
+TREE_ENGINE_REGISTRY.register(NODE_ENGINE, key="node_engine")
+# Nodes, Wrappers, and Auto support inspection, not reconstruction.
+NODE_ENGINE.register(Node, Node._flatten, None, strict=True)
+NODE_ENGINE.register(Wrapper, Wrapper._flatten, None, strict=True)
+NODE_ENGINE.register(
+    Auto,
+    lambda obj: ((obj.value,), TreeAux(children_keys=(AttributeKey("value"),))),
+    None,
+)
+NODE_ENGINE.register(MappingProxyType, flatten_mapping_proxy, unflatten_mapping_proxy)
+
+
 from .eval import eval_tree
-from .tree import NODE_ENGINE

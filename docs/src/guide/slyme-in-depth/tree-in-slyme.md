@@ -8,6 +8,8 @@ A tree is a nested structure whose containers define topology and whose unregist
 
 ## `NODE_ENGINE`
 
+Import `NODE_ENGINE` from `slyme.node.core`; its traversal handlers are registered alongside Node and Wrapper.
+
 `NODE_ENGINE` registers `Node`, `Wrapper`, `Auto`, ordinary containers, and `MappingProxyType`. It traverses explicit parameter bindings and Auto payloads for physical graph inspection and Ref discovery; function defaults are not included. Parameters may contain heterogeneous nested values; the engine describes traversal, not which combinations are legal. `Node`, `Wrapper`, and `Auto` register with `unflatten_func=None`: traversal and flattening are supported, but reconstruction raises `TypeError`.
 
 ## Object identity

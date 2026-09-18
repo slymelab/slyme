@@ -19,12 +19,12 @@ from slyme.node import (
     sequential_exec,
     wrapper,
 )
+from slyme.node.core import NODE_ENGINE
 from slyme.node.eval import BatchEvaluatorFunc
 from slyme.node.exception import (
     NodeExceptionRecord,
     WrapperExceptionRecord,
 )
-from slyme.node.tree import NODE_ENGINE
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
 from slyme.utils.registry import GeneralRegistry
@@ -138,7 +138,7 @@ async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
     ctx = Context()
     graph = parent(value=Auto(child())).add_wrappers(increment())
     assert await graph.acall(ctx) == 13
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -149,7 +149,8 @@ def test_schema_integrates_with_auto_during_graph_assembly() -> None:
     def increment(ctx: Context, /, *, value: int) -> int:
         return value + 1
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     value_ref = schema.resolve("input.value")
     ctx.set(value_ref, 4)
     assert increment(value=Auto(value_ref))(ctx) == 5
@@ -197,7 +198,8 @@ def test_auto_evaluation_for_refs_nodes_and_nested_containers() -> None:
     ) -> dict[str, Any]:
         return payload
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     ctx.set(R.resolve("input.base"), 4)
     graph = parent(
         payload=Auto(
@@ -230,10 +232,14 @@ def test_node_call_uses_live_mutable_parameter_containers() -> None:
     values = instance.get("values")
     state = instance.get("state")
 
-    assert instance(Context(schema=R)) == ((1, 2, 3, 4), 1)
+    context_1 = Context()
+    context_1.declare(R)
+    assert instance(context_1) == ((1, 2, 3, 4), 1)
     assert instance.get("values") is values
     assert instance.get("state") is state
-    assert instance(Context(schema=R)) == ((1, 2, 3, 4, 4), 2)
+    context_2 = Context()
+    context_2.declare(R)
+    assert instance(context_2) == ((1, 2, 3, 4, 4), 2)
 
 
 async def test_async_node_and_wrapper_calls_use_live_parameters() -> None:
@@ -262,8 +268,12 @@ async def test_async_node_and_wrapper_calls_use_live_parameters() -> None:
     wrapper_instance = record(events=[])
     instance = mutate(values=[1, 2]).add_wrappers(wrapper_instance)
 
-    assert await instance(Context(schema=R)) == (1, 2, 3)
-    assert await instance(Context(schema=R)) == (1, 2, 3, 3)
+    context_7 = Context()
+    context_7.declare(R)
+    assert await instance(context_7) == (1, 2, 3)
+    context_8 = Context()
+    context_8.declare(R)
+    assert await instance(context_8) == (1, 2, 3, 3)
     assert wrapper_instance.get("events") == ["wrapper", "wrapper"]
 
 
@@ -289,7 +299,8 @@ def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:
         events.append("work")
         return value
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     ctx.set(R.resolve("names.outer"), "outer")
     result = work(value=7).add_wrappers(
         trace(name=Auto(R.resolve("names.outer"))), trace(name=Auto("inner"))
@@ -315,7 +326,9 @@ def test_node_and_wrapper_exceptions_preserve_provenance() -> None:
 
     instance = fails()
     with pytest.raises(NodeExceptionRecord) as exc_info:
-        instance(Context(schema=R))
+        context_3 = Context()
+        context_3.declare(R)
+        instance(context_3)
     assert exc_info.value.exception_node is instance
     assert exc_info.value.__cause__ is failure
     assert "exception_node" in str(exc_info.value)
@@ -332,7 +345,9 @@ def test_node_and_wrapper_exceptions_preserve_provenance() -> None:
 
     wrapped_instance = fails().add_wrappers(broken_wrapper())
     with pytest.raises(WrapperExceptionRecord) as wrapper_exc:
-        wrapped_instance(Context(schema=R))
+        context_4 = Context()
+        context_4.declare(R)
+        wrapped_instance(context_4)
     assert wrapper_exc.value.wrapped_node is wrapped_instance
     assert isinstance(wrapper_exc.value.exception_node, Wrapper)
     assert wrapper_exc.value.__cause__ is wrapper_failure
@@ -380,7 +395,8 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
     ) -> int:
         return sum(values)
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     ctx.update({R.resolve("input.value"): 3, R.resolve("input.label"): "trace"})
     graph = parent(
         values=Auto(
@@ -406,7 +422,9 @@ async def test_evaluation_promotes_async_node() -> None:
         return 1
 
     child = async_child()
-    assert await await_result(eval_tree(Context(schema=R), child)) == 1
+    context_11 = Context()
+    context_11.declare(R)
+    assert await await_result(eval_tree(context_11, child)) == 1
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -420,7 +438,8 @@ async def test_evaluator_result_count_is_validated(
     registry = GeneralRegistry[type, BatchEvaluatorFunc]("test_evaluator")
     registry.register(evaluate if asynchronous else lambda ctx, values: result, key=int)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(eval_tree(ctx, [1]))
     assert isinstance(caught.value.exceptions[0], ValueError)
@@ -449,7 +468,8 @@ def test_auto_nodes_receive_isolated_child_contexts() -> None:
     ) -> tuple[int, int]:
         return left, right
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     ctx.set(inherited, 4)
     shared_child = child()
     assert parent(left=Auto(shared_child), right=Auto(shared_child))(ctx) == (1, 2)
@@ -479,7 +499,8 @@ def test_auto_realizes_each_original_leaf_only_once() -> None:
 
     produced_node = child()
     produced_mapping = {"child": produced_node}
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
 
     ctx.set(dynamic, produced_node)
     assert parent(value=Auto(dynamic))(ctx) is produced_node
@@ -510,7 +531,8 @@ async def test_async_auto_nodes_receive_isolated_child_contexts() -> None:
     async def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     result = await asyncio.wait_for(
         parent(values=Auto([child(), child()]))(ctx),
         timeout=5,
@@ -540,7 +562,9 @@ def test_sync_auto_disposes_child_effects_before_parent_execution() -> None:
         assert events == ["child", "cleanup"]
         return value
 
-    assert parent(value=Auto(child()))(Context(schema=R)) == 1
+    context_5 = Context()
+    context_5.declare(R)
+    assert parent(value=Auto(child()))(context_5) == 1
 
 
 async def test_sync_auto_promotes_async_cleanup_before_parent_execution() -> None:
@@ -562,13 +586,15 @@ async def test_sync_auto_promotes_async_cleanup_before_parent_execution() -> Non
         events.append("parent")
         return value
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
+    initial_owned = tuple(ctx._lifecycle._owned)
     pending = parent(value=Auto(child()))(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["child"]
     assert await await_result(pending) == 1
     assert events == ["child", "cleanup", "parent"]
-    assert not ctx._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
 
 
 async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None:
@@ -589,7 +615,9 @@ async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None
         assert events == ["child", "cleanup"]
         return value
 
-    assert await parent(value=Auto(child()))(Context(schema=R)) == 1
+    context_9 = Context()
+    context_9.declare(R)
+    assert await parent(value=Auto(child()))(context_9) == 1
 
 
 async def test_async_auto_runs_sync_nodes_inline_with_isolated_contexts() -> None:
@@ -611,7 +639,8 @@ async def test_async_auto_runs_sync_nodes_inline_with_isolated_contexts() -> Non
     ) -> list[tuple[int, object]]:
         return values
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     results = await parent(values=Auto([child(value=1), child(value=2)]))(ctx)
 
     assert [value for value, _ in results] == [1, 2]
@@ -638,7 +667,9 @@ def test_sync_auto_chains_node_failure_under_cleanup_failure() -> None:
 
     child_node = child()
     with pytest.raises(NodeExceptionRecord) as caught:
-        parent(value=Auto(child_node))(Context(schema=R))
+        context_6 = Context()
+        context_6.declare(R)
+        parent(value=Auto(child_node))(context_6)
 
     group = caught.value.__cause__
     assert isinstance(group, BaseExceptionGroup)
@@ -669,7 +700,9 @@ async def test_async_auto_chains_node_failure_under_cleanup_failure() -> None:
 
     child_node = child()
     with pytest.raises(NodeExceptionRecord) as caught:
-        await parent(value=Auto(child_node))(Context(schema=R))
+        context_10 = Context()
+        context_10.declare(R)
+        await parent(value=Auto(child_node))(context_10)
 
     group = caught.value.__cause__
     assert isinstance(group, BaseExceptionGroup)
@@ -716,7 +749,9 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
     async def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
+    initial_owned = tuple(ctx._lifecycle._owned)
     task = asyncio.create_task(parent(values=Auto([waiting(), failing()]))(ctx))
     await failed.wait()
     await asyncio.sleep(0)
@@ -736,7 +771,7 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
     assert str(failure.__cause__) == "child failed"
     assert cleaned.is_set()
     assert not cancelled.is_set()
-    assert not ctx._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
 
 
 async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_errors() -> (
@@ -770,7 +805,9 @@ async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_e
     async def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
+    initial_owned = tuple(ctx._lifecycle._owned)
     task = asyncio.create_task(parent(values=Auto([failing(), waiting()]))(ctx))
     await cleanup_started.wait()
     try:
@@ -778,13 +815,13 @@ async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_e
         with pytest.raises(asyncio.CancelledError) as caught:
             await task
         assert caught.value.__cause__ is None
-        assert children[0] in ctx._owned
+        assert children[0]._lifecycle in ctx._lifecycle._owned
     finally:
         release_cleanup.set()
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
             await children[0].adispose()
     assert cleanup_result.value.exceptions[0] is cleanup_failure
-    assert not ctx._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -812,7 +849,8 @@ async def test_repeated_auto_cancellation_leaves_child_cleanup_running(
     async def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     task = asyncio.create_task(parent(value=Auto(child()))(ctx))
     await cleanup_started.wait()
     try:
@@ -822,12 +860,12 @@ async def test_repeated_auto_cancellation_leaves_child_cleanup_running(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert not cleanup_finished.is_set()
-        assert ctx._owned
+        assert ctx._lifecycle._owned
     finally:
         release_cleanup.set()
         await ctx.adispose()
     assert cleanup_finished.is_set()
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
@@ -852,7 +890,9 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
     async def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
+    initial_owned = tuple(ctx._lifecycle._owned)
     task = asyncio.create_task(parent(value=Auto(child()))(ctx))
     await cleanup_started.wait()
     try:
@@ -860,13 +900,13 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
         with pytest.raises(asyncio.CancelledError) as caught:
             await task
         assert caught.value.__cause__ is None
-        assert children[0] in ctx._owned
+        assert children[0]._lifecycle in ctx._lifecycle._owned
     finally:
         release_cleanup.set()
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
             await children[0].adispose()
     assert cleanup_result.value.exceptions[0] is cleanup_failure
-    assert not ctx._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -877,7 +917,8 @@ def test_sequential_nodes_share_context() -> None:
 
     first = increment(source=R.resolve("value"), target=R.resolve("value"))
     second = increment(source=R.resolve("value"), target=R.resolve("value"))
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     sequential_exec(ctx, [first, second])
     assert ctx.get(R.resolve("value")) == 2
 
@@ -899,7 +940,8 @@ async def test_async_sequential_accepts_sync_and_async_nodes() -> None:
     async def async_step(ctx: Context, /) -> None:
         ctx.set(R.resolve("async_value"), True)
 
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     nodes = [sync_step(), async_step()]
     await await_result(sequential_exec(ctx, nodes))
     assert ctx.get(R.resolve("sync")) and ctx.get(R.resolve("async_value"))
@@ -918,7 +960,8 @@ async def test_plain_functions_assemble_independent_node_graphs() -> None:
     first = build()
     second = build(value=2)
     first.set("value", 3)
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     assert first(ctx) == 3
     assert second(ctx) == 2
     assert build()(ctx) == 1
@@ -1000,7 +1043,8 @@ async def test_wrappers_can_be_added_through_the_public_list() -> None:
     sync_instance.wrappers.append(sync_wrapper())
     async_instance = async_node()
     async_instance.wrappers.append(async_wrapper())
-    ctx = Context(schema=R)
+    ctx = Context()
+    ctx.declare(R)
     assert sync_instance(ctx) == 1
     assert await async_instance(ctx) == 2
     assert events == ["sync wrapper", "sync node", "async wrapper", "async node"]

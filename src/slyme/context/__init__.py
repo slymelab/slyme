@@ -14,9 +14,10 @@
 
 from .compose import Compose
 from .core import Context, ContextKey
-from .ref import Ref
+from .lifecycle import Lifecycle
 from .schema import (
     Metadata,
+    Ref,
     RefConfig,
     RefContainerConfig,
     RefEntry,
@@ -24,11 +25,14 @@ from .schema import (
     Schema,
 )
 from .scope import Scope
+from .store import ContextStore
 
 __all__ = [
     "Compose",
     "Context",
     "ContextKey",
+    "ContextStore",
+    "Lifecycle",
     "Metadata",
     "Ref",
     "RefConfig",

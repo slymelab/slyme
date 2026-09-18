@@ -19,7 +19,7 @@ async def test_adispose_runs_sync_cleanup_immediately_without_scheduling() -> No
     tasks = asyncio.all_tasks()
     result = ctx.adispose()
     assert events == ["cleaned"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     assert asyncio.all_tasks() == tasks
     assert await result is None
     assert await ctx.adispose() is None
@@ -42,7 +42,7 @@ def test_adispose_preserves_immediate_cleanup_errors() -> None:
         if previous is not None:
             assert caught.value is previous
         previous = caught.value
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 async def test_adispose_retains_cleanup_result_after_waiter_cancellation() -> None:
@@ -75,7 +75,7 @@ async def test_adispose_retains_cleanup_result_after_waiter_cancellation() -> No
         with pytest.raises(BaseExceptionGroup) as caught:
             await ctx.adispose()
         assert caught.value.exceptions == (failure,)
-    assert calls == 1 and not ctx._owned
+    assert calls == 1 and not ctx._lifecycle._owned
 
 
 def test_context_disposes_direct_ownership_in_lifo_order_recursively() -> None:
@@ -141,23 +141,7 @@ async def test_mixed_ownership_preserves_lifo_after_arbitrary_early_release(
     else:
         root.dispose()
     assert events == ["early-effect", "early-child", "last", "child", "first"]
-    assert not root._owned
-
-
-def test_sync_disposal_visits_each_descendant_once() -> None:
-    checked: list[Context] = []
-
-    class TrackedContext(Context):
-        def dispose(self):
-            checked.append(self)
-            return super().dispose()
-
-    root = TrackedContext()
-    left = root.fork()
-    grandchild = left.fork()
-    right = root.fork()
-    root.dispose()
-    assert checked == [root, right, left, grandchild]
+    assert not root._lifecycle._owned
 
 
 def test_sync_disposal_snapshot_handles_sibling_cleanup_and_failure() -> None:
@@ -181,7 +165,7 @@ def test_sync_disposal_snapshot_handles_sibling_cleanup_and_failure() -> None:
     assert child_error.exceptions == (failure,)
     assert caught.value.exceptions == (child_error, child_error)
     assert events == ["child", "middle"]
-    assert not root._owned
+    assert not root._lifecycle._owned
 
 
 async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None:
@@ -195,17 +179,17 @@ async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None
         await finish.wait()
 
     release = child.effect(lambda: cleanup)
-    effect = next(iter(child._owned))
+    effect = next(iter(child._lifecycle._owned))
     early = asyncio.create_task(await_result(release()))
     await started.wait()
-    assert effect in child._owned
+    assert effect in child._lifecycle._owned
     disposing = asyncio.create_task(await_result(root.dispose()))
     await asyncio.sleep(0)
-    assert child in root._owned
+    assert child._lifecycle in root._lifecycle._owned
     assert not disposing.done()
     finish.set()
     await asyncio.gather(early, disposing)
-    assert not child._owned and not root._owned
+    assert not child._lifecycle._owned and not root._lifecycle._owned
 
 
 @pytest.mark.parametrize("async_setup", [False, True])
@@ -217,7 +201,9 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
     started = asyncio.Event()
     finish = asyncio.Event()
     failure = ValueError("child cleanup")
-    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": 1})
     root.effect(lambda: lambda: events.append("first"))
     child = root.fork()
 
@@ -257,7 +243,7 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
         else:
             await root.adispose()
     assert events == ["last", "child:start", "child:finish", "first"]
-    assert not root._owned and not child._owned
+    assert not root._lifecycle._owned and not child._lifecycle._owned
 
 
 def test_failed_sync_effect_disposal_replays_error_without_repeating_cleanup() -> None:
@@ -285,7 +271,8 @@ def test_context_owns_bindings_declarations_and_compose_effects() -> None:
             "stable": Schema.leaf(),
         }
     )
-    ctx = Context(schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
     hooks = Compose[str, tuple[str, ...]].collect()
     ctx.register("hooks", hooks)
     remove_plugin = ctx.declare({"plugin": {"value": Schema.leaf()}})
@@ -308,7 +295,8 @@ def test_context_owns_bindings_declarations_and_compose_effects() -> None:
 
 def test_compose_effect_keeps_its_target_when_the_context_leaf_is_replaced() -> None:
     schema = Schema({"hooks": Schema.leaf()})
-    ctx = Context(schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
     hooks = Compose[str, tuple[str, ...]].collect()
     ctx.set("hooks", hooks)
     other = ctx.scope.fork()
@@ -331,7 +319,8 @@ def test_scope_data_survives_until_its_last_context_viewer_is_disposed() -> None
         pass
 
     schema = Schema({"value": Schema.leaf()})
-    root = Context(schema=schema)
+    root = Context()
+    root.declare(schema)
     shared_scope = root.scope.fork()
     writer = root.fork(scope=shared_scope)
     reader = root.fork(scope=shared_scope)
@@ -354,7 +343,7 @@ def test_scope_viewer_sets_clear_after_the_last_context_leaves() -> None:
     child_scope = root.scope.fork()
     child = root.fork(scope=child_scope)
     sibling = root.fork()
-    viewers = root._scope_usage
+    viewers = root._store._scope_usage
     assert viewers is not None
 
     root_viewers = viewers[root.scope].viewers
@@ -376,19 +365,20 @@ def test_scope_viewer_registration_rejects_unbalanced_operations() -> None:
     ctx = Context()
 
     with pytest.raises(RuntimeError, match="already registered"):
-        ctx._acquire_scope()
-    ctx._release_scope()
+        ctx._store.acquire_scope(ctx, ctx.scope)
+    ctx._store.release_scope(ctx, ctx.scope)
     with pytest.raises(RuntimeError, match="not registered"):
-        ctx._release_scope()
-    ctx._acquire_scope()
+        ctx._store.release_scope(ctx, ctx.scope)
+    ctx._store.acquire_scope(ctx, ctx.scope)
     ctx.dispose()
 
 
 def test_reused_scope_does_not_restore_data_or_repeat_old_context_disposal() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     scope = root.scope.fork()
     first = root.fork(scope=scope)
-    viewers = root._scope_usage
+    viewers = root._store._scope_usage
     assert viewers is not None
     old = viewers[scope].viewers
     first.set("value", "old")
@@ -411,7 +401,7 @@ def test_context_registers_and_releases_every_scope_in_its_mro() -> None:
     root = Context()
     parent_scope = root.scope.fork()
     owner = root.fork(scope=parent_scope)
-    viewers = root._scope_usage
+    viewers = root._store._scope_usage
     assert viewers is not None
     before = {scope: set(usage.viewers) for scope, usage in viewers.items()}
     child_scope = parent_scope.fork()
@@ -420,7 +410,7 @@ def test_context_registers_and_releases_every_scope_in_its_mro() -> None:
     assert all(child in viewers[scope].viewers for scope in child_scope.mro)
     child.dispose()
     assert {scope: usage.viewers for scope, usage in viewers.items()} == before
-    assert tuple(root._owned) == (owner,)
+    assert tuple(root._lifecycle._owned) == (owner._lifecycle,)
     root.dispose()
 
 
@@ -428,15 +418,16 @@ def test_context_disposal_cleans_scope_indexes_and_binding_data() -> None:
     class Payload:
         pass
 
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     child = root.fork(scope=root.scope.fork())
     payload = Payload()
     payload_ref = weakref.ref(payload)
     child.set("value", payload)
     del payload
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     identity_scopes = next(iter(binding._data.values())).scopes
-    viewers = root._scope_usage
+    viewers = root._store._scope_usage
     assert viewers is not None
     scope_viewers = viewers[child.scope].viewers
 
@@ -450,14 +441,15 @@ def test_context_disposal_cleans_scope_indexes_and_binding_data() -> None:
     gc.collect()
     assert payload_ref() is None
     root.dispose()
-    assert not root._data
+    assert not root._store._data
 
 
 def test_binding_scope_release_is_idempotent() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     child = root.isolate("value", identity="shared")
     child.set("value", "old")
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     binding.release_scope(child.scope)
     binding.release_scope(child.scope)
     assert not binding._data
@@ -470,13 +462,14 @@ def test_binding_scope_release_is_idempotent() -> None:
 def test_scope_release_only_notifies_bindings_used_by_that_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root = Context(schema=Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
     parent_scope = root.scope.fork()
     child_scope = parent_scope.fork()
     child = root.fork(scope=child_scope)
     child.set("first", "child")
     child.set("second", "child")
-    bindings = tuple(root._data.values())
+    bindings = tuple(root._store._data.values())
     calls = []
     original = type(bindings[0]).release_scope
 
@@ -499,14 +492,16 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
     asynchronous: bool,
     effect_failure: bool,
 ) -> None:
-    root = Context(schema=Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
+    initial_owned = tuple(root._lifecycle._owned)
     parent_scope = root.scope.fork()
     parent = root.fork(scope=parent_scope)
     parent.update({"first": "parent", "second": "parent"})
     child = root.fork(scope=parent_scope.fork())
     child.update({"first": "child", "second": "child"})
     parent.dispose()
-    bindings = tuple(root._data.values())
+    bindings = tuple(root._store._data.values())
     original = type(bindings[0]).release_scope
     failures = [ValueError("first scope failed"), ValueError("parent scope failed")]
     calls = []
@@ -551,27 +546,29 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
     assert set(calls[len(bindings) :]) == {
         (binding, parent_scope) for binding in bindings
     }
-    assert not root._owned
-    assert root._scope_usage is not None
-    assert set(root._scope_usage) == {root.scope}
+    assert tuple(root._lifecycle._owned) == initial_owned
+    assert root._store._scope_usage is not None
+    assert set(root._store._scope_usage) == {root.scope}
     for binding in bindings:
         assert not binding._data
     with pytest.raises(RuntimeError, match="disposed"):
         child.get("first")
     root.dispose()
-    assert not root._data
+    assert not root._store._data
 
 
 def test_failed_binding_restore_rolls_back_new_scope_usage(monkeypatch) -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    initial_owned = tuple(root._lifecycle._owned)
     identity = object()
     previous = root.isolate("value", identity=identity)
     scope = previous.scope
     previous.dispose()
     writer = root.isolate("value", identity=identity)
     writer.set("value", "live")
-    binding = next(iter(root._data.values()))
-    viewers = root._scope_usage
+    binding = next(iter(root._store._data.values()))
+    viewers = root._store._scope_usage
     assert viewers is not None
     before = {scope: set(usage.viewers) for scope, usage in viewers.items()}
     original = type(binding).acquire_scope
@@ -587,12 +584,13 @@ def test_failed_binding_restore_rolls_back_new_scope_usage(monkeypatch) -> None:
     assert {scope: usage.viewers for scope, usage in viewers.items()} == before
     assert binding._data[identity].scopes == {writer.scope}
     assert writer.get("value") == "live"
-    assert tuple(root._owned) == (writer,)
+    assert tuple(root._lifecycle._owned) == (*initial_owned, writer._lifecycle)
     root.dispose()
 
 
 def test_scope_reacquired_during_value_finalization_keeps_remaining_bindings() -> None:
-    root = Context(schema=Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
     scope = root.scope.fork()
     writer = root.fork(scope=scope)
     readers = []
@@ -620,7 +618,8 @@ def test_scope_reacquired_during_value_finalization_keeps_remaining_bindings() -
 
 
 def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     writer = root.isolate("value", identity="shared")
     scope = writer.scope
     readers = []
@@ -632,7 +631,7 @@ def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
             readers.append(reader)
 
     writer.set("value", Payload())
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     old_scopes = binding._data["shared"].scopes
     writer.dispose()
     assert len(readers) == 1
@@ -648,9 +647,11 @@ def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
 def test_failed_scope_acquisition_preserves_error_when_rollback_also_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    initial_owned = tuple(root._lifecycle._owned)
     root.set("value", "live")
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     previous = root.isolate("value")
     child_scope = previous.scope
     previous.dispose()
@@ -675,9 +676,9 @@ def test_failed_scope_acquisition_preserves_error_when_rollback_also_fails(
             root.fork(scope=child_scope)
         assert raised.value is acquisition_error
         assert raised.value.__cause__ is cleanup_error
-    assert root._scope_usage is not None
-    assert set(root._scope_usage) == {root.scope}
-    assert not root._owned
+    assert root._store._scope_usage is not None
+    assert set(root._store._scope_usage) == {root.scope}
+    assert tuple(root._lifecycle._owned) == initial_owned
     assert root.get("value") == "live"
     root.dispose()
 
@@ -687,7 +688,8 @@ def test_bound_identity_data_survives_until_its_last_viewer_is_disposed() -> Non
         pass
 
     schema = Schema({"value": Schema.leaf()})
-    root = Context(schema=schema)
+    root = Context()
+    root.declare(schema)
     identity = object()
     writer = root.isolate("value", identity=identity)
     reader = root.isolate("value", identity=identity)
@@ -710,7 +712,8 @@ def test_bound_identity_data_survives_until_its_last_viewer_is_disposed() -> Non
 
 def test_bound_identity_keeps_registration_owned_by_its_context() -> None:
     schema = Schema({"value": Schema.leaf(mode="register")})
-    root = Context(schema=schema)
+    root = Context()
+    root.declare(schema)
     identity = object()
     owner = root.isolate("value", identity=identity)
     viewer = root.isolate("value", identity=identity)
@@ -724,11 +727,12 @@ def test_bound_identity_keeps_registration_owned_by_its_context() -> None:
 
 
 def test_identity_index_tracks_isolated_scopes_after_value_deletion() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     identity = object()
     writer = root.isolate("value", identity=identity)
     viewer = root.isolate("value", identity=identity)
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
 
     scopes = binding._data[identity].scopes
     assert scopes == {writer.scope, viewer.scope}
@@ -751,11 +755,12 @@ def test_identity_index_tracks_isolated_scopes_after_value_deletion() -> None:
 
 
 def test_identity_reuse_starts_new_ownership_without_reviving_old_data() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     identity = object()
     first = root.isolate("value", identity=identity)
     first.set("value", "old")
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     old = binding._data[identity].scopes
     first.dispose()
     assert not old
@@ -779,14 +784,14 @@ def test_schema_disposal_releases_binding_with_its_scope_set_still_referenced() 
     payload = Payload()
     payload_ref = weakref.ref(payload)
     root.register("value", payload)
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     binding_ref = weakref.ref(binding)
     scopes = next(iter(binding._data.values())).scopes
     del binding, payload
 
     remove_schema()
     gc.collect()
-    assert not root._data
+    assert not root._store._data
     assert binding_ref() is None
     assert payload_ref() is None
     assert not scopes
@@ -799,13 +804,14 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
     descendant: bool,
     reader_first: bool,
 ) -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     identity = object()
     previous = root.isolate("value", identity=identity)
     saved_scope = previous.scope
     previous.set("value", "old")
     previous.dispose()
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     assert not binding._data
 
     reader_scope = saved_scope.fork() if descendant else saved_scope
@@ -825,13 +831,14 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
 
 
 def test_identity_index_keeps_both_observed_parents_of_a_diamond_scope() -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     identity = object()
     left = root.isolate("value", identity=identity)
     right = root.isolate("value", identity=identity)
     reader = root.fork(scope=Scope(parents=(left.scope, right.scope)))
     left.set("value", "shared")
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
 
     left.dispose()
     right.dispose()
@@ -845,11 +852,12 @@ def test_identity_index_keeps_both_observed_parents_of_a_diamond_scope() -> None
 def test_scope_release_does_not_scan_other_identity_bindings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     sessions = [root.fork(scope=root.scope.fork()) for _ in range(1000)]
     for number, session in enumerate(sessions):
         session.set("value", number)
-    binding = next(iter(root._data.values()))
+    binding = next(iter(root._store._data.values()))
     scope_refs = [weakref.ref(session.scope) for session in sessions]
     assert len(binding._data) == 1000
 
@@ -874,7 +882,9 @@ def test_scope_release_does_not_scan_other_identity_bindings(
 
 def test_isolated_contexts_can_share_one_private_identity() -> None:
     schema = Schema({"service": Schema.leaf()})
-    root = Context({"service": "root"}, schema=schema)
+    root = Context()
+    root.declare(schema)
+    root.update({"service": "root"})
     identity = object()
     left = root.isolate("service", identity=identity)
     right = root.isolate("service", identity=identity)
@@ -901,7 +911,8 @@ def test_shared_scope_distinguishes_assignment_and_registration_ownership() -> N
             "registered_value": Schema.leaf(mode="register"),
         }
     )
-    root = Context(schema=schema)
+    root = Context()
+    root.declare(schema)
     shared_scope = root.scope.fork()
     owner = root.fork(scope=shared_scope)
     viewer = root.fork(scope=shared_scope)
@@ -925,7 +936,8 @@ def test_shared_scope_distinguishes_assignment_and_registration_ownership() -> N
 
 def test_descendant_scope_keeps_ancestor_data_visible() -> None:
     schema = Schema({"value": Schema.leaf()})
-    root = Context(schema=schema)
+    root = Context()
+    root.declare(schema)
     ancestor_scope = root.scope.fork()
     owner = root.fork(scope=ancestor_scope)
     viewer = root.fork(scope=ancestor_scope.fork())
@@ -939,8 +951,10 @@ def test_descendant_scope_keeps_ancestor_data_visible() -> None:
 
 def test_same_scope_does_not_share_independent_context_data_roots() -> None:
     schema = Schema({"value": Schema.leaf()})
-    left = Context(schema=schema)
-    right = Context(schema=schema, scope=left.scope)
+    left = Context()
+    left.declare(schema)
+    right = Context(scope=left.scope)
+    right.declare(schema)
     left.set("value", 1)
 
     assert not right.exists("value")
@@ -963,7 +977,9 @@ def test_parent_strongly_owns_undisposed_children() -> None:
 
 def test_disposed_context_rejects_data_and_lifecycle_operations() -> None:
     schema = Schema({"value": Schema.leaf()})
-    ctx = Context({"value": 1}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"value": 1})
     ctx.dispose()
 
     for operation in (
@@ -982,7 +998,9 @@ def test_disposed_context_rejects_data_and_lifecycle_operations() -> None:
 
 def test_cleanup_can_read_context_but_cannot_start_new_mutation() -> None:
     schema = Schema({"value": Schema.leaf()})
-    ctx = Context({"value": 1}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"value": 1})
     observed: list[int] = []
 
     def cleanup() -> None:
@@ -1061,8 +1079,8 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
         release.set()
     else:
         release.set()
-        assert ctx._dispose_pending is not None
-        disposal_task = ctx._dispose_pending._task
+        assert ctx._lifecycle._dispose_pending is not None
+        disposal_task = ctx._lifecycle._dispose_pending._task
         assert disposal_task is not None
         await asyncio.wait({disposal_task})
         repeated = asyncio.create_task(await_result(ctx.dispose()))
@@ -1129,7 +1147,9 @@ async def test_async_early_cleanup_blocks_owner_and_ancestor_disposal(
     dispose_ancestor: bool,
 ) -> None:
     schema = Schema({"value": Schema.leaf()})
-    root = Context({"value": 1}, schema=schema)
+    root = Context()
+    root.declare(schema)
+    root.update({"value": 1})
     child = root.fork()
     target = root if dispose_ancestor else child
     events: list[object] = []
@@ -1153,7 +1173,9 @@ def test_sync_effect_setup_blocks_owner_and_ancestor_disposal(
     dispose_ancestor: bool,
 ) -> None:
     schema = Schema({"value": Schema.leaf()})
-    root = Context({"value": 1}, schema=schema)
+    root = Context()
+    root.declare(schema)
+    root.update({"value": 1})
     child = root.fork()
     target = root if dispose_ancestor else child
     events: list[str] = []
@@ -1176,7 +1198,9 @@ async def test_async_effect_setup_blocks_owner_and_ancestor_disposal(
     dispose_ancestor: bool,
 ) -> None:
     schema = Schema({"value": Schema.leaf()})
-    root = Context({"value": 1}, schema=schema)
+    root = Context()
+    root.declare(schema)
+    root.update({"value": 1})
     child = root.fork()
     target = root if dispose_ancestor else child
     events: list[str] = []
@@ -1202,7 +1226,9 @@ def test_sync_early_cleanup_blocks_owner_and_ancestor_disposal(
     dispose_ancestor: bool,
 ) -> None:
     schema = Schema({"value": Schema.leaf()})
-    root = Context({"value": 1}, schema=schema)
+    root = Context()
+    root.declare(schema)
+    root.update({"value": 1})
     child = root.fork()
     target = root if dispose_ancestor else child
     dispose_effect = None
@@ -1323,13 +1349,15 @@ def test_parent_disposal_blocks_new_effects_in_active_children() -> None:
     with pytest.raises(BaseExceptionGroup) as caught:
         root.dispose()
     assert isinstance(caught.value.exceptions[0], RuntimeError)
-    assert "ancestor Context is being disposed" in str(caught.value.exceptions[0])
+    assert "ancestor Lifecycle is being disposed" in str(caught.value.exceptions[0])
     with pytest.raises(RuntimeError, match="disposed"):
         child.fork()
 
 
 def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
-    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": 1})
     events: list[str] = []
     root.effect(lambda: lambda: events.append("first"))
     child = root.fork()
@@ -1367,7 +1395,9 @@ def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
 
 
 async def test_closing_child_can_dispose_while_parent_cleanup_waits() -> None:
-    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": 1})
     child = root.fork()
     grandchild = child.fork()
     events: list[str] = []
@@ -1402,7 +1432,9 @@ async def test_closing_child_can_dispose_while_parent_cleanup_waits() -> None:
 
 @pytest.mark.parametrize("fail", [False, True])
 async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -> None:
-    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": 1})
     child = root.fork()
     grandchild = child.fork()
     started = asyncio.Event()
@@ -1441,7 +1473,7 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
     else:
         assert results == [None, None]
     assert calls == 1
-    assert not root._owned and not child._owned
+    assert not root._lifecycle._owned and not child._lifecycle._owned
     if fail:
         with pytest.raises(BaseExceptionGroup) as caught:
             await root.adispose()
@@ -1452,7 +1484,8 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
 def test_dispose_does_not_close_contexts_that_only_share_visibility(
     inherit_scope: bool,
 ) -> None:
-    root = Context(schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
     owner = root.fork(scope=root.scope.fork())
     owner.set("value", 1)
     child = owner.fork()
@@ -1474,7 +1507,9 @@ def test_dispose_does_not_close_contexts_that_only_share_visibility(
 
 
 async def test_cancelled_dispose_waiter_does_not_reopen_descendants() -> None:
-    root = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    root = Context()
+    root.declare(Schema({"value": Schema.leaf()}))
+    root.update({"value": 1})
     child = root.fork()
     grandchild = child.fork()
     cleaned: list[str] = []
@@ -1508,7 +1543,9 @@ async def test_cancelled_dispose_waiter_does_not_reopen_descendants() -> None:
 
 def test_cleanup_failures_do_not_skip_remaining_cleanup_or_scope_release() -> None:
     schema = Schema({"value": Schema.leaf()})
-    ctx = Context({"value": object()}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"value": object()})
     events: list[str] = []
     ctx.effect(lambda: lambda: events.append("first"))
 
@@ -1564,7 +1601,7 @@ def test_final_schema_removal_releases_an_owned_registration_payload() -> None:
 
     assert payload_ref() is None
     with pytest.raises(KeyError, match="temporary"):
-        ctx.schema.resolve("temporary")
+        ctx.resolve("temporary")
 
     remove_redeclaration = ctx.declare({"temporary": Schema.leaf()})
     assert not ctx.exists("temporary")

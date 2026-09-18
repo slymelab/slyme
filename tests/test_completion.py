@@ -61,7 +61,7 @@ async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
     assert events == ["call"]
     assert await await_result(pending) == 5
     assert events == ["call", "await", "parent"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -84,7 +84,7 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
     ctx = Context()
     result = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
     assert await asyncio.wait_for(await_result(result), 1) == 3
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -113,7 +113,7 @@ async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
     assert asyncio.all_tasks() == before
     assert await await_result(pending) == 3
     assert events == [("call", 1), ("call", 2), ("await", 1), ("await", 2)]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -258,7 +258,7 @@ async def test_context_owns_async_setup_before_caller_waits(await_setup: bool) -
         await await_result(early())
     await await_result(ctx.dispose())
     assert events == ["setup", "cleanup"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     early = await await_result(registration)
     await await_result(early())
 
@@ -292,7 +292,7 @@ async def test_owner_disposal_joins_inflight_setup_after_waiter_cancelled() -> N
     finish.set()
     await asyncio.wait_for(disposal, 1)
     assert events == ["setup", "cleanup"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 @pytest.mark.parametrize("ancestor", [False, True])
@@ -329,7 +329,7 @@ async def test_setup_failure_detaches_registration(asynchronous: bool) -> None:
     with pytest.raises(ValueError) as caught:
         await await_result(ctx.effect(async_fail if asynchronous else fail))
     assert caught.value is failure
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     assert ctx.dispose() is None
 
 
@@ -352,7 +352,7 @@ async def test_setup_failure_during_owner_disposal_keeps_cleaning_and_replays() 
         await await_result(registration)
     assert caught.value is failure
     assert events == ["last", "first"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 async def test_async_setup_cleanup_failure_replays_without_repeating() -> None:
@@ -401,7 +401,7 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
     assert (
         await await_result(value().add_wrappers(add(extra=Auto(parameter())))(ctx)) == 5
     )
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -458,7 +458,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
     assert isinstance(node_error, NodeExceptionRecord)
     assert node_error.__cause__ is failure
     assert child_errors.__cause__ is None
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -475,7 +475,7 @@ async def test_cleanup_cannot_await_saved_owner_completion() -> None:
         await asyncio.wait_for(await_result(completion), 1)
     assert isinstance(caught.value.exceptions[0], RuntimeError)
     assert "setup or cleanup" in str(caught.value.exceptions[0])
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 async def test_disposal_preserves_sync_failure_while_finishing_async_cleanup() -> None:

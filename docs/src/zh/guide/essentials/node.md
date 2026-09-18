@@ -40,7 +40,8 @@ inline = create_node(lambda ctx, *, value: value + 1, {"value": 3})
 自行管理 Context 时直接调用 Node：
 
 ```python
-ctx = Context(schema=R)
+ctx = Context()
+ctx.declare(R)
 ctx.set(R.resolve("input.x"), 3)
 result = task(ctx)  # 5
 ```

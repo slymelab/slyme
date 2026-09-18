@@ -1,5 +1,7 @@
 # 生命周期（Lifecycle）
 
+`Lifecycle` 也是可独立使用的 effect owner，从 `slyme.context` 导出。`Lifecycle(parent=owner)` 加入生命周期树，不需要 Schema、Store 或 Scope。其 `effect()`、`dispose()` 和 `adispose()` 与 Context 采用相同规则。可选的同步 `finalize` 回调在所有归属项清理结束后执行一次，清理失败也会执行；它不是可独立撤销的 effect。Context 用该回调释放数据 viewer，应用根还会将 Store 从 Schema 注销。应用应通过 `ctx.effect()` 登记清理，而不是重写 `Context.dispose()`；归属树由 Lifecycle 遍历。
+
 Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行树。调用装饰后的函数会创建可变 Node；调用这个 Node 时，会使用它的当前参数直接执行。
 
 ## 构建与修改
@@ -40,7 +42,7 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 参数绑定使用浅快照，不做深拷贝。在 Node 或 Wrapper 内修改非 Auto 的 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。每个 Auto 参数都会按 Tree 规则遍历并重建容器，无论其中是否包含可求值叶子。普通叶子和 evaluator 返回值仍然共享。
 
-需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；全部可见字段都采用 `assign` 模式时，可以使用 `Context(context.flatten(), schema=context.schema)` 物化为新应用根；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
+需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；全部可见字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.update(context.flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
 
 Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare()` 注册的 cleanup，按直接归属项的后进先出顺序递归释放。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
 
@@ -53,10 +55,13 @@ Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare(
 静态参数值和从 `Context` 取得的值都保持普通 Python 可变语义：
 
 ```python
-ctx = Context(schema=R)
+ctx = Context()
+ctx.declare(R)
 ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
-process(data=Auto([R.resolve("a"), R.resolve("b")]))(ctx)  # Auto 生成求值后的 list [1, 2]
+process(data=Auto([R.resolve("a"), R.resolve("b")]))(
+    ctx
+)  # Auto 生成求值后的 list [1, 2]
 process(data=Auto(R.resolve("items")))(ctx)  # data 是 Context 中保存的 list
 ```
 

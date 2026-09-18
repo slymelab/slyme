@@ -121,7 +121,9 @@ def test_metadata_failure_preserves_schema_and_original_exception() -> None:
 def test_late_conflict_rolls_back_merged_metadata_and_new_containers() -> None:
     config = Schema.leaf(str, metadata={"labels": Labels(("original",))})
     schema = Schema({"first": config, "last": Schema.leaf(int)})
-    ctx = Context({"first": "runtime value"}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"first": "runtime value"})
     entries = dict(schema._entries)
     owners = {path: dict(entry._declarations) for path, entry in entries.items()}
 

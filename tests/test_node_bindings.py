@@ -8,8 +8,8 @@ import pytest
 
 from slyme.context import Context, Schema
 from slyme.node import Auto, Node, node, wrapper
+from slyme.node.core import NODE_ENGINE
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.node.tree import NODE_ENGINE
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])
@@ -87,7 +87,10 @@ def test_call_overrides_bindings_before_auto_evaluation(kind: str) -> None:
     binding = Auto(child())
     original = {"left": 1}
     instance = factory(value=binding, options=original)
-    ctx = Context({"value": 4}, schema=Schema({"value": Schema.leaf()}))
+    ctx = Context()
+    ctx.declare(Schema({"value": Schema.leaf()}))
+    initial_owned = tuple(ctx._lifecycle._owned)
+    ctx.update({"value": 4})
     runtime = (ctx,) if kind == "node" else (ctx, child(), lambda ctx: None)
     replacement = {"right": 2}
     assert instance(*runtime, value=9, options=replacement) == (
@@ -95,14 +98,14 @@ def test_call_overrides_bindings_before_auto_evaluation(kind: str) -> None:
         {"options": replacement},
     )
     assert calls == []
-    assert instance(*runtime, value=Auto(ctx.schema.resolve("value")))[0] == 4
+    assert instance(*runtime, value=Auto(ctx.resolve("value")))[0] == 4
     assert calls == []
     assert instance(*runtime, value=None)[0] is None
     assert instance(*runtime)[0] == 3
     assert calls == ["child"]
     assert instance.params == {"value": binding, "options": original}
     assert instance.get("options") is original
-    assert not ctx._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -131,7 +134,7 @@ def test_native_parameter_errors_are_reported_at_invocation() -> None:
     assert isinstance(unexpected.value.__cause__, TypeError)
     assert "unknown" in str(unexpected.value.__cause__)
     assert calls == ["child"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     instance.delete("unknown")
     assert instance(ctx, value=2) == 2
 

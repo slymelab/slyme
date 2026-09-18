@@ -25,15 +25,14 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import once
-from slyme.utils.tree import MappingKey
-
-from .ref import Ref
-from .tree import SCHEMA_ENGINE
+from slyme.utils.tree import MappingKey, TreeEngine
+from slyme.utils.tree.common import flatten_dict, unflatten_dict
 
 if TYPE_CHECKING:
-    from .core import Context
+    from .store import ContextStore
 
 __all__ = [
+    "Ref",
     "Metadata",
     "RefConfig",
     "RefContainerConfig",
@@ -43,6 +42,29 @@ __all__ = [
 ]
 
 _T = TypeVar("_T")
+
+SCHEMA_ENGINE = TreeEngine("schema_engine", register_defaults=False)
+SCHEMA_ENGINE.register(dict, flatten_dict, unflatten_dict)
+
+
+@dataclass(frozen=True)
+class Ref(Generic[_T]):
+    """Immutable Context path; the empty path identifies the root container."""
+
+    path: str
+    parts: tuple[str, ...] = field(init=False)
+
+    @staticmethod
+    def _split_path(path: str) -> tuple[str, ...]:
+        if not path:
+            return ()
+        parts = tuple(path.split("."))
+        if any(not part for part in parts):
+            raise ValueError(f"Invalid Ref path: {path!r}.")
+        return parts
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parts", self._split_path(self.path))
 
 
 @dataclass(frozen=True)
@@ -166,16 +188,16 @@ _Declaration = dict[str, "_Declaration | RefConfig[Any]"]
 
 @dataclass(frozen=True, eq=False, repr=False)
 class Schema:
-    """Reversible declarations retaining root Contexts until explicit disposal.
+    """Reversible declarations shared by application data stores.
 
     The root container is permanent. Withdrawing a field cleans its bindings in
-    every registered root Context, without guaranteeing order between roots.
+    every attached store, without guaranteeing order between applications.
     """
 
     declaration: InitVar[Schema | _Declaration | None] = None
     _data: _SchemaContainer = field(default_factory=dict, init=False)
     _entries: dict[str, RefEntry[Any]] = field(default_factory=dict, init=False)
-    _contexts: set[Context] = field(default_factory=set, init=False)
+    _stores: set[ContextStore] = field(default_factory=set, init=False)
 
     def __post_init__(self, declaration: Schema | _Declaration | None) -> None:
         root: RefEntry[Any] = RefEntry(Ref(_CONTAINER_ENTRY_KEY))
@@ -283,8 +305,8 @@ class Schema:
             if parent:
                 break
         del self._entries[entry.ref.path]
-        for ctx in tuple(self._contexts):
-            ctx._remove_binding(entry)
+        for store in tuple(self._stores):
+            store.remove_entry(entry)
 
     @staticmethod
     def _release_declaration(

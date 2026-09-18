@@ -64,7 +64,7 @@ def test_auto_async_result_can_be_created_before_starting_event_loop(
     assert not events
     assert asyncio.run(await_result(pending)) == 7
     assert events == ["child", "cleanup", "parent"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -111,7 +111,9 @@ async def test_evaluator_groups_run_concurrently_and_settle_before_reporting(
 @pytest.mark.parametrize("target", ["node", "wrapper", "eval_tree"])
 async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> None:
     schema = Schema({"first": Schema.leaf(), "second": Schema.leaf()})
-    ctx = Context(schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    initial_owned = tuple(ctx._lifecycle._owned)
     visited = []
     failure = ValueError("child failed")
 
@@ -163,7 +165,7 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
     assert isinstance(child_error, NodeExceptionRecord)
     assert child_error.__cause__ is failure
     assert visited == ["child", "cleanup"]
-    assert not ctx._owned
+    assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
 
@@ -219,7 +221,7 @@ async def test_auto_reports_cleanup_failures_with_node_exception_context(
         assert events == [
             (event, index) for index in range(3) for event in ("run", "cleanup")
         ]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -250,7 +252,7 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
     assert len(caught.value.exceptions) == 1
     assert caught.value.__cause__ is None
     assert events == ["cleanup", "second"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 async def test_sync_auto_failure_still_starts_async_siblings() -> None:
@@ -273,7 +275,7 @@ async def test_sync_auto_failure_still_starts_async_siblings() -> None:
     with pytest.raises(BaseExceptionGroup):
         await pending
     assert visited == ["sync", "async"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 async def test_auto_keeps_exception_objects_returned_as_data() -> None:
@@ -291,7 +293,7 @@ async def test_auto_keeps_exception_objects_returned_as_data() -> None:
     ctx = Context()
     result = await await_result(node_evaluator(ctx, [asynchronous(), synchronous()]))
     assert result[0] is first and result[1] is second
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 @pytest.mark.parametrize("fails", [False, True])
@@ -326,7 +328,7 @@ async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
         assert len(caught.value.exceptions) == 1
     else:
         assert await task == [1, 2]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -366,7 +368,7 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
     assert "sibling finished" in events
     assert events.count("cleanup:cancelled") == 1
     assert events.count("cleanup:sibling") == 1
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None:
@@ -398,7 +400,7 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cleaned.is_set()
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
@@ -437,7 +439,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert events == ["cleanup started"]
-        assert children[0] in ctx._owned
+        assert children[0]._lifecycle in ctx._lifecycle._owned
     finally:
         release.set()
         if cleanup_fails:
@@ -447,7 +449,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         else:
             await children[0].adispose()
     assert events == ["cleanup started", "cleanup finished"]
-    assert not ctx._owned
+    assert not ctx._lifecycle._owned
     ctx.dispose()
 
 
@@ -464,7 +466,9 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
     for key, evaluator in EVALUATOR_REGISTRY.items():
         registry.register(evaluator, key=key)
     monkeypatch.setattr("slyme.node.eval.EVALUATOR_REGISTRY", registry)
-    ctx = Context({"value": 7}, schema=Schema({"value": Schema.leaf()}))
+    ctx = Context()
+    ctx.declare(Schema({"value": Schema.leaf()}))
+    ctx.update({"value": 7})
     custom_ref = CustomRef("value")
     custom_node = CustomNode(func=lambda ctx: 3, params={})
 
@@ -504,7 +508,9 @@ async def test_auto_reconstructs_containers_and_preserves_ordinary_leaves(
     target: str, dynamic: bool
 ) -> None:
     schema = Schema({"value": Schema.leaf()})
-    ctx = Context({"value": 7}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"value": 7})
     marker = object()
     payload = {
         "plain": [{"marker": marker}, [], {}],
@@ -642,7 +648,9 @@ def test_wrapper_reentry_evaluates_current_auto_container_each_time() -> None:
         ctx.set("value", 3)
         return first, call_next(ctx)
 
-    ctx = Context({"value": 2}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"value": 2})
     graph = read(values=Auto(payload)).add_wrappers(repeat())
     assert graph(ctx) == ([1], [1, 3])
     assert graph(ctx) == ([42], [42])

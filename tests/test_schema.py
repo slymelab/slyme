@@ -20,8 +20,7 @@ from slyme.context import (
     RefLeafConfig,
     Schema,
 )
-from slyme.context.schema import _Declaration
-from slyme.context.tree import SCHEMA_ENGINE
+from slyme.context.schema import SCHEMA_ENGINE, _Declaration
 
 
 @dataclass(frozen=True)
@@ -236,14 +235,17 @@ def test_entry_withdrawal_releases_cached_aggregate() -> None:
 
 
 def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -> None:
-    schema = Schema()
+    root = Context()
+    schema = root._schema
     declaration: _Declaration = {
         "group": {"value": Schema.leaf(), "owned": Schema.leaf(mode="register")}
     }
     first = schema.declare(declaration)
     second = schema.declare(declaration)
-    left = Context({"group.value": "left"}, schema=schema)
-    right = Context({"group.value": "right"}, schema=schema)
+    left = root.fork(scope=root.scope.fork())
+    left.update({"group.value": "left"})
+    right = root.fork(scope=root.scope.fork())
+    right.update({"group.value": "right"})
     remove_owned = left.register("group.owned", "owned")
     child = left.isolate("group.value")
     child.set("group.value", "child")
@@ -260,10 +262,11 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
         remove_owned()
         left.dispose()
         right.dispose()
+        root.dispose()
     assert_indexes(schema, set())
-    assert not left._data and not right._data
-    assert not left._scope_usage and not right._scope_usage
-    assert not schema._contexts
+    assert not left._store._data and not right._store._data
+    assert not left._store._scope_usage and not right._store._scope_usage
+    assert not schema._stores
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -291,15 +294,18 @@ async def test_context_owned_cleanup_does_not_read_config(
         patch.setattr(RefEntry, "config", property(unexpected_config_read))
         await root.adispose()
         await root.adispose()
-    assert_indexes(root.schema, set())
-    assert not root._data
-    assert not root._scope_usage
-    assert not root._owned
+    assert_indexes(root._schema, set())
+    assert not root._store._data
+    assert not root._store._scope_usage
+    assert not root._lifecycle._owned
 
 
 def test_failed_declaration_rollback_does_not_read_config(monkeypatch) -> None:
     schema = Schema({"stable": Schema.leaf(int)})
-    ctx = Context({"stable": 1}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    schema = ctx._schema
+    ctx.update({"stable": 1})
     original = Schema._merge_declaration
     failure = ValueError("registration failed")
 
@@ -327,7 +333,10 @@ def test_failed_declaration_rollback_does_not_read_config(monkeypatch) -> None:
 
 def test_partial_declaration_commit_removes_only_its_new_paths(monkeypatch) -> None:
     schema = Schema({"stable": Schema.leaf(int)})
-    ctx = Context({"stable": 1}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    schema = ctx._schema
+    ctx.update({"stable": 1})
     owners = {
         path: dict(entry._declarations) for path, entry in schema._entries.items()
     }
@@ -391,12 +400,14 @@ def test_declaration_merges_each_incoming_config_once(monkeypatch) -> None:
 
 
 def test_schema_merges_contributions_without_replacing_runtime_bindings() -> None:
-    schema = Schema({"blocked": Schema.leaf(int)})
+    ctx = Context()
+    ctx.declare({"blocked": Schema.leaf(int)})
+    schema = ctx._schema
     first = _AnnotatedLeaf(labels=("first",))
     second = _AnnotatedLeaf(labels=("second",))
     remove_first = schema.declare({"value": first})
     entry = schema.resolve_entry("value")
-    ctx = Context({"value": "runtime value"}, schema=schema)
+    ctx.update({"value": "runtime value"})
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
         schema.declare({"value": second, "blocked": Schema.leaf(str)})
     assert entry.config is first
@@ -417,7 +428,7 @@ def test_schema_merges_contributions_without_replacing_runtime_bindings() -> Non
     remove_second()
     assert not entry.alive
     assert_indexes(schema, {"blocked"})
-    assert not ctx._data
+    assert not ctx._store._data
     ctx.dispose()
 
 
@@ -434,7 +445,7 @@ def test_schema_dataclass_initializes_independent_state() -> None:
     assert len({left, right}) == 2
     assert left._data is not right._data
     assert left._entries is not right._entries
-    assert left._contexts is not right._contexts
+    assert left._stores is not right._stores
     assert left._data[""] is left._entries[""]
     assert left._entries[""] is not right._entries[""]
     assert weakref.ref(left)() is left
@@ -601,8 +612,8 @@ def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> N
         return reversed(tuple(original(tree)))
 
     monkeypatch.setattr(SCHEMA_ENGINE, "iter_with_key_path", child_first)
-    schema = Schema()
-    ctx = Context(schema=schema)
+    ctx = Context()
+    schema = ctx._schema
     remove = schema.declare({"group": {"0": Schema.leaf(int), "empty": {}}})
     assert_indexes(schema, {"group", "group.0", "group.empty"})
     ctx.set("group.0", 1)
@@ -619,7 +630,7 @@ def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> N
         duplicate()
     assert_indexes(schema, set())
     assert schema._element_at(()) == {"": schema._entries[""]}
-    assert not ctx._data and not ctx._scope_usage[ctx.scope].entries
+    assert not ctx._store._data and not ctx._store._scope_usage[ctx.scope].entries
     assert_indexes(imported, {"group", "group.0", "group.empty"})
     ctx.dispose()
 
@@ -628,7 +639,9 @@ def test_child_first_conflict_rolls_back_unconfigured_ancestor_dicts(
     monkeypatch,
 ) -> None:
     schema = Schema({"blocked": Schema.leaf(int)})
-    ctx = Context({"blocked": 1}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"blocked": 1})
     original = SCHEMA_ENGINE.iter_with_key_path
     entries = dict(schema._entries)
     owners = {path: dict(entry._declarations) for path, entry in entries.items()}
@@ -705,7 +718,8 @@ def test_schema_index_and_tree_stay_unchanged_after_conflict() -> None:
 def test_context_uses_flat_schema_lookup_for_declared_paths(monkeypatch) -> None:
     schema = Schema({"group": {"nested": {"value": Schema.leaf()}}})
     ref = schema.resolve("group.nested.value")
-    ctx = Context(schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
 
     def unexpected_tree_lookup(*args, **kwargs):
         raise AssertionError("Declared leaf lookup must not traverse the Schema tree")
@@ -724,7 +738,9 @@ def test_context_uses_flat_schema_lookup_for_declared_paths(monkeypatch) -> None
 
 def test_schema_keys_and_context_keys_distinguish_declarations_from_visible_values():
     schema = Schema({"group": {"left": Schema.leaf(), "right": Schema.leaf()}})
-    ctx = Context({"group.right": 2}, schema=schema)
+    ctx = Context()
+    ctx.declare(schema)
+    ctx.update({"group.right": 2})
     assert schema._child_names(("group",)) == ("left", "right")
     assert ctx.get("group").keys() == ("right",)
     ctx.dispose()

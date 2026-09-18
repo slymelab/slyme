@@ -18,7 +18,7 @@ from inspect import isawaitable
 from typing import Any, TypeVar, cast
 
 from slyme.context import Context, Ref
-from slyme.context.tree import CTX_EVAL_ENGINE
+from slyme.context.store import CTX_EVAL_ENGINE
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import continuation
 from slyme.utils.registry import GeneralRegistry

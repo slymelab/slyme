@@ -153,7 +153,9 @@ def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
 async def test_compose_preserves_context_replacement_and_multiple_next_calls(
     asynchronous: bool,
 ) -> None:
-    ctx = Context({"value": 1}, schema=Schema({"value": Schema.leaf()}))
+    ctx = Context()
+    ctx.declare(Schema({"value": Schema.leaf()}))
+    ctx.update({"value": 1})
     child = ctx.fork(scope=ctx.scope.fork())
     child.set("value", 2)
 

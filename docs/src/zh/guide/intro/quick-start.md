@@ -54,13 +54,14 @@ def build() -> Node:
     ).add_wrappers(timing(name="llm"))
 
 
-ctx = Context(
+ctx = Context()
+ctx.declare(R)
+ctx.update(
     {
         R.resolve("input.articles"): [
             {"title": "Slyme", "content": "Composable Python Nodes"}
         ]
-    },
-    schema=R,
+    }
 )
 build()(ctx)
 print(ctx.get(R.resolve("output.responses")))
