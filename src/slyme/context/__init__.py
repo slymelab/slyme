@@ -13,10 +13,12 @@
 # limitations under the License.
 
 from .compose import Compose
-from .core import Context, ContextKey
+from .core import Context
 from .default import DATA_TREE_REF, EVALUATORS_REF, NODE_TREE_REF
 from .lifecycle import Lifecycle
 from .schema import (
+    ContextKey,
+    ContextPathError,
     Metadata,
     Ref,
     RefConfig,
@@ -32,6 +34,7 @@ __all__ = [
     "Compose",
     "Context",
     "ContextKey",
+    "ContextPathError",
     "ContextStore",
     "DATA_TREE_REF",
     "NODE_TREE_REF",

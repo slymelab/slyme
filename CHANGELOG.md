@@ -61,16 +61,19 @@ breaking changes when they are documented here.
   hierarchy, including first-value, collection, mapping, and custom rules.
 - Added immutable Compose-local identity bindings so selected Scopes can share
   contribution storage without changing other Scope lookup; Context leaves
-  support the same identity-sharing rules through `isolate(identity=...)`.
-- Added Schema-owned write modes and `Context.isolate()` for owned
-  child Contexts that block selected inherited Scope values.
+  support the same identity-sharing rules through `bind(*refs, identity=...)`.
+- Added Schema-owned write modes and `Context.set_blocked(ref, blocked=...)`
+  to enable or disable a leaf identity's inheritance barrier independently of
+  Context lifetime creation and identity binding.
 
 ### Fixed
 
-- Combined Scope usage history and active ownership in a weak-key index. Saved
-  Scopes retain empty usage records; their values are released with their final
-  viewer. `ContextStore.dispose()` clears the remaining bindings and detaches
-  the Store from Schema after all viewers have been released.
+- Retained sparse binding history in weak-key Scope usage records. The final
+  viewer releases identity data without discarding the index; reusing a Scope
+  restores only its indexed bindings and prunes withdrawn entries, without
+  scanning the application's Schema.
+  `ContextStore.dispose()` clears the remaining bindings and detaches the Store
+  from Schema after all viewers have been released.
 - Reused a single parent Scope's C3 order directly when constructing a child,
   making single-parent construction linear in the ancestor count.
 - Replaced exception-driven missing-identity scans with direct lookups. Context
@@ -129,8 +132,15 @@ breaking changes when they are documented here.
 - Removed execution-mode decorators and separate async Node, Wrapper, evaluator,
   sequence, and Context lifecycle APIs. Use the unified APIs and `await_result()`
   when immediate and awaitable results are both possible.
-- Removed `Context.bind()` and `Context.contribute()`. Use
-  `Context.isolate(..., identity=...)` for shared isolated leaf storage and
+- Removed `Context.isolate()`; compose explicit `fork()`, `bind()`, and
+  `set_blocked()` calls instead.
+- Removed the `ContextElement` base class; Context and ContextView retain their
+  data access methods without a shared abstract base.
+- Removed `ContextView.extract()`. Views provide only `get/exists/keys/to_dict/flatten`;
+  tree-shaped extraction uses `Context.extract()` with absolute paths or Refs.
+- ContextView accepts only relative string paths; use Context directly for Ref
+  lookups. Its `flatten()` output remains keyed by absolute Refs.
+- Removed `Context.contribute()`. Use
   `ctx.effect(lambda: compose.add(scope, value))` for owned contributions.
 
 - Removed `slyme.builder`; use ordinary Python functions to assemble Node graphs.

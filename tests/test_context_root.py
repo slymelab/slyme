@@ -48,14 +48,15 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
     ctx.set("group.value", 3)
     assert view.keys() == ("$", "group")
     assert view.get("group.value") == 3
-    assert view.get(Ref("group.value")) == 3
+    assert ctx.get(Ref("group.value")) == 3
     assert view.to_dict() == {"$": ctx.get("$").to_dict(), "group": {"value": 3}}
     assert view.flatten() == {**ctx.get("$").flatten(), Ref("group.value"): 3}
 
     nested = view.get("group")
     assert nested.get("") == nested
-    with pytest.raises(ContextPathError, match="outside"):
-        nested.get(Ref(""))
+    assert nested.exists("")
+    assert tuple(nested.keys("")) == tuple(nested.keys()) == ("value",)
+    assert nested.to_dict("") == nested.to_dict() == {"value": 3}
 
     ctx.delete("group")
     assert view.to_dict() == {"$": ctx.get("$").to_dict()}
@@ -73,7 +74,7 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
 
 @pytest.mark.parametrize("key", ["", Ref("")])
 @pytest.mark.parametrize(
-    "operation", ["set", "register", "update", "update_tree", "isolate"]
+    "operation", ["set", "register", "update", "update_tree", "bind", "set_blocked"]
 )
 def test_root_rejects_leaf_operations_without_partial_writes(
     key: str | Ref, operation: str
@@ -87,8 +88,10 @@ def test_root_rejects_leaf_operations_without_partial_writes(
             ctx.update({"value": 2, key: {}})
         elif operation == "update_tree":
             ctx.update_tree(["value", key], [2, {}])
-        elif operation == "isolate":
-            ctx.isolate(key)
+        elif operation == "bind":
+            ctx.bind(key, identity=object())
+        elif operation == "set_blocked":
+            ctx.set_blocked(key, blocked=True)
         else:
             getattr(ctx, operation)(key, {})
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "value": 1}

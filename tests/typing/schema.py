@@ -1,6 +1,6 @@
 """Schema declarations use dict trees or another Schema, not arbitrary mappings."""
 
-from collections.abc import Hashable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from typing import Any
 
 from typing_extensions import assert_type
@@ -15,6 +15,7 @@ from slyme.context import (
     RefLeafConfig,
     Schema,
 )
+from slyme.context.core import ContextView
 from slyme.context.schema import _Declaration
 
 
@@ -24,9 +25,14 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     Context(schema=schema)  # type: ignore[call-arg]
     assert_type(ctx.entries, tuple[RefEntry[Any], ...])
     assert_type(ctx.resolve("value"), Ref[Any])
+    assert_type(ctx.resolve(Ref("value"), role="leaf"), Ref[Any])
+    assert_type(ctx.resolve("", role="container"), Ref[Any])
     assert_type(ctx.resolve_entry("value"), RefEntry[Any])
+    assert_type(ctx.resolve_entry(Ref("value"), role=None), RefEntry[Any])
     assert_type(schema.entries, tuple[RefEntry[Any], ...])
+    assert_type(schema.resolve(Ref("value"), role="leaf"), Ref[Any])
     assert_type(schema.resolve_entry("value"), RefEntry[Any])
+    assert_type(schema.resolve_entry(Ref("value"), role=None), RefEntry[Any])
     assert_type(schema.resolve_entry("value").config.metadata, Mapping[str, Metadata])
     assert_type(Schema.leaf(int), RefLeafConfig[int])
     assert_type(Schema.container(), RefContainerConfig)
@@ -58,3 +64,15 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     Schema(mapping)  # type: ignore[arg-type]
     schema.declare(mapping)  # type: ignore[arg-type]
     ctx.declare(mapping)  # type: ignore[arg-type]
+
+
+def check_view_types(view: ContextView, ref: Ref[Any]) -> None:
+    assert_type(view.get("value"), Any)
+    assert_type(view.exists("value"), bool)
+    assert_type(view.keys(""), Iterable[str])
+    assert_type(view.to_dict(""), dict[str, Any])
+    assert_type(view.flatten(), dict[Ref[Any], Any])
+    view.get(ref)  # type: ignore[arg-type]
+    view.exists(ref)  # type: ignore[arg-type]
+    view.keys(ref)  # type: ignore[arg-type]
+    view.to_dict(ref)  # type: ignore[arg-type]

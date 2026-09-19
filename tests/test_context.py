@@ -648,9 +648,6 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
     assert user.to_dict() == {"name": "Ada", "age": 37}
     assert user.get("name") == "Ada"
     assert user.exists("age")
-    assert user.get(R.resolve("user.name")) == "Ada"
-    with pytest.raises(ContextPathError, match="outside"):
-        user.get(R.resolve("name"))
     assert set(user.keys()) == {"name", "age"}
     assert ctx.flatten() == {
         **ctx.get("$").flatten(),
@@ -1024,6 +1021,8 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
         Context.register,
         Context.update_tree,
         Context.delete,
+        Context.bind,
+        Context.set_blocked,
     )
 
     for operation in operations:
@@ -1031,12 +1030,16 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
     assert "scope" in inspect.signature(Context.fork).parameters
 
 
-def test_context_isolate_shares_only_the_selected_leaf() -> None:
+def test_context_bind_shares_only_the_selected_leaf() -> None:
     root = Context()
     root.declare(R)
     identity = object()
-    left = root.isolate(R.resolve("value"), identity=identity)
-    right = root.isolate(R.resolve("value"), identity=identity)
+    left = root.fork(scope=root.scope.fork())
+    left.bind(R.resolve("value"), identity=identity)
+    left.set_blocked(R.resolve("value"), blocked=True)
+    right = root.fork(scope=root.scope.fork())
+    right.bind(R.resolve("value"), identity=identity)
+    right.set_blocked(R.resolve("value"), blocked=True)
     left.set(R.resolve("value"), "shared")
     left.set(R.resolve("runtime.value"), "left-only")
 
@@ -1229,13 +1232,14 @@ def test_context_assignment_paths_reject_registration() -> None:
     assert ctx.get(value) == 2
 
 
-def test_context_isolate_blocks_inheritance_until_the_child_is_discarded() -> None:
+def test_context_barrier_survives_registration_removal() -> None:
     value = R.resolve("service")
     root = Context()
     root.declare(R)
     root.register(value, "root")
 
-    isolated = root.isolate(value)
+    isolated = root.fork(scope=root.scope.fork())
+    isolated.set_blocked(value, blocked=True)
     assert isolated.get(value, "missing") == "missing"
     assert not isolated.exists(value)
     assert not isolated.exists(value, local=True)
@@ -1249,12 +1253,13 @@ def test_context_isolate_blocks_inheritance_until_the_child_is_discarded() -> No
     assert root.get(value) == "root"
 
 
-def test_context_isolation_stops_c3_lookup_before_later_parents() -> None:
+def test_context_barrier_stops_c3_lookup_before_later_parents() -> None:
     value = R.resolve("value")
     root = Context()
     root.declare(R)
     root.set(value, "root")
-    left = root.isolate(value)
+    left = root.fork(scope=root.scope.fork())
+    left.set_blocked(value, blocked=True)
     right = root.fork(scope=root.scope.fork())
     right.set(value, "right")
     child_scope = Scope(parents=(left.scope, right.scope))
@@ -1274,12 +1279,16 @@ def test_context_isolation_stops_c3_lookup_before_later_parents() -> None:
     assert child.get(value, "missing") == "missing"
 
 
-def test_context_isolate_requires_declared_leaves() -> None:
+@pytest.mark.parametrize("operation", ["bind", "set_blocked"])
+def test_context_binding_operations_require_declared_leaves(operation: str) -> None:
     ctx = Context()
     ctx.declare(R)
 
     with pytest.raises(ContextPathError, match="container.*not a leaf"):
-        ctx.isolate(R.resolve("group"))
+        if operation == "bind":
+            ctx.bind(R.resolve("group"), identity=object())
+        else:
+            ctx.set_blocked(R.resolve("group"), blocked=True)
 
 
 def test_context_register_disposer_prunes_a_temporary_container() -> None:

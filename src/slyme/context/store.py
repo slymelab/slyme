@@ -15,27 +15,23 @@
 from __future__ import annotations
 
 import weakref
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import Enum
+from itertools import chain
 from typing import Any, Literal, TypeVar, cast
 
+from slyme.utils.exception import exception_group
 from slyme.utils.execution import once
 
-from .schema import Ref, RefEntry, RefLeafConfig, Schema
+from .schema import ContextPathError, Ref, RefEntry, RefLeafConfig, Schema
 from .scope import Scope
 
-__all__ = ["ContextStore", "ContextKey", "ContextPathError"]
+__all__ = ["ContextStore"]
 
 _T = TypeVar("_T")
-ContextKey = str | Ref[Any]
-_RefRole = Literal["any", "leaf", "container"]
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
-
-
-class ContextPathError(KeyError):
-    """A Context path cannot be resolved or changed as requested."""
 
 
 @dataclass(eq=False, slots=True)
@@ -45,15 +41,11 @@ class _IdentityData:
     blocked: bool = False
     scopes: set[Scope] = field(default_factory=set)
 
-    def clear(self) -> None:
-        self.scopes.clear()
-        self.token = None
-        self.blocked = False
-        self.value = _MISSING
-
 
 @dataclass(slots=True)
 class _ScopeUsage:
+    """Current viewers and binding history retained across viewer lifetimes."""
+
     viewers: set[object] = field(default_factory=set)
     entries: set[RefEntry[Any]] = field(default_factory=set)
 
@@ -82,7 +74,7 @@ class _ContextBinding:
         """Snapshot Scopes retaining identity data, excluding inactive identities."""
         return tuple(scope for data in self._data.values() for scope in data.scopes)
 
-    def _lookup_data(self, scope: Scope) -> _IdentityData | None:
+    def _get_data(self, scope: Scope) -> _IdentityData | None:
         identity = self._scope_identities.get(scope, _MISSING)
         return self._data.get(identity)
 
@@ -109,7 +101,8 @@ class _ContextBinding:
         self._ensure_data(scope)
         return True
 
-    def resolve(self, scope: Scope, *, local: bool = False) -> Any:
+    def get(self, scope: Scope, *, local: bool = False) -> Any:
+        """Return the first visible value, or _MISSING without acquiring ownership."""
         for current in (scope,) if local else scope.mro:
             data = self._data.get(self._scope_identities.get(current, _MISSING))
             if data is None:
@@ -118,23 +111,14 @@ class _ContextBinding:
                 return data.value
             if data.blocked:
                 break
-        raise LookupError("Context value is not visible.")
+        return _MISSING
 
-    def has_value(self, scope: Scope, *, token: object = _MISSING) -> bool:
-        """Check locally without creating data; a supplied token must match by identity.
+    def matches(self, scope: Scope, *, token: object | None) -> bool:
+        """Check that a local value exists and its token matches by identity."""
+        data = self._get_data(scope)
+        return data is not None and data.value is not _MISSING and data.token is token
 
-        Omitting token accepts any owner; explicit None matches only None.
-        """
-        data = self._lookup_data(scope)
-        return (
-            data is not None
-            and data.value is not _MISSING
-            and (token is _MISSING or data.token is token)
-        )
-
-    def set_value(
-        self, scope: Scope, value: Any, *, token: object | None = None
-    ) -> None:
+    def set(self, scope: Scope, value: Any, *, token: object | None = None) -> None:
         """Write freely when unprotected; otherwise require the stored token."""
         data = self._ensure_data(scope)
         if data.token is not None and data.token is not token:
@@ -142,9 +126,9 @@ class _ContextBinding:
         data.token = token
         data.value = value
 
-    def delete_value(self, scope: Scope, *, token: object | None = None) -> None:
+    def delete(self, scope: Scope, *, token: object | None = None) -> None:
         """Delete locally, enforcing any stored token; an absent value is a no-op."""
-        data = self._lookup_data(scope)
+        data = self._get_data(scope)
         if data is not None:
             if data.token is not None and data.token is not token:
                 raise ValueError("Context value token does not match.")
@@ -152,11 +136,15 @@ class _ContextBinding:
             data.token = None
             data.value = _MISSING
 
-    def block(self, scope: Scope, *, identity: Hashable | None = None) -> None:
-        """Block inheritance at a saved, new private, or explicitly shared identity."""
-        self._ensure_data(
-            scope, identity=_MISSING if identity is None else identity
-        ).blocked = True
+    def bind(self, scope: Scope, *, identity: Hashable) -> None:
+        """Retain an immutable identity without changing its value, token, or barrier."""
+        self._ensure_data(scope, identity=identity)
+
+    def set_blocked(self, scope: Scope, *, blocked: bool) -> None:
+        """Set this identity's barrier; unblocking absent data is a no-op."""
+        data = self._ensure_data(scope) if blocked else self._get_data(scope)
+        if data is not None:
+            data.blocked = blocked
 
     def release_scope(self, scope: Scope) -> None:
         """Release one Scope and remove its identity if no bound Scope remains."""
@@ -167,24 +155,20 @@ class _ContextBinding:
         data.scopes.discard(scope)
         if not data.scopes:
             del self._data[identity]
-            data.clear()
 
     def clear(self) -> None:
-        """Detach all identities before releasing values and registration handles."""
-        data = tuple(self._data.values())
+        """Clear values and saved identities."""
         self._data.clear()
         self._scope_identities.clear()
-        for identity_data in data:
-            identity_data.clear()
 
 
 _ContextData = dict[RefEntry[Any], _ContextBinding]
-_Tree = dict[str, Any]
 
 
 class ContextStore:
     """Scoped data shared by an application, without a caller's lifecycle state.
 
+    Context resolves live entries and required leaf/container roles through Schema.
     Acquire each viewer before writing through its Scope, release it exactly once,
     and dispose the store when its application ends. Context coordinates these steps.
     """
@@ -201,15 +185,9 @@ class ContextStore:
         """Detach from Schema and clear storage after releasing all viewers."""
         self._schema._detach_store(self)
         self._data.clear()
-        self._scope_usages.clear()
 
     def acquire_scope(self, viewer: object, requested_scope: Scope) -> None:
         usages = self._scope_usages
-        if any(
-            scope in usages and viewer in usages[scope].viewers
-            for scope in requested_scope.mro
-        ):
-            raise RuntimeError("Context is already registered as a Scope viewer.")
         restored_scopes: list[Scope] = []
         for scope in requested_scope.mro:
             usage = usages.get(scope)
@@ -219,96 +197,39 @@ class ContextStore:
                 restored_scopes.append(scope)
             usage.viewers.add(viewer)
         try:
+            # Restore identity data -> scopes binding
             for scope in restored_scopes:
-                # Empty usages retain history without keeping their Scope alive.
-                # Saved Scopes restore immutable identity ownership on reuse.
-                for entry in self._schema.entries:
+                entries = usages[scope].entries
+                for entry in tuple(entries):
                     binding = self._data.get(entry)
-                    if binding is None:
-                        continue
-                    try:
-                        restored = binding.restore_scope(scope)
-                    except BaseException:
-                        # A partial restore must remain reachable by rollback.
-                        usages[scope].entries.add(entry)
-                        raise
-                    if restored:
-                        usages[scope].entries.add(entry)
-        except BaseException as error:
-            try:
-                self.release_scope(viewer, requested_scope)
-            except BaseException as rollback_error:
-                raise error from rollback_error
+                    if binding is None or not binding.restore_scope(scope):
+                        entries.discard(entry)
+        except BaseException:
+            self.release_scope(viewer, requested_scope)
             raise
 
     def release_scope(self, viewer: object, requested_scope: Scope) -> None:
         usages = self._scope_usages
-        if any(
-            scope not in usages or viewer not in usages[scope].viewers
-            for scope in requested_scope.mro
-        ):
-            raise RuntimeError("Context is not registered as a Scope viewer.")
-        expired: list[tuple[Scope, _ScopeUsage, tuple[RefEntry[Any], ...]]] = []
+        expired: list[tuple[Scope, _ScopeUsage]] = []
         for scope in requested_scope.mro:
             usage = usages[scope]
             usage.viewers.remove(viewer)
             if not usage.viewers:
-                entries = tuple(usage.entries)
-                usage.entries.clear()
-                expired.append((scope, usage, entries))
+                expired.append((scope, usage))
 
-        first_error: BaseException | None = None
-        for scope, usage, entries in expired:
-            for entry in entries:
-                # Value finalizers may register new viewers for this Scope.
-                if usage.viewers:
-                    break
+        errors = []
+        for scope, usage in expired:
+            for entry in tuple(usage.entries):
                 binding = self._data.get(entry)
                 if binding is None:
+                    usage.entries.discard(entry)
                     continue
                 try:
                     binding.release_scope(scope)
-                except BaseException as error:
-                    if first_error is None:
-                        first_error = error
-        if first_error is not None:
-            raise first_error
-
-    def validate_entry(
-        self,
-        key: ContextKey,
-        *,
-        role: _RefRole = "any",
-    ) -> RefEntry[Any]:
-        path = key if isinstance(key, str) else key.path
-
-        try:
-            entry = self._schema.resolve_entry(path)
-        except (KeyError, ValueError) as error:
-            if isinstance(key, Ref):
-                raise ContextPathError(
-                    f"Ref path {path!r} is not declared by this Context."
-                ) from error
-            raise ContextPathError(str(error)) from error
-
-        kind: Literal["leaf", "container"]
-        if isinstance(entry.config, RefLeafConfig):
-            kind = "leaf"
-        else:
-            kind = "container"
-        if role != "any" and role != kind:
-            raise ContextPathError(
-                f"Ref path {path!r} is declared as a {kind}, not a {role}."
-            )
-        return entry
-
-    def _validate_ref(
-        self,
-        key: ContextKey,
-        *,
-        role: _RefRole = "any",
-    ) -> Ref[Any]:
-        return self.validate_entry(key, role=role).ref
+                except BaseException as e:
+                    errors.append(e)
+        if errors:
+            raise exception_group("Failed to release expired Scopes", errors)
 
     def _writable_binding(self, scope: Scope, entry: RefEntry[Any]) -> _ContextBinding:
         """Index usage before binding changes can release values or raise."""
@@ -319,7 +240,7 @@ class ContextStore:
         self._scope_usages[scope].entries.add(entry)
         return binding
 
-    def remove_entry(self, entry: RefEntry[Any]) -> None:
+    def delete_entry(self, entry: RefEntry[Any]) -> None:
         """Withdraw one Schema definition from this application's active index."""
         binding = self._data.pop(entry, None)
         if binding is None:
@@ -330,91 +251,48 @@ class ContextStore:
                 usage.entries.discard(entry)
         binding.clear()
 
-    def leaf_value(self, scope: Scope, entry: RefEntry[Any], *, local: bool) -> Any:
+    def get(self, scope: Scope, entry: RefEntry[Any], *, local: bool = False) -> Any:
+        """Return a resolved leaf's visible value, or _MISSING if absent."""
         binding = self._data.get(entry)
         if binding is None:
-            raise ContextPathError(entry.ref.path)
-        try:
-            return binding.resolve(scope, local=local)
-        except LookupError as error:
-            raise ContextPathError(entry.ref.path) from error
+            return _MISSING
+        return binding.get(scope, local=local)
 
-    def leaf_items(
+    def _iter_items(
         self,
         scope: Scope,
-        parts: tuple[str, ...],
+        entry: RefEntry[Any],
         *,
         local: bool,
-    ) -> Iterable[tuple[Ref[Any], Any]]:
-        for entry in self._schema._leaf_entries(parts):
-            try:
-                value = self.leaf_value(scope, entry, local=local)
-            except ContextPathError:
-                continue
-            yield entry.ref, value
+    ) -> Iterator[tuple[Ref[Any], Any]]:
+        for leaf in self._schema._leaf_entries(entry.ref.parts):
+            value = self.get(scope, leaf, local=local)
+            if value is not _MISSING:
+                yield leaf.ref, value
 
-    def exists(self, scope: Scope, ref: ContextKey, *, local: bool = False) -> bool:
-        entry = self.validate_entry(ref)
+    def exists(
+        self, scope: Scope, entry: RefEntry[Any], *, local: bool = False
+    ) -> bool:
+        """Check a resolved leaf or container's visibility; the root always exists."""
         if isinstance(entry.config, RefLeafConfig):
-            try:
-                self.leaf_value(scope, entry, local=local)
-                return True
-            except ContextPathError:
-                return False
-        return not entry.ref.parts or any(
-            self.leaf_items(scope, entry.ref.parts, local=local)
-        )
+            return self.get(scope, entry, local=local) is not _MISSING
+        return not entry.ref.parts or any(self._iter_items(scope, entry, local=local))
 
-    def keys(
+    def items(
         self,
         scope: Scope,
-        ref: ContextKey | None = None,
+        entry: RefEntry[Any],
         *,
         local: bool = False,
-    ) -> Iterable[str]:
-        parts = () if ref is None else self._validate_ref(ref, role="container").parts
-        visible = tuple(self.leaf_items(scope, parts, local=local))
-        if parts and not visible:
-            raise ContextPathError(".".join(parts))
-
-        result: list[str] = []
-        for name in self._schema._child_names(parts):
-            child_parts = (*parts, name)
-            if any(
-                leaf.parts[: len(child_parts)] == child_parts for leaf, _ in visible
-            ):
-                result.append(name)
-        return tuple(result)
-
-    def _snapshot_tree(
-        self,
-        scope: Scope,
-        ref: ContextKey | None = None,
-        *,
-        local: bool = False,
-    ) -> _Tree:
-        parts = () if ref is None else self._validate_ref(ref, role="container").parts
-        visible = tuple(self.leaf_items(scope, parts, local=local))
-        if parts and not visible:
-            raise ContextPathError(".".join(parts))
-
-        result: _Tree = {}
-        for leaf, value in visible:
-            relative_parts = leaf.parts[len(parts) :]
-            current = result
-            for part in relative_parts[:-1]:
-                current = current.setdefault(part, {})
-            current[relative_parts[-1]] = value
-        return result
-
-    def to_dict(
-        self,
-        scope: Scope,
-        ref: ContextKey | None = None,
-        *,
-        local: bool = False,
-    ) -> dict[str, Any]:
-        return self._snapshot_tree(scope, ref, local=local)
+    ) -> Iterable[tuple[Ref[Any], Any]]:
+        """Iterate a resolved container's leaves; reject empty non-root containers immediately."""
+        items = self._iter_items(scope, entry, local=local)
+        if not entry.ref.parts:
+            return items
+        first = next(items, None)
+        if first is None:
+            raise ContextPathError(entry.ref.path)
+        return chain((first,), items)
 
     @staticmethod
     def _validate_mode(
@@ -427,62 +305,51 @@ class ContextStore:
                 f"this operation requires {mode!r} mode."
             )
 
-    def _set_entry(self, scope: Scope, entry: RefEntry[Any], value: Any) -> None:
-        self._validate_mode(entry, "assign")
-        self._writable_binding(scope, entry).set_value(scope, value)
-
     def _delete_leaf(self, scope: Scope, entry: RefEntry[Any]) -> None:
         binding = self._data.get(entry)
         if binding is not None:
-            binding.delete_value(scope)
+            binding.delete(scope)
 
-    def set(self, scope: Scope, ref: ContextKey, value: _T) -> None:
+    def set(self, scope: Scope, entry: RefEntry[Any], value: _T) -> None:
         """Set one local assignment value; registration paths reject assignment."""
-        entry = self.validate_entry(ref, role="leaf")
-        self._set_entry(scope, entry, value)
+        self._validate_mode(entry, "assign")
+        self._writable_binding(scope, entry).set(scope, value)
 
-    def delete(self, scope: Scope, ref: ContextKey) -> None:
+    def delete(self, scope: Scope, entry: RefEntry[Any]) -> None:
         """Delete local values under a path; the empty path covers all leaves.
 
         Deletion changes only the identity bound to this Scope for each leaf.
         Schema declarations, inheritance barriers, and effects remain intact.
         Every selected leaf must use assign mode, including absent local values.
         """
-        entry = self.validate_entry(ref)
         if isinstance(entry.config, RefLeafConfig):
             self._validate_mode(entry, "assign")
             self._delete_leaf(scope, entry)
         else:
-            leaves = set(self._schema._leaf_entries(entry.ref.parts))
-            for leaf in leaves:
-                self._validate_mode(leaf, "assign")
-            for leaf in leaves & self._scope_usages[scope].entries:
-                self._delete_leaf(scope, leaf)
+            self.drop(scope, (entry,))
 
-    def update(self, scope: Scope, updates: Mapping[ContextKey, Any]) -> None:
-        """Set local assignment values after validating every path and write mode.
+    def update(
+        self, scope: Scope, updates: Iterable[tuple[RefEntry[Any], Any]]
+    ) -> None:
+        """Consume resolved leaf updates, keep each entry's last value, then validate modes.
 
         Preflight failures leave bindings unchanged. Failures during application
         of the writes do not trigger rollback.
         """
-        entries = {
-            self.validate_entry(ref, role="leaf"): value
-            for ref, value in updates.items()
-        }
+        entries = dict(updates)
         for entry in entries:
             self._validate_mode(entry, "assign")
         for entry, value in entries.items():
-            self._set_entry(scope, entry, value)
+            self._writable_binding(scope, entry).set(scope, value)
 
-    def drop(self, scope: Scope, refs: Iterable[ContextKey]) -> None:
-        """Delete local assignment after validating all inputs and descendant modes.
+    def drop(self, scope: Scope, entries: Iterable[RefEntry[Any]]) -> None:
+        """Consume resolved entries, then validate all descendant modes before deletion.
 
         Preflight failures leave bindings unchanged. Failures during application
         of the deletions do not trigger rollback.
         """
-        entries = {self.validate_entry(ref) for ref in refs}
         leaves: set[RefEntry[Any]] = set()
-        for entry in entries:
+        for entry in set(entries):
             if isinstance(entry.config, RefLeafConfig):
                 leaves.add(entry)
             else:
@@ -492,7 +359,9 @@ class ContextStore:
         for leaf in leaves & self._scope_usages[scope].entries:
             self._delete_leaf(scope, leaf)
 
-    def register(self, scope: Scope, ref: ContextKey, value: _T) -> Callable[[], None]:
+    def register(
+        self, scope: Scope, entry: RefEntry[Any], value: _T
+    ) -> Callable[[], None]:
         """Install a registration at this Scope with an empty local identity.
 
         The returned disposer removes only this installation. Assignment paths reject
@@ -500,35 +369,47 @@ class ContextStore:
         The disposer holds its binding until called, then drops that reference even
         if cleanup fails. It does not retain the Store.
         """
-        entry = self.validate_entry(ref, role="leaf")
         self._validate_mode(entry, "register")
         binding: _ContextBinding | None
         binding = self._writable_binding(scope, entry)
-        if binding.has_value(scope):
+        if binding.get(scope, local=True) is not _MISSING:
             raise ContextPathError(
                 f"Cannot register existing local path {entry.ref.path!r}."
             )
         token = object()
-        binding.set_value(scope, value, token=token)
+        binding.set(scope, value, token=token)
 
         @once
         def dispose() -> None:
             nonlocal binding
             try:
-                if cast(_ContextBinding, binding).has_value(scope, token=token):
-                    cast(_ContextBinding, binding).delete_value(scope, token=token)
+                if cast(_ContextBinding, binding).matches(scope, token=token):
+                    cast(_ContextBinding, binding).delete(scope, token=token)
             finally:
                 binding = None
 
         return dispose
 
-    def isolate(
+    def bind(
         self,
         scope: Scope,
-        entries: tuple[RefEntry[Any], ...],
+        entry: RefEntry[Any],
         *,
-        identity: Hashable | None = None,
+        identity: Hashable,
     ) -> None:
-        """Block inherited values for prevalidated leaves at a newly owned Scope."""
-        for entry in entries:
-            self._writable_binding(scope, entry).block(scope, identity=identity)
+        """Bind one resolved leaf to an immutable identity at this Scope."""
+        self._writable_binding(scope, entry).bind(scope, identity=identity)
+
+    def set_blocked(
+        self,
+        scope: Scope,
+        entry: RefEntry[Any],
+        *,
+        blocked: bool,
+    ) -> None:
+        """Set a leaf's barrier without allocating storage for an absent unblock."""
+        binding = (
+            self._writable_binding(scope, entry) if blocked else self._data.get(entry)
+        )
+        if binding is not None:
+            binding.set_blocked(scope, blocked=blocked)

@@ -21,22 +21,25 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     root.declare(Schema({f"value{i}": Schema.leaf() for i in range(100)}))
     root.update({f"value{i}": i for i in range(100)})
     object.__setattr__(root._store, "_data", NoScan(root._store._data))
-    previous = root.isolate("value0", identity="shared")
+    previous = root.fork(scope=root.scope.fork())
+    previous.bind("value0", identity="shared")
+    previous.set_blocked("value0", blocked=True)
     saved_scope = previous.scope
     previous.dispose()
-    writer = root.isolate("value0", identity="shared")
+    writer = root.fork(scope=root.scope.fork())
+    writer.bind("value0", identity="shared")
+    writer.set_blocked("value0", blocked=True)
     writer.set("value0", "retained")
     binding = root._store._data[root.resolve_entry("value0")]
+    object.__setattr__(root._schema, "_entries", NoScan(root._schema._entries))
     restored: list[tuple[_ContextBinding, Scope]] = []
     released: list[tuple[_ContextBinding, Scope]] = []
     restore = _ContextBinding.restore_scope
     release = _ContextBinding.release_scope
 
     def record_restore(self, scope):
-        result = restore(self, scope)
-        if result:
-            restored.append((self, scope))
-        return result
+        restored.append((self, scope))
+        return restore(self, scope)
 
     def record_release(self, scope):
         released.append((self, scope))
@@ -59,7 +62,7 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     root.dispose()
 
 
-@pytest.mark.parametrize("operation", ["set", "register", "isolate"])
+@pytest.mark.parametrize("operation", ["set", "register", "bind", "set_blocked"])
 def test_first_binding_is_indexed_but_reads_are_not(operation: str) -> None:
     registration = operation == "register"
     root = Context()
@@ -70,16 +73,17 @@ def test_first_binding_is_indexed_but_reads_are_not(operation: str) -> None:
         root.register("value", "root")
     else:
         root.set("value", "root")
-    if operation == "isolate":
-        child = root.isolate("value")
+    child = root.fork(scope=root.scope.fork())
+    assert child.get("value") == "root"
+    assert not root._store._scope_usages[child.scope].entries
+    if operation == "set_blocked":
+        child.set_blocked("value", blocked=True)
+    elif operation == "bind":
+        child.bind("value", identity=object())
+    elif operation == "set":
+        child.set("value", "child")
     else:
-        child = root.fork(scope=root.scope.fork())
-        assert child.get("value") == "root"
-        assert not root._store._scope_usages[child.scope].entries
-        if operation == "set":
-            child.set("value", "child")
-        else:
-            remove = child.register("value", "child")
+        remove = child.register("value", "child")
 
     binding = root._store._data[root.resolve_entry("value")]
     assert root._store._scope_usages[child.scope].entries == {
@@ -94,12 +98,14 @@ def test_first_binding_is_indexed_but_reads_are_not(operation: str) -> None:
         root.resolve_entry("value")
     }
     child.dispose()
-    assert binding._lookup_data(child.scope) is None
+    assert binding._get_data(child.scope) is None
     assert child.scope in binding._scope_identities
     assert not root._store._scope_usages[child.scope].viewers
-    assert not root._store._scope_usages[child.scope].entries
+    assert root._store._scope_usages[child.scope].entries == {
+        root.resolve_entry("value")
+    }
     root.dispose()
-    assert not root._store._scope_usages
+    assert all(not usage.viewers for usage in root._store._scope_usages.values())
 
 
 def test_reverse_index_does_not_keep_released_scopes_alive() -> None:
@@ -242,30 +248,116 @@ def test_store_retains_saved_identities_across_a_gap_without_viewers() -> None:
     viewer = object()
     entry = schema.resolve_entry("value")
     store.acquire_scope(viewer, first)
-    store.isolate(first, [entry], identity="shared")
-    store.set(first, "value", "old")
+    store.bind(first, entry, identity="shared")
+    store.set_blocked(first, entry, blocked=True)
+    store.set(first, entry, "old")
     binding = store._data[entry]
     usage = store._scope_usages[first]
     store.release_scope(viewer, first)
-    assert not usage.viewers and not usage.entries
+    assert not usage.viewers
+    assert usage.entries == {entry}
+    assert store._scope_usages[first] is usage
     assert store._data[entry] is binding
     assert not binding._data
 
     store.acquire_scope(viewer, second)
-    store.isolate(second, [entry], identity="shared")
-    store.set(second, "value", "new")
+    store.bind(second, entry, identity="shared")
+    store.set_blocked(second, entry, blocked=True)
+    store.set(second, entry, "new")
     store.acquire_scope(viewer, first)
     assert store._scope_usages[first] is usage
-    assert usage.entries == {entry}
+    assert store._scope_usages[first].entries == {entry}
     store.release_scope(viewer, second)
-    assert store.leaf_value(first, entry, local=False) == "new"
+    assert store.get(first, entry) == "new"
     store.release_scope(viewer, first)
     assert not binding._data
     assert store._data[entry] is binding
     store.dispose()
     assert not store._data
-    assert not store._scope_usages
+    assert all(not usage.viewers for usage in store._scope_usages.values())
     assert not schema._stores
+
+
+def test_saved_scope_history_prunes_withdrawn_declaration_generations() -> None:
+    class Payload:
+        pass
+
+    root = Context()
+    scope = root.scope.fork()
+    old_entries = []
+    for _ in range(20):
+        withdraw = root.declare({"temporary": Schema.leaf()})
+        child = root.fork(scope=scope)
+        payload = Payload()
+        payload_ref = weakref.ref(payload)
+        child.set("temporary", payload)
+        old_entry = root.resolve_entry("temporary")
+        old_entries.append(weakref.ref(old_entry))
+        del payload
+        child.dispose()
+        withdraw()
+        assert not old_entry.alive
+        assert old_entry in root._store._scope_usages[scope].entries
+        assert not root._store._scope_usages[scope].viewers
+        assert payload_ref() is None
+
+    del old_entry
+    root.declare({"temporary": Schema.leaf()})
+    root.set("temporary", "parent")
+    reader = root.fork(scope=scope)
+    assert not root._store._scope_usages[scope].entries
+    assert reader.get("temporary") == "parent"
+    assert not reader.exists("temporary", local=True)
+    gc.collect()
+    assert all(reference() is None for reference in old_entries)
+    root.dispose()
+
+
+@pytest.mark.parametrize("failure_after_restore", [False, True])
+def test_sparse_restore_failure_rolls_back_all_recorded_bindings(
+    monkeypatch: pytest.MonkeyPatch, failure_after_restore: bool
+) -> None:
+    root = Context()
+    paths = ("first", "second", "third")
+    root.declare({path: Schema.leaf() for path in paths})
+    previous = root.fork(scope=root.scope.fork())
+    previous.bind(*paths, identity="shared")
+    for path in paths:
+        previous.set_blocked(path, blocked=True)
+    scope = previous.scope
+    previous.dispose()
+    writer = root.fork(scope=root.scope.fork())
+    writer.bind(*paths, identity="shared")
+    for path in paths:
+        writer.set_blocked(path, blocked=True)
+    writer.update({path: path for path in paths})
+    entries = set(root._store._scope_usages[scope].entries)
+    restored = []
+    original = _ContextBinding.restore_scope
+    failure = ValueError("second binding failed")
+
+    def fail_second(binding, restored_scope):
+        restored.append(binding)
+        if len(restored) == 2:
+            if failure_after_restore:
+                original(binding, restored_scope)
+            raise failure
+        return original(binding, restored_scope)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(_ContextBinding, "restore_scope", fail_second)
+        with pytest.raises(ValueError) as caught:
+            root.fork(scope=scope)
+    assert caught.value is failure
+    assert len(restored) == 2
+    assert not root._store._scope_usages[scope].viewers
+    assert root._store._scope_usages[scope].entries == entries
+    for entry in entries:
+        assert root._store._data[entry].scopes == (writer.scope,)
+    reader = root.fork(scope=scope)
+    writer.dispose()
+    assert [reader.get(path) for path in paths] == list(paths)
+    root.dispose()
 
 
 def test_scope_usage_lifecycle_requires_only_point_lookups() -> None:
@@ -291,7 +383,7 @@ def test_scope_usage_lifecycle_requires_only_point_lookups() -> None:
         child.set("value", 1)
         child.dispose()
         assert not root._store._scope_usages[scope].viewers
-        assert not root._store._scope_usages[scope].entries
+        assert root._store._scope_usages[scope].entries == {root.resolve_entry("value")}
     root.dispose()
 
 
@@ -344,8 +436,12 @@ def test_delete_keeps_shared_identity_ownership_without_a_prior_write(
 ) -> None:
     root = Context()
     root.declare(Schema({"group": {"value": Schema.leaf()}}))
-    reader = root.isolate("group.value", identity="shared")
-    writer = root.isolate("group.value", identity="shared")
+    reader = root.fork(scope=root.scope.fork())
+    reader.bind("group.value", identity="shared")
+    reader.set_blocked("group.value", blocked=True)
+    writer = root.fork(scope=root.scope.fork())
+    writer.bind("group.value", identity="shared")
+    writer.set_blocked("group.value", blocked=True)
     writer.set("group.value", "old")
     if operation == "delete":
         reader.delete("group")
@@ -372,7 +468,9 @@ def test_schema_withdrawal_cleans_every_scope_before_path_reuse() -> None:
     schema = root._schema
     left = root.fork(scope=root.scope.fork())
     right = root.fork(scope=root.scope.fork())
-    writer = left.isolate("value", identity="shared")
+    writer = left.fork(scope=left.scope.fork())
+    writer.bind("value", identity="shared")
+    writer.set_blocked("value", blocked=True)
     saved = writer.scope
     writer.set("value", "old")
     writer.dispose()
@@ -392,7 +490,9 @@ def test_schema_withdrawal_cleans_every_scope_before_path_reuse() -> None:
     assert not old_binding._data
 
     root.declare({"value": Schema.leaf()})
-    new_writer = left.isolate("value", identity="shared")
+    new_writer = left.fork(scope=left.scope.fork())
+    new_writer.bind("value", identity="shared")
+    new_writer.set_blocked("value", blocked=True)
     new_writer.set("value", "new")
     reader = left.fork(scope=saved)
     assert not left._store._scope_usages[saved].entries
@@ -496,8 +596,8 @@ def test_schema_withdrawal_allows_stores_to_unregister_during_cleanup() -> None:
             left.dispose()
             right.dispose()
 
-    left.set(left_scope, "value", Payload())
-    right.set(right_scope, "value", "right")
+    left.set(left_scope, schema.resolve_entry("value"), Payload())
+    right.set(right_scope, schema.resolve_entry("value"), "right")
     withdraw()
     assert not schema._stores
     assert not left._data and not right._data
@@ -512,20 +612,20 @@ def test_withdrawal_preserves_other_store_reentrant_redeclaration() -> None:
     left_viewer, right_viewer = object(), object()
     left.acquire_scope(left_viewer, left_scope)
     right.acquire_scope(right_viewer, right_scope)
-    right.set(right_scope, "value", "old")
+    right.set(right_scope, schema.resolve_entry("value"), "old")
 
     class Payload:
         def __del__(self):
             schema.declare({"value": Schema.leaf()})
-            right.set(right_scope, "value", "new")
+            right.set(right_scope, schema.resolve_entry("value"), "new")
 
-    left.set(left_scope, "value", Payload())
+    left.set(left_scope, schema.resolve_entry("value"), Payload())
     withdraw()
     entry = schema.resolve_entry("value")
-    assert right.leaf_value(right_scope, entry, local=False) == "new"
+    assert right.get(right_scope, entry) == "new"
     assert right._scope_usages[right_scope].entries == {entry}
-    right.delete(right_scope, "")
-    assert not right.exists(right_scope, "value")
+    right.delete(right_scope, schema.resolve_entry(""))
+    assert not right.exists(right_scope, entry)
     left.release_scope(left_viewer, left_scope)
     right.release_scope(right_viewer, right_scope)
     left.dispose()

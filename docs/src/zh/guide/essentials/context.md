@@ -4,13 +4,15 @@
 
 Context 私有持有三个协作对象：`Schema` 定义路径和 metadata，`ContextStore` 保存分层值及其 viewer，`Lifecycle` 管理 effect 和子生命周期。同一应用中的 Context 共享 Schema 和 Store，但各自独占一个 Lifecycle。Context 通过 `declare()`、`resolve()`、`resolve_entry()` 和 `entries` 暴露声明操作，调用方不必访问私有对象。`entries` 包含声明的 container 和未赋值 leaf，而 `keys()` 和 `flatten()` 描述可见值。
 
+Context 通过 Schema 解析路径、检查 leaf/container 角色，再将 `RefEntry` 交给 Store。Store 处理分层值和写入模式；Context 根据 Store 返回的可见条目组织 view、keys 和字典。ContextView 只调整相对路径，不重复解析。Binding 和 Store 使用 `get/set/delete` 操作值；取不到可见值时，内部 getter 返回缺值哨兵。存在性检查和条目遍历无需通过异常处理缺值。Context 负责返回用户默认值或抛出 `ContextPathError`；默认值不会隐藏路径未声明的错误。
+
 Context 协调组件归属，ContextView 通过 Context 完成访问。Store 独占维护 viewer 和反向索引，每个私有 binding 则独占维护自己的 identity、值与注册 token，不持有 Store 的状态。字段撤销先移除 Store 索引，再清空 binding 数据，因此值的析构函数可以重新声明同一路径，而旧清理不会删除新数据。Schema 自己登记和解绑 Store，仅向其通知字段撤销；Lifecycle 执行传入的最终清理函数，不依赖 Schema 或 Store。Scope 只保存可见性信息，不管理可变数据或清理归属。
 
 普通 Context 操作在委托前检查自身 Lifecycle。释放期间可以读取，直到该 Context 完成释放，但禁止写入、声明、新增 effect 和创建子级。内部撤销和 Scope 释放检查精确的持有记录，在清理期间仍可执行。共享的 Schema 和 Store 不采用某个调用者的生命周期状态，其他活跃 Context 可以继续使用它们。
 
 每个 Context binding 按 identity 保存一条纯数据记录，包含当前值、继承 barrier 和仍被观察的 Scope；只有注册需要撤销 token。Binding 负责这些记录的全部操作，写入不会暴露记录对象。Context 独立管理存储，Compose 则管理带 metadata 的有序 contribution。
 
-Store 执行 Schema 写入模式，以及注册不能覆盖本地已有值的规则。Binding 提供带 token 的写入和删除：记录保存的 token 为 `None` 时不限制调用方；非 `None` 时必须传入同一个 token，调用方传 `None` 也不能绕过检查。Store 注册会创建唯一 token，并通过 `once()` 包装调用 Binding 本地归属检查和删除方法的 disposer。归属检查始终要求 token 精确匹配，因此旧 disposer 不会删除替代值，即使替代值没有 token 保护。
+Store 执行 Schema 写入模式，以及注册不能覆盖本地已有值的规则。Binding 提供带 token 的写入和删除：记录保存的 token 为 `None` 时不限制调用方；非 `None` 时必须传入同一个 token，调用方传 `None` 也不能绕过检查。Store 注册会创建唯一 token，并通过 `once()` 包装调用 Binding 的 `matches()` 和 `delete()` 的 disposer。`matches()` 要求本地值存在且 token 精确匹配，因此旧 disposer 不会删除替代值，即使替代值没有 token 保护。
 
 读取会遍历完整的 Scope MRO，跳过未绑定的 Scope，并选择首个值或继承 barrier。读取不会创建绑定或缓存结果，因此下一次读取会看到后续的写入和移除。
 
@@ -222,7 +224,7 @@ fragment 仍用于声明和导出该插件拥有的路径；`ctx.entries` 列出
 
 `context/default.py` 在根 Context 安装三个 register 模式的 Compose：`$.tree.data`、`$.tree.node` 和 `$.eval.handlers`。分别通过 `DATA_TREE_REF`、`NODE_TREE_REF`、`EVALUATORS_REF` 访问；这些常量由 `slyme.context` 导出。它们和贡献的清理由根生命周期管理，不存在可变的进程级 registry。
 
-这些路径服从普通 Context/Scope 规则。子 Scope 可继承，完全无关的 Scope 必须显式获得配置，不会隐式回退到 root。可以通过 Compose 贡献规则，也可以 isolate 某个字段后注册独立的 Compose。详见 [Tree 规则](../slyme-in-depth/tree-in-slyme.md)。
+这些路径服从普通 Context/Scope 规则。子 Scope 可继承，完全无关的 Scope 必须显式获得配置，不会隐式回退到 root。可以通过 Compose 贡献规则，也可以创建子 Scope，通过 `set_blocked(ref, blocked=True)` 阻断某个字段的继承，再注册独立的 Compose。详见 [Tree 规则](../slyme-in-depth/tree-in-slyme.md)。
 
 ### 根 container
 
@@ -303,7 +305,9 @@ Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周
 
 删除局部值通常会让 Scope MRO 中的下一个值重新可见。
 
-`isolate()` 创建带有 child Scope、由当前 Context 管理的子 Context，并阻止指定 leaf 的祖先值穿透。私有阻断标记会参与 Scope C3 查找，后续 Scope parent 无法绕过它。写入隔离后的子 Context 时值正常可见；删除该值后会重新看到阻断状态，而不是祖先值。多次调用时传入相同的 `identity=`，可以让这些隔离子级共享指定 leaf 的存储，同时仍与 parent 分离：
+`fork(scope=...)` 创建由当前 Context 管理的子 Context。`bind(*refs, identity=...)` 为当前 Scope 选择各字段的不可变存储身份，不改变继承、不迁移值。绑定到同一 identity 的 Scope 共享该字段的值、注册 token 和阻断状态。应先绑定再写入；已绑定的 Scope 不能改用不同 identity。绑定前会验证所有路径；绑定过程中发生 identity 冲突时，保留此前成功的绑定。
+
+`set_blocked(ref, *, blocked: bool)` 修改当前 Scope 对应 identity 上单个 leaf 的继承阻断状态，不创建 Context 或 Scope。`blocked=True` 时，空 identity 会停止 C3 查找，后续 parent 也无法绕过；局部值仍然可见。`blocked=False` 时，空 identity 恢复继承，不改变当前值或注册 token。对尚未绑定的 leaf 取消阻断不分配存储。这两个操作都不创建或释放生命周期：
 
 ```python
 service_schema = Schema({"service": Schema.leaf()})
@@ -311,13 +315,16 @@ root = Context()
 root.declare(service_schema)
 root.update({"service": "default"})
 service = service_schema.resolve("service")
-isolated = root.isolate(service)
+isolated = root.fork(scope=root.scope.fork())
+isolated.set_blocked(service, blocked=True)
 assert not isolated.exists(service)
 
 isolated.set(service, "ready")
 assert isolated.get(service) == "ready"
 isolated.delete(service)
 assert not isolated.exists(service)
+isolated.set_blocked(service, blocked=False)
+assert isolated.get(service) == "default"
 ```
 
 ## 可撤销的局部绑定
@@ -355,9 +362,9 @@ dispose Context 后，它会从 `ctx.scope.mro` 中每个 Scope 的 viewer 集�
 
 Context binding 按 identity 记录仍被观察的 Scope，最后一个 viewer 退出时会清除其值，无须扫描无关的 Scope 绑定。直接复用仍被持有的 Scope，或将它作为祖先使用，都会重新登记 viewer 并保留原有 identity 绑定；已经清除的值不会恢复。
 
-每个应用为仍被观察的 Scope 保存一条 usage 记录，包含 Context viewer 集合与参与绑定的 Schema leaf entry 集合。写入和隔离会登记 entry，普通继承读取不会。删除 container 时先校验后代模式，再将后代 entry 与索引求交集，访问对应 binding。删除值保留索引条目、identity 持有关系和隔离 barrier。Scope 释放只访问索引内的 binding，最后一个 viewer 退出后删除 usage 记录。Schema 最终撤销字段时，所有使用它的应用都会移除对应的精确 entry 和 binding。
+每个应用使用弱键保存 usage 记录，包含 Context viewer 集合与参与绑定的 Schema leaf entry 集合。写入和隔离会登记 entry，普通继承读取不会。删除 container 时先校验后代模式，再将后代 entry 与索引求交集，访问对应 binding。删除值保留索引条目、identity 持有关系和隔离 barrier。最后一个 viewer 退出时释放 identity 持有关系，但保留 Scope 的绑定历史。Schema 最终撤销字段时，所有使用它的应用都会移除对应的精确 binding，并从活跃绑定的索引中移除该 entry。
 
-弱引用成员集合记录哪些 Scope 曾经有过 viewer，不枚举弱引用。新 Scope 无须扫描 binding；复用已释放的 Scope（包括作为祖先）时，扫描当前 Schema 条目以恢复仍然存在的 identity 持有关系，已撤销的定义和已清除的值不会恢复。数据 binding 不保证清理顺序；需要有序清理的依赖应由 effect 管理。
+复用已释放的 Scope（包括作为祖先）时，只访问其记录的 entry 来恢复仍然存在的 identity 持有关系，不扫描 Schema，也不枚举弱键。恢复和释放会顺便移除失效的历史 entry；同路径重新声明会创建不同的 entry，不继承旧绑定。外部仍持有的闲置 Scope 可能保留已撤销的 entry，直到再次使用或被回收。已经清除的值不会恢复。数据 binding 不保证清理顺序；需要有序清理的依赖应由 effect 管理。
 
 Scope viewer 和 binding identity 直接使用集合记录持有者。Context dispose 会移除自己的 viewer 登记，再释放各个 binding 中不再被观察的 Scope；最后一个绑定的 Scope 退出时，移除 identity 及其数据。这些内部登记不为每个成员分配撤销回调。某项清理失败不会阻止其余 binding 和 Scope 的清理，后续调用 Context dispose 会重现最终失败。如果归属项清理和 Scope 释放都失败，Scope 释放的第一个错误会保留为汇总异常的 cause。如果某个 Scope 在值的析构期间重新获得 viewer，后续清理会保留新 viewer 仍可见的数据。
 
@@ -403,6 +410,8 @@ root.dispose()
 
 Context 接受 Ref Tree 进行批量读写。`extract` 会将输入展开一次、校验全部 Ref、读取对应值，再重建一次请求结构；叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
 
+`ContextView` 只提供 `get/exists/keys/to_dict/flatten`，用于读取和自省子树。它仅保存 Context 与路径前缀并转发读取，不独立管理数据、Scope 或生命周期操作。树形提取使用 `ctx.extract(...)`，传入绝对路径或 Ref；View 不提供 `extract()`，也不依赖 Tree 配置。
+
 `keys()`、`ContextView` 和 `to_dict()` 会先遍历 Schema 结构，再读取平铺的 leaf 单元。因此非根的空 container 的声明角色保持稳定，但不会出现在有效数据视图中；根 View 始终可取得。`to_dict()` 将可见 Context leaf 投影为嵌套的普通字典，适合展示或序列化；在不同 Schema 之间，该投影无法区分以 mapping 为值的 leaf 与内容相同的嵌套 Context 路径。`flatten()` 则返回准确的 `dict[Ref, Any]` 可见 leaf 映射：
 
 ```python
@@ -423,9 +432,7 @@ assert mapping_leaf.flatten() == {
 assert nested_path.get("settings").flatten() == {tree_schema.resolve("settings.theme"): "dark"}
 ```
 
-两者默认解析绑定 Scope 的 C3 有效视图，也都接受 `local=True`。`ContextView` 使用相对
-字符串访问子树，而已经解析的 Ref 始终是绝对路径，因此它的 `flatten()` 也返回
-Schema 中的绝对 Ref。空字符串表示 View 自身，`Ref("")` 则表示应用根，因此位于非根 View 的范围之外。两种方法都不会复制 leaf value。
+两者默认解析绑定 Scope 的 C3 有效视图，也都接受 `local=True`。`ContextView` 只接受相对字符串路径；空字符串表示 View 自身，也是 `keys()` 和 `to_dict()` 的默认路径。绝对 Ref 直接交给 Context 查询。View 的 `flatten()` 仍返回以 Schema 绝对 Ref 为键的字典。两种方法都不会复制 leaf value。
 创建新根并声明所有被复制的路径后，调用 `snapshot.update(ctx.get("app").flatten())` 物化值；这里选择 `app` 等业务子树，复制的字段必须全部采用 `assign` 模式；整根 flatten 还包含 register 模式的框架配置。
 `register` 字段需要在新 owner 上显式调用 `register()`，快照不会转移所有权。
 新应用根默认获得新的 Scope，因此看不到目标为源 Scope 的

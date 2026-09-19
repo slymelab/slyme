@@ -60,7 +60,7 @@ ctx.dispose()
 
 Ordinary forks reuse their parent's configuration. A child Scope inherits it through C3. A fork bound to an unrelated `Scope()` sees no default values: install the required Compose objects and contributions explicitly. There is no fallback to `ctx.root`. A separate root `Context()` installs independent defaults.
 
-Use `ctx.isolate(DATA_TREE_REF)` and `register()` to install an independent rule composition for that field. An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves `NODE_TREE_REF` and passes those rules to TreeEngine.
+Create `child = ctx.fork(scope=ctx.scope.fork())`, call `child.set_blocked(DATA_TREE_REF, blocked=True)`, then `child.register(DATA_TREE_REF, Compose())` to install an independent rule composition for that field. An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves `NODE_TREE_REF` and passes those rules to TreeEngine.
 
 Schema declaration uses private, immutable dict-only rules and does not read runtime configuration. Configuring a data tree cannot change how Schema interprets declarations.
 

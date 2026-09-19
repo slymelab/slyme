@@ -64,7 +64,7 @@ def test_defaults_are_root_owned_and_forks_do_not_install_again() -> None:
     left.dispose()
     assert all(not compose.entries(left.scope) for compose in retained)
     assert not left._store._data
-    assert not left._store._scope_usages
+    assert all(not usage.viewers for usage in left._store._scope_usages.values())
     right.dispose()
 
 
@@ -129,7 +129,8 @@ def test_rule_composition_uses_c3_then_contribution_order() -> None:
 
 def test_isolated_tree_rules_do_not_affect_schema_or_parent_rules() -> None:
     root = Context()
-    isolated = root.isolate(DATA_TREE_REF)
+    isolated = root.fork(scope=root.scope.fork())
+    isolated.set_blocked(DATA_TREE_REF, blocked=True)
     isolated.register(DATA_TREE_REF, Compose(TreeRules.merge))
     isolated.declare({"group": {"value": Schema.leaf()}})
     isolated.set("group.value", 3)
@@ -263,9 +264,7 @@ def test_context_tree_operations_use_the_same_scoped_rules() -> None:
     )
     root.update_tree(Box("group.value"), Box(5))
     assert root.extract(Box("group.value")) == Box(5)
-    view = root.get("group")
-    assert view.extract(Box("value")) == Box(5)
-    assert view.extract(Box(root.resolve("group.value")), local=True) == Box(5)
+    assert root.extract(Box(root.resolve("group.value")), local=True) == Box(5)
     plugin.dispose()
     assert Box not in root.get(DATA_TREE_REF).resolve(root.scope).handlers
     assert root.get("group.value") == 5
@@ -289,5 +288,5 @@ def test_failed_default_installation_releases_partial_root(monkeypatch) -> None:
     ctx = constructed[0]
     assert not ctx._schema._stores
     assert not ctx._store._data
-    assert not ctx._store._scope_usages
+    assert all(not usage.viewers for usage in ctx._store._scope_usages.values())
     assert not ctx._lifecycle._owned

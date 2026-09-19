@@ -12,6 +12,7 @@ import pytest
 
 from slyme.context import (
     Context,
+    ContextPathError,
     Metadata,
     Ref,
     RefConfig,
@@ -22,6 +23,36 @@ from slyme.context import (
 )
 from slyme.context.schema import _SCHEMA_RULES, _Declaration
 from slyme.utils.tree import TreeEngine
+
+
+@pytest.mark.parametrize("method", ["resolve", "resolve_entry"])
+@pytest.mark.parametrize("as_ref", [False, True])
+def test_schema_resolution_normalizes_keys_and_enforces_requested_roles(
+    method: str, as_ref: bool
+) -> None:
+    schema = Schema({"group": {"value": Schema.leaf()}})
+    resolve = getattr(schema, method)
+    for path, role in (
+        ("", "container"),
+        ("group", "container"),
+        ("group.value", "leaf"),
+    ):
+        key = Ref(path) if as_ref else path
+        entry = schema._entries[path]
+        expected = entry.ref if method == "resolve" else entry
+        assert resolve(key) is expected
+        assert resolve(key, role=None) is expected
+        assert resolve(key, role=role) is expected
+        wrong_role = "leaf" if role == "container" else "container"
+        with pytest.raises(ContextPathError, match=f"{role}, not a {wrong_role}"):
+            resolve(key, role=wrong_role)
+
+    missing = Ref("missing") if as_ref else "missing"
+    with pytest.raises(ContextPathError) as caught:
+        resolve(missing)
+    assert caught.value.args == ("Context path 'missing' is not declared.",)
+    assert isinstance(caught.value.__cause__, KeyError)
+    assert caught.value.__cause__.args == ("missing",)
 
 
 @dataclass(frozen=True)
@@ -248,7 +279,8 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
     right = root.fork(scope=root.scope.fork())
     right.update({"group.value": "right"})
     remove_owned = left.register("group.owned", "owned")
-    child = left.isolate("group.value")
+    child = left.fork(scope=left.scope.fork())
+    child.set_blocked("group.value", blocked=True)
     child.set("group.value", "child")
 
     def unexpected_config_read(self):
@@ -266,7 +298,7 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
         root.dispose()
     assert_indexes(schema, set())
     assert not left._store._data and not right._store._data
-    assert not left._store._scope_usages and not right._store._scope_usages
+    assert all(not usage.viewers for usage in root._store._scope_usages.values())
     assert not schema._stores
 
 
@@ -297,7 +329,7 @@ async def test_context_owned_cleanup_does_not_read_config(
         await root.adispose()
     assert_indexes(root._schema, set())
     assert not root._store._data
-    assert not root._store._scope_usages
+    assert all(not usage.viewers for usage in root._store._scope_usages.values())
     assert not root._lifecycle._owned
 
 

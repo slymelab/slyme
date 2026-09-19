@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from .store import ContextStore
 
 __all__ = [
+    "ContextKey",
+    "ContextPathError",
     "Ref",
     "Metadata",
     "RefConfig",
@@ -64,6 +66,13 @@ class Ref(Generic[_T]):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parts", self._split_path(self.path))
+
+
+ContextKey = str | Ref[Any]
+
+
+class ContextPathError(KeyError):
+    """A Context path cannot be resolved or changed as requested."""
 
 
 @dataclass(frozen=True)
@@ -315,7 +324,7 @@ class Schema:
                 break
         del self._entries[entry.ref.path]
         for store in tuple(self._stores):
-            store.remove_entry(entry)
+            store.delete_entry(entry)
 
     @staticmethod
     def _release_declaration(
@@ -339,13 +348,40 @@ class Schema:
         """Snapshot the registered root, container, and leaf entries, not configs."""
         return tuple(self._entries.values())
 
-    def resolve_entry(self, path: str) -> RefEntry[Any]:
-        """Return the current entry at a path; raise KeyError if it is undeclared."""
-        return self._entries[path]
+    def resolve_entry(
+        self,
+        key: ContextKey,
+        *,
+        role: Literal["leaf", "container"] | None = None,
+    ) -> RefEntry[Any]:
+        """Resolve a declared path; reject missing paths or a required role mismatch.
 
-    def resolve(self, path: str) -> Ref[Any]:
+        Strings and Refs resolve by path. Without a required role, resolution
+        does not materialize the entry's merged config.
+        """
+        path = key if isinstance(key, str) else key.path
+        try:
+            entry = self._entries[path]
+        except KeyError as error:
+            raise ContextPathError(f"Context path {path!r} is not declared.") from error
+        if role is None:
+            return entry
+
+        kind = "leaf" if isinstance(entry.config, RefLeafConfig) else "container"
+        if role != kind:
+            raise ContextPathError(
+                f"Ref path {path!r} is declared as a {kind}, not a {role}."
+            )
+        return entry
+
+    def resolve(
+        self,
+        key: ContextKey,
+        *,
+        role: Literal["leaf", "container"] | None = None,
+    ) -> Ref[Any]:
         """Return the declared Ref; an empty path resolves the root container."""
-        return self.resolve_entry(path).ref
+        return self.resolve_entry(key, role=role).ref
 
     def declare(
         self,

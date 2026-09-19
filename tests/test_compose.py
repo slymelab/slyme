@@ -430,14 +430,18 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
     root = Context()
     root.declare(Schema({"value": Schema.leaf(mode="register")}))
     identity = object()
-    child = root.isolate("value", identity=identity)
+    child = root.fork(scope=root.scope.fork())
+    child.bind("value", identity=identity)
+    child.set_blocked("value", blocked=True)
     binding = root._store._data[root.resolve_entry("value")]
-    remove = root._store.register(child.scope, "value", "old")
+    remove = root._store.register(child.scope, root.resolve_entry("value"), "old")
     assert binding._data[identity].blocked
 
     child.dispose()
     assert not binding._data
-    replacement = root.isolate("value", identity=identity)
+    replacement = root.fork(scope=root.scope.fork())
+    replacement.bind("value", identity=identity)
+    replacement.set_blocked("value", blocked=True)
     replacement.register("value", "new")
     remove()
     assert replacement.get("value") == "new"

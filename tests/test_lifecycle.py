@@ -159,21 +159,18 @@ def test_context_shares_store_and_schema_but_not_lifecycle() -> None:
     assert not schema._stores
 
 
-def test_failed_isolation_releases_its_child_lifecycle_and_scope(monkeypatch) -> None:
+def test_failed_binding_leaves_child_disposal_to_its_owner() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     initial_owned = tuple(root._lifecycle._owned)
     root.update({"value": "root"})
-    isolate = ContextStore.isolate
-
-    def fail(store, scope, entries, *, identity=None):
-        isolate(store, scope, entries, identity=identity)
-        raise ValueError("isolation failed")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(ContextStore, "isolate", fail)
-        with pytest.raises(ValueError, match="isolation failed"):
-            root.isolate("value")
+    child = root.fork(scope=root.scope.fork())
+    child.bind("value", identity="original")
+    with pytest.raises(ValueError, match="cannot be rebound"):
+        child.bind("value", identity="replacement")
+    assert child.get("value") == "root"
+    assert root._store._scope_usages[child.scope].viewers == {child}
+    child.dispose()
     assert tuple(root._lifecycle._owned) == initial_owned
     assert {
         scope for scope, usage in root._store._scope_usages.items() if usage.viewers
@@ -222,15 +219,15 @@ async def test_closing_context_does_not_freeze_shared_data_or_block_revocation()
     root.dispose()
 
 
-def test_store_supports_explicit_ownership_without_a_context() -> None:
+def test_schema_withdrawal_clears_store_binding_data() -> None:
     schema = Schema()
     withdraw = schema.declare({"value": Schema.leaf()})
     store = ContextStore(schema)
     scope = Scope()
     viewer = object()
     store.acquire_scope(viewer, scope)
-    store.set(scope, "value", 1)
-    assert store.leaf_value(scope, schema.resolve_entry("value"), local=False) == 1
+    store.set(scope, schema.resolve_entry("value"), 1)
+    assert store.get(scope, schema.resolve_entry("value")) == 1
     withdraw()
     assert not store._data
     store.release_scope(viewer, scope)
@@ -246,15 +243,13 @@ def test_disposed_store_detaches_without_changing_other_schema_consumers() -> No
     left_viewer, right_viewer = object(), object()
     left.acquire_scope(left_viewer, scope)
     right.acquire_scope(right_viewer, scope)
-    left.set(scope, "value", "left")
-    right.set(scope, "value", "right")
+    left.set(scope, schema.resolve_entry("value"), "left")
+    right.set(scope, schema.resolve_entry("value"), "right")
     left.release_scope(left_viewer, scope)
     left.dispose()
     left.dispose()
     assert schema._stores == {right}
-    assert (
-        right.leaf_value(scope, schema.resolve_entry("value"), local=False) == "right"
-    )
+    assert right.get(scope, schema.resolve_entry("value")) == "right"
     withdraw()
     assert not right._data
     right.release_scope(right_viewer, scope)
@@ -280,4 +275,4 @@ async def test_context_disposal_releases_store_after_failed_async_cleanup() -> N
         await await_result(root.dispose())
     assert events == ["cleanup"]
     assert not schema._stores
-    assert not store._scope_usages
+    assert all(not usage.viewers for usage in store._scope_usages.values())
