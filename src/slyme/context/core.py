@@ -176,7 +176,8 @@ class Context:
         *,
         label: Any | None = None,
         parents: Scope | tuple[Scope, ...] | None = None,
-        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity],
+        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
+        | None = None,
     ) -> Context:
         """Create an owned child and one new Scope configured for all targets.
 
@@ -186,7 +187,9 @@ class Context:
         Context values. Each ScopeBinding selects private or shared storage and
         allows ancestor fallback unless it or its Identity is blocked.
         An Identity is shorthand for ScopeBinding(identity=identity).
-        Unselected targets inherit. Empty bindings still create a new Scope.
+        Unselected targets inherit. None or empty bindings create a new Scope
+        without explicit bindings. derive() is equivalent to
+        fork(scope=self.scope.fork()).
         """
         self._lifecycle.assert_active()
         prepared = tuple(
@@ -196,7 +199,7 @@ class Context:
                 else self._schema.resolve_entry(target, role="leaf"),
                 ScopeBinding(binding) if isinstance(binding, Identity) else binding,
             )
-            for target, binding in bindings.items()
+            for target, binding in (bindings or {}).items()
         )
         child = self.fork(
             scope=Scope(label=label, parents=self.scope if parents is None else parents)

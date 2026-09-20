@@ -300,6 +300,50 @@ def test_derive_selects_visibility_parents_independently_of_lifecycle(
     root.dispose()
 
 
+@pytest.mark.parametrize("options", [{}, {"bindings": None}, {"bindings": {}}])
+def test_derive_without_bindings_creates_an_owned_inheriting_scope(options) -> None:
+    root = Context()
+    root.declare({"value": Schema.leaf()})
+    root.set("value", "parent")
+    child = root.derive(**options)
+    explicit = root.fork(scope=root.scope.fork())
+    assert child.parent is root
+    assert child.root is root
+    assert child.scope is not root.scope
+    assert child.scope.parents == (root.scope,)
+    assert child.scope.mro == (child.scope, root.scope)
+    assert child.get("value") == explicit.get("value") == "parent"
+    assert not child.exists("value", local=True)
+    assert child.get(DATA_TREE_REF) is root.get(DATA_TREE_REF)
+
+    child.set("value", "child")
+    assert root.get("value") == explicit.get("value") == "parent"
+    child.delete("value")
+    root.set("value", "updated")
+    assert child.get("value") == explicit.get("value") == "updated"
+    released = []
+    child.effect(lambda: lambda: released.append("child"))
+    root.dispose()
+    assert released == ["child"]
+    with pytest.raises(RuntimeError, match="disposed"):
+        child.get("value")
+
+
+def test_derive_without_bindings_accepts_independent_scope_and_label() -> None:
+    root = Context()
+    root.declare({"value": Schema.leaf()})
+    root.set("value", "parent")
+    child = root.derive(parents=(), label="independent", bindings=None)
+    assert child.parent is root
+    assert child.scope.label == "independent"
+    assert child.scope.mro == (child.scope,)
+    assert not child.exists("value")
+    assert child.get(DATA_TREE_REF, None) is None
+    child.set("value", "child")
+    assert root.get("value") == "parent"
+    root.dispose()
+
+
 def test_derive_uses_c3_parents_and_allows_an_independent_root_scope() -> None:
     root = Context()
     root.declare({"first": Schema.leaf(), "second": Schema.leaf()})
@@ -307,7 +351,7 @@ def test_derive_uses_c3_parents_and_allows_an_independent_root_scope() -> None:
     right = root.fork(scope=root.scope.fork())
     left.set("first", "left")
     right.update({"first": "right", "second": "right"})
-    child = root.derive(parents=(left.scope, right.scope), bindings={})
+    child = root.derive(parents=(left.scope, right.scope))
     assert child.scope.mro == (child.scope, left.scope, right.scope, root.scope)
     assert child.get("first") == "left"
     assert child.get("second") == "right"

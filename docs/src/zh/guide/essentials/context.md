@@ -311,7 +311,7 @@ Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周
 
 数据清理不改变配置。复用已保存的 Scope 会保留该字段的绑定和局部阻断；复用 Identity 会保留身份级阻断。已清理的值不会恢复。撤销 Schema 的最终声明会移除该字段的绑定，但不能改变外部仍持有的 Identity。这些规则控制查找，不是插件之间的权限控制。
 
-`ctx.derive(*, label=None, parents=None, bindings=...)` 创建由当前 Context 管理的子 Context，并为全部 target 创建同一个新 Scope。`parents=None` 继承 `ctx.scope`；显式 Scope 或 tuple 指定新 Scope 的直接父级，`()` 创建独立 Scope。生命周期仍由 `ctx` 管理。路径或 Ref key 配置已声明的 leaf；Compose 对象 key 配置贡献层，不替换 Context 中的值。每个值可以是 ScopeBinding 或 Identity。直接传 Identity 等价于 `ScopeBinding(identity=identity)`，不接受 None。`ScopeBinding()` 创建私有 Identity 且不阻断；`ScopeBinding(identity=shared)` 选择共享存储。两级阻断均需显式设置 `blocked=True`。未指定的 target 沿指定父集继承。空 bindings 也会创建新 Scope。共享 identity 不会让新 Scope 的阻断影响无继承关系的其他 Scope：
+`ctx.derive(*, label=None, parents=None, bindings=None)` 创建由当前 Context 管理的子 Context，并为全部 target 创建同一个新 Scope。`parents=None` 继承 `ctx.scope`；显式 Scope 或 tuple 指定新 Scope 的直接父级，`()` 创建独立 Scope。生命周期仍由 `ctx` 管理。路径或 Ref key 配置已声明的 leaf；Compose 对象 key 配置贡献层，不替换 Context 中的值。每个值可以是 ScopeBinding 或 Identity。直接传 Identity 等价于 `ScopeBinding(identity=identity)`，映射中的单个值不接受 None。`ScopeBinding()` 创建私有 Identity 且不阻断；`ScopeBinding(identity=shared)` 选择共享存储。两级阻断均需显式设置 `blocked=True`。未指定的 target 沿指定父集继承。省略 bindings、传入 None 或空映射均会创建新 Scope，不配置显式绑定。无参 `ctx.derive()` 等价于 `ctx.fork(scope=ctx.scope.fork())`。共享 identity 不会让新 Scope 的阻断影响无继承关系的其他 Scope：
 
 ```python
 from slyme.context import Identity

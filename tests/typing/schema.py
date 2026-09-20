@@ -38,7 +38,10 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     values: Compose[str, tuple[str, ...]] = Compose.collect()
     assert_type(ctx.fork(), Context)
     assert_type(ctx.fork(scope=ctx.scope), Context)
+    assert_type(ctx.derive(), Context)
+    assert_type(ctx.derive(bindings=None), Context)
     assert_type(ctx.derive(bindings={}), Context)
+    assert_type(ctx.derive(parents=ctx.scope, label="child"), Context)
     assert_type(
         ctx.derive(
             bindings={"value": ScopeBinding(), Ref("service"): ScopeBinding(identity)}
@@ -65,7 +68,7 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     assert_type(Compose.derive_many(label="root", parents=(), bindings={}), Scope)
     ctx.fork(bindings={})  # type: ignore[call-arg]
     ctx.derive(bindings={}, scope=ctx.scope)  # type: ignore[call-arg]
-    ctx.derive({})  # type: ignore[misc, call-arg]
+    ctx.derive({})  # type: ignore[misc]
     values.derive()  # type: ignore[call-arg]
     values.derive(ctx.scope)  # type: ignore[misc, call-arg]
     Compose.derive_many(bindings={})  # type: ignore[call-arg]
