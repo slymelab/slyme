@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import pytest
 
-from slyme.context import Context, Ref, Schema, Scope
+from slyme.context import Context, Identity, Ref, Schema, Scope, ScopeBinding
 from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_TREE_REF
 from slyme.context.store import _MISSING
@@ -23,12 +23,12 @@ def test_undeclared_path_errors_are_the_same_for_strings_and_refs(
         lambda: ctx.resolve(key),
         lambda: ctx.resolve_entry(key),
         lambda: ctx.get(key, None),
+        lambda: ctx.flatten(key),
         lambda: ctx.exists(key),
         lambda: ctx.set(key, 1),
         lambda: ctx.delete(key),
-        lambda: ctx.bind(key, identity=object()),
-        lambda: ctx.set_blocked(key, blocked=True),
-        lambda: ctx.set_blocked(key, blocked=False),
+        lambda: ctx.derive(bindings={key: ScopeBinding()}),
+        lambda: ctx.derive(bindings={key: ScopeBinding(blocked=True)}),
     ):
         with pytest.raises(ContextPathError) as caught:
             operation()
@@ -76,6 +76,7 @@ def test_container_reads_share_scope_visibility_and_empty_container_rules() -> N
         lambda: child.get("group", local=True),
         lambda: child.keys("group", local=True),
         lambda: child.to_dict("group", local=True),
+        lambda: child.flatten("group", local=True),
         lambda: child.get("group").flatten(local=True),
     ):
         with pytest.raises(ContextPathError, match="group"):
@@ -99,8 +100,7 @@ def test_missing_values_use_internal_sentinel_and_public_defaults(missing: str) 
     if missing == "deleted":
         root.delete("group.value")
     if missing == "barrier":
-        child = root.fork(scope=root.scope.fork())
-        child.set_blocked("group.value", blocked=True)
+        child = root.derive(bindings={"group.value": ScopeBinding(blocked=True)})
     else:
         child = root.fork(
             scope=Scope() if missing == "unrelated" else root.scope.fork()
@@ -266,16 +266,17 @@ def test_failed_update_keeps_the_explicitly_created_context_alive() -> None:
 
 
 def test_shared_identity_has_one_registration_and_allows_reinstallation() -> None:
+    shared_identity = Identity("shared", blocked=True)
     schema = Schema({"service": Schema.leaf(mode="register")})
     root = Context()
     root.declare(schema)
     root.register("service", "inherited")
-    left = root.fork(scope=root.scope.fork())
-    left.bind("service", identity="shared")
-    left.set_blocked("service", blocked=True)
-    right = root.fork(scope=root.scope.fork())
-    right.bind("service", identity="shared")
-    right.set_blocked("service", blocked=True)
+    left = root.derive(
+        bindings={"service": ScopeBinding(shared_identity, blocked=False)}
+    )
+    right = root.derive(
+        bindings={"service": ScopeBinding(shared_identity, blocked=False)}
+    )
     payload: list[str] = []
     remove = left.register("service", payload)
     with pytest.raises(ContextPathError, match="existing local"):
@@ -360,8 +361,7 @@ def test_update_assigns_local_values_over_inheritance_and_barriers() -> None:
     root.declare(schema)
     root.update({"service": "root"})
     child = root.fork(scope=root.scope.fork())
-    isolated = root.fork(scope=root.scope.fork())
-    isolated.set_blocked("service", blocked=True)
+    isolated = root.derive(bindings={"service": ScopeBinding(blocked=True)})
     child.update({"service": "child"})
     isolated.update({"service": "isolated"})
     assert child.get("service") == "child"
@@ -493,9 +493,55 @@ def test_view_flatten_preserves_visibility_and_context_lifetime_checks() -> None
         root_view.flatten()
 
 
+@pytest.mark.parametrize("key", ["group", Ref("group")])
+@pytest.mark.parametrize("local", [False, True])
+def test_flatten_selects_a_container_and_preserves_absolute_refs(
+    key: str | Ref[Any],
+    local: bool,
+) -> None:
+    root = Context()
+    root.declare(
+        {
+            "group": {"parent": Schema.leaf(), "child": Schema.leaf()},
+            "other": Schema.leaf(),
+        }
+    )
+    root.update({"group.parent": "inherited", "other": "excluded"})
+    child = root.fork(scope=root.scope.fork())
+    payload = [object()]
+    child.set("group.child", payload)
+    expected: dict[Ref[Any], Any] = {child.resolve("group.child"): payload}
+    if not local:
+        expected[child.resolve("group.parent")] = "inherited"
+    assert child.flatten(key, local=local) == expected
+    assert child.flatten(key, local=local)[child.resolve("group.child")] is payload
+    assert child.flatten() == child.flatten("") == child.flatten(Ref(""))
+    with pytest.raises(ContextPathError, match="leaf, not a container"):
+        child.flatten("group.child")
+    root.dispose()
+
+
+def test_view_flatten_forwards_the_prefix_to_context() -> None:
+    calls = []
+
+    class RecordingContext(Context):
+        def flatten(self, ref=None, *, local=False):
+            calls.append((ref, local))
+            return super().flatten(ref, local=local)
+
+    ctx = RecordingContext()
+    ctx.declare({"group": {"value": Schema.leaf()}})
+    ctx.set("group.value", 1)
+    assert ctx.get("group").flatten(local=True) == {ctx.resolve("group.value"): 1}
+    assert calls == [("group", True)]
+    ctx.dispose()
+
+
 @pytest.mark.parametrize("mode", ["assign", "register"])
-def test_barrier_changes_preserve_values_and_registration_tokens(
+@pytest.mark.parametrize("block_mode", ["scope", "identity"])
+def test_immutable_barriers_preserve_values_and_registration_tokens(
     mode: Literal["assign", "register"],
+    block_mode: Literal["scope", "identity"],
 ) -> None:
     root = Context()
     root.declare({"value": Schema.leaf(mode=mode)})
@@ -503,8 +549,10 @@ def test_barrier_changes_preserve_values_and_registration_tokens(
         root.set("value", "parent")
     else:
         root.register("value", "parent")
-    child = root.fork(scope=root.scope.fork())
-    child.set_blocked("value", blocked=True)
+    identity = Identity(blocked=block_mode == "identity")
+    child = root.derive(
+        bindings={"value": ScopeBinding(identity, blocked=block_mode == "scope")}
+    )
     assert not child.exists("value")
     if mode == "assign":
         child.set("value", "child")
@@ -514,18 +562,19 @@ def test_barrier_changes_preserve_values_and_registration_tokens(
 
     else:
         remove = child.register("value", "child")
-    child.set_blocked("value", blocked=False)
     assert child.get("value") == "child"
     remove()
-    assert child.get("value") == "parent"
-    child.set_blocked("value", blocked=True)
     assert not child.exists("value")
-    child.set_blocked("value", blocked=False)
-    assert child.get("value") == "parent"
+    assert not child.exists("value")
+    assert root.get("value") == "parent"
     root.dispose()
 
 
-def test_shared_identity_barrier_uses_each_readers_own_ancestry() -> None:
+@pytest.mark.parametrize("mode", ["scope", "identity"])
+def test_barrier_visibility_with_shared_identity_and_different_ancestry(
+    mode: Literal["scope", "identity"],
+) -> None:
+    shared_identity = Identity("shared", blocked=mode == "identity")
     root = Context()
     root.declare({"value": Schema.leaf()})
     root.set("value", "root")
@@ -533,80 +582,95 @@ def test_shared_identity_barrier_uses_each_readers_own_ancestry() -> None:
     right_parent = root.fork(scope=root.scope.fork())
     left_parent.set("value", "left parent")
     right_parent.set("value", "right parent")
-    left = left_parent.fork(scope=left_parent.scope.fork())
-    right = right_parent.fork(scope=right_parent.scope.fork())
     owned = tuple(root._lifecycle._owned)
-    left.bind("value", identity="shared")
-    right.bind("value", identity="shared")
+    left = left_parent.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=mode == "scope")}
+    )
+    right = right_parent.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     assert tuple(root._lifecycle._owned) == owned
-    assert left.get("value") == "left parent"
-    assert right.get("value") == "right parent"
-
-    left.set_blocked("value", blocked=True)
     assert not left.exists("value")
-    assert not right.exists("value")
+    assert right.get("value", None) == ("right parent" if mode == "scope" else None)
     right.set("value", "shared value")
     assert left.get("value") == "shared value"
-    right.set_blocked("value", blocked=False)
     assert left.get("value") == "shared value"
     left.delete("value")
-    assert left.get("value") == "left parent"
-    assert right.get("value") == "right parent"
+    assert not left.exists("value")
+    assert right.get("value", None) == ("right parent" if mode == "scope" else None)
     root.dispose()
 
 
-@pytest.mark.parametrize("inherited", [False, True])
-def test_unblocking_unbound_leaf_does_not_allocate_or_choose_identity(
-    inherited: bool,
+@pytest.mark.parametrize("mode", ["scope", "identity"])
+def test_configured_fork_indexes_a_stable_binding(
+    mode: Literal["scope", "identity"],
 ) -> None:
     root = Context()
     root.declare({"value": Schema.leaf()})
-    if inherited:
-        root.set("value", "parent")
-        root.set_blocked("value", blocked=True)
-    child = root.fork(scope=root.scope.fork())
+    root.set("value", "parent")
     entry = root.resolve_entry("value")
-    child.set_blocked("value", blocked=False)
-    assert not root._store._scope_usages[child.scope].entries
-    if inherited:
-        binding = root._store._data[entry]
-        assert child.scope not in binding._scope_identities
-        assert binding._get_data(root.scope).blocked
-        assert child.get("value") == "parent"
-    else:
-        assert entry not in root._store._data
-    child.bind("value", identity="explicit")
+    config = ScopeBinding(Identity(blocked=mode == "identity"), blocked=mode == "scope")
+    child = root.derive(bindings={"value": config})
+    assert root._store._scope_usages[child.scope].entries == {entry}
+    binding = root._store._data[entry]
+    identity = binding._scope_bindings[child.scope].identity
+    assert binding._scope_bindings[child.scope].identity is identity
+    assert binding._scope_bindings[child.scope] is config
+    assert not child.exists("value")
     child.set("value", "child")
     root.dispose()
 
 
-def test_bind_prevalidates_paths_and_does_not_rollback_identity_conflicts() -> None:
+def test_fork_rejects_missing_paths_and_preserves_existing_bindings() -> None:
+    shared_identity = Identity("shared")
+    original_identity = Identity("original")
     root = Context()
     root.declare({"a": Schema.leaf(), "b": Schema.leaf()})
-    child = root.fork(scope=root.scope.fork())
     with pytest.raises(ContextPathError):
-        child.bind("a", "missing", identity="shared")
-    assert not root._store._scope_usages[child.scope].entries
-
-    child.bind("b", identity="original")
-    with pytest.raises(ValueError, match="cannot be rebound"):
-        child.bind("a", "b", identity="shared")
-    sibling = root.fork(scope=root.scope.fork())
-    sibling.bind("a", identity="shared")
+        root.derive(
+            bindings={
+                "a": ScopeBinding(shared_identity, blocked=True),
+                "missing": ScopeBinding(blocked=True),
+            }
+        )
+    child = root.derive(
+        bindings={
+            "a": ScopeBinding(shared_identity, blocked=True),
+            "b": ScopeBinding(original_identity, blocked=True),
+        }
+    )
+    with pytest.raises(ValueError, match="immutable"):
+        root.derive(
+            bindings={
+                "b": ScopeBinding(original_identity, blocked=True),
+                Ref("b"): ScopeBinding(shared_identity, blocked=True),
+            }
+        )
+    sibling = root.derive(bindings={"a": ScopeBinding(shared_identity, blocked=False)})
     child.set("a", "retained")
     assert sibling.get("a") == "retained"
-    child.bind("b", identity="original")
     root.dispose()
 
 
-@pytest.mark.parametrize("blocked", [False, True])
-def test_disposed_context_rejects_barrier_and_binding_changes(blocked: bool) -> None:
+@pytest.mark.parametrize("mode", ["scope", "identity"])
+def test_disposed_context_rejects_configured_forks(
+    mode: Literal["scope", "identity"],
+) -> None:
+    shared_identity = Identity("shared")
     root = Context()
     root.declare({"value": Schema.leaf()})
     child = root.fork(scope=root.scope.fork())
     child.dispose()
     with pytest.raises(RuntimeError, match="disposed"):
-        child.set_blocked("value", blocked=blocked)
+        child.derive(
+            bindings={
+                "value": ScopeBinding(
+                    Identity(blocked=mode == "identity"), blocked=mode == "scope"
+                )
+            }
+        )
     with pytest.raises(RuntimeError, match="disposed"):
-        child.bind("value", identity="shared")
+        child.derive(bindings={"value": ScopeBinding(shared_identity, blocked=True)})
+    with pytest.raises(RuntimeError, match="disposed"):
+        child.derive(bindings={"value": ScopeBinding(blocked=True)})
     root.dispose()

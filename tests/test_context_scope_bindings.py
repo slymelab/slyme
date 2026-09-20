@@ -5,7 +5,7 @@ import weakref
 
 import pytest
 
-from slyme.context import Context, Schema, Scope
+from slyme.context import Context, Identity, Schema, Scope, ScopeBinding
 from slyme.context.store import ContextStore, _ContextBinding
 from slyme.utils.exception import BaseExceptionGroup
 
@@ -13,6 +13,8 @@ from slyme.utils.exception import BaseExceptionGroup
 def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    shared_identity = Identity("shared", blocked=True)
+
     class NoScan(dict):
         def values(self):
             pytest.fail("Scope lifecycle must not scan all application bindings.")
@@ -21,14 +23,14 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     root.declare(Schema({f"value{i}": Schema.leaf() for i in range(100)}))
     root.update({f"value{i}": i for i in range(100)})
     object.__setattr__(root._store, "_data", NoScan(root._store._data))
-    previous = root.fork(scope=root.scope.fork())
-    previous.bind("value0", identity="shared")
-    previous.set_blocked("value0", blocked=True)
+    previous = root.derive(
+        bindings={"value0": ScopeBinding(shared_identity, blocked=False)}
+    )
     saved_scope = previous.scope
     previous.dispose()
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value0", identity="shared")
-    writer.set_blocked("value0", blocked=True)
+    writer = root.derive(
+        bindings={"value0": ScopeBinding(shared_identity, blocked=False)}
+    )
     writer.set("value0", "retained")
     binding = root._store._data[root.resolve_entry("value0")]
     object.__setattr__(root._schema, "_entries", NoScan(root._schema._entries))
@@ -62,7 +64,7 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
     root.dispose()
 
 
-@pytest.mark.parametrize("operation", ["set", "register", "bind", "set_blocked"])
+@pytest.mark.parametrize("operation", ["set", "register", "bind", "block"])
 def test_first_binding_is_indexed_but_reads_are_not(operation: str) -> None:
     registration = operation == "register"
     root = Context()
@@ -76,10 +78,18 @@ def test_first_binding_is_indexed_but_reads_are_not(operation: str) -> None:
     child = root.fork(scope=root.scope.fork())
     assert child.get("value") == "root"
     assert not root._store._scope_usages[child.scope].entries
-    if operation == "set_blocked":
-        child.set_blocked("value", blocked=True)
+    if operation == "block":
+        child._store.bind(
+            child.scope,
+            child.resolve_entry("value", role="leaf"),
+            ScopeBinding(blocked=True),
+        )
     elif operation == "bind":
-        child.bind("value", identity=object())
+        child._store.bind(
+            child.scope,
+            child.resolve_entry("value", role="leaf"),
+            ScopeBinding(Identity(), blocked=False),
+        )
     elif operation == "set":
         child.set("value", "child")
     else:
@@ -99,7 +109,7 @@ def test_first_binding_is_indexed_but_reads_are_not(operation: str) -> None:
     }
     child.dispose()
     assert binding._get_data(child.scope) is None
-    assert child.scope in binding._scope_identities
+    assert child.scope in binding._scope_bindings
     assert not root._store._scope_usages[child.scope].viewers
     assert root._store._scope_usages[child.scope].entries == {
         root.resolve_entry("value")
@@ -178,8 +188,8 @@ def test_withdrawal_detaches_store_indexes_before_payload_redeclares_the_path() 
                 entry not in usage.entries
                 for usage in root._store._scope_usages.values()
             )
-            assert root.scope not in binding._scope_identities
-            assert child.scope not in binding._scope_identities
+            assert root.scope not in binding._scope_bindings
+            assert child.scope not in binding._scope_bindings
             root.declare({"value": Schema.leaf()})
             child.set("value", "new")
             events.append("redeclared")
@@ -242,14 +252,14 @@ def test_new_scopes_do_not_scan_schema_entries() -> None:
 
 
 def test_store_retains_saved_identities_across_a_gap_without_viewers() -> None:
+    shared_identity = Identity("shared", blocked=True)
     schema = Schema({"value": Schema.leaf()})
     store = ContextStore(schema)
     first, second = Scope(), Scope()
     viewer = object()
     entry = schema.resolve_entry("value")
     store.acquire_scope(viewer, first)
-    store.bind(first, entry, identity="shared")
-    store.set_blocked(first, entry, blocked=True)
+    store.bind(first, entry, ScopeBinding(shared_identity, blocked=False))
     store.set(first, entry, "old")
     binding = store._data[entry]
     usage = store._scope_usages[first]
@@ -261,8 +271,7 @@ def test_store_retains_saved_identities_across_a_gap_without_viewers() -> None:
     assert not binding._data
 
     store.acquire_scope(viewer, second)
-    store.bind(second, entry, identity="shared")
-    store.set_blocked(second, entry, blocked=True)
+    store.bind(second, entry, ScopeBinding(shared_identity, blocked=False))
     store.set(second, entry, "new")
     store.acquire_scope(viewer, first)
     assert store._scope_usages[first] is usage
@@ -317,19 +326,15 @@ def test_saved_scope_history_prunes_withdrawn_declaration_generations() -> None:
 def test_sparse_restore_failure_rolls_back_all_recorded_bindings(
     monkeypatch: pytest.MonkeyPatch, failure_after_restore: bool
 ) -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     paths = ("first", "second", "third")
     root.declare({path: Schema.leaf() for path in paths})
-    previous = root.fork(scope=root.scope.fork())
-    previous.bind(*paths, identity="shared")
-    for path in paths:
-        previous.set_blocked(path, blocked=True)
+    config = ScopeBinding(shared_identity, blocked=False)
+    previous = root.derive(bindings={path: config for path in paths})
     scope = previous.scope
     previous.dispose()
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind(*paths, identity="shared")
-    for path in paths:
-        writer.set_blocked(path, blocked=True)
+    writer = root.derive(bindings={path: config for path in paths})
     writer.update({path: path for path in paths})
     entries = set(root._store._scope_usages[scope].entries)
     restored = []
@@ -434,14 +439,15 @@ def test_container_deletion_only_visits_intersecting_bindings(
 def test_delete_keeps_shared_identity_ownership_without_a_prior_write(
     operation: str,
 ) -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"group": {"value": Schema.leaf()}}))
-    reader = root.fork(scope=root.scope.fork())
-    reader.bind("group.value", identity="shared")
-    reader.set_blocked("group.value", blocked=True)
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("group.value", identity="shared")
-    writer.set_blocked("group.value", blocked=True)
+    reader = root.derive(
+        bindings={"group.value": ScopeBinding(shared_identity, blocked=False)}
+    )
+    writer = root.derive(
+        bindings={"group.value": ScopeBinding(shared_identity, blocked=False)}
+    )
     writer.set("group.value", "old")
     if operation == "delete":
         reader.delete("group")
@@ -463,14 +469,15 @@ def test_delete_keeps_shared_identity_ownership_without_a_prior_write(
 
 
 def test_schema_withdrawal_cleans_every_scope_before_path_reuse() -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     withdraw = root.declare({"value": Schema.leaf()})
     schema = root._schema
     left = root.fork(scope=root.scope.fork())
     right = root.fork(scope=root.scope.fork())
-    writer = left.fork(scope=left.scope.fork())
-    writer.bind("value", identity="shared")
-    writer.set_blocked("value", blocked=True)
+    writer = left.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     saved = writer.scope
     writer.set("value", "old")
     writer.dispose()
@@ -490,9 +497,9 @@ def test_schema_withdrawal_cleans_every_scope_before_path_reuse() -> None:
     assert not old_binding._data
 
     root.declare({"value": Schema.leaf()})
-    new_writer = left.fork(scope=left.scope.fork())
-    new_writer.bind("value", identity="shared")
-    new_writer.set_blocked("value", blocked=True)
+    new_writer = left.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     new_writer.set("value", "new")
     reader = left.fork(scope=saved)
     assert not left._store._scope_usages[saved].entries

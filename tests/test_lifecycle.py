@@ -5,7 +5,15 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from slyme.context import Context, ContextStore, Lifecycle, Schema, Scope
+from slyme.context import (
+    Context,
+    ContextStore,
+    Identity,
+    Lifecycle,
+    Schema,
+    Scope,
+    ScopeBinding,
+)
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
 
@@ -160,14 +168,21 @@ def test_context_shares_store_and_schema_but_not_lifecycle() -> None:
 
 
 def test_failed_binding_leaves_child_disposal_to_its_owner() -> None:
+    original_identity = Identity("original")
+    replacement_identity = Identity("replacement")
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     initial_owned = tuple(root._lifecycle._owned)
     root.update({"value": "root"})
-    child = root.fork(scope=root.scope.fork())
-    child.bind("value", identity="original")
-    with pytest.raises(ValueError, match="cannot be rebound"):
-        child.bind("value", identity="replacement")
+    child = root.derive(
+        bindings={"value": ScopeBinding(original_identity, blocked=False)}
+    )
+    with pytest.raises(ValueError, match="immutable"):
+        child._store.bind(
+            child.scope,
+            child.resolve_entry("value", role="leaf"),
+            ScopeBinding(replacement_identity, blocked=False),
+        )
     assert child.get("value") == "root"
     assert root._store._scope_usages[child.scope].viewers == {child}
     child.dispose()

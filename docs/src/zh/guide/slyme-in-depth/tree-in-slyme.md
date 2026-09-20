@@ -60,7 +60,7 @@ ctx.dispose()
 
 普通 fork 复用父级配置，子 Scope 通过 C3 继承。绑定到无关 `Scope()` 的 fork 看不到默认值，必须显式安装需要的 Compose 和 contribution；框架不会回退到 `ctx.root`。独立创建的根 `Context()` 会安装自己的默认配置。
 
-创建 `child = ctx.fork(scope=ctx.scope.fork())`，调用 `child.set_blocked(DATA_TREE_REF, blocked=True)`，再通过 `child.register(DATA_TREE_REF, Compose())` 为该字段安装独立的规则组合。空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历则显式解析 `NODE_TREE_REF`，再将规则传给 TreeEngine。
+创建 `child = ctx.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})`，再调用 `child.register(DATA_TREE_REF, Compose(TreeRules.merge))`，为该字段安装独立的规则组合。空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历则显式解析 `NODE_TREE_REF`，再将规则传给 TreeEngine。
 
 Schema 声明使用私有、不可变、仅处理 dict 的规则，不读取运行时配置。修改 data tree 规则不会改变 Schema 对声明的解释方式。
 

@@ -14,10 +14,12 @@ from hypothesis import strategies as st
 import slyme.context as context_module
 from slyme.context import (
     Context,
+    Identity,
     Ref,
     RefEntry,
     Schema,
     Scope,
+    ScopeBinding,
 )
 from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_RULES
@@ -1021,8 +1023,6 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
         Context.register,
         Context.update_tree,
         Context.delete,
-        Context.bind,
-        Context.set_blocked,
     )
 
     for operation in operations:
@@ -1033,13 +1033,13 @@ def test_context_crud_uses_only_the_bound_scope() -> None:
 def test_context_bind_shares_only_the_selected_leaf() -> None:
     root = Context()
     root.declare(R)
-    identity = object()
-    left = root.fork(scope=root.scope.fork())
-    left.bind(R.resolve("value"), identity=identity)
-    left.set_blocked(R.resolve("value"), blocked=True)
-    right = root.fork(scope=root.scope.fork())
-    right.bind(R.resolve("value"), identity=identity)
-    right.set_blocked(R.resolve("value"), blocked=True)
+    identity = Identity(blocked=True)
+    left = root.derive(
+        bindings={R.resolve("value"): ScopeBinding(identity, blocked=False)}
+    )
+    right = root.derive(
+        bindings={R.resolve("value"): ScopeBinding(identity, blocked=False)}
+    )
     left.set(R.resolve("value"), "shared")
     left.set(R.resolve("runtime.value"), "left-only")
 
@@ -1238,8 +1238,7 @@ def test_context_barrier_survives_registration_removal() -> None:
     root.declare(R)
     root.register(value, "root")
 
-    isolated = root.fork(scope=root.scope.fork())
-    isolated.set_blocked(value, blocked=True)
+    isolated = root.derive(bindings={value: ScopeBinding(blocked=True)})
     assert isolated.get(value, "missing") == "missing"
     assert not isolated.exists(value)
     assert not isolated.exists(value, local=True)
@@ -1253,13 +1252,19 @@ def test_context_barrier_survives_registration_removal() -> None:
     assert root.get(value) == "root"
 
 
-def test_context_barrier_stops_c3_lookup_before_later_parents() -> None:
+@pytest.mark.parametrize("mode", ["scope", "identity"])
+def test_context_barrier_stops_c3_lookup_before_later_parents(mode) -> None:
     value = R.resolve("value")
     root = Context()
     root.declare(R)
     root.set(value, "root")
-    left = root.fork(scope=root.scope.fork())
-    left.set_blocked(value, blocked=True)
+    left = root.derive(
+        bindings={
+            value: ScopeBinding(
+                Identity(blocked=mode == "identity"), blocked=mode == "scope"
+            )
+        }
+    )
     right = root.fork(scope=root.scope.fork())
     right.set(value, "right")
     child_scope = Scope(parents=(left.scope, right.scope))
@@ -1279,16 +1284,13 @@ def test_context_barrier_stops_c3_lookup_before_later_parents() -> None:
     assert child.get(value, "missing") == "missing"
 
 
-@pytest.mark.parametrize("operation", ["bind", "set_blocked"])
-def test_context_binding_operations_require_declared_leaves(operation: str) -> None:
+@pytest.mark.parametrize("binding", [ScopeBinding(), ScopeBinding(blocked=True)])
+def test_context_derive_bindings_require_declared_leaves(binding: ScopeBinding) -> None:
     ctx = Context()
     ctx.declare(R)
 
     with pytest.raises(ContextPathError, match="container.*not a leaf"):
-        if operation == "bind":
-            ctx.bind(R.resolve("group"), identity=object())
-        else:
-            ctx.set_blocked(R.resolve("group"), blocked=True)
+        ctx.derive(bindings={R.resolve("group"): binding})
 
 
 def test_context_register_disposer_prunes_a_temporary_container() -> None:

@@ -27,7 +27,7 @@ from .schema import (
     RefLeafConfig,
     Schema,
 )
-from .scope import Scope
+from .scope import Identity, Scope, ScopeBinding
 from .store import ContextStore
 
 __all__ = [
@@ -40,6 +40,7 @@ __all__ = [
     "NODE_TREE_REF",
     "EVALUATORS_REF",
     "Lifecycle",
+    "Identity",
     "Metadata",
     "Ref",
     "RefConfig",
@@ -48,4 +49,5 @@ __all__ = [
     "RefLeafConfig",
     "Schema",
     "Scope",
+    "ScopeBinding",
 ]

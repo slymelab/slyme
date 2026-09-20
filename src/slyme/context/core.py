@@ -14,13 +14,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, TypeVar, overload
 
 from slyme.utils.tree import TreeEngine
 
+from .compose import Compose
 from .default import DATA_TREE_REF, _install
 from .lifecycle import Lifecycle, _Cleanup, _Disposer
 from .schema import (
@@ -32,7 +33,7 @@ from .schema import (
     Schema,
     _Declaration,
 )
-from .scope import Scope
+from .scope import Identity, Scope, ScopeBinding
 from .store import _MISSING as _STORE_MISSING
 from .store import ContextStore
 
@@ -170,28 +171,46 @@ class Context:
         """Create an owned child sharing this Scope unless another is supplied."""
         return type(self)(parent=self, scope=scope)
 
-    def bind(self, *refs: ContextKey, identity: Hashable) -> None:
-        """Bind leaves at this Scope to immutable, per-field storage identities.
+    def derive(
+        self,
+        *,
+        label: Any | None = None,
+        parents: Scope | tuple[Scope, ...] | None = None,
+        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity],
+    ) -> Context:
+        """Create an owned child and one new Scope configured for all targets.
 
-        Binding does not create a Context or Scope, block inheritance, or move
-        existing values. Paths are validated before binding; identity conflicts
-        leave earlier bindings in place. Use a new Scope to select new identities.
+        Parents defaults to this Scope, independently of lifecycle ownership;
+        an empty tuple creates an independent Scope. Path keys configure declared
+        leaves; Compose keys configure contribution layers without replacing
+        Context values. Each ScopeBinding selects private or shared storage and
+        allows ancestor fallback unless it or its Identity is blocked.
+        An Identity is shorthand for ScopeBinding(identity=identity).
+        Unselected targets inherit. Empty bindings still create a new Scope.
         """
         self._lifecycle.assert_active()
-        entries = tuple(self._schema.resolve_entry(ref, role="leaf") for ref in refs)
-        for entry in entries:
-            self._store.bind(self.scope, entry, identity=identity)
-
-    def set_blocked(self, ref: ContextKey, *, blocked: bool) -> None:
-        """Set the inheritance barrier on one leaf's identity at this Scope.
-
-        Shared identities share their barrier. Values and tokens are unchanged;
-        an empty unblocked identity falls back through the reader's Scope MRO.
-        Unblocking an unbound leaf does not create storage or bind an identity.
-        """
-        self._lifecycle.assert_active()
-        entry = self._schema.resolve_entry(ref, role="leaf")
-        self._store.set_blocked(self.scope, entry, blocked=blocked)
+        prepared = tuple(
+            (
+                target
+                if isinstance(target, Compose)
+                else self._schema.resolve_entry(target, role="leaf"),
+                ScopeBinding(binding) if isinstance(binding, Identity) else binding,
+            )
+            for target, binding in bindings.items()
+        )
+        child = self.fork(
+            scope=Scope(label=label, parents=self.scope if parents is None else parents)
+        )
+        try:
+            for target, binding in prepared:
+                if isinstance(target, Compose):
+                    target._bind(child.scope, binding)
+                else:
+                    self._store.bind(child.scope, target, binding)
+        except BaseException:
+            child.dispose()
+            raise
+        return child
 
     def _entry_value(
         self,
@@ -254,15 +273,12 @@ class Context:
             current[relative_parts[-1]] = value
         return result
 
-    def _flat_items(
+    def flatten(
         self, ref: ContextKey | None = None, *, local: bool = False
-    ) -> Iterable[tuple[Ref[Any], Any]]:
+    ) -> dict[Ref[Any], Any]:
+        """Return a container's visible leaves keyed by absolute Refs; default to root."""
         entry = self.resolve_entry("" if ref is None else ref, role="container")
-        return self._store.items(self.scope, entry, local=local)
-
-    def flatten(self, *, local: bool = False) -> dict[Ref[Any], Any]:
-        """Return the visible Context leaves as a flat Ref-to-value mapping."""
-        return dict(self._flat_items(local=local))
+        return dict(self._store.items(self.scope, entry, local=local))
 
     def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
         self._lifecycle.assert_readable()
@@ -358,7 +374,7 @@ class ContextView:
 
     def flatten(self, *, local: bool = False) -> dict[Ref[Any], Any]:
         """Return this subtree's visible leaves keyed by absolute Refs."""
-        return dict(self._context._flat_items(self._adjust_key(""), local=local))
+        return self._context.flatten(self._adjust_key(""), local=local)
 
     def to_dict(
         self,

@@ -56,15 +56,21 @@ breaking changes when they are documented here.
   effects, recursive owner-local LIFO disposal, and explicit Scope binding.
 - Added lifecycle-owned `Context.register()` and `declare()`
   operations, each with an exact disposer for optional early cleanup.
-- Added `Context.flatten()` for exact visible Ref-to-value leaf mappings.
+- Added `Context.flatten(ref=None, *, local=False)` for exact visible Ref-to-value
+  leaf mappings of the root or a selected container.
 - Added `Compose` for ordered, reversible values resolved through a Scope's C3
   hierarchy, including first-value, collection, mapping, and custom rules.
 - Added immutable Compose-local identity bindings so selected Scopes can share
   contribution storage without changing other Scope lookup; Context leaves
-  support the same identity-sharing rules through `bind(*refs, identity=...)`.
-- Added Schema-owned write modes and `Context.set_blocked(ref, blocked=...)`
-  to enable or disable a leaf identity's inheritance barrier independently of
-  Context lifetime creation and identity binding.
+  support the same identity-sharing rules through `derive(bindings=...)`.
+- Added Schema-owned write modes and immutable `Identity` objects with optional
+  identity-level barriers. `ScopeBinding` specifies identity and Scope-local
+  barriers independently of payload lifetime. Both default to unblocked.
+- Added keyword-only `Context.derive(label=..., parents=..., bindings=...)` to
+  create an owned child Context and one configured Scope. `Compose.derive()`
+  and static `Compose.derive_many()` create a Scope for one or multiple Composes
+  without lifecycle ownership; both require explicit parents. Derive APIs accept
+  ScopeBinding or Identity configurations, not None; Compose.derive requires its binding.
 
 ### Fixed
 
@@ -132,8 +138,10 @@ breaking changes when they are documented here.
 - Removed execution-mode decorators and separate async Node, Wrapper, evaluator,
   sequence, and Context lifecycle APIs. Use the unified APIs and `await_result()`
   when immediate and awaitable results are both possible.
-- Removed `Context.isolate()`; compose explicit `fork()`, `bind()`, and
-  `set_blocked()` calls instead.
+- Removed public `Context.bind()`, `Context.isolate()`, and in-place Compose binding.
+  Configure new Scopes through `Context.derive(bindings=...)` or
+  `Compose.derive()` / `derive_many()`, using immutable `Identity` and `ScopeBinding`
+  values. `Context.fork()` only creates a lifetime with a supplied or shared Scope.
 - Removed the `ContextElement` base class; Context and ContextView retain their
   data access methods without a shared abstract base.
 - Removed `ContextView.extract()`. Views provide only `get/exists/keys/to_dict/flatten`;
@@ -249,6 +257,8 @@ breaking changes when they are documented here.
 - `Scope.fork()` now creates only a single-parent child; C3 multiple inheritance
   uses explicit `Scope(parents=(...))` construction. Context roots track the
   exact live Context viewers for every Scope instead of anonymous counts.
+- Scope construction is keyword-only. Its `parents` input accepts a Scope or a
+  tuple, while the stored `parents` attribute is always a tuple.
 - `Context.root` owns the application data store and lifetime subtree and holds
   their shared Schema reference. Scope C3 order is independent of the Context
   lifetime tree and has no common-root restriction.

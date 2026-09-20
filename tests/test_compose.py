@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import gc
 import weakref
-from collections.abc import Hashable
 from types import MappingProxyType
 
 import pytest
 
 import slyme.context as context_module
-from slyme.context import Compose, Context, Schema, Scope
+from slyme.context import Compose, Context, Identity, Schema, Scope, ScopeBinding
 
 R = Schema({"hooks": Schema.leaf(), "tools": Schema.leaf()})
 
@@ -19,7 +18,7 @@ def test_compose_is_the_only_public_composition_type() -> None:
 
 
 def test_one_uses_scope_and_entry_precedence() -> None:
-    root = Scope("root")
+    root = Scope(label="root")
     agent = root.fork(label="agent")
     values = Compose[str, str].one()
 
@@ -45,10 +44,10 @@ def test_one_uses_scope_and_entry_precedence() -> None:
 
 
 def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
-    root = Scope("root")
+    root = Scope(label="root")
     left = root.fork(label="left")
     right = root.fork(label="right")
-    child = Scope("child", parents=(left, right))
+    child = Scope(label="child", parents=(left, right))
     values = Compose[str, tuple[str, ...]].collect()
 
     values.add(root, "root")
@@ -68,7 +67,7 @@ def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
 
 
 def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
-    root = Scope("root")
+    root = Scope(label="root")
     child = root.fork(label="child")
     values = Compose.merge()
 
@@ -98,7 +97,7 @@ def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
 
 
 def test_compose_accepts_a_custom_resolver() -> None:
-    root = Scope("root")
+    root = Scope(label="root")
     child = root.fork(label="child")
     values = Compose[int, int](sum)
     values.add(root, 2)
@@ -136,14 +135,17 @@ def test_entries_are_immutable_snapshots_with_exact_disposal() -> None:
     assert len(values) == 0
 
 
-def test_bind_shares_one_compose_identity_only_in_that_compose() -> None:
-    left = Scope("left")
-    right = Scope("right")
-    identity = object()
+def test_derive_shares_identity_only_in_that_compose() -> None:
+    identity = Identity()
     shared = Compose[str, tuple[str, ...]].collect()
     independent = Compose[str, tuple[str, ...]].collect()
 
-    shared.bind(left, right, identity=identity)
+    left = shared.derive(
+        parents=Scope(label="left"), binding=ScopeBinding(identity, blocked=True)
+    )
+    right = shared.derive(
+        parents=Scope(label="right"), binding=ScopeBinding(identity, blocked=True)
+    )
     shared.add(left, "left")
     shared.add(right, "right")
     independent.add(left, "independent")
@@ -155,71 +157,152 @@ def test_bind_shares_one_compose_identity_only_in_that_compose() -> None:
     assert all(entry["identity"] is identity for entry in shared.entries())
 
 
-def test_bind_is_atomic_idempotent_and_rejects_rebinding() -> None:
-    left = Scope("left")
-    right = Scope("right")
+def test_derive_creates_fresh_scopes_without_changing_parent_binding() -> None:
+    parent = Scope()
     values = Compose[str, tuple[str, ...]].collect()
-    first = object()
-    second = object()
+    values.add(parent, "parent")
+    original = values._scope_bindings[parent]
 
-    values.bind(left, identity=first)
-    values.bind(left, identity=first)
-    with pytest.raises(ValueError, match="rebound"):
-        values.bind(right, left, identity=second)
+    first = values.derive(parents=parent, binding=ScopeBinding())
+    second = values.derive(parents=parent, binding=ScopeBinding())
+    assert first is not second
+    assert first.parents == second.parents == (parent,)
+    assert values._scope_bindings[parent] is original
+    assert values.resolve(parent) == ("parent",)
+    assert values.resolve(first) == values.resolve(second) == ("parent",)
 
-    values.bind(right, identity=first)
+    remove = values.add(first, "private")
+    assert values.resolve(first) == ("private", "parent")
+    assert values.resolve(second) == ("parent",)
+    assert values.resolve(parent) == ("parent",)
+    remove()
+    assert values.resolve(first) == ("parent",)
+
+
+@pytest.mark.parametrize("single", [False, True])
+def test_derive_many_configures_all_composes_on_one_scope(single: bool) -> None:
+    parent = Scope(label="parent")
+    tools, events, unconfigured = (
+        Compose.collect(),
+        Compose.collect(),
+        Compose.collect(),
+    )
+    tools.add(parent, "parent tool")
+    events.add(parent, "parent event")
+    unconfigured.add(parent, "inherited")
+    identity = Identity()
+    peer = events.derive(parents=(), binding=ScopeBinding(identity, blocked=True))
+    events.add(peer, "shared event")
+    scope = Compose.derive_many(
+        label="derived",
+        parents=parent if single else (parent,),
+        bindings={
+            tools: ScopeBinding(blocked=True),
+            events: ScopeBinding(identity, blocked=True),
+        },
+    )
+    assert scope.label == "derived"
+    assert scope.parents == (parent,)
+    assert scope.mro == (scope, parent)
+    assert tools.resolve(scope) == ()
+    assert events.resolve(scope) == ("shared event",)
+    assert unconfigured.resolve(scope) == ("inherited",)
+    assert tools._scope_bindings[scope].identity is not identity
+    remove = tools.add(scope, "private tool")
+    assert tools.resolve(scope) == ("private tool",)
+    assert tools.resolve(parent) == ("parent tool",)
+    remove()
+    assert tools.resolve(scope) == ()
+
+
+def test_derive_many_handles_c3_and_empty_configuration() -> None:
+    root = Scope()
+    left, right = root.fork(), root.fork()
+    values = Compose.collect()
+    values.add(left, "left")
+    values.add(right, "right")
+    config = ScopeBinding(blocked=False)
+    scope = Compose.derive_many(parents=(left, right), bindings={values: config})
+    assert scope.mro == (scope, left, right, root)
+    assert values._scope_bindings[scope] is config
+    assert values.resolve(scope) == ("left", "right")
+    empty = Compose.derive_many(parents=(), bindings={})
+    assert empty.parents == ()
+    assert empty.mro == (empty,)
+    assert values.resolve(empty) == ()
+
+
+def test_derive_many_rejects_inconsistent_parents_without_installing_bindings() -> None:
+    values = Compose.collect()
+    left, right = Scope(), Scope()
+    xy, yx = Scope(parents=(left, right)), Scope(parents=(right, left))
+    with pytest.raises(TypeError, match="consistent Scope C3"):
+        Compose.derive_many(
+            parents=(xy, yx), bindings={values: ScopeBinding(blocked=True)}
+        )
+    assert not values._scope_bindings
+    assert not values.entries()
+
+
+def test_internal_binding_is_idempotent_and_rejects_rebinding() -> None:
+    left = Scope(label="left")
+    right = Scope(label="right")
+    values = Compose[str, tuple[str, ...]].collect()
+    first = Identity()
+    second = Identity()
+
+    values._bind(left, ScopeBinding(first, blocked=False))
+    values._bind(left, ScopeBinding(first, blocked=False))
+    with pytest.raises(ValueError, match="immutable"):
+        values._bind(left, ScopeBinding(second, blocked=False))
+
+    values._bind(right, ScopeBinding(first, blocked=False))
     values.add(right, "shared")
     assert values.resolve(left) == ("shared",)
-    with pytest.raises(ValueError, match="at least one Scope"):
-        values.bind(identity=first)
-    with pytest.raises(TypeError, match="identities must be hashable"):
-        values.bind(Scope(), identity=[])  # type: ignore[arg-type]
 
 
 def test_read_does_not_bind_and_first_write_prevents_later_rebinding() -> None:
     scope = Scope()
     values = Compose[str, tuple[str, ...]].collect()
-    identity = object()
+    identity = Identity()
 
     assert values.resolve(scope) == ()
-    values.bind(scope, identity=identity)
+    values._bind(scope, ScopeBinding(identity, blocked=False))
     remove = values.add(scope, "value")
     remove()
 
     assert values.resolve(scope) == ()
-    with pytest.raises(ValueError, match="rebound"):
-        values.bind(scope, identity=object())
+    with pytest.raises(ValueError, match="immutable"):
+        values._bind(scope, ScopeBinding(Identity(), blocked=False))
     values.add(scope, "new")
     assert values.entries(scope)[0]["identity"] is identity
 
     implicit = Scope()
     values.add(implicit, "implicit")
-    with pytest.raises(ValueError, match="rebound"):
-        values.bind(implicit, identity=identity)
+    with pytest.raises(ValueError, match="immutable"):
+        values._bind(implicit, ScopeBinding(identity, blocked=False))
 
 
 def test_empty_binding_does_not_retain_an_unreferenced_scope() -> None:
     values = Compose[str, tuple[str, ...]].collect()
-    scope = Scope()
+    scope = values.derive(parents=Scope(), binding=ScopeBinding())
     scope_ref = weakref.ref(scope)
-    values.bind(scope, identity=object())
 
     del scope
     gc.collect()
 
     assert scope_ref() is None
-    assert not values._scope_identities
+    assert not values._scope_bindings
 
 
 def test_c3_lookup_visits_a_shared_identity_only_once() -> None:
-    root = Scope("root")
-    left = root.fork(label="left")
-    right = root.fork(label="right")
-    child = Scope("child", parents=(left, right))
-    identity = object()
+    root = Scope(label="root")
+    identity = Identity()
     values = Compose[str, tuple[str, ...]].collect()
 
-    values.bind(left, right, identity=identity)
+    left = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
+    right = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
+    child = Scope(label="child", parents=(left, right))
     values.add(left, "left")
     values.add(right, "right")
     values.add(root, "root")
@@ -227,10 +310,11 @@ def test_c3_lookup_visits_a_shared_identity_only_once() -> None:
     assert values.resolve(child) == ("left", "right", "root")
 
 
-@pytest.mark.parametrize("identity", [None, False, 0, "", ()])
-def test_sparse_c3_reads_preserve_falsey_identities_and_see_new_bindings(
-    identity: Hashable,
+@pytest.mark.parametrize("label", [None, "", "shared"])
+def test_sparse_c3_reads_see_new_bindings_without_allocating_identities(
+    label: str | None,
 ) -> None:
+    identity = Identity(label)
     root = Scope()
     left = root.fork()
     right = root.fork()
@@ -239,14 +323,15 @@ def test_sparse_c3_reads_preserve_falsey_identities_and_see_new_bindings(
     values = Compose[str, tuple[str, ...]].collect()
 
     assert values.resolve(child) == ()
-    values.bind(left, right, identity=identity)
+    values._bind(left, ScopeBinding(identity, blocked=False))
+    values._bind(right, ScopeBinding(identity, blocked=False))
     remove = values.add(left, "shared")
     assert values.resolve(child) == ("shared",)
     values.add(root, "root")
-    identities_before = dict(values._scope_identities)
+    identities_before = dict(values._scope_bindings)
     assert values.resolve(child) == ("shared", "root")
     assert values.values(child, local=True) == ()
-    assert dict(values._scope_identities) == identities_before
+    assert dict(values._scope_bindings) == identities_before
 
     remove()
     assert values.resolve(child) == ("root",)
@@ -302,10 +387,9 @@ def test_compose_disposer_does_not_retain_an_already_removed_value() -> None:
 
 def test_bucket_is_removed_after_the_last_shared_identity_entry_leaves() -> None:
     values = Compose[str, tuple[str, ...]].collect()
-    left = Scope()
-    right = Scope()
-    identity = object()
-    values.bind(left, right, identity=identity)
+    identity = Identity()
+    left = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
+    right = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
     remove_left = values.add(left, "left")
     bucket = values._buckets[identity]
     remove_right = values.add(right, "right", position="prepend")
@@ -344,9 +428,8 @@ def test_compose_disposer_owns_compose_until_release() -> None:
 @pytest.mark.parametrize("keep_other_entry", [False, True])
 def test_value_finalizer_can_add_to_the_same_identity(keep_other_entry: bool) -> None:
     values = Compose[object, tuple[object, ...]].collect()
-    scope = Scope()
-    identity = object()
-    values.bind(scope, identity=identity)
+    identity = Identity()
+    scope = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
     remove_new = []
 
     class Value:
@@ -429,19 +512,15 @@ def test_clear_bucket_preserves_entries_added_by_old_value_finalizers() -> None:
 def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf(mode="register")}))
-    identity = object()
-    child = root.fork(scope=root.scope.fork())
-    child.bind("value", identity=identity)
-    child.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    child = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     binding = root._store._data[root.resolve_entry("value")]
     remove = root._store.register(child.scope, root.resolve_entry("value"), "old")
-    assert binding._data[identity].blocked
+    assert binding._scope_bindings[child.scope].identity.blocked
 
     child.dispose()
     assert not binding._data
-    replacement = root.fork(scope=root.scope.fork())
-    replacement.bind("value", identity=identity)
-    replacement.set_blocked("value", blocked=True)
+    replacement = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     replacement.register("value", "new")
     remove()
     assert replacement.get("value") == "new"
@@ -450,9 +529,9 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
 
 
 def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> None:
-    left = Scope("left")
-    right = Scope("right")
-    combined = Scope("combined", parents=(left, right))
+    left = Scope(label="left")
+    right = Scope(label="right")
+    combined = Scope(label="combined", parents=(left, right))
     values = Compose[str, tuple[str, ...]].collect()
     values.add(left, "left")
     values.add(right, "right")
@@ -479,9 +558,9 @@ def test_context_fork_shares_scope_unless_one_is_explicit() -> None:
 
 def test_context_data_and_scope_identity_are_orthogonal() -> None:
     ref = R.resolve("tools")
-    left = Scope("left")
-    right = Scope("right")
-    combined = Scope("combined", parents=(left, right))
+    left = Scope(label="left")
+    right = Scope(label="right")
+    combined = Scope(label="combined", parents=(left, right))
     root = Context(scope=left)
     root.declare(R)
     right_context = root.fork(scope=right)
@@ -499,7 +578,7 @@ def test_context_data_and_scope_identity_are_orthogonal() -> None:
 
 def test_independent_context_roots_do_not_share_data_with_the_same_scope() -> None:
     ref = R.resolve("tools")
-    scope = Scope("shared-identity")
+    scope = Scope(label="shared-identity")
     left = Context(scope=scope)
     left.declare(R)
     right = Context(scope=scope)
@@ -538,7 +617,7 @@ def test_context_effect_owns_contributions_to_explicit_scopes() -> None:
     hooks = Compose[str, tuple[str, ...]].collect()
     root.register(hooks_ref, hooks)
     child = root.fork(scope=root.scope.fork(label="child"))
-    external = Scope("external")
+    external = Scope(label="external")
 
     remove_bound = child.effect(
         lambda: child.get(hooks_ref).add(

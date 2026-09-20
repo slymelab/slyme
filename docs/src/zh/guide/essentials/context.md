@@ -10,7 +10,7 @@ Context 协调组件归属，ContextView 通过 Context 完成访问。Store 独
 
 普通 Context 操作在委托前检查自身 Lifecycle。释放期间可以读取，直到该 Context 完成释放，但禁止写入、声明、新增 effect 和创建子级。内部撤销和 Scope 释放检查精确的持有记录，在清理期间仍可执行。共享的 Schema 和 Store 不采用某个调用者的生命周期状态，其他活跃 Context 可以继续使用它们。
 
-每个 Context binding 按 identity 保存一条纯数据记录，包含当前值、继承 barrier 和仍被观察的 Scope；只有注册需要撤销 token。Binding 负责这些记录的全部操作，写入不会暴露记录对象。Context 独立管理存储，Compose 则管理带 metadata 的有序 contribution。
+每个 Context binding 按 Scope 保存不可变的 `ScopeBinding`，其中指定 `Identity` 和局部继承阻断；Identity 自身定义共享阻断。可变数据记录保存当前值、注册 token 和仍持有数据的 Scope。Binding 负责这些记录的全部操作，写入不会暴露记录对象。Context 独立管理存储，Compose 则管理带 metadata 的有序 contribution。
 
 Store 执行 Schema 写入模式，以及注册不能覆盖本地已有值的规则。Binding 提供带 token 的写入和删除：记录保存的 token 为 `None` 时不限制调用方；非 `None` 时必须传入同一个 token，调用方传 `None` 也不能绕过检查。Store 注册会创建唯一 token，并通过 `once()` 包装调用 Binding 的 `matches()` 和 `delete()` 的 disposer。`matches()` 要求本地值存在且 token 精确匹配，因此旧 disposer 不会删除替代值，即使替代值没有 token 保护。
 
@@ -224,7 +224,7 @@ fragment 仍用于声明和导出该插件拥有的路径；`ctx.entries` 列出
 
 `context/default.py` 在根 Context 安装三个 register 模式的 Compose：`$.tree.data`、`$.tree.node` 和 `$.eval.handlers`。分别通过 `DATA_TREE_REF`、`NODE_TREE_REF`、`EVALUATORS_REF` 访问；这些常量由 `slyme.context` 导出。它们和贡献的清理由根生命周期管理，不存在可变的进程级 registry。
 
-这些路径服从普通 Context/Scope 规则。子 Scope 可继承，完全无关的 Scope 必须显式获得配置，不会隐式回退到 root。可以通过 Compose 贡献规则，也可以创建子 Scope，通过 `set_blocked(ref, blocked=True)` 阻断某个字段的继承，再注册独立的 Compose。详见 [Tree 规则](../slyme-in-depth/tree-in-slyme.md)。
+这些路径服从普通 Context/Scope 规则。子 Scope 可继承，完全无关的 Scope 必须显式获得配置，不会隐式回退到 root。可以通过 Compose 贡献规则，也可以调用 `ctx.derive(bindings={ref: ScopeBinding(blocked=True)})`，再在返回的子 Context 中注册独立的 Compose。详见 [Tree 规则](../slyme-in-depth/tree-in-slyme.md)。
 
 ### 根 container
 
@@ -297,7 +297,7 @@ assert agent.scope.find("mixin") is mixin_scope
 assert agent.to_dict("settings") == {"mode": "fast", "timeout": 45}
 ```
 
-Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周期归属，以及保存 Schema 和数据的应用根；Scope 决定查找顺序。`scope.fork()` 始终创建单 parent 子级；多 parent 必须显式使用 `Scope(parents=(...))` 构造，并满足一致的 C3 线性化，这些 parent 可以来自彼此无关的 Scope 根。即使复用同一个 Scope 对象，不同 Context 根也不会共享 Context 数据。
+Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周期归属，以及保存 Schema 和数据的应用根；Scope 决定查找顺序。`Scope(*, label=None, parents=())` 接受单个 Scope 或 tuple，在 C3 线性化之前将存储的 `parents` 属性归一化为 tuple。parent 可以来自彼此无关的 Scope 根。`scope.fork()` 创建单 parent 子级。即使复用同一个 Scope 对象，不同 Context 根也不会共享 Context 数据。
 
 单 parent Scope 直接在 parent 已有的 MRO 前加入自身，即使 parent 本身使用多继承也成立。构造成本与该 MRO 的长度呈线性关系。
 
@@ -305,27 +305,41 @@ Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周
 
 删除局部值通常会让 Scope MRO 中的下一个值重新可见。
 
-`fork(scope=...)` 创建由当前 Context 管理的子 Context。`bind(*refs, identity=...)` 为当前 Scope 选择各字段的不可变存储身份，不改变继承、不迁移值。绑定到同一 identity 的 Scope 共享该字段的值、注册 token 和阻断状态。应先绑定再写入；已绑定的 Scope 不能改用不同 identity。绑定前会验证所有路径；绑定过程中发生 identity 冲突时，保留此前成功的绑定。
+`fork()` 创建由当前 Context 管理、共享当前 Scope 的子 Context；`fork(scope=...)` 选择已有 Scope。`Identity(label=None, blocked=False)` 是不可变的存储身份：共享要求使用同一对象，而不是相同 label。数据仍局限于单个 Context store 中的某个字段，或单个 Compose。`blocked=True` 为所有使用该 Identity 的 Scope 固定继承阻断。
 
-`set_blocked(ref, *, blocked: bool)` 修改当前 Scope 对应 identity 上单个 leaf 的继承阻断状态，不创建 Context 或 Scope。`blocked=True` 时，空 identity 会停止 C3 查找，后续 parent 也无法绕过；局部值仍然可见。`blocked=False` 时，空 identity 恢复继承，不改变当前值或注册 token。对尚未绑定的 leaf 取消阻断不分配存储。这两个操作都不创建或释放生命周期：
+`ScopeBinding(identity=Identity(), blocked=False)` 描述存储身份和 Scope 局部阻断，默认会为每个实例创建私有 Identity；两级 blocked 均默认为 False。公开 API 只在新 Scope 上安装显式配置，已有绑定不可更改。未绑定 Scope 的首次写入会固定私有、不阻断的绑定。已有值仍然可见；无值时任意一级阻断都会停止 C3 查找，包括后续 parent。Context 和 Compose 不提供原地修改绑定或阻断的公开操作。
+
+数据清理不改变配置。复用已保存的 Scope 会保留该字段的绑定和局部阻断；复用 Identity 会保留身份级阻断。已清理的值不会恢复。撤销 Schema 的最终声明会移除该字段的绑定，但不能改变外部仍持有的 Identity。这些规则控制查找，不是插件之间的权限控制。
+
+`ctx.derive(*, label=None, parents=None, bindings=...)` 创建由当前 Context 管理的子 Context，并为全部 target 创建同一个新 Scope。`parents=None` 继承 `ctx.scope`；显式 Scope 或 tuple 指定新 Scope 的直接父级，`()` 创建独立 Scope。生命周期仍由 `ctx` 管理。路径或 Ref key 配置已声明的 leaf；Compose 对象 key 配置贡献层，不替换 Context 中的值。每个值可以是 ScopeBinding 或 Identity。直接传 Identity 等价于 `ScopeBinding(identity=identity)`，不接受 None。`ScopeBinding()` 创建私有 Identity 且不阻断；`ScopeBinding(identity=shared)` 选择共享存储。两级阻断均需显式设置 `blocked=True`。未指定的 target 沿指定父集继承。空 bindings 也会创建新 Scope。共享 identity 不会让新 Scope 的阻断影响无继承关系的其他 Scope：
 
 ```python
+from slyme.context import Identity
+
 service_schema = Schema({"service": Schema.leaf()})
 root = Context()
 root.declare(service_schema)
 root.update({"service": "default"})
 service = service_schema.resolve("service")
-isolated = root.fork(scope=root.scope.fork())
-isolated.set_blocked(service, blocked=True)
+isolated = root.derive(bindings={service: ScopeBinding(blocked=True)})
 assert not isolated.exists(service)
 
 isolated.set(service, "ready")
 assert isolated.get(service) == "ready"
 isolated.delete(service)
 assert not isolated.exists(service)
-isolated.set_blocked(service, blocked=False)
-assert isolated.get(service) == "default"
+assert root.get(service) == "default"
+isolated.dispose()
+
+shared = Identity("shared")
+left = root.derive(bindings={service: ScopeBinding(identity=shared)})
+right = root.derive(bindings={service: ScopeBinding(identity=shared)})
+left.set(service, "shared value")
+assert right.get(service) == "shared value"
+root.dispose()
 ```
+
+插件重载时，从干净的共享基础 Scope 创建新 Scope，并使用插件独占的子 Context 管理声明、注册、Compose 贡献和清理。在成功释放并停止相关任务后，另一个插件可以不带这些贡献地启动。复用 Scope 或 Identity 表示显式沿用其配置及仍被持有的共享数据；新 Scope 若未阻断，仍会继承祖先。释放不会撤销对共享 assign 数据的任意写入、已存对象的内部修改或文件、网络操作。因此不可变配置和精确撤销支持干净重载，但不是通用事务回滚。
 
 ## 可撤销的局部绑定
 
@@ -370,7 +384,7 @@ Scope viewer 和 binding identity 直接使用集合记录持有者。Context di
 
 ## Compose
 
-`Compose` 在 Compose 局部 identity 下保存有序值，并根据 Scope C3 顺序解析。尚未绑定的 Scope 会在第一次写入时获得私有 identity。`compose.bind(scope_a, scope_b, identity=key)` 可将多个 Scope 一次性绑定到共享 identity；重复绑定到相同 identity 是幂等操作，改绑则会失败。绑定属于不可撤销的结构信息。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.effect()` 管理 `Compose.add()` 返回的 disposer：
+`Compose` 在 Compose 局部 identity 下保存有序值，并根据 Scope C3 顺序解析。`compose.derive(*, label=None, parents=..., binding=...)` 为一个 Compose 创建配置好的 Scope；静态方法 `Compose.derive_many(*, label=None, parents=..., bindings=...)` 在同一个新 Scope 上配置多个 Compose。两者均要求显式传入 parents（单个 Scope 或 tuple，包括 `()`），与 Context.derive 一样接受 ScopeBinding 或 Identity 值，但不接受 None，不创建 Context 或生命周期所有者。需要混合配置字段与 Compose，并由子 Context 管理生命周期时，使用 Context.derive。未绑定 Scope 的首次写入会创建私有、不阻断的绑定；移除全部 entry 不会重置配置。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.effect()` 管理 `Compose.add()` 返回的 disposer：
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -400,9 +414,9 @@ root.dispose()
 
 `Compose.one()` 选择第一个可见值，`Compose.collect()` 将所有可见值组成 tuple，`Compose.merge()` 合并 mapping，并为每个 key 保留第一个可见值。向 `Compose(...)` 传入同步 resolver 可以定义其他结果规则。在同一个 Scope 内，`position="prepend"` 将 entry 放在现有 entry 之前；默认值是 `"append"`。
 
-`values(scope, local=True)` 可在不执行 resolver 的情况下检查该 Scope identity 下的 entry，`resolve(scope, local=True)` 则对同一组值应用 resolver。多个 Scope 共享 identity 时，这一局部集合包含从所有这些 Scope 贡献的 entry；C3 查找只会访问共享 identity 一次。`entries(scope)` 返回不可变记录，包括每项的 id、贡献 Scope、identity、value 与 metadata；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
+`values(scope, local=True)` 可在不执行 resolver 的情况下检查该 Scope identity 下的 entry，`resolve(scope, local=True)` 则对同一组值应用 resolver。多个 Scope 共享 identity 时，这一局部集合包含从所有这些 Scope 贡献的 entry。C3 查找只读取共享 bucket 一次，但仍检查每个 Scope 的阻断。任意一级阻断都会在读取当前 bucket 后停止查找，即使 bucket 为空。`entries(scope)` 遵循相同可见性规则，返回每项的 id、贡献 Scope、identity、value 与 metadata 的不可变记录；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
 
-每个 Compose identity 的 bucket 就是有序 entry 字典。按唯一 token 删除 entry 后，如果 bucket 为空就将其移除；不另行维护计数，也不为每条 entry 分配内部 release 回调。复用已清空的 identity 会创建新 bucket，旧 disposer 不会误删新 entry。disposer 在调用前保留其 Compose；后续重复调用会重现释放失败，而不会重试 cleanup。Context binding 的某个 identity 最后一个绑定 Scope 不再被观察时，会清除该 identity 的值和 barrier。
+每个 Compose identity 的 bucket 就是有序 entry 字典。按唯一 token 删除 entry 后，如果 bucket 为空就将其移除；不另行维护计数，也不为每条 entry 分配内部 release 回调。复用已清空的 identity 会创建新 bucket，旧 disposer 不会误删新 entry。disposer 在调用前保留其 Compose；后续重复调用会重现释放失败，而不会重试 cleanup。Context binding 在最后一个持有某 identity 的 Scope 不再被观察时清除其数据。两者都独立保留绑定配置，不随数据清理而重置。
 
 绑定到 child Scope 的 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
 
@@ -411,6 +425,8 @@ root.dispose()
 Context 接受 Ref Tree 进行批量读写。`extract` 会将输入展开一次、校验全部 Ref、读取对应值，再重建一次请求结构；叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
 
 `ContextView` 只提供 `get/exists/keys/to_dict/flatten`，用于读取和自省子树。它仅保存 Context 与路径前缀并转发读取，不独立管理数据、Scope 或生命周期操作。树形提取使用 `ctx.extract(...)`，传入绝对路径或 Ref；View 不提供 `extract()`，也不依赖 Tree 配置。
+
+`Context.flatten(ref=None, *, local=False)` 接受字符串或 Ref 指定的 container 路径，省略时选择根。ContextView 的 `flatten()` 将自身前缀转发给这个方法。两者都返回绝对 Ref 键，不复制 leaf value。
 
 `keys()`、`ContextView` 和 `to_dict()` 会先遍历 Schema 结构，再读取平铺的 leaf 单元。因此非根的空 container 的声明角色保持稳定，但不会出现在有效数据视图中；根 View 始终可取得。`to_dict()` 将可见 Context leaf 投影为嵌套的普通字典，适合展示或序列化；在不同 Schema 之间，该投影无法区分以 mapping 为值的 leaf 与内容相同的嵌套 Context 路径。`flatten()` 则返回准确的 `dict[Ref, Any]` 可见 leaf 映射：
 
@@ -433,7 +449,7 @@ assert nested_path.get("settings").flatten() == {tree_schema.resolve("settings.t
 ```
 
 两者默认解析绑定 Scope 的 C3 有效视图，也都接受 `local=True`。`ContextView` 只接受相对字符串路径；空字符串表示 View 自身，也是 `keys()` 和 `to_dict()` 的默认路径。绝对 Ref 直接交给 Context 查询。View 的 `flatten()` 仍返回以 Schema 绝对 Ref 为键的字典。两种方法都不会复制 leaf value。
-创建新根并声明所有被复制的路径后，调用 `snapshot.update(ctx.get("app").flatten())` 物化值；这里选择 `app` 等业务子树，复制的字段必须全部采用 `assign` 模式；整根 flatten 还包含 register 模式的框架配置。
+创建新根并声明所有被复制的路径后，调用 `snapshot.update(ctx.flatten("app"))` 物化值；这里选择 `app` 等业务子树，复制的字段必须全部采用 `assign` 模式；整根 flatten 还包含 register 模式的框架配置。
 `register` 字段需要在新 owner 上显式调用 `register()`，快照不会转移所有权。
 新应用根默认获得新的 Scope，因此看不到目标为源 Scope 的
 contribution；显式复用该 Scope 会共享 Compose 可见性，但不同 Context 根仍不会共享

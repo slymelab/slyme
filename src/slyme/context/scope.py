@@ -20,19 +20,58 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, overload
 
-__all__ = ["Scope"]
+__all__ = ["Identity", "Scope", "ScopeBinding"]
 
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
-@dataclass(frozen=True, eq=False, repr=False)
+@dataclass(frozen=True, eq=False)
+class Identity:
+    """Shared storage identity with immutable fallback policy.
+
+    Sharing requires the same object, not an equal label. Storage is local to
+    each Context field or Compose. A blocked identity stops ancestor lookup
+    after its own values, including when its storage is empty.
+    """
+
+    label: str | None = None
+    blocked: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeBinding:
+    """Immutable storage selection and local fallback policy for a new Scope.
+
+    Each default binding has a private Identity and allows ancestor lookup.
+    Either this binding's blocked flag or its Identity's flag stops fallback.
+    """
+
+    identity: Identity = field(default_factory=Identity)
+    blocked: bool = False
+
+
+@dataclass(frozen=True, eq=False, repr=False, init=False)
 class Scope:
-    """One immutable position in a C3-linearized visibility graph."""
+    """One immutable C3 position with direct parents normalized to a tuple."""
 
     label: Any | None = None
     parents: tuple[Scope, ...] = ()
     _mro: tuple[Scope, ...] = field(init=False)
+
+    def __init__(
+        self,
+        *,
+        label: Any | None = None,
+        parents: Scope | tuple[Scope, ...] = (),
+    ) -> None:
+        direct_parents = (parents,) if isinstance(parents, Scope) else parents
+        if len(direct_parents) != len(set(direct_parents)):
+            raise TypeError("A Scope cannot contain duplicate direct parents.")
+
+        object.__setattr__(self, "label", label)
+        object.__setattr__(self, "parents", direct_parents)
+        object.__setattr__(self, "_mro", (self, *self._merge_mro(direct_parents)))
 
     @staticmethod
     def _merge_mro(parents: tuple[Scope, ...]) -> tuple[Scope, ...]:
@@ -66,17 +105,6 @@ class Scope:
                 if sequence and sequence[0] is candidate:
                     sequence.pop(0)
 
-    def __post_init__(self) -> None:
-        direct_parents = tuple(self.parents)
-        if len(direct_parents) != len(set(direct_parents)):
-            raise TypeError("A Scope cannot contain duplicate direct parents.")
-
-        object.__setattr__(
-            self,
-            "_mro",
-            (self, *self._merge_mro(direct_parents)),
-        )
-
     @property
     def mro(self) -> tuple[Scope, ...]:
         """Return this Scope followed by its C3-linearized ancestors."""
@@ -88,7 +116,7 @@ class Scope:
         label: Any | None = None,
     ) -> Scope:
         """Create a child Scope with this Scope as its only direct parent."""
-        return type(self)(label=label, parents=(self,))
+        return type(self)(label=label, parents=self)
 
     @overload
     def find(self, label: Any, default: Scope | _Missing = _MISSING) -> Scope: ...

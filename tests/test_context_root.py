@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ScopeBinding
 from slyme.context.core import ContextPathError, ContextView
 from slyme.node import Auto, node
 
@@ -74,7 +74,7 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
 
 @pytest.mark.parametrize("key", ["", Ref("")])
 @pytest.mark.parametrize(
-    "operation", ["set", "register", "update", "update_tree", "bind", "set_blocked"]
+    "operation", ["set", "register", "update", "update_tree", "bind", "block"]
 )
 def test_root_rejects_leaf_operations_without_partial_writes(
     key: str | Ref, operation: str
@@ -89,9 +89,9 @@ def test_root_rejects_leaf_operations_without_partial_writes(
         elif operation == "update_tree":
             ctx.update_tree(["value", key], [2, {}])
         elif operation == "bind":
-            ctx.bind(key, identity=object())
-        elif operation == "set_blocked":
-            ctx.set_blocked(key, blocked=True)
+            ctx.derive(bindings={key: ScopeBinding()})
+        elif operation == "block":
+            ctx.derive(bindings={key: ScopeBinding(blocked=True)})
         else:
             getattr(ctx, operation)(key, {})
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "value": 1}

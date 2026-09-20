@@ -19,11 +19,11 @@ from __future__ import annotations
 import types
 import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Hashable, Mapping, MutableMapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
 
-from .scope import Scope
+from .scope import Identity, Scope, ScopeBinding
 
 __all__ = ["Compose"]
 
@@ -31,14 +31,13 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 _K = TypeVar("_K", bound=Hashable)
 _V = TypeVar("_V")
-_UNBOUND = object()
 
 
 @dataclass(frozen=True)
 class _ComposeEntry(Generic[_T]):
     token: object
     scope: Scope
-    identity: Hashable
+    identity: Identity
     value: _T
     metadata: Mapping[str, Any]
 
@@ -46,65 +45,59 @@ class _ComposeEntry(Generic[_T]):
 class Compose(Generic[_T, _R]):
     """Store reversible values and combine those visible through Scope C3 order."""
 
-    __slots__ = ("_buckets", "_resolver", "_scope_identities", "__weakref__")
+    __slots__ = ("_buckets", "_resolver", "_scope_bindings", "__weakref__")
 
     def __init__(self, resolver: Callable[[tuple[_T, ...]], _R]) -> None:
         self._resolver = resolver
-        self._scope_identities: weakref.WeakKeyDictionary[Scope, Hashable] = (
+        self._scope_bindings: weakref.WeakKeyDictionary[Scope, ScopeBinding] = (
             weakref.WeakKeyDictionary()
         )
-        self._buckets: dict[Hashable, OrderedDict[object, _ComposeEntry[_T]]] = {}
+        self._buckets: dict[Identity, OrderedDict[object, _ComposeEntry[_T]]] = {}
 
-    @staticmethod
-    def _validate_identity(identity: Hashable) -> Hashable:
-        try:
-            hash(identity)
-        except TypeError as error:
-            raise TypeError("Compose identities must be hashable.") from error
-        return identity
-
-    def bind(self, *scopes: Scope, identity: Hashable) -> None:
-        """Bind Scopes once to one Compose-local storage identity."""
-        Compose._bind_identities(self._scope_identities, scopes, identity=identity)
-
-    @staticmethod
-    def _bind_identities(
-        scope_identities: MutableMapping[Scope, Hashable],
-        scopes: tuple[Scope, ...],
+    def derive(
+        self,
         *,
-        identity: Hashable,
-    ) -> None:
-        if not scopes:
-            raise ValueError("Compose.bind() requires at least one Scope.")
-        checked_identity = Compose._validate_identity(identity)
+        label: Any | None = None,
+        parents: Scope | tuple[Scope, ...],
+        binding: ScopeBinding | Identity,
+    ) -> Scope:
+        """Create a Scope configured for this Compose, leaving its parents unchanged.
 
-        conflicts = tuple(
-            scope
-            for scope in scopes
-            if scope in scope_identities and scope_identities[scope] != checked_identity
-        )
-        if conflicts:
-            raise ValueError("A Scope cannot be rebound to another Compose identity.")
-
-        for scope in scopes:
-            if scope not in scope_identities:
-                scope_identities[scope] = checked_identity
+        ScopeBinding() selects private storage with ancestor fallback. Share
+        storage by supplying the same Identity directly or inside ScopeBinding.
+        A direct Identity uses the default unblocked Scope-local policy.
+        No Context or lifecycle is created; contributions require disposer ownership.
+        """
+        return self.derive_many(label=label, parents=parents, bindings={self: binding})
 
     @staticmethod
-    def _identity_for(
-        scope_identities: MutableMapping[Scope, Hashable],
-        scope: Scope,
+    def derive_many(
         *,
-        create: bool,
-    ) -> Hashable:
-        try:
-            return scope_identities[scope]
-        except KeyError:
-            if not create:
-                raise LookupError("Scope has no bound storage identity.") from None
-        identity = object()
-        scope_identities[scope] = identity
-        return identity
+        label: Any | None = None,
+        parents: Scope | tuple[Scope, ...],
+        bindings: Mapping[Compose[Any, Any], ScopeBinding | Identity],
+    ) -> Scope:
+        """Configure all Composes on one new Scope, without lifecycle ownership.
+
+        An empty parent tuple creates an independent Scope. Binding values follow
+        derive() semantics: an Identity or an explicit ScopeBinding.
+        """
+        scope = Scope(label=label, parents=parents)
+        for compose, binding in bindings.items():
+            compose._bind(
+                scope,
+                ScopeBinding(binding) if isinstance(binding, Identity) else binding,
+            )
+        return scope
+
+    def _bind(self, scope: Scope, binding: ScopeBinding) -> None:
+        previous = self._scope_bindings.get(scope)
+        if previous is None:
+            self._scope_bindings[scope] = binding
+        elif previous != binding:
+            raise ValueError(
+                "A Scope binding's identity and blocked policy are immutable."
+            )
 
     @classmethod
     def one(cls) -> Compose[_T, _T]:
@@ -136,37 +129,27 @@ class Compose(Generic[_T, _R]):
 
         return Compose(resolve)
 
-    @staticmethod
-    def _scoped_identities(
-        scope_identities: MutableMapping[Scope, Hashable],
-        scope: Scope,
-        *,
-        local: bool,
-    ) -> list[Hashable]:
-        scopes = (scope,) if local else scope.mro
-        identities: list[Hashable] = []
-        seen: set[Hashable] = set()
-        for current in scopes:
-            identity = scope_identities.get(current, _UNBOUND)
-            if identity is not _UNBOUND and identity not in seen:
-                seen.add(identity)
-                identities.append(identity)
-        return identities
-
     def _scoped_entries(
         self,
         scope: Scope,
         *,
         local: bool,
     ) -> tuple[_ComposeEntry[_T], ...]:
-        return tuple(
-            entry
-            for identity in Compose._scoped_identities(
-                self._scope_identities, scope, local=local
-            )
-            if (bucket := self._buckets.get(identity)) is not None
-            for entry in bucket.values()
-        )
+        entries: list[_ComposeEntry[_T]] = []
+        seen: set[Identity] = set()
+        for current in (scope,) if local else scope.mro:
+            binding = self._scope_bindings.get(current)
+            if binding is None:
+                continue
+            identity = binding.identity
+            if identity not in seen:
+                seen.add(identity)
+                bucket = self._buckets.get(identity)
+                if bucket is not None:
+                    entries.extend(bucket.values())
+            if binding.blocked or identity.blocked:
+                break
+        return tuple(entries)
 
     def add(
         self,
@@ -197,7 +180,10 @@ class Compose(Generic[_T, _R]):
         metadata: Mapping[str, Any] | None = None,
         position: Literal["prepend", "append"] = "append",
     ) -> _ComposeEntry[_T]:
-        identity = Compose._identity_for(self._scope_identities, scope, create=True)
+        binding = self._scope_bindings.get(scope)
+        if binding is None:
+            binding = self._scope_bindings[scope] = ScopeBinding()
+        identity = binding.identity
         token = object()
         entry = _ComposeEntry(
             token,
@@ -215,7 +201,7 @@ class Compose(Generic[_T, _R]):
             bucket.move_to_end(token, last=False)
         return entry
 
-    def _remove(self, identity: Hashable, token: object) -> None:
+    def _remove(self, identity: Identity, token: object) -> None:
         current = self._buckets.get(identity)
         if current is None:
             return
@@ -225,7 +211,7 @@ class Compose(Generic[_T, _R]):
             del self._buckets[identity]
         del entry
 
-    def _clear_bucket(self, identity: Hashable) -> None:
+    def _clear_bucket(self, identity: Identity) -> None:
         bucket = self._buckets.pop(identity, None)
         if bucket is not None:
             bucket.clear()

@@ -6,7 +6,7 @@ import weakref
 
 import pytest
 
-from slyme.context import Compose, Context, Schema, Scope
+from slyme.context import Compose, Context, Identity, Schema, Scope, ScopeBinding
 from slyme.context.core import ContextPathError
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
@@ -439,18 +439,19 @@ def test_context_disposal_cleans_scope_indexes_and_binding_data() -> None:
 
 
 def test_binding_scope_release_is_idempotent() -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    child = root.fork(scope=root.scope.fork())
-    child.bind("value", identity="shared")
-    child.set_blocked("value", blocked=True)
+    child = root.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     child.set("value", "old")
     binding = root._store._data[root.resolve_entry("value")]
     binding.release_scope(child.scope)
     binding.release_scope(child.scope)
     assert not binding._data
     child.set("value", "new")
-    assert binding._data["shared"].scopes == {child.scope}
+    assert binding._data[shared_identity].scopes == {child.scope}
     assert child.get("value") == "new"
     root.dispose()
 
@@ -570,15 +571,11 @@ def test_failed_binding_restore_rolls_back_new_scope_usage(monkeypatch) -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     initial_owned = tuple(root._lifecycle._owned)
-    identity = object()
-    previous = root.fork(scope=root.scope.fork())
-    previous.bind("value", identity=identity)
-    previous.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    previous = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     scope = previous.scope
     previous.dispose()
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity=identity)
-    writer.set_blocked("value", blocked=True)
+    writer = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     writer.set("value", "live")
     binding = root._store._data[root.resolve_entry("value")]
     viewers = root._store._scope_usages
@@ -678,11 +675,12 @@ def test_reacquiring_an_expiring_mro_preserves_every_restored_index() -> None:
 
 
 def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity="shared")
-    writer.set_blocked("value", blocked=True)
+    writer = root.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     scope = writer.scope
     readers = []
 
@@ -694,12 +692,12 @@ def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
 
     writer.set("value", Payload())
     binding = root._store._data[root.resolve_entry("value")]
-    old_scopes = binding._data["shared"].scopes
+    old_scopes = binding._data[shared_identity].scopes
     writer.dispose()
     assert len(readers) == 1
     assert not old_scopes
-    assert binding._data["shared"].scopes is not old_scopes
-    assert binding._data["shared"].scopes == {scope}
+    assert binding._data[shared_identity].scopes is not old_scopes
+    assert binding._data[shared_identity].scopes == {scope}
     writer.dispose()
     assert readers[0].get("value") == "new"
     root.dispose()
@@ -714,8 +712,7 @@ def test_scope_rollback_failure_retains_acquisition_error_as_context(
     initial_owned = tuple(root._lifecycle._owned)
     root.set("value", "live")
     binding = root._store._data[root.resolve_entry("value")]
-    previous = root.fork(scope=root.scope.fork())
-    previous.set_blocked("value", blocked=True)
+    previous = root.derive(bindings={"value": ScopeBinding(blocked=True)})
     child_scope = previous.scope
     previous.dispose()
     acquisition_error = ValueError("restore failed")
@@ -758,13 +755,9 @@ def test_bound_identity_data_survives_until_its_last_viewer_is_disposed() -> Non
     schema = Schema({"value": Schema.leaf()})
     root = Context()
     root.declare(schema)
-    identity = object()
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity=identity)
-    writer.set_blocked("value", blocked=True)
-    reader = root.fork(scope=root.scope.fork())
-    reader.bind("value", identity=identity)
-    reader.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    writer = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
+    reader = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     payload = Payload()
     payload_ref = weakref.ref(payload)
     writer.set("value", payload)
@@ -786,13 +779,9 @@ def test_bound_identity_keeps_registration_owned_by_its_context() -> None:
     schema = Schema({"value": Schema.leaf(mode="register")})
     root = Context()
     root.declare(schema)
-    identity = object()
-    owner = root.fork(scope=root.scope.fork())
-    owner.bind("value", identity=identity)
-    owner.set_blocked("value", blocked=True)
-    viewer = root.fork(scope=root.scope.fork())
-    viewer.bind("value", identity=identity)
-    viewer.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    owner = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
+    viewer = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     owner.register("value", "temporary")
 
     assert viewer.get("value") == "temporary"
@@ -805,13 +794,9 @@ def test_bound_identity_keeps_registration_owned_by_its_context() -> None:
 def test_identity_index_tracks_isolated_scopes_after_value_deletion() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    identity = object()
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity=identity)
-    writer.set_blocked("value", blocked=True)
-    viewer = root.fork(scope=root.scope.fork())
-    viewer.bind("value", identity=identity)
-    viewer.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    writer = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
+    viewer = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     binding = root._store._data[root.resolve_entry("value")]
 
     scopes = binding._data[identity].scopes
@@ -830,26 +815,22 @@ def test_identity_index_tracks_isolated_scopes_after_value_deletion() -> None:
     viewer.dispose()
     assert not scopes
     assert not binding._data
-    assert binding._scope_identities[writer.scope] is identity
+    assert binding._scope_bindings[writer.scope].identity is identity
     root.dispose()
 
 
 def test_identity_reuse_starts_new_ownership_without_reviving_old_data() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    identity = object()
-    first = root.fork(scope=root.scope.fork())
-    first.bind("value", identity=identity)
-    first.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    first = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     first.set("value", "old")
     binding = root._store._data[root.resolve_entry("value")]
     old = binding._data[identity].scopes
     first.dispose()
     assert not old
 
-    second = root.fork(scope=root.scope.fork())
-    second.bind("value", identity=identity)
-    second.set_blocked("value", blocked=True)
+    second = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     assert binding._data[identity].scopes is not old
     assert not second.exists("value")
     second.set("value", "new")
@@ -895,10 +876,8 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
 ) -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    identity = object()
-    previous = root.fork(scope=root.scope.fork())
-    previous.bind("value", identity=identity)
-    previous.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    previous = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     saved_scope = previous.scope
     previous.set("value", "old")
     previous.dispose()
@@ -908,9 +887,7 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
     reader_scope = saved_scope.fork() if descendant else saved_scope
     if reader_first:
         reader = root.fork(scope=reader_scope)
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity=identity)
-    writer.set_blocked("value", blocked=True)
+    writer = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     writer.set("value", "new")
     if not reader_first:
         reader = root.fork(scope=reader_scope)
@@ -926,13 +903,9 @@ def test_reused_scope_protects_identity_without_reading_or_binding_again(
 def test_identity_index_keeps_both_observed_parents_of_a_diamond_scope() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    identity = object()
-    left = root.fork(scope=root.scope.fork())
-    left.bind("value", identity=identity)
-    left.set_blocked("value", blocked=True)
-    right = root.fork(scope=root.scope.fork())
-    right.bind("value", identity=identity)
-    right.set_blocked("value", blocked=True)
+    identity = Identity(blocked=True)
+    left = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
+    right = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     reader = root.fork(scope=Scope(parents=(left.scope, right.scope)))
     left.set("value", "shared")
     binding = root._store._data[root.resolve_entry("value")]
@@ -961,7 +934,7 @@ def test_scope_release_does_not_scan_other_identity_bindings(
     def reject_scan():
         pytest.fail("Scope release must not scan every Scope-to-identity binding.")
 
-    monkeypatch.setattr(binding._scope_identities, "items", reject_scan)
+    monkeypatch.setattr(binding._scope_bindings, "items", reject_scan)
     sessions[0].dispose()
     assert len(binding._data) == 999
     assert sessions[-1].get("value") == 999
@@ -973,7 +946,7 @@ def test_scope_release_does_not_scan_other_identity_bindings(
     sessions.clear()
     gc.collect()
     assert all(scope_ref() is None for scope_ref in scope_refs)
-    assert not binding._scope_identities
+    assert not binding._scope_bindings
     root.dispose()
 
 
@@ -982,13 +955,9 @@ def test_isolated_contexts_can_share_one_private_identity() -> None:
     root = Context()
     root.declare(schema)
     root.update({"service": "root"})
-    identity = object()
-    left = root.fork(scope=root.scope.fork())
-    left.bind("service", identity=identity)
-    left.set_blocked("service", blocked=True)
-    right = root.fork(scope=root.scope.fork())
-    right.bind("service", identity=identity)
-    right.set_blocked("service", blocked=True)
+    identity = Identity(blocked=True)
+    left = root.derive(bindings={"service": ScopeBinding(identity, blocked=False)})
+    right = root.derive(bindings={"service": ScopeBinding(identity, blocked=False)})
 
     assert not left.exists("service")
     assert not right.exists("service")
@@ -999,9 +968,7 @@ def test_isolated_contexts_can_share_one_private_identity() -> None:
     assert right.get("service") == "isolated"
     right.dispose()
 
-    later = root.fork(scope=root.scope.fork())
-    later.bind("service", identity=identity)
-    later.set_blocked("service", blocked=True)
+    later = root.derive(bindings={"service": ScopeBinding(identity, blocked=False)})
     assert not later.exists("service")
     later.dispose()
     root.dispose()
@@ -1484,9 +1451,8 @@ def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
             lambda: ctx.effect(lambda: lambda: None),
             lambda: ctx.fork(),
             lambda: Context(parent=ctx),
-            lambda: ctx.bind("value", identity=object()),
-            lambda: ctx.set_blocked("value", blocked=True),
-            lambda: ctx.set_blocked("value", blocked=False),
+            lambda: ctx.derive(bindings={"value": ScopeBinding()}),
+            lambda: ctx.derive(bindings={"value": ScopeBinding(blocked=True)}),
         ):
             with pytest.raises(RuntimeError, match="being disposed"):
                 operation()

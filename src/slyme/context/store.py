@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import weakref
-from collections.abc import Callable, Hashable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from itertools import chain
@@ -25,7 +25,7 @@ from slyme.utils.exception import exception_group
 from slyme.utils.execution import once
 
 from .schema import ContextPathError, Ref, RefEntry, RefLeafConfig, Schema
-from .scope import Scope
+from .scope import Identity, Scope, ScopeBinding
 
 __all__ = ["ContextStore"]
 
@@ -38,7 +38,6 @@ _MISSING = _Missing.MARK
 class _IdentityData:
     value: Any = _MISSING
     token: object | None = None
-    blocked: bool = False
     scopes: set[Scope] = field(default_factory=set)
 
 
@@ -53,19 +52,19 @@ class _ScopeUsage:
 class _ContextBinding:
     """Own one field's identities and values, independently of Store indexes.
 
-    Saved identities outlive active data while their Scopes remain reachable.
+    Saved bindings outlive active data while their Scopes remain reachable.
     Reads never acquire ownership; the last retaining Scope releases the data.
     """
 
     __slots__ = (
         "_data",
-        "_scope_identities",
+        "_scope_bindings",
         "__weakref__",
     )
 
     def __init__(self) -> None:
-        self._data: dict[Hashable, _IdentityData] = {}
-        self._scope_identities: weakref.WeakKeyDictionary[Scope, Hashable] = (
+        self._data: dict[Identity, _IdentityData] = {}
+        self._scope_bindings: weakref.WeakKeyDictionary[Scope, ScopeBinding] = (
             weakref.WeakKeyDictionary()
         )
 
@@ -75,28 +74,23 @@ class _ContextBinding:
         return tuple(scope for data in self._data.values() for scope in data.scopes)
 
     def _get_data(self, scope: Scope) -> _IdentityData | None:
-        identity = self._scope_identities.get(scope, _MISSING)
-        return self._data.get(identity)
+        binding = self._scope_bindings.get(scope)
+        return None if binding is None else self._data.get(binding.identity)
 
-    def _ensure_data(
-        self, scope: Scope, *, identity: Hashable = _MISSING
-    ) -> _IdentityData:
+    def _ensure_data(self, scope: Scope) -> _IdentityData:
         """Retain local data under the saved identity or a new immutable identity."""
-        current = self._scope_identities.get(scope, _MISSING)
-        if current is _MISSING:
-            current = object() if identity is _MISSING else identity
-            self._scope_identities[scope] = current
-        elif identity is not _MISSING and current != identity:
-            raise ValueError("A Scope cannot be rebound to another Context identity.")
-        data = self._data.get(current)
+        binding = self._scope_bindings.get(scope)
+        if binding is None:
+            binding = self._scope_bindings[scope] = ScopeBinding()
+        data = self._data.get(binding.identity)
         if data is None:
-            data = self._data[current] = _IdentityData()
+            data = self._data[binding.identity] = _IdentityData()
         data.scopes.add(scope)
         return data
 
     def restore_scope(self, scope: Scope) -> bool:
         """Restore saved identity ownership; return False for an unbound Scope."""
-        if scope not in self._scope_identities:
+        if scope not in self._scope_bindings:
             return False
         self._ensure_data(scope)
         return True
@@ -104,12 +98,13 @@ class _ContextBinding:
     def get(self, scope: Scope, *, local: bool = False) -> Any:
         """Return the first visible value, or _MISSING without acquiring ownership."""
         for current in (scope,) if local else scope.mro:
-            data = self._data.get(self._scope_identities.get(current, _MISSING))
-            if data is None:
+            binding = self._scope_bindings.get(current)
+            if binding is None:
                 continue
-            if data.value is not _MISSING:
+            data = self._data.get(binding.identity)
+            if data is not None and data.value is not _MISSING:
                 return data.value
-            if data.blocked:
+            if binding.blocked or binding.identity.blocked:
                 break
         return _MISSING
 
@@ -136,30 +131,33 @@ class _ContextBinding:
             data.token = None
             data.value = _MISSING
 
-    def bind(self, scope: Scope, *, identity: Hashable) -> None:
-        """Retain an immutable identity without changing its value, token, or barrier."""
-        self._ensure_data(scope, identity=identity)
-
-    def set_blocked(self, scope: Scope, *, blocked: bool) -> None:
-        """Set this identity's barrier; unblocking absent data is a no-op."""
-        data = self._ensure_data(scope) if blocked else self._get_data(scope)
-        if data is not None:
-            data.blocked = blocked
+    def bind(self, scope: Scope, binding: ScopeBinding) -> None:
+        """Fix local lookup policy and retain its identity's current data."""
+        previous = self._scope_bindings.get(scope)
+        if previous is None:
+            self._scope_bindings[scope] = binding
+        elif previous != binding:
+            raise ValueError(
+                "A Scope binding's identity and blocked policy are immutable."
+            )
+        self._ensure_data(scope)
 
     def release_scope(self, scope: Scope) -> None:
-        """Release one Scope and remove its identity if no bound Scope remains."""
-        identity = self._scope_identities.get(scope, _MISSING)
-        data = self._data.get(identity)
+        """Release data after its last retaining Scope, keeping binding policy."""
+        binding = self._scope_bindings.get(scope)
+        if binding is None:
+            return
+        data = self._data.get(binding.identity)
         if data is None:
             return
         data.scopes.discard(scope)
         if not data.scopes:
-            del self._data[identity]
+            del self._data[binding.identity]
 
     def clear(self) -> None:
         """Clear values and saved identities."""
         self._data.clear()
-        self._scope_identities.clear()
+        self._scope_bindings.clear()
 
 
 _ContextData = dict[RefEntry[Any], _ContextBinding]
@@ -394,22 +392,7 @@ class ContextStore:
         self,
         scope: Scope,
         entry: RefEntry[Any],
-        *,
-        identity: Hashable,
+        binding: ScopeBinding,
     ) -> None:
-        """Bind one resolved leaf to an immutable identity at this Scope."""
-        self._writable_binding(scope, entry).bind(scope, identity=identity)
-
-    def set_blocked(
-        self,
-        scope: Scope,
-        entry: RefEntry[Any],
-        *,
-        blocked: bool,
-    ) -> None:
-        """Set a leaf's barrier without allocating storage for an absent unblock."""
-        binding = (
-            self._writable_binding(scope, entry) if blocked else self._data.get(entry)
-        )
-        if binding is not None:
-            binding.set_blocked(scope, blocked=blocked)
+        """Fix one leaf's identity and fallback policy at this Scope."""
+        self._writable_binding(scope, entry).bind(scope, binding)

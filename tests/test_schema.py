@@ -20,6 +20,7 @@ from slyme.context import (
     RefEntry,
     RefLeafConfig,
     Schema,
+    ScopeBinding,
 )
 from slyme.context.schema import _SCHEMA_RULES, _Declaration
 from slyme.utils.tree import TreeEngine
@@ -279,8 +280,7 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
     right = root.fork(scope=root.scope.fork())
     right.update({"group.value": "right"})
     remove_owned = left.register("group.owned", "owned")
-    child = left.fork(scope=left.scope.fork())
-    child.set_blocked("group.value", blocked=True)
+    child = left.derive(bindings={"group.value": ScopeBinding(blocked=True)})
     child.set("group.value", "child")
 
     def unexpected_config_read(self):

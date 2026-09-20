@@ -2,30 +2,28 @@ from __future__ import annotations
 
 import gc
 import weakref
-from collections.abc import Hashable
 
 import pytest
 
-from slyme.context import Context, ContextStore, Schema, Scope
+from slyme.context import Context, ContextStore, Identity, Schema, Scope, ScopeBinding
 from slyme.context.store import _MISSING, _ContextBinding
 
 
 def test_binding_distinguishes_saved_identity_from_active_scope_ownership() -> None:
+    shared_identity = Identity("shared", blocked=True)
     binding = _ContextBinding()
     left, right = Scope(), Scope()
     assert not binding.restore_scope(left)
-    assert not binding._scope_identities
+    assert not binding._scope_bindings
     assert binding.scopes == ()
-    binding.bind(left, identity="shared")
-    binding.set_blocked(left, blocked=True)
-    binding.bind(right, identity="shared")
-    binding.set_blocked(right, blocked=True)
+    binding.bind(left, ScopeBinding(shared_identity, blocked=False))
+    binding.bind(right, ScopeBinding(shared_identity, blocked=False))
     binding.set(left, "value")
     snapshot = binding.scopes
     assert set(snapshot) == {left, right}
 
     binding.release_scope(left)
-    assert left in binding._scope_identities
+    assert left in binding._scope_bindings
     assert binding.scopes == (right,)
     assert set(snapshot) == {left, right}
     assert binding.restore_scope(left)
@@ -35,33 +33,34 @@ def test_binding_distinguishes_saved_identity_from_active_scope_ownership() -> N
     assert binding.get(left) == "value"
     binding.release_scope(left)
     assert binding.scopes == ()
-    assert left in binding._scope_identities
+    assert left in binding._scope_bindings
 
     binding.clear()
     assert not binding.restore_scope(left)
     assert not binding.restore_scope(right)
 
 
-def test_block_reuses_equal_identity_without_replacing_value_or_token() -> None:
+def test_bind_reuses_same_identity_without_replacing_value_or_token() -> None:
     binding = _ContextBinding()
     scope = Scope()
-    identity = ("shared", 1)
-    equal_identity = tuple(["shared", 1])
+    identity = Identity("shared", blocked=True)
     token = object()
-    binding.bind(scope, identity=identity)
-    binding.set_blocked(scope, blocked=True)
+    binding.bind(scope, ScopeBinding(identity, blocked=False))
     binding.set(scope, None, token=token)
     data = binding._data[identity]
 
-    binding.bind(scope, identity=equal_identity)
-    binding.set_blocked(scope, blocked=True)
-    binding.set_blocked(scope, blocked=True)
+    binding.bind(scope, ScopeBinding(identity, blocked=False))
+    binding.bind(scope, binding._scope_bindings[scope])
+    with pytest.raises(ValueError, match="immutable"):
+        binding.bind(
+            scope, ScopeBinding(Identity("shared", blocked=True), blocked=False)
+        )
     assert binding._data[identity] is data
     assert binding.scopes == (scope,)
     assert binding.matches(scope, token=token)
     assert binding.get(scope) is None
     binding.delete(scope, token=token)
-    assert data.blocked
+    assert identity.blocked
     assert binding.get(scope) is _MISSING
     binding.clear()
 
@@ -71,39 +70,38 @@ def test_block_rejects_rebinding_a_saved_identity(released: bool) -> None:
     binding = _ContextBinding()
     scope = Scope()
     binding.set(scope, "value")
-    identity = binding._scope_identities[scope]
+    identity = binding._scope_bindings[scope].identity
     if released:
         binding.release_scope(scope)
 
-    with pytest.raises(ValueError, match="cannot be rebound"):
-        binding.bind(scope, identity=object())
-        binding.set_blocked(scope, blocked=True)
-    assert binding._scope_identities[scope] is identity
+    with pytest.raises(ValueError, match="immutable"):
+        binding.bind(scope, ScopeBinding(Identity(), blocked=False))
+    assert binding._scope_bindings[scope].identity is identity
     if released:
         assert not binding._data
     else:
         assert binding.get(scope) == "value"
-        assert not binding._data[identity].blocked
+        assert not identity.blocked
     binding.clear()
 
 
 def test_scope_restoration_does_not_revive_released_data() -> None:
+    saved_identity = Identity("saved", blocked=True)
     binding = _ContextBinding()
     scope = Scope()
     token = object()
-    binding.bind(scope, identity="saved")
-    binding.set_blocked(scope, blocked=True)
+    binding.bind(scope, ScopeBinding(saved_identity, blocked=False))
     binding.set(scope, "old", token=token)
     binding.release_scope(scope)
     binding.release_scope(scope)
     assert not binding._data
 
     assert binding.restore_scope(scope)
-    assert binding._scope_identities[scope] == "saved"
+    assert binding._scope_bindings[scope].identity is saved_identity
     assert binding.scopes == (scope,)
     assert binding.get(scope, local=True) is _MISSING
     assert not binding.matches(scope, token=token)
-    assert not binding._data["saved"].blocked
+    assert saved_identity.blocked
     binding.set(scope, "new")
     assert binding.get(scope) == "new"
     binding.clear()
@@ -123,7 +121,7 @@ def test_binding_clear_invalidates_old_tokens() -> None:
     binding.clear()
     gc.collect()
     assert reference() is None
-    assert scope not in binding._scope_identities
+    assert scope not in binding._scope_bindings
     assert binding.scopes == ()
     assert not binding.matches(scope, token=token)
 
@@ -195,7 +193,7 @@ def test_binding_local_get_and_matches_neither_inherit_nor_create_an_identity() 
     assert not binding.matches(child, token=token)
     assert not binding.restore_scope(child)
     binding.release_scope(child)
-    assert child not in binding._scope_identities
+    assert child not in binding._scope_bindings
     binding.clear()
 
 
@@ -204,9 +202,9 @@ def test_unprotected_values_accept_any_token(supplied_token: object | None) -> N
     binding = _ContextBinding()
     scope = Scope()
     binding.delete(scope, token=supplied_token)
-    assert scope not in binding._scope_identities
+    assert scope not in binding._scope_bindings
     assert not binding.matches(scope, token=None)
-    binding.set_blocked(scope, blocked=True)
+    binding.bind(scope, ScopeBinding(blocked=True))
     binding.set(scope, "first")
     assert binding.matches(scope, token=None)
     assert not binding.matches(scope, token=object())
@@ -216,18 +214,17 @@ def test_unprotected_values_accept_any_token(supplied_token: object | None) -> N
     binding.set(scope, "unprotected")
     binding.delete(scope, token=supplied_token)
     assert binding.get(scope, local=True) is _MISSING
-    assert scope in binding._scope_identities
+    assert scope in binding._scope_bindings
     assert binding.get(scope) is _MISSING
     binding.clear()
 
 
 def test_shared_identity_enforces_the_same_token_from_every_scope() -> None:
+    shared_identity = Identity("shared", blocked=True)
     binding = _ContextBinding()
     left, right = Scope(), Scope()
-    binding.bind(left, identity="shared")
-    binding.set_blocked(left, blocked=True)
-    binding.bind(right, identity="shared")
-    binding.set_blocked(right, blocked=True)
+    binding.bind(left, ScopeBinding(shared_identity, blocked=False))
+    binding.bind(right, ScopeBinding(shared_identity, blocked=False))
     owner = object()
     binding.set(left, "original", token=owner)
     assert binding.matches(right, token=owner)
@@ -241,6 +238,8 @@ def test_shared_identity_enforces_the_same_token_from_every_scope() -> None:
 
 
 def test_binding_clear_detaches_identities_before_value_finalization() -> None:
+    replacement_identity = Identity("replacement", blocked=True)
+    original_identity = Identity("original", blocked=True)
     binding = _ContextBinding()
     scope = Scope()
     events: list[str] = []
@@ -248,14 +247,12 @@ def test_binding_clear_detaches_identities_before_value_finalization() -> None:
     class Payload:
         def __del__(self) -> None:
             assert binding.scopes == ()
-            assert scope not in binding._scope_identities
-            binding.bind(scope, identity="replacement")
-            binding.set_blocked(scope, blocked=True)
+            assert scope not in binding._scope_bindings
+            binding.bind(scope, ScopeBinding(replacement_identity, blocked=False))
             binding.set(scope, "new")
             events.append("replaced")
 
-    binding.bind(scope, identity="original")
-    binding.set_blocked(scope, blocked=True)
+    binding.bind(scope, ScopeBinding(original_identity, blocked=False))
     binding.set(scope, Payload())
     binding.clear()
     assert events == ["replaced"]
@@ -413,46 +410,46 @@ def test_registration_rejects_an_existing_unprotected_value() -> None:
 
 
 def test_shared_identity_has_one_current_value_and_a_persistent_barrier() -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     root.update({"value": "root"})
-    left = root.fork(scope=root.scope.fork())
-    left.bind("value", identity="shared")
-    left.set_blocked("value", blocked=True)
-    right = root.fork(scope=root.scope.fork())
-    right.bind("value", identity="shared")
-    right.set_blocked("value", blocked=True)
+    left = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
+    right = root.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     left.set("value", "original")
     binding = root._store._data[root.resolve_entry("value")]
     right.set("value", "updated")
     assert left.get("value") == "updated"
     assert right.get("value") == "updated"
     assert len(binding._data) == 2
-    assert binding._data["shared"].blocked
+    assert shared_identity.blocked
 
     right.delete("value")
     assert not left.exists("value")
     assert not right.exists("value")
-    assert binding._data["shared"].blocked
+    assert shared_identity.blocked
     assert root.get("value") == "root"
     right.set("value", None)
     left.dispose()
     assert right.get("value") is None
     right.dispose()
     assert len(binding._data) == 1
-    assert not any(data.blocked for data in binding._data.values())
+    assert shared_identity not in binding._data
     root.dispose()
 
 
 def test_shared_value_does_not_retain_its_disposed_writers_scope() -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity="shared")
-    writer.set_blocked("value", blocked=True)
-    reader = root.fork(scope=root.scope.fork())
-    reader.bind("value", identity="shared")
-    reader.set_blocked("value", blocked=True)
+    writer = root.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
+    reader = root.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     writer.set("value", "retained")
     scope_ref = weakref.ref(writer.scope)
     writer.dispose()
@@ -502,19 +499,20 @@ def test_value_finalizer_can_replace_the_same_path(operation: str) -> None:
 
 
 def test_identity_release_preserves_a_barrier_created_by_a_value_finalizer() -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     root.update({"value": "root"})
-    writer = root.fork(scope=root.scope.fork())
-    writer.bind("value", identity="shared")
-    writer.set_blocked("value", blocked=True)
+    writer = root.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     replacements: list[Context] = []
 
     class Payload:
         def __del__(self) -> None:
-            child = root.fork(scope=root.scope.fork())
-            child.bind("value", identity="shared")
-            child.set_blocked("value", blocked=True)
+            child = root.derive(
+                bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+            )
             child.set("value", "new")
             replacements.append(child)
 
@@ -533,29 +531,30 @@ def test_context_get_stops_at_value_or_barrier_without_creating_identities(
     monkeypatch: pytest.MonkeyPatch,
     value: str | None,
 ) -> None:
+    shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     root.update({"value": "root"})
-    left = root.fork(scope=root.scope.fork())
-    left.bind("value", identity="shared")
-    left.set_blocked("value", blocked=True)
-    right = root.fork(scope=root.scope.fork())
-    right.bind("value", identity="shared")
-    right.set_blocked("value", blocked=True)
+    left = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
+    right = root.derive(
+        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    )
     unbound = Scope(parents=(left.scope, right.scope))
     child = root.fork(scope=unbound.fork())
     child.set("value", value)
     binding = root._store._data[root.resolve_entry("value")]
     seen: list[Scope] = []
-    original = binding._scope_identities.get
-    identities_before = dict(binding._scope_identities)
+    original = binding._scope_bindings.get
+    identities_before = dict(binding._scope_bindings)
 
-    def record(scope: Scope, default: Hashable = None) -> Hashable:
+    def record(
+        scope: Scope, default: ScopeBinding | None = None
+    ) -> ScopeBinding | None:
         seen.append(scope)
         return original(scope, default)
 
     with monkeypatch.context() as patch:
-        patch.setattr(binding._scope_identities, "get", record)
+        patch.setattr(binding._scope_bindings, "get", record)
         assert child.get("value") == value
         assert seen == [child.scope]
 
@@ -567,5 +566,5 @@ def test_context_get_stops_at_value_or_barrier_without_creating_identities(
         seen.clear()
         assert binding.get(child.scope, local=True) is _MISSING
         assert seen == [child.scope]
-    assert dict(binding._scope_identities) == identities_before
+    assert dict(binding._scope_bindings) == identities_before
     root.dispose()

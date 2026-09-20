@@ -13,6 +13,7 @@ from slyme.context import (
     Context,
     Schema,
     Scope,
+    ScopeBinding,
 )
 from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_RULES
@@ -129,8 +130,7 @@ def test_rule_composition_uses_c3_then_contribution_order() -> None:
 
 def test_isolated_tree_rules_do_not_affect_schema_or_parent_rules() -> None:
     root = Context()
-    isolated = root.fork(scope=root.scope.fork())
-    isolated.set_blocked(DATA_TREE_REF, blocked=True)
+    isolated = root.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})
     isolated.register(DATA_TREE_REF, Compose(TreeRules.merge))
     isolated.declare({"group": {"value": Schema.leaf()}})
     isolated.set("group.value", 3)
