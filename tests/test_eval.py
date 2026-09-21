@@ -29,7 +29,9 @@ def test_same_evaluator_batches_leaves_registered_under_multiple_types(
 
     ctx = Context()
     ctx.effect(
-        lambda: ctx.get(EVALUATORS_REF).add(ctx.scope, {int: evaluate, str: evaluate})
+        lambda: ctx.get(EVALUATORS_REF).register(
+            ctx.scope, {int: evaluate, str: evaluate}
+        )
     )
     assert eval_tree(ctx, [1, "a", 2]) == ["1", "a", "2"]
     assert calls == [[1, "a", 2]]
@@ -121,7 +123,9 @@ async def test_evaluator_groups_run_concurrently_and_settle_before_reporting(
 
     ctx = Context()
     ctx.effect(
-        lambda: ctx.get(EVALUATORS_REF).add(ctx.scope, {int: integers, str: strings})
+        lambda: ctx.get(EVALUATORS_REF).register(
+            ctx.scope, {int: integers, str: strings}
+        )
     )
     pending = await_result(eval_tree(ctx, [1, "a", 2, "b"]))
     if fail:
@@ -513,7 +517,7 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
     assert result[0] == 7
     assert result[1] is custom_ref and result[2] is custom_node
     remove = ctx.effect(
-        lambda: evaluators.add(
+        lambda: evaluators.register(
             ctx.scope, {CustomRef: defaults[Ref], CustomNode: defaults[Node]}
         )
     )
@@ -529,7 +533,7 @@ def test_integer_evaluator_does_not_evaluate_booleans(
 ) -> None:
     ctx = Context()
     ctx.effect(
-        lambda: ctx.get(EVALUATORS_REF).add(
+        lambda: ctx.get(EVALUATORS_REF).register(
             ctx.scope, {int: lambda _ctx, values: [value + 1 for value in values]}
         )
     )
@@ -659,7 +663,7 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
         element = capture(value=Auto(box), other=1)
         graph = identity(value=Auto(None), other=0).add_wrappers(element)
     ctx = Context()
-    ctx.effect(lambda: ctx.get(DATA_TREE_REF).add(ctx.scope, rules))
+    ctx.effect(lambda: ctx.get(DATA_TREE_REF).register(ctx.scope, rules))
     result, other = graph(ctx)
     assert calls == 1
     assert result is not box
@@ -714,6 +718,6 @@ def test_short_circuiting_wrapper_does_not_traverse_auto_parameters(
         return 12
 
     ctx = Context()
-    ctx.effect(lambda: ctx.get(DATA_TREE_REF).add(ctx.scope, rules))
+    ctx.effect(lambda: ctx.get(DATA_TREE_REF).register(ctx.scope, rules))
     assert identity(value=Auto(Box())).add_wrappers(stop())(ctx) == 12
     ctx.dispose()

@@ -7,6 +7,7 @@ import pytest
 from slyme.context import Compose, Context, Identity, Ref, Schema, Scope, ScopeBinding
 from slyme.context.default import DATA_TREE_REF
 from slyme.context.schema import ContextPathError
+from tests.compose_helpers import ValueLayer, collect_values
 
 
 @pytest.mark.parametrize("mode", ["scope", "identity"])
@@ -248,7 +249,7 @@ def test_derive_rejects_inconsistent_parents_before_registering_a_child() -> Non
     left, right = Scope(), Scope()
     xy = Scope(parents=(left, right))
     yx = Scope(parents=(right, left))
-    values = Compose.collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     children = tuple(root._lifecycle._owned)
     data = dict(root._store._data)
     with pytest.raises(TypeError, match="consistent Scope C3"):
@@ -373,10 +374,13 @@ def test_mixed_targets_share_one_new_scope_without_replacing_compose_fields() ->
     root = Context()
     root.declare({"service": Schema.leaf(), "tools": Schema.leaf()})
     root.set("service", "parent service")
-    tools, hooks = Compose.collect(), Compose.collect()
+    tools, hooks = (
+        Compose(factory=ValueLayer, query=collect_values),
+        Compose(factory=ValueLayer, query=collect_values),
+    )
     root.set("tools", tools)
-    root.effect(lambda: tools.add(root.scope, "parent tool"))
-    root.effect(lambda: hooks.add(root.scope, "parent hook"))
+    root.effect(lambda: tools.register(root.scope, "parent tool"))
+    root.effect(lambda: hooks.register(root.scope, "parent hook"))
     shared = Identity("tools")
     config = ScopeBinding(shared, blocked=False)
     child = root.derive(
@@ -396,8 +400,8 @@ def test_mixed_targets_share_one_new_scope_without_replacing_compose_fields() ->
         tools._scope_bindings[child.scope].identity
         is not hooks._scope_bindings[child.scope].identity
     )
-    child.effect(lambda: tools.add(child.scope, "child tool"))
-    child.effect(lambda: hooks.add(child.scope, "child hook"))
+    child.effect(lambda: tools.register(child.scope, "child tool"))
+    child.effect(lambda: hooks.register(child.scope, "child hook"))
     assert tools.resolve(child.scope) == ("child tool", "parent tool")
     assert tools.resolve(root.scope) == ("parent tool",)
     assert hooks.resolve(child.scope) == ("child hook",)
@@ -410,9 +414,9 @@ def test_mixed_targets_share_one_new_scope_without_replacing_compose_fields() ->
 def test_path_and_compose_object_targets_configure_different_storage() -> None:
     root = Context()
     root.declare({"tools": Schema.leaf()})
-    original = Compose.collect()
+    original = Compose(factory=ValueLayer, query=collect_values)
     root.set("tools", original)
-    root.effect(lambda: original.add(root.scope, "parent"))
+    root.effect(lambda: original.register(root.scope, "parent"))
     child = root.derive(
         bindings={
             "tools": ScopeBinding(blocked=True),
@@ -421,9 +425,9 @@ def test_path_and_compose_object_targets_configure_different_storage() -> None:
     )
     assert not child.exists("tools")
     assert original.resolve(child.scope) == ()
-    replacement = Compose.collect()
+    replacement = Compose(factory=ValueLayer, query=collect_values)
     child.set("tools", replacement)
-    child.effect(lambda: replacement.add(child.scope, "replacement"))
+    child.effect(lambda: replacement.register(child.scope, "replacement"))
     assert child.get("tools").resolve(child.scope) == ("replacement",)
     assert original.resolve(child.scope) == ()
     assert root.get("tools") is original
@@ -432,7 +436,7 @@ def test_path_and_compose_object_targets_configure_different_storage() -> None:
 
 def test_derive_preflights_paths_before_touching_any_compose() -> None:
     root = Context()
-    values = Compose.collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     children = tuple(root._lifecycle._owned)
     with pytest.raises(ContextPathError):
         root.derive(
@@ -449,7 +453,7 @@ def test_derive_preflights_paths_before_touching_any_compose() -> None:
 def test_failed_mixed_configuration_releases_context_data_and_child() -> None:
     root = Context()
     root.declare({"value": Schema.leaf()})
-    values = Compose.collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     children = tuple(root._lifecycle._owned)
     with pytest.raises(ValueError, match="immutable"):
         root.derive(
@@ -461,7 +465,7 @@ def test_failed_mixed_configuration_releases_context_data_and_child() -> None:
         )
     assert tuple(root._lifecycle._owned) == children
     assert not root._store._data[root.resolve_entry("value")]._data
-    assert not values.entries()
+    assert not tuple(values.layers())
     root.dispose()
 
 
@@ -484,8 +488,8 @@ def test_context_and_compose_derivations_keep_the_explicit_binding(
     root = Context()
     root.declare({"value": Schema.leaf()})
     root.set("value", "parent")
-    values = Compose.collect()
-    root.effect(lambda: values.add(root.scope, "parent"))
+    values = Compose(factory=ValueLayer, query=collect_values)
+    root.effect(lambda: values.register(root.scope, "parent"))
     config = (
         ScopeBinding(blocked=True)
         if level == "scope"
@@ -517,8 +521,8 @@ def test_identity_shorthand_keeps_its_policy_without_a_scope_barrier(
     root = Context()
     root.declare({"value": Schema.leaf()})
     root.set("value", "parent")
-    values = Compose.collect()
-    root.effect(lambda: values.add(root.scope, "parent"))
+    values = Compose(factory=ValueLayer, query=collect_values)
+    root.effect(lambda: values.register(root.scope, "parent"))
     identity = Identity(blocked=blocked)
     child = root.derive(bindings={"value": identity, values: identity})
     peer = root.derive(bindings={"value": ScopeBinding(identity)})
@@ -537,7 +541,7 @@ def test_identity_shorthand_keeps_its_policy_without_a_scope_barrier(
     assert values.resolve(independent) == (() if blocked else ("parent",))
     child.set("value", "shared")
     assert peer.get("value") == "shared"
-    remove = child.effect(lambda: values.add(child.scope, "shared"))
+    remove = child.effect(lambda: values.register(child.scope, "shared"))
     expected = ("shared",) if blocked else ("shared", "parent")
     assert values.resolve(independent) == values.resolve(batch) == expected
     child.delete("value")
@@ -576,12 +580,12 @@ def test_default_binding_falls_back_after_local_value_removal(
 
 def test_compose_derive_does_not_register_a_context_or_own_contributions() -> None:
     root = Context()
-    values = Compose.collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     children = tuple(root._lifecycle._owned)
     scope = values.derive(parents=root.scope, binding=ScopeBinding())
     assert tuple(root._lifecycle._owned) == children
     assert scope not in root._store._scope_usages
-    remove = values.add(scope, "independent")
+    remove = values.register(scope, "independent")
     root.dispose()
     assert values.resolve(scope) == ("independent",)
     remove()

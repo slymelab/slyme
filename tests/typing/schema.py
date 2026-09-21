@@ -3,6 +3,7 @@
 from collections.abc import Hashable, Iterable, Mapping
 from typing import Any
 
+from tests.compose_helpers import ValueLayer, collect_values
 from typing_extensions import assert_type
 
 from slyme.context import (
@@ -35,7 +36,9 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     assert_type(ctx.flatten("group"), dict[Ref[Any], Any])
     assert_type(ctx.flatten(Ref("group"), local=True), dict[Ref[Any], Any])
     identity = Identity("shared", blocked=True)
-    values: Compose[str, tuple[str, ...]] = Compose.collect()
+    values: Compose[ValueLayer[str], tuple[str, ...]] = Compose(
+        factory=ValueLayer[str], query=collect_values
+    )
     assert_type(ctx.fork(), Context)
     assert_type(ctx.fork(scope=ctx.scope), Context)
     assert_type(ctx.derive(), Context)

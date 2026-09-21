@@ -18,7 +18,10 @@ Only immutable rule definitions are shared between applications. Mutable
 compositions are installed separately for each root Context.
 """
 
-from collections.abc import Mapping
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -40,11 +43,70 @@ if TYPE_CHECKING:
 
 __all__ = ["DATA_TREE_REF", "NODE_TREE_REF", "EVALUATORS_REF"]
 
-DATA_TREE_REF = Ref[Compose[TreeRules, TreeRules]]("$.tree.data")
-NODE_TREE_REF = Ref[Compose[TreeRules, TreeRules]]("$.tree.node")
-EVALUATORS_REF = Ref[
-    Compose[Mapping[type, "BatchEvaluatorFunc"], dict[type, "BatchEvaluatorFunc"]]
-]("$.eval.handlers")
+
+@dataclass
+class TreeLayer:
+    """Tree rule registrations with one handler per exact class in this layer."""
+
+    rules: dict[object, TreeRules] = field(default_factory=dict, init=False)
+    _classes: set[type] = field(default_factory=set, init=False)
+
+    def register(self, token: object, /, rules: TreeRules) -> None:
+        for cls in rules.handlers:
+            if cls in self._classes:
+                raise ValueError(f"Type {cls!r} is already registered in this layer.")
+        self.rules[token] = rules
+        self._classes.update(rules.handlers)
+
+    def delete(self, token: object, /) -> None:
+        self._classes.difference_update(self.rules.pop(token).handlers)
+
+    @staticmethod
+    def merge(layers: Iterable[TreeLayer]) -> TreeRules:
+        """Merge registered Tree rules in visible layer and registration order."""
+        return TreeRules.merge(
+            tuple(rule for layer in layers for rule in layer.rules.values())
+        )
+
+
+@dataclass
+class EvaluatorLayer:
+    """Evaluator registrations with one handler per exact class in this layer."""
+
+    handlers: dict[type, BatchEvaluatorFunc] = field(default_factory=dict, init=False)
+    _registrations: dict[object, tuple[type, ...]] = field(
+        default_factory=dict, init=False
+    )
+
+    def register(
+        self, token: object, /, handlers: Mapping[type, BatchEvaluatorFunc]
+    ) -> None:
+        classes = tuple(handlers)
+        for cls in classes:
+            if cls in self.handlers:
+                raise ValueError(f"Type {cls!r} is already registered in this layer.")
+        self.handlers.update(handlers)
+        self._registrations[token] = classes
+
+    def delete(self, token: object, /) -> None:
+        for cls in self._registrations.pop(token):
+            del self.handlers[cls]
+
+    @staticmethod
+    def merge(layers: Iterable[EvaluatorLayer]) -> dict[type, BatchEvaluatorFunc]:
+        """Snapshot visible evaluators, keeping the first handler for each class."""
+        result: dict[type, BatchEvaluatorFunc] = {}
+        for layer in layers:
+            for cls, handler in layer.handlers.items():
+                result.setdefault(cls, handler)
+        return result
+
+
+DATA_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.data")
+NODE_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.node")
+EVALUATORS_REF = Ref[Compose[EvaluatorLayer, dict[type, "BatchEvaluatorFunc"]]](
+    "$.eval.handlers"
+)
 
 DATA_RULES = TreeRules(
     handlers={
@@ -60,7 +122,7 @@ DATA_RULES = TreeRules(
 )
 
 
-def _install(ctx: "Context") -> None:
+def _install(ctx: Context) -> None:
     # Context is already constructed before importing Node's default behavior.
     from slyme.node.core import NODE_RULES, Node
     from slyme.node.eval import node_evaluator, ref_evaluator
@@ -76,16 +138,18 @@ def _install(ctx: "Context") -> None:
             }
         }
     )
-    data = Compose(TreeRules.merge)
-    nodes = Compose(TreeRules.merge)
-    evaluators: Compose[
-        Mapping[type, BatchEvaluatorFunc], dict[type, BatchEvaluatorFunc]
-    ] = Compose.merge()
+    data = Compose(factory=TreeLayer, query=TreeLayer.merge)
+    nodes = Compose(factory=TreeLayer, query=TreeLayer.merge)
+    evaluators = Compose(factory=EvaluatorLayer, query=EvaluatorLayer.merge)
     ctx.register(DATA_TREE_REF, data)
     ctx.register(NODE_TREE_REF, nodes)
     ctx.register(EVALUATORS_REF, evaluators)
-    ctx.effect(lambda: data.add(ctx.scope, DATA_RULES))
-    ctx.effect(lambda: nodes.add(ctx.scope, TreeRules.merge((NODE_RULES, DATA_RULES))))
+    ctx.effect(lambda: data.register(ctx.scope, DATA_RULES))
     ctx.effect(
-        lambda: evaluators.add(ctx.scope, {Ref: ref_evaluator, Node: node_evaluator})
+        lambda: nodes.register(ctx.scope, TreeRules.merge((NODE_RULES, DATA_RULES)))
+    )
+    ctx.effect(
+        lambda: evaluators.register(
+            ctx.scope, {Ref: ref_evaluator, Node: node_evaluator}
+        )
     )

@@ -6,6 +6,7 @@ import pytest
 
 from slyme.context import Compose, Context, Identity, Schema, Scope, ScopeBinding
 from slyme.context.store import _MISSING, _ContextBinding
+from tests.compose_helpers import ValueLayer, collect_values
 
 
 def test_identity_uses_object_identity_and_has_frozen_configuration() -> None:
@@ -66,8 +67,8 @@ def test_implicit_first_write_also_fixes_binding_policy() -> None:
             root.resolve_entry("value", role="leaf"),
             ScopeBinding(blocked=True),
         )
-    values = Compose.collect()
-    remove = values.add(root.scope, 1)
+    values = Compose(factory=ValueLayer, query=collect_values)
+    remove = values.register(root.scope, 1)
     remove()
     with pytest.raises(ValueError, match="immutable"):
         values._bind(root.scope, ScopeBinding(blocked=True))
@@ -92,8 +93,8 @@ def test_empty_binding_stops_lookup_without_any_identity_data(level: str) -> Non
 def test_compose_barriers_survive_empty_buckets(level: str) -> None:
     root = Scope()
     identity = Identity(blocked=level == "identity")
-    values = Compose.collect()
-    values.add(root, "parent")
+    values = Compose(factory=ValueLayer, query=collect_values)
+    values.register(root, "parent")
     config = ScopeBinding(identity, blocked=level == "scope")
     left = values.derive(parents=root, binding=config)
     right = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
@@ -101,9 +102,9 @@ def test_compose_barriers_survive_empty_buckets(level: str) -> None:
     assert values.resolve(left) == ()
     expected = ("parent",) if level == "scope" else ()
     assert values.resolve(right) == expected
-    remove = values.add(right, "shared")
+    remove = values.register(right, "shared")
     assert values.resolve(left) == ("shared",)
-    assert values.values(left, local=True) == ("shared",)
+    assert values.resolve(left, local=True) == ("shared",)
     remove()
     assert identity not in values._buckets
     assert values.resolve(left) == ()
@@ -118,18 +119,20 @@ def test_compose_barriers_survive_empty_buckets(level: str) -> None:
 def test_compose_deduplicates_shared_data_but_still_checks_each_scope_barrier() -> None:
     root = Scope()
     identity = Identity()
-    values = Compose.collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     left = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
     right = values.derive(parents=root, binding=ScopeBinding(identity, blocked=True))
     child = Scope(parents=(left, right))
-    values.add(root, "parent")
-    remove = values.add(left, "shared")
+    values.register(root, "parent")
+    remove = values.register(left, "shared")
     assert values.resolve(child) == ("shared",)
-    assert tuple(entry["value"] for entry in values.entries(child)) == ("shared",)
-    assert len(values.entries()) == 2
+    assert tuple(tuple(layer.values()) for layer in values.layers(child)) == (
+        ("shared",),
+    )
+    assert len(tuple(values.layers())) == 2
     remove()
     assert values.resolve(child) == ()
-    assert values.values(child, local=True) == ()
+    assert values.resolve(child, local=True) == ()
 
 
 def test_identity_configuration_is_shared_but_data_is_container_local() -> None:
@@ -142,14 +145,17 @@ def test_identity_configuration_is_shared_but_data_is_container_local() -> None:
     right = right_root.derive(bindings={"value": ScopeBinding(identity, blocked=True)})
     left.set("value", "left")
     assert not right.exists("value")
-    first, second = Compose.collect(), Compose.collect()
+    first, second = (
+        Compose(factory=ValueLayer, query=collect_values),
+        Compose(factory=ValueLayer, query=collect_values),
+    )
     first_scope = first.derive(
         parents=scope, binding=ScopeBinding(identity, blocked=True)
     )
     second_scope = second.derive(
         parents=scope, binding=ScopeBinding(identity, blocked=True)
     )
-    first.add(first_scope, "first")
+    first.register(first_scope, "first")
     assert second.resolve(second_scope) == ()
     left_root.dispose()
     right_root.dispose()
@@ -162,7 +168,7 @@ def test_fresh_scope_plugin_reload_releases_contributions_and_payloads() -> None
     root = Context()
     root.declare({"service": Schema.leaf(mode="register"), "state": Schema.leaf()})
     root.register("service", "default")
-    hooks = Compose.collect()
+    hooks = Compose(factory=ValueLayer, query=collect_values)
     closed: list[int] = []
     for generation in range(20):
         plugin = root.derive(bindings={"service": ScopeBinding(blocked=True)})
@@ -173,13 +179,15 @@ def test_fresh_scope_plugin_reload_releases_contributions_and_payloads() -> None
         plugin.register("service", payload)
         plugin.declare({"temporary": Schema.leaf()})
         plugin.set("temporary", payload)
-        plugin.effect(lambda ctx=plugin, value=payload: hooks.add(ctx.scope, value))
+        plugin.effect(
+            lambda ctx=plugin, value=payload: hooks.register(ctx.scope, value)
+        )
         plugin.effect(lambda item=generation: lambda: closed.append(item))
         assert hooks.resolve(plugin.scope) == (payload,)
         plugin.dispose()
         assert root.get("service") == "default"
         assert not root.exists("state")
-        assert not hooks.entries()
+        assert not tuple(hooks.layers())
         assert "temporary" not in {entry.ref.path for entry in root.entries}
         del plugin, payload
         gc.collect()

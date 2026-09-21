@@ -24,7 +24,7 @@ These constants are also exported by `slyme.context`. Data rules expand list, tu
 
 Each operation resolves its rule and evaluator mappings once, before traversal or asynchronous suspension. Contributions added or removed afterward affect subsequent operations, not that operation's dispatch or reconstruction. Capturing a callable does not extend the lifetime of resources managed by its owner.
 
-Compose resolves contributions in Scope C3 order, then local insertion order; the first handler for a type wins. Use `position="prepend"` to override an earlier contribution in the same Scope. Dispose a contribution to reveal the next applicable definition:
+The default compositions use `TreeLayer` and `EvaluatorLayer` from `slyme.context.default`. Each layer rejects a second registration of the same exact class, even for the same handler or through a different Scope sharing its Identity. A conflicting batch installs none of its classes. Withdrawal allows those classes to be registered again. Across layers, queries keep the first handler in Scope C3 order; register into a child layer to override an inherited contribution. Tree resolver sequences retain their registration order. Dispose a contribution to reveal the next applicable definition:
 
 ```python
 from dataclasses import dataclass
@@ -44,7 +44,7 @@ rules = TreeRules({
         lambda items, _: Box(next(iter(items))),
     ),
 })
-plugin.effect(lambda: ctx.get(DATA_TREE_REF).add(plugin.scope, rules))
+plugin.effect(lambda: ctx.get(DATA_TREE_REF).register(plugin.scope, rules))
 
 effective = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
 leaves, definition = TreeEngine.flatten(Box(1), rules=effective)
@@ -60,7 +60,23 @@ ctx.dispose()
 
 Ordinary forks reuse their parent's configuration. A child Scope inherits it through C3. A fork bound to an unrelated `Scope()` sees no default values: install the required Compose objects and contributions explicitly. There is no fallback to `ctx.root`. A separate root `Context()` installs independent defaults.
 
-Create `child = ctx.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})`, then call `child.register(DATA_TREE_REF, Compose(TreeRules.merge))` to install an independent rule composition for that field. An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves `NODE_TREE_REF` and passes those rules to TreeEngine.
+Install an independent tree composition in an owned, isolated child:
+
+```python
+from slyme.context import Compose, Context, DATA_TREE_REF, ScopeBinding
+from slyme.context.default import TreeLayer
+
+ctx = Context()
+child = ctx.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})
+child.register(DATA_TREE_REF, Compose(
+    factory=TreeLayer,
+    query=TreeLayer.merge,
+))
+assert not child.get(DATA_TREE_REF).resolve(child.scope).handlers
+ctx.dispose()
+```
+
+An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves NODE_TREE_REF and passes those rules to TreeEngine.
 
 Schema declaration uses private, immutable dict-only rules and does not read runtime configuration. Configuring a data tree cannot change how Schema interprets declarations.
 

@@ -397,7 +397,7 @@ def test_extract_traverses_custom_containers_once_and_reconstructs_only_final_va
     ref = schema.resolve("value")
     payload = [object()]
     ctx = Context()
-    ctx.effect(lambda: ctx.get(DATA_TREE_REF).add(ctx.scope, rules))
+    ctx.effect(lambda: ctx.get(DATA_TREE_REF).register(ctx.scope, rules))
     ctx.declare(schema)
     ctx.update({ref: payload})
     request = Box(ref)

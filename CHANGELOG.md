@@ -58,8 +58,8 @@ breaking changes when they are documented here.
   operations, each with an exact disposer for optional early cleanup.
 - Added `Context.flatten(ref=None, *, local=False)` for exact visible Ref-to-value
   leaf mappings of the root or a selected container.
-- Added `Compose` for ordered, reversible values resolved through a Scope's C3
-  hierarchy, including first-value, collection, mapping, and custom rules.
+- Added `Compose` for reversible registrations in application-defined layers,
+  resolved through Scope C3 lookup and caller-supplied queries.
 - Added immutable Compose-local identity bindings so selected Scopes can share
   contribution storage without changing other Scope lookup; Context leaves
   support the same identity-sharing rules through `derive(bindings=...)`.
@@ -118,6 +118,8 @@ breaking changes when they are documented here.
 
 ### Removed
 
+- Removed `Compose.one()`, `collect()`, `merge()`, and generic entry snapshots.
+  Define layer storage and queries explicitly; inspect live layers with `layers()`.
 - Mutable global Tree/evaluator registries and `utils.registry`; scoped Compose
   contributions replace registration APIs. Root views include `$`, so bulk
   assignment snapshots must select assign-mode business fields explicitly.
@@ -149,7 +151,7 @@ breaking changes when they are documented here.
 - ContextView accepts only relative string paths; use Context directly for Ref
   lookups. Its `flatten()` output remains keyed by absolute Refs.
 - Removed `Context.contribute()`. Use
-  `ctx.effect(lambda: compose.add(scope, value))` for owned contributions.
+  `ctx.effect(lambda: compose.register(scope, value))` for owned contributions.
 
 - Removed `slyme.builder`; use ordinary Python functions to assemble Node graphs.
 - Removed `slyme.cli`, its argparse helpers, Context argument metadata, and
@@ -182,6 +184,13 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Compose accepts a layer factory and optional default query. `ComposeLayer`
+  requires synchronous `register(token, /, *args, **kwargs)` and `delete(token)`;
+  `Compose.register(scope, /, *args, **kwargs)` forwards business arguments and
+  returns an exact disposer. `layers()` exposes live layers without reconstruction.
+  Default Tree/Eval layers reject duplicate exact classes within one Identity;
+  child layers can override ancestors. Their static `merge()` methods produce
+  query snapshots.
 - ContextStore implements registration policy with a `once()` disposer;
   binding writes and deletions enforce stored ownership tokens. An unprotected
   (`None`) token accepts any caller token, but a protected value requires identity
@@ -218,10 +227,10 @@ breaking changes when they are documented here.
   and removed the process-global engine registry, including its namespace
   from `pytree_engine` to `tree_engine`. No compatibility aliases are provided.
 - Scope viewers, Context-binding identities, and Schema declarations use direct
-  ownership sets managed by internal registration and cleanup methods. Compose
-  entries use unique tokens and ordered buckets, without per-entry internal
-  release callbacks. Cleanup preserves failure replay and reentrant identity
-  reuse; cleared values do not return when a Scope or identity is reused.
+  ownership records managed by internal registration and cleanup methods. Compose
+  keeps contributing Scopes by registration token and removes each layer after
+  its last registration is withdrawn. Cleanup preserves failure replay and
+  reentrant identity reuse; cleared values do not return when an identity is reused.
 - Raised the minimum supported Python version from 3.9 to 3.10, following the
   upstream CPython maintenance lifecycle, and adopted native 3.10 typing syntax.
 - Renamed `RefFactory` to `Schema` and aligned Context construction and

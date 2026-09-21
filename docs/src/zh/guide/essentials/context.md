@@ -10,7 +10,7 @@ Context 协调组件归属，ContextView 通过 Context 完成访问。Store 独
 
 普通 Context 操作在委托前检查自身 Lifecycle。释放期间可以读取，直到该 Context 完成释放，但禁止写入、声明、新增 effect 和创建子级。内部撤销和 Scope 释放检查精确的持有记录，在清理期间仍可执行。共享的 Schema 和 Store 不采用某个调用者的生命周期状态，其他活跃 Context 可以继续使用它们。
 
-每个 Context binding 按 Scope 保存不可变的 `ScopeBinding`，其中指定 `Identity` 和局部继承阻断；Identity 自身定义共享阻断。可变数据记录保存当前值、注册 token 和仍持有数据的 Scope。Binding 负责这些记录的全部操作，写入不会暴露记录对象。Context 独立管理存储，Compose 则管理带 metadata 的有序 contribution。
+每个 Context binding 按 Scope 保存不可变的 `ScopeBinding`，其中指定 `Identity` 和局部继承阻断；Identity 自身定义共享阻断。可变数据记录保存当前值、注册 token 和仍持有数据的 Scope。Binding 负责这些记录的全部操作，写入不会暴露记录对象。Context 独立管理存储，Compose 则管理应用定义 Layer 中的可撤销登记。
 
 Store 执行 Schema 写入模式，以及注册不能覆盖本地已有值的规则。Binding 提供带 token 的写入和删除：记录保存的 token 为 `None` 时不限制调用方；非 `None` 时必须传入同一个 token，调用方传 `None` 也不能绕过检查。Store 注册会创建唯一 token，并通过 `once()` 包装调用 Binding 的 `matches()` 和 `delete()` 的 disposer。`matches()` 要求本地值存在且 token 精确匹配，因此旧 disposer 不会删除替代值，即使替代值没有 token 保护。
 
@@ -384,41 +384,57 @@ Scope viewer 和 binding identity 直接使用集合记录持有者。Context di
 
 ## Compose
 
-`Compose` 在 Compose 局部 identity 下保存有序值，并根据 Scope C3 顺序解析。`compose.derive(*, label=None, parents=..., binding=...)` 为一个 Compose 创建配置好的 Scope；静态方法 `Compose.derive_many(*, label=None, parents=..., bindings=...)` 在同一个新 Scope 上配置多个 Compose。两者均要求显式传入 parents（单个 Scope 或 tuple，包括 `()`），与 Context.derive 一样接受 ScopeBinding 或 Identity 值，但不接受 None，不创建 Context 或生命周期所有者。需要混合配置字段与 Compose，并由子 Context 管理生命周期时，使用 Context.derive。未绑定 Scope 的首次写入会创建私有、不阻断的绑定；移除全部 entry 不会重置配置。Node 需要通过 Ref 获取 Compose 时，可以把它作为普通 leaf 存入 Context，再使用 `Context.effect()` 管理 `Compose.add()` 返回的 disposer：
+`Compose` 负责登记 token、精确撤销和 Scope 可见性。`Compose[L, R]` 分别描述应用定义的 Layer 和默认 query 的结果类型。构造函数接受 `factory` 和可选的 `query`；每个活跃 Identity 都通过 factory 创建独立的 Layer。
+
+公开的 `ComposeLayer` 协议只要求两个同步方法：`register(token, /, *args, **kwargs)` 和 `delete(token)`，不要求继承该协议。`compose.register(scope, /, *args, **kwargs)` 选择 Identity、注入唯一 token，并原样转发所有业务参数。Layer 不接收隐式 Compose、Scope 或 Identity，其 register 签名决定可接受的业务参数，包括 prepend/append、metadata 等关键字选项。固定依赖可以由 factory 闭包提供；跨层检查放在显式接收 Compose 和 Scope 的上层操作中。
 
 ```python
 from slyme.context import Compose, Context, Schema
 
-R = Schema({"tools": Schema.leaf(mode="register")})
+class ValueLayer(dict):
+    def register(self, token, /, value):
+        self[token] = value
+
+    def delete(self, token, /):
+        del self[token]
+
 root = Context()
-root.declare(R)
-tools = Compose[str, tuple[str, ...]].collect()
-root.register(R.resolve("tools"), tools)
-
-root.effect(lambda: tools.add(root.scope, "read"))
-agent = root.fork(scope=root.scope.fork(label="agent"))
-remove_agent = agent.effect(
-    lambda: agent.get(R.resolve("tools")).add(
-        agent.scope, "shell", metadata={"plugin": "shell"}
-    )
+root.declare({"tools": Schema.leaf(mode="register")})
+tools = Compose(
+    factory=ValueLayer,
+    query=lambda layers: tuple(
+        value for layer in layers for value in layer.values()
+    ),
 )
+root.register("tools", tools)
+root.effect(lambda: tools.register(root.scope, "read"))
 
-assert agent.get(R.resolve("tools")) is tools
+agent = root.derive(label="agent")
+remove_agent = agent.effect(
+    lambda: agent.get("tools").register(agent.scope, value="shell")
+)
 assert tools.resolve(agent.scope) == ("shell", "read")
+assert tools.resolve(agent.scope, local=True) == ("shell",)
+assert tools.resolve(
+    agent.scope, lambda layers: sum(len(layer) for layer in layers)
+) == 2
+
 remove_agent()
 agent.dispose()
 root.dispose()
 ```
 
-`ctx.effect(lambda: ctx.get(ref).add(target_scope, value))` 会通过 `ctx.scope` 查找 Compose，并显式选择 contribution 的目标 `target_scope`。即使目标 Scope 位于其他位置，该 Context 仍拥有 cleanup。即使 Context leaf 后来被替换为另一个 Compose，返回的 disposer 仍会移除原来的 entry。直接调用 `compose.add(scope, value)` 时，调用方须自行管理 disposer。
+`resolve(scope)` 使用构造时配置的 query；`resolve(scope, query)` 仅覆盖本次查询，可以返回不同类型。未配置默认 query 时必须显式提供，否则 resolve 抛出 ValueError。Query 组合可见的 Layer；每层自行管理存储、索引和本层顺序。
 
-`Compose.one()` 选择第一个可见值，`Compose.collect()` 将所有可见值组成 tuple，`Compose.merge()` 合并 mapping，并为每个 key 保留第一个可见值。向 `Compose(...)` 传入同步 resolver 可以定义其他结果规则。在同一个 Scope 内，`position="prepend"` 将 entry 放在现有 entry 之前；默认值是 `"append"`。
+`layers(scope)` 惰性返回实际的 Layer 对象，而不是扁平化贡献或副本。每个共享 Identity 在 C3 顺序中只出现一次。`local=True` 选择当前 Scope 的 Identity，也包含其他共享该 Identity 的 Scope 所登记的内容。每个访问到的绑定都会在当前层之后应用 Scope 级和 Identity 级阻断，即使该层为空或 Identity 已访问过。`layers()` 不传 Scope 时枚举全部活跃层；`local=True` 必须提供 Scope。读取不创建 Layer 或绑定。
 
-`values(scope, local=True)` 可在不执行 resolver 的情况下检查该 Scope identity 下的 entry，`resolve(scope, local=True)` 则对同一组值应用 resolver。多个 Scope 共享 identity 时，这一局部集合包含从所有这些 Scope 贡献的 entry。C3 查找只读取共享 bucket 一次，但仍检查每个 Scope 的阻断。任意一级阻断都会在读取当前 bucket 后停止查找，即使 bucket 为空。`entries(scope)` 遵循相同可见性规则，返回每项的 id、贡献 Scope、identity、value 与 metadata 的不可变记录；省略 Scope 会检查全部当前 entry。Compose 会保留这些 entry，直到精确 disposer 执行，因此应优先使用由生命周期管理的 contribution。
+不要在查询迭代期间修改 Compose 的结构。调用 handler 前先保存所选 handler 的快照。快照持有对象，但不会延长其外部资源的生命周期。通过 Layer 自己的接口检查业务数据；Compose 不会从仅保存聚合结果的 Layer 重建原始值。
 
-每个 Compose identity 的 bucket 就是有序 entry 字典。按唯一 token 删除 entry 后，如果 bucket 为空就将其移除；不另行维护计数，也不为每条 entry 分配内部 release 回调。复用已清空的 identity 会创建新 bucket，旧 disposer 不会误删新 entry。disposer 在调用前保留其 Compose；后续重复调用会重现释放失败，而不会重试 cleanup。Context binding 在最后一个持有某 identity 的 Scope 不再被观察时清除其数据。两者都独立保留绑定配置，不随数据清理而重置。
+每次成功登记都保留唯一 token 和贡献来源 Scope，直到精确撤销。最终登记撤销后删除 Identity 的 Layer；判断依据是登记存活状态，而不是层的大小、计算结果或真假值。`len(compose)` 返回活跃登记数量。拒绝登记时必须保持层数据不变；删除必须精确对应 token。Layer 方法不得显式重入所属 Compose 的修改操作，框架不对任意层内修改提供事务回滚。清理失败会抛给调用方；重复调用 disposer 重现同一错误，但不重试清理。
 
-绑定到 child Scope 的 Context 可以在同一 Ref 上安装新的 Compose 对象，从而得到独立集合。Compose 始终是普通 Context leaf。
+`compose.derive(*, label=None, parents=..., binding=...)` 为一个 Compose 创建配置好的 Scope；`Compose.derive_many(*, label=None, parents=..., bindings=...)` 在一个新 Scope 上配置多个 Compose。两者都要求显式 parents，接受 ScopeBinding 或 Identity，且不创建生命周期所有者。使用 `ctx.derive()` 创建受拥有的子 Context，同时配置 Context 字段和 Compose 绑定。未绑定的 Scope 首次登记时固定为私有、未阻断的绑定；撤销不会重置该配置。
+
+`ctx.effect(lambda: ctx.get(ref).register(target_scope, value))` 通过 ctx.scope 获取 Compose，显式选择登记层，并负责撤销，即使 target_scope 与它无关。Context 叶子被替换后，disposer 仍指向原 Compose。直接调用 compose.register 时由调用方负责所有权。子 Context 可以在相同路径登记另一个 Compose，获得独立集合。
 
 ## 结构化操作与投影
 

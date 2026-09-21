@@ -24,7 +24,7 @@ Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 l
 
 每次操作在遍历或异步暂停前，只解析一次有效规则与 evaluator 映射。之后新增或撤销 contribution 影响后续操作，不改变本次分派和重建。保留 callable 并不延长其 owner 管理的资源生命周期。
 
-Compose 按 Scope C3 顺序，再按本层插入顺序处理 contribution；同一类型的首个 handler 生效。同一 Scope 内使用 `position="prepend"` 覆盖较早的贡献；撤销后重新显露下一条适用定义：
+默认组合使用 `slyme.context.default` 中的 `TreeLayer` 和 `EvaluatorLayer`。每层拒绝重复登记相同的精确 class，即使 handler 相同，或登记来自共享该 Identity 的另一个 Scope。批次中存在冲突时，不会安装其中任何 class。撤销后可以重新登记这些 class。跨层查询按 Scope C3 顺序保留首个 handler；向子层登记以覆盖继承的贡献。Tree resolver 序列保持登记顺序。撤销后重新显露下一条适用定义：
 
 ```python
 from dataclasses import dataclass
@@ -44,7 +44,7 @@ rules = TreeRules({
         lambda items, _: Box(next(iter(items))),
     ),
 })
-plugin.effect(lambda: ctx.get(DATA_TREE_REF).add(plugin.scope, rules))
+plugin.effect(lambda: ctx.get(DATA_TREE_REF).register(plugin.scope, rules))
 
 effective = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
 leaves, definition = TreeEngine.flatten(Box(1), rules=effective)
@@ -60,7 +60,23 @@ ctx.dispose()
 
 普通 fork 复用父级配置，子 Scope 通过 C3 继承。绑定到无关 `Scope()` 的 fork 看不到默认值，必须显式安装需要的 Compose 和 contribution；框架不会回退到 `ctx.root`。独立创建的根 `Context()` 会安装自己的默认配置。
 
-创建 `child = ctx.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})`，再调用 `child.register(DATA_TREE_REF, Compose(TreeRules.merge))`，为该字段安装独立的规则组合。空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历则显式解析 `NODE_TREE_REF`，再将规则传给 TreeEngine。
+在由父级管理、阻断继承的子 Context 中安装独立规则组合：
+
+```python
+from slyme.context import Compose, Context, DATA_TREE_REF, ScopeBinding
+from slyme.context.default import TreeLayer
+
+ctx = Context()
+child = ctx.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})
+child.register(DATA_TREE_REF, Compose(
+    factory=TreeLayer,
+    query=TreeLayer.merge,
+))
+assert not child.get(DATA_TREE_REF).resolve(child.scope).handlers
+ctx.dispose()
+```
+
+空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历显式解析 NODE_TREE_REF，再将规则传给 TreeEngine。
 
 Schema 声明使用私有、不可变、仅处理 dict 的规则，不读取运行时配置。修改 data tree 规则不会改变 Schema 对声明的解释方式。
 

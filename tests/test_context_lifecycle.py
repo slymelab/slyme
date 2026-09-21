@@ -10,6 +10,7 @@ from slyme.context import Compose, Context, Identity, Schema, Scope, ScopeBindin
 from slyme.context.core import ContextPathError
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
+from tests.compose_helpers import ValueLayer, collect_values
 
 
 async def test_adispose_runs_sync_cleanup_immediately_without_scheduling() -> None:
@@ -273,17 +274,18 @@ def test_context_owns_bindings_declarations_and_compose_effects() -> None:
     )
     ctx = Context()
     ctx.declare(schema)
-    hooks = Compose[str, tuple[str, ...]].collect()
+    hooks = Compose(factory=ValueLayer, query=collect_values)
     ctx.register("hooks", hooks)
     remove_plugin = ctx.declare({"plugin": {"value": Schema.leaf()}})
     ctx.set("plugin.value", 1)
-    ctx.effect(lambda: hooks.add(ctx.scope, "first", metadata={"owner": "test"}))
-    ctx.effect(lambda: hooks.add(ctx.scope, "zeroth", position="prepend"))
+    first = {"handler": "first", "metadata": {"owner": "test"}}
+    ctx.effect(lambda: hooks.register(ctx.scope, first))
+    ctx.effect(lambda: hooks.register(ctx.scope, "second"))
 
-    assert hooks.resolve(ctx.scope) == ("zeroth", "first")
-    assert hooks.entries(ctx.scope)[1]["metadata"] == {"owner": "test"}
+    assert hooks.resolve(ctx.scope) == (first, "second")
+    assert hooks.resolve(ctx.scope)[0]["metadata"] == {"owner": "test"}
     with pytest.raises(ContextPathError, match="register"):
-        ctx.set("hooks", Compose.collect())
+        ctx.set("hooks", Compose(factory=ValueLayer, query=collect_values))
 
     remove_plugin()
     remove_plugin()
@@ -297,16 +299,16 @@ def test_compose_effect_keeps_its_target_when_the_context_leaf_is_replaced() -> 
     schema = Schema({"hooks": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    hooks = Compose[str, tuple[str, ...]].collect()
+    hooks = Compose(factory=ValueLayer, query=collect_values)
     ctx.set("hooks", hooks)
     other = ctx.scope.fork()
 
-    dispose = ctx.effect(lambda: ctx.get("hooks").add(other, "other"))
+    dispose = ctx.effect(lambda: ctx.get("hooks").register(other, "other"))
     assert hooks.resolve(ctx.scope) == ()
     assert hooks.resolve(other) == ("other",)
-    replacement = Compose[str, tuple[str, ...]].collect()
+    replacement = Compose(factory=ValueLayer, query=collect_values)
     ctx.set("hooks", replacement)
-    ctx.effect(lambda: ctx.get("hooks").add(other, "replacement"))
+    ctx.effect(lambda: ctx.get("hooks").register(other, "replacement"))
     dispose()
     assert hooks.resolve(other) == ()
     assert replacement.resolve(other) == ("replacement",)

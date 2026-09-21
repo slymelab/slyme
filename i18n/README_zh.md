@@ -142,14 +142,25 @@ Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命�
 ```python
 from slyme.context import Compose, Context, Schema
 
-R = Schema({"hooks": Schema.leaf(mode="register")})
-root = Context(schema=R)
-hooks = Compose[str, tuple[str, ...]].collect()
-root.register(R.resolve("hooks"), hooks)
-agent = root.fork(scope=root.scope.fork(name="agent"))
+class ValueLayer(dict):
+    def register(self, token, /, value):
+        self[token] = value
 
-root.effect(lambda: hooks.add(root.scope, "root"))
-agent.effect(lambda: agent.get(R.resolve("hooks")).add(agent.scope, "agent"))
+    def delete(self, token, /):
+        del self[token]
+
+R = Schema({"hooks": Schema.leaf(mode="register")})
+root = Context()
+root.declare(R)
+hooks = Compose(
+    factory=ValueLayer,
+    query=lambda layers: tuple(value for layer in layers for value in layer.values()),
+)
+root.register(R.resolve("hooks"), hooks)
+agent = root.derive(label="agent")
+
+root.effect(lambda: hooks.register(root.scope, "root"))
+agent.effect(lambda: agent.get(R.resolve("hooks")).register(agent.scope, "agent"))
 assert hooks.resolve(agent.scope) == ("agent", "root")
 
 agent.dispose()
@@ -157,7 +168,9 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
-Scope viewer、共享的 Context-binding identity 和 Schema 声明直接使用集合记录持有者。内部登记和清理方法负责移除空的持有记录及其数据；Compose 按唯一 token 移除 entry，并删除空 bucket。只有向调用方提供显式撤销能力的操作才返回 disposer。后续登记可以复用 Scope 或 identity，但不会恢复已清除的数据。
+`Compose(*, factory, query=None)` 为每个活跃 Identity 创建一个应用定义的 Layer。`ComposeLayer` 协议要求同步的 `register(token, /, *args, **kwargs)` 和 `delete(token)` 方法，不要求继承该协议。Compose 只注入 token，业务参数原样转发。`resolve(scope, query=None)` 使用默认或本次指定的查询函数；`layers(scope=None, local=False)` 惰性返回 Layer，不传 Scope 时返回全部活跃层。最后一次登记撤销后回收层，与层的计算结果是否为空无关。默认 Tree/Eval 层禁止在相同 Identity 内重复登记 class；覆盖继承的 handler 需要独立层。
+
+Scope viewer、共享的 Context-binding identity 和 Schema 声明直接记录持有关系。内部登记和清理方法负责移除空的持有记录及其数据；Compose 按唯一 token 移除登记，并在最终登记撤销后删除层。只有向调用方提供显式撤销能力的操作才返回 disposer。后续登记可以复用 Scope 或 identity，但不会恢复已清除的数据。
 
 释放开始时，会在执行任何 cleanup 前禁止整棵所属 Context 子树的修改。每个 Context 在自身释放完成前仍可读取；子树之外的 Context 即使共享 Scope，也不受影响。
 

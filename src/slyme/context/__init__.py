@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .compose import Compose
+from .compose import Compose, ComposeLayer
 from .core import Context
 from .default import DATA_TREE_REF, EVALUATORS_REF, NODE_TREE_REF
 from .lifecycle import Lifecycle
@@ -32,6 +32,7 @@ from .store import ContextStore
 
 __all__ = [
     "Compose",
+    "ComposeLayer",
     "Context",
     "ContextKey",
     "ContextPathError",

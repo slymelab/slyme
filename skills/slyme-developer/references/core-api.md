@@ -52,6 +52,13 @@ An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned c
 ## Context lifetime, Scope visibility, and Compose
 
 ```python
+class ValueLayer(dict):
+    def register(self, token, /, value):
+        self[token] = value
+
+    def delete(self, token, /):
+        del self[token]
+
 root_ctx = Context()
 root_ctx.declare(R)
 agent_scope = root_ctx.scope.fork(label="agent")
@@ -59,13 +66,14 @@ agent_ctx = root_ctx.fork(scope=agent_scope)
 
 remove_request = agent_ctx.register(R.resolve("request.id"), "request-1")
 
-tools = Compose[str, tuple[str, ...]].collect()
+tools = Compose(
+    factory=ValueLayer,
+    query=lambda layers: tuple(value for layer in layers for value in layer.values()),
+)
 root_ctx.register(R.resolve("tools"), tools)
-root_ctx.effect(lambda: tools.add(root_ctx.scope, "read"))
+root_ctx.effect(lambda: tools.register(root_ctx.scope, "read"))
 remove_agent = agent_ctx.effect(
-    lambda: agent_ctx.get(R.resolve("tools")).add(
-        agent_ctx.scope, "shell", metadata={"plugin": "shell"}
-    )
+    lambda: agent_ctx.get(R.resolve("tools")).register(agent_ctx.scope, "shell")
 )
 
 assert tools.resolve(agent_ctx.scope) == ("shell", "read")
@@ -76,7 +84,11 @@ agent_ctx.dispose()
 root_ctx.dispose()
 ```
 
-Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's Compose-local identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data. `ctx.derive(bindings={ref: ScopeBinding(identity=identity)})` creates an owned child with a new Scope and shared storage for that leaf. Bindings accept ScopeBinding or Identity, not None. A direct Identity is shorthand for `ScopeBinding(identity=identity)`; `ScopeBinding()` creates private storage. Both ScopeBinding and Identity default to unblocked; set `blocked=True` explicitly to stop fallback. Its keyword-only `label` and `parents` configure the new Scope. Parents defaults to `ctx.scope`; one Scope or a tuple selects other visibility parents, including `()` for an independent Scope, without changing lifecycle ownership. Independent Context roots keep separate data even when bound to the same Scope. `Context.register()` rejects an existing value at the bound identity. `Compose.one()` selects the first visible value, `collect()` returns all visible values, and `merge()` combines mappings with first-visible key precedence.
+Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's path-local Identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data. `ctx.derive(bindings={ref: ScopeBinding(identity=identity)})` creates an owned child with a new Scope and shared storage for that leaf. Bindings accept ScopeBinding or Identity, not None. A direct Identity is shorthand for `ScopeBinding(identity=identity)`; `ScopeBinding()` creates private storage. Both ScopeBinding and Identity default to unblocked; set `blocked=True` explicitly to stop fallback. Its keyword-only `label` and `parents` configure the new Scope. Parents defaults to `ctx.scope`; one Scope or a tuple selects other visibility parents, including `()` for an independent Scope, without changing lifecycle ownership. Independent Context roots keep separate data even when bound to the same Scope. `Context.register()` rejects an existing value at the bound identity.
+
+`Compose(factory=..., query=...)` creates one layer per active Identity. Layers implement synchronous `register(token, /, *args, **kwargs)` and `delete(token)` methods; Compose supplies only the token and forwards business arguments. `layers(scope)` exposes live layers in C3 order, `layers()` enumerates all active layers, and `resolve(scope, query=None)` applies the default or a per-call query. Keep cross-layer validation outside the layer. Metadata and registration options belong to the application layer's interface.
+
+Root Contexts install `TreeLayer` and `EvaluatorLayer` compositions from `slyme.context.default`. Their static `merge()` methods produce snapshots. Within one Identity, the same exact class cannot be registered twice; after withdrawal it can be registered again. Child layers can override inherited handlers without modifying the parent.
 
 Create an application root with `Context(scope=optional_scope)`, declare paths with `ctx.declare(R)`, then assign values with `ctx.update(data)`. Schema import copies definitions with independent ownership; later source changes do not propagate. Every path must belong to the application Schema. A child has one `parent`, shares its private Schema and ContextStore, and owns a distinct Lifecycle attached to its parent's Lifecycle. Resolve application-wide declarations through `ctx.resolve(path)`, `ctx.resolve_entry(path)`, and `ctx.entries`; entries include containers and unset leaves. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(label="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
 
@@ -90,7 +102,7 @@ A parent strongly owns its child Contexts. Each Context processes directly owned
 
 Effect setup and cleanup cannot dispose their owner Context or an ancestor while running, and cleanup cannot re-enter its own disposer; Slyme rejects these operations with `RuntimeError`.
 
-Use `ctx.effect(lambda: ctx.get(ref).add(target_scope, value))` when a Compose stored at `ref` should receive a lifecycle-owned contribution. `ctx.get(ref)` selects the Compose through the Context's bound Scope; `target_scope` explicitly selects where to store the contribution. The calling Context owns cleanup regardless of the target Scope. Direct `compose.add(scope, value)` remains available when the caller will manage its returned disposer itself. `compose.derive(parents=parent, binding=ScopeBinding(identity=identity))` creates a Scope using the selected Identity in this Compose. `Compose.derive_many(parents=parents, bindings={compose: config, ...})` configures multiple Composes on one new Scope. Both are keyword-only, require parents (one Scope or a tuple), accept an optional label, and create no lifecycle. Binding is permanent for each live Scope and has no disposer; contributions remain independently reversible.
+Use `ctx.effect(lambda: ctx.get(ref).register(target_scope, value))` when a Compose stored at `ref` should receive a lifecycle-owned contribution. `ctx.get(ref)` selects the Compose through the Context's bound Scope; `target_scope` explicitly selects where to store the contribution. The calling Context owns cleanup regardless of the target Scope. Direct `compose.register(scope, value)` remains available when the caller will manage its returned disposer itself. `compose.derive(parents=parent, binding=ScopeBinding(identity=identity))` creates a Scope using the selected Identity in this Compose. `Compose.derive_many(parents=parents, bindings={compose: config, ...})` configures multiple Composes on one new Scope. Both are keyword-only, require parents (one Scope or a tuple), accept an optional label, and create no lifecycle. Binding is permanent for each live Scope and has no disposer; contributions remain independently reversible.
 
 ## Wrappers
 

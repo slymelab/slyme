@@ -224,7 +224,7 @@ async def test_evaluation_runs_sync_batches_before_awaiting_async_results(
 
     ctx = Context()
     ctx.effect(
-        lambda: ctx.get(EVALUATORS_REF).add(
+        lambda: ctx.get(EVALUATORS_REF).register(
             ctx.scope, {int: asynchronous, str: synchronous}
         )
     )

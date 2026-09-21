@@ -7,33 +7,41 @@ from types import MappingProxyType
 import pytest
 
 import slyme.context as context_module
-from slyme.context import Compose, Context, Identity, Schema, Scope, ScopeBinding
+from slyme.context import (
+    Compose,
+    ComposeLayer,
+    Context,
+    Identity,
+    Schema,
+    Scope,
+    ScopeBinding,
+)
+from tests.compose_helpers import ValueLayer, collect_values, first_value, merge_values
 
 R = Schema({"hooks": Schema.leaf(), "tools": Schema.leaf()})
 
 
-def test_compose_is_the_only_public_composition_type() -> None:
+def test_composition_exports_its_layer_protocol() -> None:
     assert context_module.Compose is Compose
+    assert context_module.ComposeLayer is ComposeLayer
     assert not hasattr(context_module, "Value")
 
 
-def test_one_uses_scope_and_entry_precedence() -> None:
+def test_first_value_query_uses_scope_and_registration_precedence() -> None:
     root = Scope(label="root")
     agent = root.fork(label="agent")
-    values = Compose[str, str].one()
-
-    remove_root = values.add(root, "root")
-    remove_agent = values.add(agent, "agent")
-    remove_later = values.add(agent, "later")
+    values = Compose(factory=ValueLayer, query=first_value)
+    remove_root = values.register(root, "root")
+    remove_agent = values.register(agent, "agent")
+    remove_later = values.register(agent, "later")
 
     assert values.resolve(root) == "root"
     assert values.resolve(agent) == "agent"
-
-    remove_override = values.add(agent, "override", position="prepend")
-    assert values.resolve(agent) == "override"
+    override_scope = agent.fork()
+    remove_override = values.register(override_scope, "override")
+    assert values.resolve(override_scope) == "override"
     remove_override()
-    assert values.resolve(agent) == "agent"
-
+    assert values.resolve(override_scope) == "agent"
     remove_agent()
     assert values.resolve(agent) == "later"
     remove_later()
@@ -43,18 +51,17 @@ def test_one_uses_scope_and_entry_precedence() -> None:
         values.resolve(agent)
 
 
-def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
+def test_query_follows_c3_without_repeating_diamond_ancestors() -> None:
     root = Scope(label="root")
     left = root.fork(label="left")
     right = root.fork(label="right")
     child = Scope(label="child", parents=(left, right))
-    values = Compose[str, tuple[str, ...]].collect()
-
-    values.add(root, "root")
-    values.add(left, "left")
-    values.add(right, "right")
-    values.add(child, "child-last")
-    values.add(child, "child-first", position="prepend")
+    values = Compose(factory=ValueLayer, query=collect_values)
+    values.register(root, "root")
+    values.register(left, "left")
+    values.register(right, "right")
+    values.register(child, "child-first")
+    values.register(child, "child-last")
 
     assert values.resolve(child) == (
         "child-first",
@@ -63,31 +70,26 @@ def test_collect_follows_c3_without_repeating_diamond_ancestors() -> None:
         "right",
         "root",
     )
-    assert values.values(child, local=True) == ("child-first", "child-last")
+    assert values.resolve(child, local=True) == ("child-first", "child-last")
+    layers = tuple(values.layers(child))
+    assert tuple(tuple(layer.values()) for layer in layers) == (
+        ("child-first", "child-last"),
+        ("left",),
+        ("right",),
+        ("root",),
+    )
+    assert tuple(values.layers(child, local=True)) == layers[:1]
 
 
-def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
+def test_mapping_query_preserves_registrations_and_uses_first_visible_key() -> None:
     root = Scope(label="root")
     child = root.fork(label="child")
-    values = Compose.merge()
+    values = Compose(factory=ValueLayer, query=merge_values)
+    remove_root = values.register(root, {"shared": "root", "root": 1})
+    remove_child = values.register(child, {"shared": "child", "child": 2})
+    remove_later = values.register(child, {"shared": "later"})
 
-    remove_root = values.add(root, {"shared": "root", "root": 1})
-    remove_child = values.add(child, {"shared": "child", "child": 2})
-    remove_later = values.add(child, {"shared": "later"})
-
-    assert values.resolve(child) == {
-        "shared": "child",
-        "child": 2,
-        "root": 1,
-    }
-
-    remove_override = values.add(
-        child,
-        {"shared": "override"},
-        position="prepend",
-    )
-    assert values.resolve(child)["shared"] == "override"
-    remove_override()
+    assert values.resolve(child) == {"shared": "child", "child": 2, "root": 1}
     remove_child()
     assert values.resolve(child)["shared"] == "later"
     remove_later()
@@ -96,49 +98,51 @@ def test_merge_preserves_entries_and_uses_first_visible_key() -> None:
     assert values.resolve(child) == {}
 
 
-def test_compose_accepts_a_custom_resolver() -> None:
+def test_compose_uses_default_query_and_per_call_override() -> None:
     root = Scope(label="root")
     child = root.fork(label="child")
-    values = Compose[int, int](sum)
-    values.add(root, 2)
-    values.add(child, 3)
+    values = Compose(
+        factory=ValueLayer,
+        query=lambda layers: sum(value for layer in layers for value in layer.values()),
+    )
+    values.register(root, 2)
+    values.register(child, 3)
 
     assert values.resolve(child) == 5
     assert values.resolve(child, local=True) == 3
+    assert values.resolve(
+        child, lambda layers: [list(layer.values()) for layer in layers]
+    ) == [[3], [2]]
+    assert values.resolve(child) == 5
 
 
-def test_entries_are_immutable_snapshots_with_exact_disposal() -> None:
+def test_registration_preserves_payload_and_assigns_independent_ids() -> None:
     scope = Scope()
-    values = Compose[str, tuple[str, ...]].collect()
-    metadata = {"plugin": "example"}
-
-    remove_first = values.add(scope, "same", metadata=metadata)
-    remove_second = values.add(scope, "same", metadata=metadata)
-    metadata["late"] = True
-
-    entries = values.entries(scope)
-    assert len(entries) == 2
-    assert entries[0]["id"] is not entries[1]["id"]
-    assert entries[0]["scope"] is scope
-    assert entries[0]["identity"] is entries[1]["identity"]
-    assert entries[0]["value"] == "same"
-    assert entries[0]["metadata"] == {"plugin": "example"}
-    assert isinstance(entries[0], MappingProxyType)
-    assert isinstance(entries[0]["metadata"], MappingProxyType)
-    with pytest.raises(TypeError):
-        entries[0]["value"] = "changed"  # type: ignore[index]
+    values = Compose(factory=ValueLayer, query=collect_values)
+    record = {"value": "same", "metadata": MappingProxyType({"plugin": "example"})}
+    remove_first = values.register(scope, record)
+    remove_second = values.register(scope, record)
+    layer = next(iter(values.layers(scope)))
+    first_id, second_id = layer
+    assert first_id is not second_id
+    assert layer[first_id] is layer[second_id] is record
+    snapshot = values.resolve(scope)
 
     remove_second()
     remove_second()
-    assert values.values(scope) == ("same",)
+    assert tuple(layer) == (first_id,)
+    assert values.resolve(scope) == (record,)
     remove_first()
     assert len(values) == 0
+    assert snapshot == (record, record)
+    assert not layer
+    assert not tuple(values.layers())
 
 
 def test_derive_shares_identity_only_in_that_compose() -> None:
     identity = Identity()
-    shared = Compose[str, tuple[str, ...]].collect()
-    independent = Compose[str, tuple[str, ...]].collect()
+    shared = Compose(factory=ValueLayer, query=collect_values)
+    independent = Compose(factory=ValueLayer, query=collect_values)
 
     left = shared.derive(
         parents=Scope(label="left"), binding=ScopeBinding(identity, blocked=True)
@@ -146,21 +150,21 @@ def test_derive_shares_identity_only_in_that_compose() -> None:
     right = shared.derive(
         parents=Scope(label="right"), binding=ScopeBinding(identity, blocked=True)
     )
-    shared.add(left, "left")
-    shared.add(right, "right")
-    independent.add(left, "independent")
+    shared.register(left, "left")
+    shared.register(right, "right")
+    independent.register(left, "independent")
 
     assert shared.resolve(left) == ("left", "right")
     assert shared.resolve(right, local=True) == ("left", "right")
     assert independent.resolve(right) == ()
-    assert {entry["scope"] for entry in shared.entries(right)} == {left, right}
-    assert all(entry["identity"] is identity for entry in shared.entries())
+    assert tuple(shared.layers(left)) == tuple(shared.layers(right))
+    assert set(shared._buckets) == {identity}
 
 
 def test_derive_creates_fresh_scopes_without_changing_parent_binding() -> None:
     parent = Scope()
-    values = Compose[str, tuple[str, ...]].collect()
-    values.add(parent, "parent")
+    values = Compose(factory=ValueLayer, query=collect_values)
+    values.register(parent, "parent")
     original = values._scope_bindings[parent]
 
     first = values.derive(parents=parent, binding=ScopeBinding())
@@ -171,7 +175,7 @@ def test_derive_creates_fresh_scopes_without_changing_parent_binding() -> None:
     assert values.resolve(parent) == ("parent",)
     assert values.resolve(first) == values.resolve(second) == ("parent",)
 
-    remove = values.add(first, "private")
+    remove = values.register(first, "private")
     assert values.resolve(first) == ("private", "parent")
     assert values.resolve(second) == ("parent",)
     assert values.resolve(parent) == ("parent",)
@@ -183,16 +187,16 @@ def test_derive_creates_fresh_scopes_without_changing_parent_binding() -> None:
 def test_derive_many_configures_all_composes_on_one_scope(single: bool) -> None:
     parent = Scope(label="parent")
     tools, events, unconfigured = (
-        Compose.collect(),
-        Compose.collect(),
-        Compose.collect(),
+        Compose(factory=ValueLayer, query=collect_values),
+        Compose(factory=ValueLayer, query=collect_values),
+        Compose(factory=ValueLayer, query=collect_values),
     )
-    tools.add(parent, "parent tool")
-    events.add(parent, "parent event")
-    unconfigured.add(parent, "inherited")
+    tools.register(parent, "parent tool")
+    events.register(parent, "parent event")
+    unconfigured.register(parent, "inherited")
     identity = Identity()
     peer = events.derive(parents=(), binding=ScopeBinding(identity, blocked=True))
-    events.add(peer, "shared event")
+    events.register(peer, "shared event")
     scope = Compose.derive_many(
         label="derived",
         parents=parent if single else (parent,),
@@ -208,7 +212,7 @@ def test_derive_many_configures_all_composes_on_one_scope(single: bool) -> None:
     assert events.resolve(scope) == ("shared event",)
     assert unconfigured.resolve(scope) == ("inherited",)
     assert tools._scope_bindings[scope].identity is not identity
-    remove = tools.add(scope, "private tool")
+    remove = tools.register(scope, "private tool")
     assert tools.resolve(scope) == ("private tool",)
     assert tools.resolve(parent) == ("parent tool",)
     remove()
@@ -218,9 +222,9 @@ def test_derive_many_configures_all_composes_on_one_scope(single: bool) -> None:
 def test_derive_many_handles_c3_and_empty_configuration() -> None:
     root = Scope()
     left, right = root.fork(), root.fork()
-    values = Compose.collect()
-    values.add(left, "left")
-    values.add(right, "right")
+    values = Compose(factory=ValueLayer, query=collect_values)
+    values.register(left, "left")
+    values.register(right, "right")
     config = ScopeBinding(blocked=False)
     scope = Compose.derive_many(parents=(left, right), bindings={values: config})
     assert scope.mro == (scope, left, right, root)
@@ -233,7 +237,7 @@ def test_derive_many_handles_c3_and_empty_configuration() -> None:
 
 
 def test_derive_many_rejects_inconsistent_parents_without_installing_bindings() -> None:
-    values = Compose.collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     left, right = Scope(), Scope()
     xy, yx = Scope(parents=(left, right)), Scope(parents=(right, left))
     with pytest.raises(TypeError, match="consistent Scope C3"):
@@ -241,13 +245,13 @@ def test_derive_many_rejects_inconsistent_parents_without_installing_bindings() 
             parents=(xy, yx), bindings={values: ScopeBinding(blocked=True)}
         )
     assert not values._scope_bindings
-    assert not values.entries()
+    assert not tuple(values.layers())
 
 
 def test_internal_binding_is_idempotent_and_rejects_rebinding() -> None:
     left = Scope(label="left")
     right = Scope(label="right")
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     first = Identity()
     second = Identity()
 
@@ -257,34 +261,34 @@ def test_internal_binding_is_idempotent_and_rejects_rebinding() -> None:
         values._bind(left, ScopeBinding(second, blocked=False))
 
     values._bind(right, ScopeBinding(first, blocked=False))
-    values.add(right, "shared")
+    values.register(right, "shared")
     assert values.resolve(left) == ("shared",)
 
 
 def test_read_does_not_bind_and_first_write_prevents_later_rebinding() -> None:
     scope = Scope()
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     identity = Identity()
 
     assert values.resolve(scope) == ()
     values._bind(scope, ScopeBinding(identity, blocked=False))
-    remove = values.add(scope, "value")
+    remove = values.register(scope, "value")
     remove()
 
     assert values.resolve(scope) == ()
     with pytest.raises(ValueError, match="immutable"):
         values._bind(scope, ScopeBinding(Identity(), blocked=False))
-    values.add(scope, "new")
-    assert values.entries(scope)[0]["identity"] is identity
+    values.register(scope, "new")
+    assert values._scope_bindings[scope].identity is identity
 
     implicit = Scope()
-    values.add(implicit, "implicit")
+    values.register(implicit, "implicit")
     with pytest.raises(ValueError, match="immutable"):
         values._bind(implicit, ScopeBinding(identity, blocked=False))
 
 
 def test_empty_binding_does_not_retain_an_unreferenced_scope() -> None:
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     scope = values.derive(parents=Scope(), binding=ScopeBinding())
     scope_ref = weakref.ref(scope)
 
@@ -298,14 +302,14 @@ def test_empty_binding_does_not_retain_an_unreferenced_scope() -> None:
 def test_c3_lookup_visits_a_shared_identity_only_once() -> None:
     root = Scope(label="root")
     identity = Identity()
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
 
     left = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
     right = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
     child = Scope(label="child", parents=(left, right))
-    values.add(left, "left")
-    values.add(right, "right")
-    values.add(root, "root")
+    values.register(left, "left")
+    values.register(right, "right")
+    values.register(root, "root")
 
     assert values.resolve(child) == ("left", "right", "root")
 
@@ -320,22 +324,22 @@ def test_sparse_c3_reads_see_new_bindings_without_allocating_identities(
     right = root.fork()
     unbound = Scope(parents=(left, right))
     child = unbound.fork()
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
 
     assert values.resolve(child) == ()
     values._bind(left, ScopeBinding(identity, blocked=False))
     values._bind(right, ScopeBinding(identity, blocked=False))
-    remove = values.add(left, "shared")
+    remove = values.register(left, "shared")
     assert values.resolve(child) == ("shared",)
-    values.add(root, "root")
+    values.register(root, "root")
     identities_before = dict(values._scope_bindings)
     assert values.resolve(child) == ("shared", "root")
-    assert values.values(child, local=True) == ()
+    assert values.resolve(child, local=True) == ()
     assert dict(values._scope_bindings) == identities_before
 
     remove()
     assert values.resolve(child) == ("root",)
-    values.add(right, "new")
+    values.register(right, "new")
     assert values.resolve(child) == ("new", "root")
 
 
@@ -343,12 +347,12 @@ def test_compose_retains_scope_and_value_until_exact_disposal() -> None:
     class Value:
         pass
 
-    values = Compose[Value, tuple[Value, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     scope = Scope()
     value = Value()
     scope_ref = weakref.ref(scope)
     value_ref = weakref.ref(value)
-    dispose = values.add(scope, value)
+    dispose = values.register(scope, value)
 
     del scope
     del value
@@ -371,11 +375,11 @@ def test_compose_disposer_does_not_retain_an_already_removed_value() -> None:
     class Value:
         pass
 
-    values = Compose[Value, tuple[Value, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     scope = Scope()
     value = Value()
     value_ref = weakref.ref(value)
-    dispose = values.add(scope, value)
+    dispose = values.register(scope, value)
 
     dispose()
     del value
@@ -386,36 +390,37 @@ def test_compose_disposer_does_not_retain_an_already_removed_value() -> None:
 
 
 def test_bucket_is_removed_after_the_last_shared_identity_entry_leaves() -> None:
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     identity = Identity()
     left = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
     right = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
-    remove_left = values.add(left, "left")
+    remove_left = values.register(left, "left")
     bucket = values._buckets[identity]
-    remove_right = values.add(right, "right", position="prepend")
+    remove_right = values.register(right, "right")
     assert values._buckets[identity] is bucket
-    assert values.values(left) == ("right", "left")
+    assert values.resolve(left) == ("left", "right")
 
     remove_left()
     assert values._buckets[identity] is bucket
-    assert len(bucket) == 1
+    assert len(bucket.registrations) == 1
     remove_right()
-    assert not bucket
+    assert not bucket.registrations
+    assert not bucket.data
     assert not values._buckets
 
-    remove_new = values.add(left, "new")
+    remove_new = values.register(left, "new")
     assert values._buckets[identity] is not bucket
     remove_left()
     remove_right()
-    assert values.values(right) == ("new",)
+    assert values.resolve(right) == ("new",)
     remove_new()
     assert not values._buckets
 
 
 def test_compose_disposer_owns_compose_until_release() -> None:
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     compose_ref = weakref.ref(values)
-    remove = values.add(Scope(), "value")
+    remove = values.register(Scope(), "value")
     del values
     gc.collect()
     assert compose_ref() is not None
@@ -427,29 +432,30 @@ def test_compose_disposer_owns_compose_until_release() -> None:
 
 @pytest.mark.parametrize("keep_other_entry", [False, True])
 def test_value_finalizer_can_add_to_the_same_identity(keep_other_entry: bool) -> None:
-    values = Compose[object, tuple[object, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     identity = Identity()
     scope = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
     remove_new = []
 
     class Value:
         def __del__(self):
-            remove_new.append(values.add(scope, "new", position="prepend"))
+            remove_new.append(values.register(scope, "new"))
 
-    remove = values.add(scope, Value())
+    remove = values.register(scope, Value())
     bucket = values._buckets[identity]
     if keep_other_entry:
-        remove_other = values.add(scope, "other")
+        remove_other = values.register(scope, "other")
     remove()
     assert len(remove_new) == 1
     if keep_other_entry:
         assert values._buckets[identity] is bucket
-        assert values.values(scope) == ("new", "other")
+        assert values.resolve(scope) == ("other", "new")
         remove_other()
     else:
-        assert not bucket
+        assert not bucket.registrations
+        assert not bucket.data
         assert values._buckets[identity] is not bucket
-    assert values.values(scope) == ("new",)
+    assert values.resolve(scope) == ("new",)
     remove_new[0]()
     assert not values._buckets
 
@@ -457,9 +463,9 @@ def test_value_finalizer_can_add_to_the_same_identity(keep_other_entry: bool) ->
 def test_bucket_cleanup_failure_is_replayed_without_removing_a_new_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    values = Compose[str, tuple[str, ...]].collect()
+    values = Compose(factory=ValueLayer, query=collect_values)
     scope = Scope()
-    remove = values.add(scope, "old")
+    remove = values.register(scope, "old")
     original = Compose._remove
     error = ValueError("cleanup failed")
     calls = []
@@ -476,37 +482,13 @@ def test_bucket_cleanup_failure_is_replayed_without_removing_a_new_bucket(
     assert raised.value is error
     assert not values._buckets
 
-    remove_new = values.add(scope, "new")
+    remove_new = values.register(scope, "new")
     with pytest.raises(ValueError) as repeated:
         remove()
     assert repeated.value is error
     assert calls == ["cleanup"]
-    assert values.values(scope) == ("new",)
+    assert values.resolve(scope) == ("new",)
     remove_new()
-
-
-def test_clear_bucket_preserves_entries_added_by_old_value_finalizers() -> None:
-    values = Compose[object, tuple[object, ...]].collect()
-    scope = Scope()
-    remove_new = []
-
-    class Value:
-        def __del__(self):
-            remove_new.append(values.add(scope, "new"))
-
-    remove_first = values.add(scope, Value())
-    remove_second = values.add(scope, "second")
-    identity = values.entries(scope)[0]["identity"]
-    bucket = values._buckets[identity]
-    values._clear_bucket(identity)
-    assert not bucket
-    assert values._buckets[identity] is not bucket
-    remove_first()
-    remove_second()
-    assert len(remove_new) == 1
-    assert values.values(scope) == ("new",)
-    remove_new[0]()
-    assert not values._buckets
 
 
 def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> None:
@@ -528,20 +510,23 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
     assert not binding._data
 
 
-def test_unrelated_scopes_can_share_one_compose_without_visibility_leaks() -> None:
+def test_all_values_are_explicit_and_scoped_reads_do_not_leak() -> None:
     left = Scope(label="left")
     right = Scope(label="right")
     combined = Scope(label="combined", parents=(left, right))
-    values = Compose[str, tuple[str, ...]].collect()
-    values.add(left, "left")
-    values.add(right, "right")
+    values = Compose(factory=ValueLayer, query=collect_values)
+    values.register(left, "left")
+    values.register(right, "right")
 
     assert values.resolve(left) == ("left",)
     assert values.resolve(right) == ("right",)
     assert values.resolve(combined) == ("left", "right")
-    assert {entry["value"] for entry in values.entries()} == {"left", "right"}
+    assert {value for layer in values.layers() for value in layer.values()} == {
+        "left",
+        "right",
+    }
     with pytest.raises(ValueError, match="requires a Scope"):
-        values.entries(local=True)
+        tuple(values.layers(local=True))
 
 
 def test_context_fork_shares_scope_unless_one_is_explicit() -> None:
@@ -594,18 +579,18 @@ def test_context_can_shadow_a_compose_as_an_ordinary_leaf() -> None:
     tools_ref = R.resolve("tools")
     root = Context()
     root.declare(Schema({"tools": Schema.leaf(mode="register")}))
-    inherited = Compose[str, tuple[str, ...]].collect()
+    inherited = Compose(factory=ValueLayer, query=collect_values)
     root.register(tools_ref, inherited)
     child = root.fork(scope=root.scope.fork(label="child"))
 
-    inherited.add(root.scope, "root-tool")
-    inherited.add(child.scope, "agent-tool")
+    inherited.register(root.scope, "root-tool")
+    inherited.register(child.scope, "agent-tool")
     assert child.get(tools_ref) is inherited
     assert inherited.resolve(child.scope) == ("agent-tool", "root-tool")
 
-    isolated = Compose[str, tuple[str, ...]].collect()
+    isolated = Compose(factory=ValueLayer, query=collect_values)
     child.register(tools_ref, isolated)
-    isolated.add(child.scope, "isolated-tool")
+    isolated.register(child.scope, "isolated-tool")
     assert child.get(tools_ref) is isolated
     assert isolated.resolve(child.scope) == ("isolated-tool",)
 
@@ -614,24 +599,21 @@ def test_context_effect_owns_contributions_to_explicit_scopes() -> None:
     hooks_ref = R.resolve("hooks")
     root = Context()
     root.declare(Schema({"hooks": Schema.leaf(mode="register")}))
-    hooks = Compose[str, tuple[str, ...]].collect()
+    hooks = Compose(factory=ValueLayer, query=collect_values)
     root.register(hooks_ref, hooks)
     child = root.fork(scope=root.scope.fork(label="child"))
     external = Scope(label="external")
 
     remove_bound = child.effect(
-        lambda: child.get(hooks_ref).add(
+        lambda: child.get(hooks_ref).register(
             child.scope,
             "bound",
-            metadata={"source": "child"},
-            position="prepend",
         )
     )
-    child.effect(lambda: child.get(hooks_ref).add(external, "external"))
+    child.effect(lambda: child.get(hooks_ref).register(external, "external"))
 
     assert hooks.resolve(child.scope) == ("bound",)
     assert hooks.resolve(external) == ("external",)
-    assert hooks.entries(child.scope)[0]["metadata"] == {"source": "child"}
 
     remove_bound()
     remove_bound()
@@ -645,9 +627,9 @@ def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
     ref = R.resolve("hooks")
     ctx = Context()
     ctx.declare(R)
-    hooks = Compose[str, tuple[str, ...]].collect()
+    hooks = Compose(factory=ValueLayer, query=collect_values)
     ctx.set(ref, hooks)
-    hooks.add(ctx.scope, "handler")
+    hooks.register(ctx.scope, "handler")
 
     snapshot = Context()
     snapshot.declare(R)
@@ -655,3 +637,264 @@ def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
     assert snapshot.get(ref) is hooks
     assert hooks.resolve(ctx.scope) == ("handler",)
     assert hooks.resolve(snapshot.scope) == ()
+
+
+def test_query_is_optional_until_resolve_and_override_does_not_set_a_default() -> None:
+    scope = Scope()
+    values = Compose(factory=ValueLayer)
+    with pytest.raises(ValueError, match="requires a query"):
+        values.resolve(scope)
+    assert not tuple(values.layers(scope))
+    assert not values._scope_bindings
+    remove = values.register(scope, None)
+    assert values.resolve(scope, lambda layers: next(iter(layers))) == next(
+        iter(values.layers(scope))
+    )
+    with pytest.raises(ValueError, match="requires a query"):
+        values.resolve(scope)
+    remove()
+
+
+def test_visible_containers_are_live_but_collect_is_a_snapshot() -> None:
+    scope = Scope()
+    values = Compose(factory=ValueLayer, query=collect_values)
+    remove_first = values.register(scope, "first")
+    layer = next(iter(values.layers(scope)))
+    snapshot = values.resolve(scope)
+    remove_second = values.register(scope, "second")
+    assert next(iter(values.layers(scope))) is layer
+    assert tuple(layer.values()) == ("first", "second")
+    assert snapshot == ("first",)
+    remove_first()
+    remove_second()
+    assert not layer
+    assert not tuple(values.layers())
+
+
+def test_query_can_stop_before_reading_parent_bindings() -> None:
+    parent = Scope()
+    child = parent.fork()
+    values = Compose(factory=ValueLayer, query=first_value)
+    values.register(parent, "parent")
+    values.register(child, "child")
+
+    class Bindings(weakref.WeakKeyDictionary):
+        def get(self, scope, default=None):
+            if scope is parent:
+                pytest.fail("A short-circuit query must not visit later Scopes.")
+            return super().get(scope, default)
+
+    values._scope_bindings = Bindings(values._scope_bindings)
+    assert values.resolve(child) == "child"
+
+
+def test_factory_is_lazy_and_registration_failure_does_not_leave_a_bucket() -> None:
+    created = []
+
+    class CheckedLayer(ValueLayer):
+        def register(self, token, /, value):
+            if value == "conflict":
+                raise ValueError("conflicting registration")
+            super().register(token, value)
+
+    def factory():
+        data = CheckedLayer()
+        created.append(data)
+        return data
+
+    values = Compose(factory=factory)
+    scope = Scope()
+    assert tuple(values.layers(scope)) == ()
+    assert created == []
+    with pytest.raises(ValueError, match="conflicting"):
+        values.register(scope, "conflict")
+    assert len(created) == 1
+    assert not values._buckets
+    remove = values.register(scope, "accepted")
+    with pytest.raises(ValueError, match="conflicting"):
+        values.register(scope, "conflict")
+    assert len(created) == 2
+    assert tuple(next(iter(values.layers(scope))).values()) == ("accepted",)
+    assert len(values) == 1
+    remove()
+    assert not values._buckets
+
+
+def test_factory_failure_does_not_publish_data() -> None:
+    def factory():
+        raise ValueError("factory failed")
+
+    values = Compose(factory=factory)
+    with pytest.raises(ValueError, match="factory failed"):
+        values.register(Scope(), 1)
+    assert not values._buckets
+    assert len(values) == 0
+
+
+def test_custom_container_can_aggregate_zero_while_registrations_remain_live() -> None:
+    class Total:
+        def __init__(self):
+            self.amount = 0
+            self.contributions = {}
+
+        def __bool__(self):
+            pytest.fail("Container truthiness must not decide its lifetime.")
+
+        def register(self, token, /, amount):
+            self.contributions[token] = amount
+            self.amount += amount
+
+        def delete(self, token, /):
+            self.amount -= self.contributions.pop(token)
+
+    values = Compose(
+        factory=Total,
+        query=lambda layers: sum(layer.amount for layer in layers),
+    )
+    scope = Scope()
+    remove_positive = values.register(scope, 3)
+    remove_negative = values.register(scope, -3)
+    layer = next(iter(values.layers(scope)))
+    assert values.resolve(scope) == 0
+    assert len(values) == 2
+    remove_positive()
+    assert values.resolve(scope) == -3
+    assert next(iter(values.layers(scope))) is layer
+    remove_negative()
+    assert not values._buckets
+    assert len(values) == 0
+
+
+def test_custom_storage_controls_order_and_deletes_exact_duplicates() -> None:
+    class OrderedLayer(list):
+        def register(self, token, /, value, *, position="append"):
+            if position == "prepend":
+                self.insert(0, (token, value))
+            else:
+                self.append((token, value))
+
+        def delete(self, token, /):
+            self[:] = [entry for entry in self if entry[0] is not token]
+
+    values = Compose(
+        factory=OrderedLayer,
+        query=lambda layers: tuple(value for layer in layers for _, value in layer),
+    )
+    scope = Scope()
+    remove_first = values.register(scope, "same")
+    remove_middle = values.register(scope, "middle", position="prepend")
+    remove_last = values.register(scope, value="same", position="prepend")
+    assert values.resolve(scope) == ("same", "middle", "same")
+    remove_last()
+    remove_last()
+    assert values.resolve(scope) == ("middle", "same")
+    remove_first()
+    assert values.resolve(scope) == ("middle",)
+    remove_middle()
+    assert len(values) == 0
+
+
+def test_custom_delete_failure_is_shared_without_repeating_cleanup() -> None:
+    calls = []
+    error = ValueError("custom delete failed")
+
+    class FailingLayer(ValueLayer):
+        def delete(self, token, /):
+            calls.append(token)
+            super().delete(token)
+            raise error
+
+    values = Compose(factory=FailingLayer)
+    scope = Scope()
+    dispose = values.register(scope, "old")
+    with pytest.raises(ValueError) as first:
+        dispose()
+    assert first.value is error
+    assert not values._buckets
+    values.register(scope, "new")
+    with pytest.raises(ValueError) as second:
+        dispose()
+    assert second.value is error
+    assert len(calls) == 1
+    assert tuple(next(iter(values.layers(scope))).values()) == ("new",)
+
+
+def test_custom_keyed_storage_looks_up_one_name_and_restores_hidden_contributions() -> (
+    None
+):
+    class NamedLayer:
+        def __init__(self):
+            self.by_name = {}
+            self.names = {}
+
+        def register(self, token, /, name, value):
+            self.by_name.setdefault(name, {})[token] = value
+            self.names[token] = name
+
+        def delete(self, token, /):
+            name = self.names.pop(token)
+            entries = self.by_name[name]
+            del entries[token]
+            if not entries:
+                del self.by_name[name]
+
+    def find_search(layers):
+        for layer in layers:
+            entries = layer.by_name.get("search")
+            if entries:
+                return next(iter(entries.values()))
+        raise LookupError("search")
+
+    tools = Compose(
+        factory=NamedLayer,
+        query=find_search,
+    )
+    root = Scope()
+    child = root.fork()
+    remove_root = tools.register(root, "search", "root")
+    remove_other = tools.register(root, "unrelated", "other")
+    remove_child = tools.register(child, name="search", value="child")
+    remove_later = tools.register(child, "search", value="later")
+    assert tools.resolve(child) == "child"
+    remove_child()
+    assert tools.resolve(child) == "later"
+    remove_later()
+    assert tools.resolve(child) == "root"
+    remove_root()
+    with pytest.raises(LookupError, match="search"):
+        tools.resolve(child)
+    assert len(tools) == 1
+    remove_other()
+    assert not tuple(tools.layers())
+
+
+def test_layer_can_register_without_a_value_and_accept_framework_names_as_options() -> (
+    None
+):
+    class Flags:
+        def __init__(self, enabled):
+            self.enabled = enabled
+            self.options = {}
+
+        def register(self, token, /, **options):
+            self.options[token] = options
+
+        def delete(self, token, /):
+            del self.options[token]
+
+    values = Compose(factory=lambda: Flags(enabled=True))
+    scope = Scope()
+    remove_empty = values.register(scope)
+    remove_options = values.register(
+        scope, scope="business scope", token="business token"
+    )
+    layer = next(iter(values.layers(scope)))
+    assert layer.enabled
+    assert list(layer.options.values()) == [
+        {},
+        {"scope": "business scope", "token": "business token"},
+    ]
+    remove_empty()
+    assert len(layer.options) == 1
+    remove_options()
+    assert not tuple(values.layers())

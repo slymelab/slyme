@@ -166,15 +166,25 @@ A Context root holds a live `Schema` reference and owns an application data stor
 ```python
 from slyme.context import Compose, Context, Schema
 
+class ValueLayer(dict):
+    def register(self, token, /, value):
+        self[token] = value
+
+    def delete(self, token, /):
+        del self[token]
+
 R = Schema({"hooks": Schema.leaf(mode="register")})
 root = Context()
 root.declare(R)
-hooks = Compose[str, tuple[str, ...]].collect()
+hooks = Compose(
+    factory=ValueLayer,
+    query=lambda layers: tuple(value for layer in layers for value in layer.values()),
+)
 root.register(R.resolve("hooks"), hooks)
 agent = root.fork(scope=root.scope.fork(label="agent"))
 
-root.effect(lambda: hooks.add(root.scope, "root"))
-agent.effect(lambda: agent.get(R.resolve("hooks")).add(agent.scope, "agent"))
+root.effect(lambda: hooks.register(root.scope, "root"))
+agent.effect(lambda: agent.get(R.resolve("hooks")).register(agent.scope, "agent"))
 assert hooks.resolve(agent.scope) == ("agent", "root")
 
 agent.dispose()
@@ -182,7 +192,9 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
-Scope viewers and shared Context-binding identities track their owners directly in sets. Schema entries map declaration IDs to their original configs and cache the merged config; withdrawal invalidates this cache, and the next config read recomputes it from remaining declarations. Internal registration and cleanup methods remove empty ownership records and their data; Compose removes entries by unique token and drops empty buckets. Only operations exposed for explicit undo return disposers. A later registration can reuse the Scope or identity, but cleared data does not return.
+`Compose(*, factory, query=None)` creates one application-defined layer per active Identity. The `ComposeLayer` protocol requires synchronous `register(token, /, *args, **kwargs)` and `delete(token)` methods; inheriting the protocol is optional. Compose injects only the token and forwards business arguments unchanged. `resolve(scope, query=None)` uses a default or per-call query; `layers(scope=None, local=False)` lazily exposes layers, with no Scope selecting all active layers. Registration lifetimes determine layer cleanup, independently of its contents. The default Tree/Eval layers reject duplicate class registrations within the same Identity; use another layer to override an inherited handler. See [Compose](docs/src/guide/essentials/context.md#compose).
+
+Scope viewers and shared Context-binding identities track their owners directly in sets. Schema entries map declaration IDs to their original configs and cache the merged config; withdrawal invalidates this cache, and the next config read recomputes it from remaining declarations. Internal registration and cleanup methods remove empty ownership records and their data; Compose removes registrations by unique token and drops a layer when its final registration is withdrawn. Only operations exposed for explicit undo return disposers. A later registration can reuse the Scope or identity, but cleared data does not return.
 
 `Identity(label=None, blocked=False)` fixes shared storage identity and its fallback policy; equal labels do not share storage. `ScopeBinding(identity=Identity(), blocked=False)` adds immutable Scope-local policy, creating a private Identity by default. Both blocking flags default to False. `ctx.derive()` is equivalent to `ctx.fork(scope=ctx.scope.fork())`; omitted, `None`, or empty `bindings` create no explicit bindings. `ctx.derive(bindings={target: config})` creates an owned child with one fresh Scope for all configured targets: declared leaf paths or Compose objects. Each config is a ScopeBinding or an Identity; an Identity is shorthand for `ScopeBinding(identity=identity)`. Individual binding values cannot be `None`: `ScopeBinding()` selects private storage with fallback, `ScopeBinding(identity=shared)` shares storage, and `blocked=True` explicitly stops fallback. `compose.derive(parents=..., binding=...)` and `Compose.derive_many(parents=..., bindings=...)` create a Scope without lifecycle ownership and require explicit parents. Scope construction and derive APIs are keyword-only; parents accepts one Scope or a tuple, stored as a tuple. Context.derive defaults parents to the caller's Scope, but accepts another parent set or `()` independently of the child Context's lifecycle parent. Public APIs do not reconfigure existing Scopes. Both barriers survive payload cleanup. Clean plugin reloads require owned contributions and a clean base Scope; disposal does not undo arbitrary shared assignments or external effects.
 

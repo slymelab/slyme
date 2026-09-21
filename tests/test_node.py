@@ -437,7 +437,7 @@ async def test_evaluator_result_count_is_validated(
 
     ctx = Context()
     ctx.effect(
-        lambda: ctx.get(EVALUATORS_REF).add(
+        lambda: ctx.get(EVALUATORS_REF).register(
             ctx.scope, {int: evaluate if asynchronous else lambda ctx, values: result}
         )
     )

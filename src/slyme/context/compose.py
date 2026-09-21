@@ -12,47 +12,83 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Scope-aware reversible composition."""
+"""Scope-aware reversible registration in application-defined layers."""
 
 from __future__ import annotations
 
-import types
 import weakref
-from collections import OrderedDict
-from collections.abc import Callable, Hashable, Mapping
-from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Generic, ParamSpec, Protocol, TypeVar, overload
+
+from slyme.utils.execution import once
 
 from .scope import Identity, Scope, ScopeBinding
 
-__all__ = ["Compose"]
+__all__ = ["Compose", "ComposeLayer"]
 
-_T = TypeVar("_T")
+_P = ParamSpec("_P")
 _R = TypeVar("_R")
-_K = TypeVar("_K", bound=Hashable)
-_V = TypeVar("_V")
+_S = TypeVar("_S")
 
 
-@dataclass(frozen=True)
-class _ComposeEntry(Generic[_T]):
-    token: object
-    scope: Scope
-    identity: Identity
-    value: _T
-    metadata: Mapping[str, Any]
+class ComposeLayer(Protocol[_P]):
+    """Synchronous, token-addressed storage for one Identity.
+
+    register must leave data unchanged on failure. delete removes exactly that
+    registration. Neither operation explicitly reenters its owning Compose.
+    Compose alone calls these methods on the layers it owns.
+    Registration arguments after token belong entirely to the application.
+    """
+
+    def register(
+        self, token: object, /, *args: _P.args, **kwargs: _P.kwargs
+    ) -> None: ...
+
+    def delete(self, token: object, /) -> None: ...
 
 
-class Compose(Generic[_T, _R]):
-    """Store reversible values and combine those visible through Scope C3 order."""
+_L = TypeVar("_L", bound=ComposeLayer[...], covariant=True)
 
-    __slots__ = ("_buckets", "_resolver", "_scope_bindings", "__weakref__")
 
-    def __init__(self, resolver: Callable[[tuple[_T, ...]], _R]) -> None:
-        self._resolver = resolver
+@dataclass
+class _Bucket(Generic[_L]):
+    data: _L
+    registrations: dict[object, Scope] = field(default_factory=dict)
+
+
+class Compose(Generic[_L, _R]):
+    """Own registration tokens and expose visible layers in C3 order.
+
+    Each Identity receives one factory-created ComposeLayer. A layer receives
+    only its registration token and caller-supplied business arguments, never an
+    implicitly bound Compose, Scope, or Identity.
+
+    Queries receive live layers, not copies. Do not mutate the Compose
+    while iterating them; snapshot selected values before invoking user code.
+    Contributions retain their Scopes until their exact disposers run.
+    """
+
+    __slots__ = (
+        "_factory",
+        "_query",
+        "_buckets",
+        "_scope_bindings",
+        "__weakref__",
+    )
+
+    def __init__(
+        self,
+        *,
+        factory: Callable[[], _L],
+        query: Callable[[Iterable[_L]], _R] | None = None,
+    ) -> None:
+        self._factory = factory
+        self._query = query
         self._scope_bindings: weakref.WeakKeyDictionary[Scope, ScopeBinding] = (
             weakref.WeakKeyDictionary()
         )
-        self._buckets: dict[Identity, OrderedDict[object, _ComposeEntry[_T]]] = {}
+        self._buckets: dict[Identity, _Bucket[_L]] = {}
 
     def derive(
         self,
@@ -61,13 +97,7 @@ class Compose(Generic[_T, _R]):
         parents: Scope | tuple[Scope, ...],
         binding: ScopeBinding | Identity,
     ) -> Scope:
-        """Create a Scope configured for this Compose, leaving its parents unchanged.
-
-        ScopeBinding() selects private storage with ancestor fallback. Share
-        storage by supplying the same Identity directly or inside ScopeBinding.
-        A direct Identity uses the default unblocked Scope-local policy.
-        No Context or lifecycle is created; contributions require disposer ownership.
-        """
+        """Create a configured Scope without changing parents or owning cleanup."""
         return self.derive_many(label=label, parents=parents, bindings={self: binding})
 
     @staticmethod
@@ -77,11 +107,7 @@ class Compose(Generic[_T, _R]):
         parents: Scope | tuple[Scope, ...],
         bindings: Mapping[Compose[Any, Any], ScopeBinding | Identity],
     ) -> Scope:
-        """Configure all Composes on one new Scope, without lifecycle ownership.
-
-        An empty parent tuple creates an independent Scope. Binding values follow
-        derive() semantics: an Identity or an explicit ScopeBinding.
-        """
+        """Configure several Composes on one new Scope without lifecycle ownership."""
         scope = Scope(label=label, parents=parents)
         for compose, binding in bindings.items():
             compose._bind(
@@ -99,43 +125,68 @@ class Compose(Generic[_T, _R]):
                 "A Scope binding's identity and blocked policy are immutable."
             )
 
-    @classmethod
-    def one(cls) -> Compose[_T, _T]:
-        """Create a composition that selects the first visible value."""
-
-        def resolve(values: tuple[_T, ...]) -> _T:
-            if not values:
-                raise LookupError("Compose has no value visible from this Scope.")
-            return values[0]
-
-        return Compose(resolve)
-
-    @classmethod
-    def collect(cls) -> Compose[_T, tuple[_T, ...]]:
-        """Create a composition that returns every visible value in order."""
-        return Compose(lambda values: values)
-
-    @classmethod
-    def merge(cls) -> Compose[Mapping[_K, _V], dict[_K, _V]]:
-        """Create a composition that merges mappings with first value precedence."""
-
-        def resolve(values: tuple[Mapping[_K, _V], ...]) -> dict[_K, _V]:
-            result: dict[_K, _V] = {}
-            for value in values:
-                for key, item in value.items():
-                    if key not in result:
-                        result[key] = item
-            return result
-
-        return Compose(resolve)
-
-    def _scoped_entries(
-        self,
+    def register(
+        self: Compose[ComposeLayer[_P], _R],
         scope: Scope,
+        /,
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> Callable[[], None]:
+        """Forward business arguments with a unique token; return an exact disposer.
+
+        Disposers retain this Compose until called and replay a cleanup failure
+        without retrying. Removing the last registration drops its layer;
+        immutable Scope bindings survive independently of layer contents.
+        """
+        binding = self._scope_bindings.get(scope)
+        if binding is None:
+            binding = self._scope_bindings[scope] = ScopeBinding()
+        identity = binding.identity
+        bucket = self._buckets.get(identity)
+        if bucket is None:
+            bucket = _Bucket(self._factory())
+            self._buckets[identity] = bucket
+        token = object()
+        try:
+            bucket.data.register(token, *args, **kwargs)
+        except BaseException:
+            if not bucket.registrations:
+                del self._buckets[identity]
+            raise
+        bucket.registrations[token] = scope
+
+        @once
+        def dispose() -> None:
+            self._remove(identity, token)
+
+        return dispose
+
+    def _remove(self, identity: Identity, token: object) -> None:
+        bucket = self._buckets[identity]
+        scope = bucket.registrations.pop(token)
+        if not bucket.registrations:
+            # Detach before releasing payloads: finalizers may register a new layer.
+            del self._buckets[identity]
+        bucket.data.delete(token)
+        del scope
+
+    def layers(
+        self,
+        scope: Scope | None = None,
         *,
-        local: bool,
-    ) -> tuple[_ComposeEntry[_T], ...]:
-        entries: list[_ComposeEntry[_T]] = []
+        local: bool = False,
+    ) -> Iterable[_L]:
+        """Yield layers once per visible Identity, without creating data.
+
+        Omit scope to inspect all live layers. local=True selects only the
+        supplied Scope's Identity, including registrations through other Scopes
+        sharing it. Empty and duplicate-Identity bindings still apply barriers.
+        """
+        if scope is None:
+            if local:
+                raise ValueError("local=True requires a Scope.")
+            yield from (bucket.data for bucket in self._buckets.values())
+            return
         seen: set[Identity] = set()
         for current in (scope,) if local else scope.mro:
             binding = self._scope_bindings.get(current)
@@ -146,139 +197,40 @@ class Compose(Generic[_T, _R]):
                 seen.add(identity)
                 bucket = self._buckets.get(identity)
                 if bucket is not None:
-                    entries.extend(bucket.values())
+                    yield bucket.data
             if binding.blocked or identity.blocked:
                 break
-        return tuple(entries)
 
-    def add(
+    @overload
+    def resolve(
         self,
         scope: Scope,
-        value: _T,
-        *,
-        metadata: Mapping[str, Any] | None = None,
-        position: Literal["prepend", "append"] = "append",
-    ) -> Callable[[], None]:
-        """Add a value with exact disposal; the final release removes its bucket.
-
-        The disposer retains this Compose until called and reproduces a failed
-        release on subsequent calls without repeating its cleanup.
-        """
-        entry = self._insert(
-            scope,
-            value,
-            metadata=metadata,
-            position=position,
-        )
-        return self._disposer(entry)
-
-    def _insert(
-        self,
-        scope: Scope,
-        value: _T,
-        *,
-        metadata: Mapping[str, Any] | None = None,
-        position: Literal["prepend", "append"] = "append",
-    ) -> _ComposeEntry[_T]:
-        binding = self._scope_bindings.get(scope)
-        if binding is None:
-            binding = self._scope_bindings[scope] = ScopeBinding()
-        identity = binding.identity
-        token = object()
-        entry = _ComposeEntry(
-            token,
-            scope,
-            identity,
-            value,
-            types.MappingProxyType(dict(metadata or {})),
-        )
-        bucket = self._buckets.get(identity)
-        if bucket is None:
-            bucket = OrderedDict()
-            self._buckets[identity] = bucket
-        bucket[token] = entry
-        if position == "prepend":
-            bucket.move_to_end(token, last=False)
-        return entry
-
-    def _remove(self, identity: Identity, token: object) -> None:
-        current = self._buckets.get(identity)
-        if current is None:
-            return
-        # Detach an empty bucket before dropping the value: its finalizer may add.
-        entry = current.pop(token, None)
-        if not current:
-            del self._buckets[identity]
-        del entry
-
-    def _clear_bucket(self, identity: Identity) -> None:
-        bucket = self._buckets.pop(identity, None)
-        if bucket is not None:
-            bucket.clear()
-
-    def _disposer(
-        self,
-        entry: _ComposeEntry[_T],
-    ) -> Callable[[], None]:
-        compose: Compose[_T, _R] | None = self
-        identity = entry.identity
-        token = entry.token
-        error: BaseException | None = None
-
-        def dispose() -> None:
-            nonlocal compose, error
-            if compose is None:
-                if error is not None:
-                    raise error
-                return
-            current = compose
-            compose = None
-            try:
-                current._remove(identity, token)
-            except BaseException as failure:
-                error = failure
-                raise
-
-        return dispose
-
-    def values(self, scope: Scope, *, local: bool = False) -> tuple[_T, ...]:
-        """Return values from most-specific to least-specific Scope."""
-        return tuple(entry.value for entry in self._scoped_entries(scope, local=local))
-
-    def resolve(self, scope: Scope, *, local: bool = False) -> _R:
-        """Resolve values visible from a Scope."""
-        return self._resolver(self.values(scope, local=local))
-
-    def entries(
-        self,
-        scope: Scope | None = None,
+        query: None = None,
         *,
         local: bool = False,
-    ) -> tuple[Mapping[str, Any], ...]:
-        """Return immutable entry snapshots for introspection."""
-        if scope is None:
-            if local:
-                raise ValueError("local=True requires a Scope.")
-            scoped = tuple(
-                entry
-                for bucket in tuple(self._buckets.values())
-                for entry in bucket.values()
-            )
-        else:
-            scoped = self._scoped_entries(scope, local=local)
-
-        return tuple(
-            types.MappingProxyType(
-                {
-                    "id": entry.token,
-                    "scope": entry.scope,
-                    "identity": entry.identity,
-                    "value": entry.value,
-                    "metadata": entry.metadata,
-                }
-            )
-            for entry in scoped
-        )
+    ) -> _R: ...
+    @overload
+    def resolve(
+        self,
+        scope: Scope,
+        query: Callable[[Iterable[_L]], _S],
+        *,
+        local: bool = False,
+    ) -> _S: ...
+    def resolve(
+        self,
+        scope: Scope,
+        query: Callable[[Iterable[_L]], _S] | None = None,
+        *,
+        local: bool = False,
+    ) -> _R | _S:
+        """Apply the supplied query or the constructor's default to visible data."""
+        if query is None:
+            if self._query is None:
+                raise ValueError("Compose.resolve() requires a query.")
+            return self._query(self.layers(scope, local=local))
+        return query(self.layers(scope, local=local))
 
     def __len__(self) -> int:
-        return sum(len(bucket) for bucket in self._buckets.values())
+        """Return the number of live registrations, independent of layer contents."""
+        return sum(len(bucket.registrations) for bucket in self._buckets.values())

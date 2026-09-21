@@ -11,12 +11,18 @@ from slyme.context import (
     NODE_TREE_REF,
     Compose,
     Context,
+    Identity,
+    Ref,
     Schema,
     Scope,
     ScopeBinding,
 )
 from slyme.context.core import ContextPathError
-from slyme.context.default import DATA_RULES
+from slyme.context.default import (
+    DATA_RULES,
+    EvaluatorLayer,
+    TreeLayer,
+)
 from slyme.node import Auto, node
 from slyme.node.core import NODE_RULES
 from slyme.node.eval import eval_tree
@@ -56,14 +62,14 @@ def test_defaults_are_root_owned_and_forks_do_not_install_again() -> None:
     assert not child._lifecycle._owned
     assert tuple(left._lifecycle._owned) == (*baseline, child._lifecycle)
     data = left.get(DATA_TREE_REF)
-    child.effect(lambda: data.add(child.scope, TreeRules({Box: BOX_HANDLER})))
+    child.effect(lambda: data.register(child.scope, TreeRules({Box: BOX_HANDLER})))
     assert Box in data.resolve(left.scope).handlers
     assert Box not in right.get(DATA_TREE_REF).resolve(right.scope).handlers
     child.dispose()
     assert Box not in data.resolve(left.scope).handlers
     retained = [left.get(ref) for ref in (DATA_TREE_REF, NODE_TREE_REF, EVALUATORS_REF)]
     left.dispose()
-    assert all(not compose.entries(left.scope) for compose in retained)
+    assert all(not tuple(compose.layers(left.scope)) for compose in retained)
     assert not left._store._data
     assert all(not usage.viewers for usage in left._store._scope_usages.values())
     right.dispose()
@@ -85,18 +91,23 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
     with pytest.raises(ContextPathError):
         eval_tree(detached, [])
 
-    rules = Compose(TreeRules.merge)
+    rules = Compose(
+        factory=TreeLayer,
+        query=TreeLayer.merge,
+    )
     detached.register(DATA_TREE_REF, rules)
     detached.effect(
-        lambda: rules.add(detached.scope, root.get(DATA_TREE_REF).resolve(root.scope))
+        lambda: rules.register(
+            detached.scope, root.get(DATA_TREE_REF).resolve(root.scope)
+        )
     )
     assert detached.extract(["value"]) == [7]
     with pytest.raises(ContextPathError):
         eval_tree(detached, [])
-    evaluators = Compose.merge()
+    evaluators = Compose(factory=EvaluatorLayer, query=EvaluatorLayer.merge)
     detached.register(EVALUATORS_REF, evaluators)
     detached.effect(
-        lambda: evaluators.add(
+        lambda: evaluators.register(
             detached.scope, root.get(EVALUATORS_REF).resolve(root.scope)
         )
     )
@@ -104,7 +115,7 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
     root.dispose()
 
 
-def test_rule_composition_uses_c3_then_contribution_order() -> None:
+def test_rule_composition_uses_c3_and_rejects_duplicate_types_in_one_layer() -> None:
     root = Context()
     left = root.fork(scope=root.scope.fork())
     right = root.fork(scope=root.scope.fork())
@@ -112,26 +123,37 @@ def test_rule_composition_uses_c3_then_contribution_order() -> None:
     first = TreeHandler(lambda box: (("first",), TreeAux()), BOX_HANDLER.unflatten)
     second = TreeHandler(lambda box: (("second",), TreeAux()), BOX_HANDLER.unflatten)
     rules = root.get(DATA_TREE_REF)
-    remove_left = left.effect(lambda: rules.add(left.scope, TreeRules({Box: first})))
-    right.effect(lambda: rules.add(right.scope, TreeRules({Box: second})))
+    remove_left = left.effect(
+        lambda: rules.register(left.scope, TreeRules({Box: first}))
+    )
+    right.effect(lambda: rules.register(right.scope, TreeRules({Box: second})))
     assert rules.resolve(joined.scope).handlers[Box] is first
     remove_left()
     assert rules.resolve(joined.scope).handlers[Box] is second
-    right.effect(lambda: rules.add(right.scope, TreeRules({Box: first})))
+    with pytest.raises(ValueError, match="already registered"):
+        right.effect(lambda: rules.register(right.scope, TreeRules({Box: first})))
     assert rules.resolve(joined.scope).handlers[Box] is second
-    prepend = right.effect(
-        lambda: rules.add(right.scope, TreeRules({Box: first}), position="prepend")
+    override = right.derive()
+    remove_override = override.effect(
+        lambda: rules.register(override.scope, TreeRules({Box: first}))
     )
-    assert rules.resolve(joined.scope).handlers[Box] is first
-    prepend()
+    assert rules.resolve(override.scope).handlers[Box] is first
     assert rules.resolve(joined.scope).handlers[Box] is second
+    remove_override()
+    assert rules.resolve(override.scope).handlers[Box] is second
     root.dispose()
 
 
 def test_isolated_tree_rules_do_not_affect_schema_or_parent_rules() -> None:
     root = Context()
     isolated = root.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})
-    isolated.register(DATA_TREE_REF, Compose(TreeRules.merge))
+    isolated.register(
+        DATA_TREE_REF,
+        Compose(
+            factory=TreeLayer,
+            query=TreeLayer.merge,
+        ),
+    )
     isolated.declare({"group": {"value": Schema.leaf()}})
     isolated.set("group.value", 3)
     tree = [isolated.resolve("group.value")]
@@ -185,7 +207,9 @@ def test_evaluation_snapshots_evaluators_before_container_callbacks() -> None:
     ctx = Context()
     evaluators = ctx.get(EVALUATORS_REF)
     remove = ctx.effect(
-        lambda: evaluators.add(ctx.scope, {int: lambda ctx, values: [10] * len(values)})
+        lambda: evaluators.register(
+            ctx.scope, {int: lambda ctx, values: [10] * len(values)}
+        )
     )
 
     def flatten(box):
@@ -193,7 +217,7 @@ def test_evaluation_snapshots_evaluators_before_container_callbacks() -> None:
         return (box.value,), TreeAux()
 
     ctx.effect(
-        lambda: ctx.get(DATA_TREE_REF).add(
+        lambda: ctx.get(DATA_TREE_REF).register(
             ctx.scope, TreeRules({Box: TreeHandler(flatten, BOX_HANDLER.unflatten)})
         )
     )
@@ -212,10 +236,12 @@ async def test_inflight_evaluation_uses_captured_rules_until_reconstruction() ->
         return [value + 1 for value in values]
 
     remove_rules = ctx.effect(
-        lambda: ctx.get(DATA_TREE_REF).add(ctx.scope, TreeRules({Box: BOX_HANDLER}))
+        lambda: ctx.get(DATA_TREE_REF).register(
+            ctx.scope, TreeRules({Box: BOX_HANDLER})
+        )
     )
     remove_evaluator = ctx.effect(
-        lambda: ctx.get(EVALUATORS_REF).add(ctx.scope, {int: evaluate})
+        lambda: ctx.get(EVALUATORS_REF).register(ctx.scope, {int: evaluate})
     )
     pending = asyncio.create_task(await_result(eval_tree(ctx, Box(1))))
     await entered.wait()
@@ -236,10 +262,12 @@ def test_node_assembly_stays_independent_of_the_execution_context() -> None:
     graph = consume(value=Auto(Box(3)))
     left, right = Context(), Context()
     left.effect(
-        lambda: left.get(DATA_TREE_REF).add(left.scope, TreeRules({Box: BOX_HANDLER}))
+        lambda: left.get(DATA_TREE_REF).register(
+            left.scope, TreeRules({Box: BOX_HANDLER})
+        )
     )
     left.effect(
-        lambda: left.get(EVALUATORS_REF).add(
+        lambda: left.get(EVALUATORS_REF).register(
             left.scope, {int: lambda ctx, values: [value * 2 for value in values]}
         )
     )
@@ -260,7 +288,9 @@ def test_context_tree_operations_use_the_same_scoped_rules() -> None:
         BOX_HANDLER.unflatten,
     )
     plugin.effect(
-        lambda: root.get(DATA_TREE_REF).add(plugin.scope, TreeRules({Box: handler}))
+        lambda: root.get(DATA_TREE_REF).register(
+            plugin.scope, TreeRules({Box: handler})
+        )
     )
     root.update_tree(Box("group.value"), Box(5))
     assert root.extract(Box("group.value")) == Box(5)
@@ -290,3 +320,124 @@ def test_failed_default_installation_releases_partial_root(monkeypatch) -> None:
     assert not ctx._store._data
     assert all(not usage.viewers for usage in ctx._store._scope_usages.values())
     assert not ctx._lifecycle._owned
+
+
+@pytest.mark.parametrize(
+    ("ref", "wrap", "builtin"),
+    [
+        (DATA_TREE_REF, TreeRules, list),
+        (NODE_TREE_REF, TreeRules, list),
+        (EVALUATORS_REF, dict, Ref),
+    ],
+)
+def test_default_layers_reject_conflicting_batches_without_partial_registration(
+    ref, wrap, builtin
+) -> None:
+    ctx = Context()
+    compose = ctx.get(ref)
+    handler = (lambda ctx, values: values) if ref == EVALUATORS_REF else BOX_HANDLER
+    initial = compose.resolve(ctx.scope)
+    count = len(compose)
+
+    # The new class precedes the conflict: rejection must not reserve either key.
+    with pytest.raises(ValueError, match="already registered"):
+        compose.register(ctx.scope, wrap({Box: handler, builtin: handler}))
+    assert compose.resolve(ctx.scope) == initial
+    assert len(compose) == count
+
+    remove = ctx.effect(lambda: compose.register(ctx.scope, wrap({Box: handler})))
+    with pytest.raises(ValueError, match="already registered"):
+        compose.register(ctx.scope, wrap({Box: handler}))
+    remove()
+    remove()
+    assert compose.resolve(ctx.scope) == initial
+
+    ctx.effect(lambda: compose.register(ctx.scope, wrap({Box: handler})))
+    ctx.dispose()
+    assert not tuple(compose.layers())
+
+
+@pytest.mark.parametrize(
+    ("ref", "wrap"),
+    [(DATA_TREE_REF, TreeRules), (NODE_TREE_REF, TreeRules), (EVALUATORS_REF, dict)],
+)
+def test_shared_identity_rejects_duplicate_classes_but_child_layers_can_override(
+    ref, wrap
+) -> None:
+    root = Context()
+    compose = root.get(ref)
+    identity = Identity()
+    left = root.derive(bindings={compose: identity})
+    right = root.derive(bindings={compose: identity})
+    first = (lambda ctx, values: values) if ref == EVALUATORS_REF else BOX_HANDLER
+    second = (
+        (lambda ctx, values: [])
+        if ref == EVALUATORS_REF
+        else TreeHandler(lambda box: ((2,), TreeAux()), BOX_HANDLER.unflatten)
+    )
+    left.effect(lambda: compose.register(left.scope, wrap({Box: first})))
+    with pytest.raises(ValueError, match="already registered"):
+        right.effect(lambda: compose.register(right.scope, wrap({Box: second})))
+    inherited = compose.resolve(right.scope)
+
+    child = right.derive()
+    remove = child.effect(lambda: compose.register(child.scope, wrap({Box: second})))
+    effective = compose.resolve(child.scope)
+    handlers = effective if ref == EVALUATORS_REF else effective.handlers
+    assert handlers[Box] is second
+    remove()
+    assert compose.resolve(child.scope) == inherited
+
+    left.dispose()
+    right.effect(lambda: compose.register(right.scope, wrap({Box: second})))
+    root.dispose()
+    assert not tuple(compose.layers())
+
+
+def test_evaluator_layer_keeps_registration_keys_after_source_mapping_changes() -> None:
+    ctx = Context()
+    compose = ctx.get(EVALUATORS_REF)
+
+    def handler(ctx, values):
+        return values
+
+    source = {Box: handler}
+    remove = ctx.effect(lambda: compose.register(ctx.scope, source))
+    snapshot = compose.resolve(ctx.scope)
+    source.clear()
+    remove()
+    assert snapshot[Box] is handler
+    assert Box not in compose.resolve(ctx.scope)
+    ctx.effect(lambda: compose.register(ctx.scope, {Box: handler}))
+    ctx.dispose()
+
+
+def test_tree_layer_resolver_only_registrations_keep_order_and_exact_disposal() -> None:
+    ctx = Context()
+    compose = ctx.get(DATA_TREE_REF)
+
+    def first(value, aux):
+        return None
+
+    def second(value, aux):
+        return None
+
+    remove = ctx.effect(
+        lambda: compose.register(
+            ctx.scope, TreeRules(pre_resolvers=(first,), post_resolvers=(second,))
+        )
+    )
+    ctx.effect(
+        lambda: compose.register(
+            ctx.scope, TreeRules(pre_resolvers=(second,), post_resolvers=(first,))
+        )
+    )
+    effective = compose.resolve(ctx.scope)
+    assert effective.pre_resolvers == (first, second)
+    assert effective.post_resolvers == (second, first)
+    remove()
+    effective = compose.resolve(ctx.scope)
+    assert effective.pre_resolvers == (second,)
+    assert effective.post_resolvers == (first,)
+    assert effective.handlers == DATA_RULES.handlers
+    ctx.dispose()

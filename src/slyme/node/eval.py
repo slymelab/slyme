@@ -141,7 +141,7 @@ def ref_evaluator(
 
 @continuation
 def _evaluate_node(ctx: Context, node: Node) -> Generator[Any, Any, Any]:
-    child = ctx.fork(scope=ctx.scope.fork())
+    child = ctx.derive()
     try:
         return (yield node(child))
     finally:

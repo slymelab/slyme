@@ -10,7 +10,7 @@ Context coordinates component ownership; ContextView delegates access through Co
 
 Normal Context access checks its Lifecycle before delegating. During disposal, reads remain allowed until that Context finishes releasing, but writes, declarations, effects, and child creation are forbidden. Internal withdrawal and Scope release use exact ownership records and remain allowed during cleanup. Shared Schema and Store do not adopt one caller's lifecycle state: other active Contexts may continue using them.
 
-Each Context binding stores an immutable `ScopeBinding` per Scope. It selects an `Identity` and a local inheritance barrier; the Identity defines its own shared barrier. Mutable data records hold the current value, registration token, and retaining Scopes. Binding owns all operations on these records; writes do not expose them. Context storage is independent of Compose, which stores ordered contributions with metadata.
+Each Context binding stores an immutable `ScopeBinding` per Scope. It selects an `Identity` and a local inheritance barrier; the Identity defines its own shared barrier. Mutable data records hold the current value, registration token, and retaining Scopes. Binding owns all operations on these records; writes do not expose them. Context storage is independent of Compose, which manages reversible registrations in application-defined layers.
 
 Store enforces Schema write modes and the requirement that registration cannot overwrite a local value. Binding provides token-aware writes and deletions: a stored `None` token is unprotected, while a non-`None` token requires that exact token, including when the caller supplies `None`. Store registration creates a unique token and a `once()` disposer that calls Binding's `matches()` and `delete()`. `matches()` requires a local value and an exact token match, so an old disposer cannot delete a replacement, even an unprotected one.
 
@@ -396,41 +396,57 @@ Scope viewers and binding identities store their owners directly in sets. Contex
 
 ## Compose
 
-`Compose` stores ordered values under Compose-local identities and resolves them through Scope C3 order. `compose.derive(*, label=None, parents=..., binding=...)` creates a Scope configured for one Compose; static `Compose.derive_many(*, label=None, parents=..., bindings=...)` configures several Composes on the same new Scope. Both require explicit parents (one Scope or a tuple, including `()`), accept ScopeBinding or Identity values as Context.derive does, but not None, and create no Context or lifecycle owner. Use Context.derive for mixed field and Compose targets with an owned child Context. An unbound Scope's first write creates a private unblocked binding. Removing all entries does not reset binding configuration. Store a Compose object in Context when Nodes need to discover it through a Ref, then use `Context.effect()` to own the disposer returned by `Compose.add()`:
+`Compose` owns registration tokens, exact withdrawal, and Scope visibility. `Compose[L, R]` describes the application-defined layer and default query result types. Its constructor accepts `factory` and an optional `query`; each active Identity receives a fresh layer from the factory.
+
+The public `ComposeLayer` protocol requires two synchronous methods: `register(token, /, *args, **kwargs)` and `delete(token)`. Inheriting the protocol is optional. `compose.register(scope, /, *args, **kwargs)` selects the Identity and injects a unique token, forwarding all business arguments unchanged. A layer receives no implicit Compose, Scope, or Identity. Its registration signature determines the accepted arguments, including keyword options such as prepend/append or metadata. Capture fixed dependencies in the factory; perform cross-layer validation in an outer operation that explicitly receives Compose and Scope.
 
 ```python
 from slyme.context import Compose, Context, Schema
 
-R = Schema({"tools": Schema.leaf(mode="register")})
+class ValueLayer(dict):
+    def register(self, token, /, value):
+        self[token] = value
+
+    def delete(self, token, /):
+        del self[token]
+
 root = Context()
-root.declare(R)
-tools = Compose[str, tuple[str, ...]].collect()
-root.register(R.resolve("tools"), tools)
-
-root.effect(lambda: tools.add(root.scope, "read"))
-agent = root.fork(scope=root.scope.fork(label="agent"))
-remove_agent = agent.effect(
-    lambda: agent.get(R.resolve("tools")).add(
-        agent.scope, "shell", metadata={"plugin": "shell"}
-    )
+root.declare({"tools": Schema.leaf(mode="register")})
+tools = Compose(
+    factory=ValueLayer,
+    query=lambda layers: tuple(
+        value for layer in layers for value in layer.values()
+    ),
 )
+root.register("tools", tools)
+root.effect(lambda: tools.register(root.scope, "read"))
 
-assert agent.get(R.resolve("tools")) is tools
+agent = root.derive(label="agent")
+remove_agent = agent.effect(
+    lambda: agent.get("tools").register(agent.scope, value="shell")
+)
 assert tools.resolve(agent.scope) == ("shell", "read")
+assert tools.resolve(agent.scope, local=True) == ("shell",)
+assert tools.resolve(
+    agent.scope, lambda layers: sum(len(layer) for layer in layers)
+) == 2
+
 remove_agent()
 agent.dispose()
 root.dispose()
 ```
 
-`ctx.effect(lambda: ctx.get(ref).add(target_scope, value))` looks up the Compose through `ctx.scope` and explicitly selects `target_scope` for the contribution. The Context owns cleanup even when the target Scope is elsewhere. The returned disposer removes the original entry, even if the Context leaf is later replaced with another Compose. Direct `compose.add(scope, value)` leaves disposer management to the caller.
+`resolve(scope)` applies the constructor's query; `resolve(scope, query)` overrides it for that call and may return another type. With no default, callers must supply a query; otherwise resolve raises ValueError. Queries combine visible layers; each layer controls its own storage, indexes, and local ordering.
 
-`Compose.one()` selects the first visible value, `Compose.collect()` returns all visible values as a tuple, and `Compose.merge()` combines mappings while preserving the first visible value for each key. Passing a synchronous resolver to `Compose(...)` defines another result rule. Within one Scope, `position="prepend"` places an entry before existing entries; the default is `"append"`.
+`layers(scope)` lazily yields live layer objects, not flattened contributions or copies. Each shared Identity appears once in C3 order. `local=True` selects only the current Scope's Identity, including registrations through other Scopes sharing it. Every visited binding applies its Scope-local and Identity barriers after that layer, even if the layer is empty or its Identity was already visited. `layers()` without a Scope enumerates all active layers; `local=True` requires a Scope. Reads never create layers or bindings.
 
-`values(scope, local=True)` inspects the entries under that Scope's identity without resolving them, while `resolve(scope, local=True)` applies the resolver to the same set. If several Scopes share an identity, this local set includes entries contributed through all of them. C3 lookup reads each shared bucket once, but checks every Scope's barrier. Either barrier stops lookup after the current bucket, even when empty. `entries(scope)` follows the same visibility rules and returns immutable records with each entry's id, contributing Scope, identity, value, and metadata; omitting the Scope inspects every current entry. Compose retains those entries until their exact disposer runs, so lifecycle-owned contributions are the preferred cleanup mechanism.
+Do not structurally mutate a Compose during query iteration. Snapshot selected handlers before invoking them. Snapshots retain objects but do not extend their external resources' lifetimes. Inspect application data through the layer's own interface; Compose does not reconstruct original values from an aggregate-only layer.
 
-Each Compose identity's bucket is an ordered entry mapping. Removing an entry by its unique token also removes its bucket if empty; no separate count or per-entry internal release callback is maintained. Reusing an emptied identity creates a new bucket, and old disposers cannot remove its entries. A disposer retains its Compose until called; repeated calls reproduce a release failure without retrying cleanup. Context bindings clear identity data when its final retaining Scope is no longer observed. Both mechanisms preserve binding configuration independently of data cleanup.
+Each successful registration keeps a unique token and its contributing Scope alive until exact disposal. The final withdrawal removes the Identity's layer based on live registrations, not its size, computed result, or truthiness; `len(compose)` counts registrations. A rejected registration must leave layer data unchanged, and deletion must remove precisely that token. Layer methods must not explicitly reenter their Compose's mutations. Arbitrary layer changes are not transactionally rolled back. Cleanup failures propagate and are replayed by repeated disposer calls without retrying.
 
-A Context bound to a child Scope can replace an inherited Compose object at its Ref with a new Compose object to create an independent set. Compose remains an ordinary Context leaf.
+`compose.derive(*, label=None, parents=..., binding=...)` creates a configured Scope for one Compose; `Compose.derive_many(*, label=None, parents=..., bindings=...)` configures several Composes on one new Scope. Both require explicit parents, accept ScopeBinding or Identity values, and create no lifecycle owner. Use `ctx.derive()` for owned children with mixed Context field and Compose bindings. An unbound Scope's first registration fixes a private unblocked binding. Withdrawal does not reset that configuration.
+
+`ctx.effect(lambda: ctx.get(ref).register(target_scope, value))` looks up the Compose using ctx.scope, selects the registration layer explicitly, and owns withdrawal even if target_scope is unrelated. The disposer retains its original Compose target if the Context leaf is replaced. Direct compose.register leaves ownership to its caller. A child Context can register a different Compose at the same Context path to obtain an independent collection.
 
 ## Structured operations and projections
 
