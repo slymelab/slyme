@@ -430,6 +430,41 @@ def test_compose_disposer_owns_compose_until_release() -> None:
     remove()
 
 
+def test_layer_disposer_owns_cleanup_state_and_releases_it_after_disposal() -> None:
+    calls = []
+
+    class Value:
+        pass
+
+    class Layer:
+        def register(self, token, /, value):
+            def dispose():
+                assert value is value_ref()
+                assert scope_ref() is not None
+                assert not values._buckets
+                calls.append(token)
+
+            return dispose
+
+    values = Compose(factory=Layer)
+    scope, value = Scope(), Value()
+    scope_ref, value_ref = weakref.ref(scope), weakref.ref(value)
+    dispose = values.register(scope, value)
+    layer_ref = weakref.ref(next(iter(values.layers())))
+    del scope, value
+    gc.collect()
+    assert scope_ref() is not None
+    assert value_ref() is not None
+
+    dispose()
+    dispose()
+    gc.collect()
+    assert len(calls) == 1
+    assert scope_ref() is None
+    assert value_ref() is None
+    assert layer_ref() is None
+
+
 @pytest.mark.parametrize("keep_other_entry", [False, True])
 def test_value_finalizer_can_add_to_the_same_identity(keep_other_entry: bool) -> None:
     values = Compose(factory=ValueLayer, query=collect_values)
@@ -470,9 +505,9 @@ def test_bucket_cleanup_failure_is_replayed_without_removing_a_new_bucket(
     error = ValueError("cleanup failed")
     calls = []
 
-    def fail(self, identity, token):
+    def fail(self, identity, token, cleanup):
         calls.append("cleanup")
-        original(self, identity, token)
+        original(self, identity, token, cleanup)
         raise error
 
     with monkeypatch.context() as patch:
@@ -695,7 +730,7 @@ def test_factory_is_lazy_and_registration_failure_does_not_leave_a_bucket() -> N
         def register(self, token, /, value):
             if value == "conflict":
                 raise ValueError("conflicting registration")
-            super().register(token, value)
+            return super().register(token, value)
 
     def factory():
         data = CheckedLayer()
@@ -744,8 +779,10 @@ def test_custom_container_can_aggregate_zero_while_registrations_remain_live() -
             self.contributions[token] = amount
             self.amount += amount
 
-        def delete(self, token, /):
-            self.amount -= self.contributions.pop(token)
+            def dispose():
+                self.amount -= self.contributions.pop(token)
+
+            return dispose
 
     values = Compose(
         factory=Total,
@@ -773,8 +810,10 @@ def test_custom_storage_controls_order_and_deletes_exact_duplicates() -> None:
             else:
                 self.append((token, value))
 
-        def delete(self, token, /):
-            self[:] = [entry for entry in self if entry[0] is not token]
+            def dispose():
+                self[:] = [entry for entry in self if entry[0] is not token]
+
+            return dispose
 
     values = Compose(
         factory=OrderedLayer,
@@ -794,15 +833,20 @@ def test_custom_storage_controls_order_and_deletes_exact_duplicates() -> None:
     assert len(values) == 0
 
 
-def test_custom_delete_failure_is_shared_without_repeating_cleanup() -> None:
+def test_custom_disposer_failure_is_shared_without_repeating_cleanup() -> None:
     calls = []
-    error = ValueError("custom delete failed")
+    error = ValueError("custom cleanup failed")
 
     class FailingLayer(ValueLayer):
-        def delete(self, token, /):
-            calls.append(token)
-            super().delete(token)
-            raise error
+        def register(self, token, /, value):
+            cleanup = super().register(token, value)
+
+            def dispose():
+                calls.append(token)
+                cleanup()
+                raise error
+
+            return dispose
 
     values = Compose(factory=FailingLayer)
     scope = Scope()
@@ -825,18 +869,17 @@ def test_custom_keyed_storage_looks_up_one_name_and_restores_hidden_contribution
     class NamedLayer:
         def __init__(self):
             self.by_name = {}
-            self.names = {}
 
         def register(self, token, /, name, value):
             self.by_name.setdefault(name, {})[token] = value
-            self.names[token] = name
 
-        def delete(self, token, /):
-            name = self.names.pop(token)
-            entries = self.by_name[name]
-            del entries[token]
-            if not entries:
-                del self.by_name[name]
+            def dispose():
+                entries = self.by_name[name]
+                del entries[token]
+                if not entries:
+                    del self.by_name[name]
+
+            return dispose
 
     def find_search(layers):
         for layer in layers:
@@ -879,8 +922,10 @@ def test_layer_can_register_without_a_value_and_accept_framework_names_as_option
         def register(self, token, /, **options):
             self.options[token] = options
 
-        def delete(self, token, /):
-            del self.options[token]
+            def dispose():
+                del self.options[token]
+
+            return dispose
 
     values = Compose(factory=lambda: Flags(enabled=True))
     scope = Scope()

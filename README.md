@@ -170,8 +170,10 @@ class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
 
-    def delete(self, token, /):
-        del self[token]
+        def dispose():
+            del self[token]
+
+        return dispose
 
 R = Schema({"hooks": Schema.leaf(mode="register")})
 root = Context()
@@ -192,7 +194,7 @@ assert hooks.resolve(root.scope) == ("root",)
 root.dispose()
 ```
 
-`Compose(*, factory, query=None)` creates one application-defined layer per active Identity. The `ComposeLayer` protocol requires synchronous `register(token, /, *args, **kwargs)` and `delete(token)` methods; inheriting the protocol is optional. Compose injects only the token and forwards business arguments unchanged. `resolve(scope, query=None)` uses a default or per-call query; `layers(scope=None, local=False)` lazily exposes layers, with no Scope selecting all active layers. Registration lifetimes determine layer cleanup, independently of its contents. The default Tree/Eval layers reject duplicate class registrations within the same Identity; use another layer to override an inherited handler. See [Compose](docs/src/guide/essentials/context.md#compose).
+`Compose(*, factory, query=None)` creates one application-defined layer per active Identity. The `ComposeLayer` protocol requires a synchronous `register(token, /, *args, **kwargs)` method returning a synchronous disposer; inheriting the protocol is optional. Compose injects only the token and forwards business arguments unchanged. Compose invokes each layer disposer at most once and owns registration bookkeeping and empty-layer cleanup. `resolve(scope, query=None)` uses a default or per-call query; `layers(scope=None, local=False)` lazily exposes layers, with no Scope selecting all active layers. Registration lifetimes determine layer cleanup, independently of its contents. The default Tree/Eval layers reject duplicate class registrations within the same Identity; use another layer to override an inherited handler. See [Compose](docs/src/guide/essentials/context.md#compose).
 
 Scope viewers and shared Context-binding identities track their owners directly in sets. Schema entries map declaration IDs to their original configs and cache the merged config; withdrawal invalidates this cache, and the next config read recomputes it from remaining declarations. Internal registration and cleanup methods remove empty ownership records and their data; Compose removes registrations by unique token and drops a layer when its final registration is withdrawn. Only operations exposed for explicit undo return disposers. A later registration can reuse the Scope or identity, but cleared data does not return.
 

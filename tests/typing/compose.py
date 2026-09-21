@@ -44,11 +44,8 @@ class NamedLayer:
         value: int,
         *,
         position: Literal["prepend", "append"] = "append",
-    ) -> None:
-        pass
-
-    def delete(self, token: object, /) -> None:
-        pass
+    ) -> Callable[[], None]:
+        return lambda: None
 
 
 def check_signature(scope: Scope) -> None:

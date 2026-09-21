@@ -185,9 +185,11 @@ breaking changes when they are documented here.
 ### Changed
 
 - Compose accepts a layer factory and optional default query. `ComposeLayer`
-  requires synchronous `register(token, /, *args, **kwargs)` and `delete(token)`;
+  requires synchronous `register(token, /, *args, **kwargs)` returning a synchronous
+  disposer, with no separate deletion method;
   `Compose.register(scope, /, *args, **kwargs)` forwards business arguments and
-  returns an exact disposer. `layers()` exposes live layers without reconstruction.
+  returns an exact, single-execution disposer that also owns registration and
+  empty-layer cleanup. `layers()` exposes live layers without reconstruction.
   Default Tree/Eval layers reject duplicate exact classes within one Identity;
   child layers can override ancestors. Their static `merge()` methods produce
   query snapshots.

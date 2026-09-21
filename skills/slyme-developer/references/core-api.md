@@ -56,8 +56,10 @@ class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
 
-    def delete(self, token, /):
-        del self[token]
+        def dispose():
+            del self[token]
+
+        return dispose
 
 root_ctx = Context()
 root_ctx.declare(R)
@@ -86,7 +88,7 @@ root_ctx.dispose()
 
 Context reads follow the bound Scope's C3 order by default and accept `local=True` for that Scope's path-local Identity. Writes always target the identity bound to the Context's Scope; no Context CRUD method accepts a separate `scope=` argument. Contexts in one application root that share a Scope therefore see the same data. `ctx.derive(bindings={ref: ScopeBinding(identity=identity)})` creates an owned child with a new Scope and shared storage for that leaf. Bindings accept ScopeBinding or Identity, not None. A direct Identity is shorthand for `ScopeBinding(identity=identity)`; `ScopeBinding()` creates private storage. Both ScopeBinding and Identity default to unblocked; set `blocked=True` explicitly to stop fallback. Its keyword-only `label` and `parents` configure the new Scope. Parents defaults to `ctx.scope`; one Scope or a tuple selects other visibility parents, including `()` for an independent Scope, without changing lifecycle ownership. Independent Context roots keep separate data even when bound to the same Scope. `Context.register()` rejects an existing value at the bound identity.
 
-`Compose(factory=..., query=...)` creates one layer per active Identity. Layers implement synchronous `register(token, /, *args, **kwargs)` and `delete(token)` methods; Compose supplies only the token and forwards business arguments. `layers(scope)` exposes live layers in C3 order, `layers()` enumerates all active layers, and `resolve(scope, query=None)` applies the default or a per-call query. Keep cross-layer validation outside the layer. Metadata and registration options belong to the application layer's interface.
+`Compose(factory=..., query=...)` creates one layer per active Identity. Layers implement synchronous `register(token, /, *args, **kwargs)` returning a synchronous disposer; Compose supplies only the token and forwards business arguments. Compose owns registration bookkeeping, invokes each layer disposer at most once, and removes the layer after its final registration. Register through Compose rather than directly on its layers. `layers(scope)` exposes live layers in C3 order, `layers()` enumerates all active layers, and `resolve(scope, query=None)` applies the default or a per-call query. Keep cross-layer validation outside the layer. Metadata and registration options belong to the application layer's interface.
 
 Root Contexts install `TreeLayer` and `EvaluatorLayer` compositions from `slyme.context.default`. Their static `merge()` methods produce snapshots. Within one Identity, the same exact class cannot be registered twice; after withdrawal it can be registered again. Child layers can override inherited handlers without modifying the parent.
 

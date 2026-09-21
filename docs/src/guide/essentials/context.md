@@ -398,7 +398,7 @@ Scope viewers and binding identities store their owners directly in sets. Contex
 
 `Compose` owns registration tokens, exact withdrawal, and Scope visibility. `Compose[L, R]` describes the application-defined layer and default query result types. Its constructor accepts `factory` and an optional `query`; each active Identity receives a fresh layer from the factory.
 
-The public `ComposeLayer` protocol requires two synchronous methods: `register(token, /, *args, **kwargs)` and `delete(token)`. Inheriting the protocol is optional. `compose.register(scope, /, *args, **kwargs)` selects the Identity and injects a unique token, forwarding all business arguments unchanged. A layer receives no implicit Compose, Scope, or Identity. Its registration signature determines the accepted arguments, including keyword options such as prepend/append or metadata. Capture fixed dependencies in the factory; perform cross-layer validation in an outer operation that explicitly receives Compose and Scope.
+The public `ComposeLayer` protocol requires one synchronous method: `register(token, /, *args, **kwargs) -> Callable[[], None]`. Its returned disposer removes exactly that registration's business data. Inheriting the protocol is optional. `compose.register(scope, /, *args, **kwargs)` selects the Identity and injects a unique token, forwarding all business arguments unchanged. A layer receives no implicit Compose, Scope, or Identity. Its registration signature determines the accepted arguments, including keyword options such as prepend/append or metadata. Capture fixed dependencies in the factory; perform cross-layer validation in an outer operation that explicitly receives Compose and Scope.
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -407,8 +407,10 @@ class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
 
-    def delete(self, token, /):
-        del self[token]
+        def dispose():
+            del self[token]
+
+        return dispose
 
 root = Context()
 root.declare({"tools": Schema.leaf(mode="register")})
@@ -442,7 +444,7 @@ root.dispose()
 
 Do not structurally mutate a Compose during query iteration. Snapshot selected handlers before invoking them. Snapshots retain objects but do not extend their external resources' lifetimes. Inspect application data through the layer's own interface; Compose does not reconstruct original values from an aggregate-only layer.
 
-Each successful registration keeps a unique token and its contributing Scope alive until exact disposal. The final withdrawal removes the Identity's layer based on live registrations, not its size, computed result, or truthiness; `len(compose)` counts registrations. A rejected registration must leave layer data unchanged, and deletion must remove precisely that token. Layer methods must not explicitly reenter their Compose's mutations. Arbitrary layer changes are not transactionally rolled back. Cleanup failures propagate and are replayed by repeated disposer calls without retrying.
+Each successful registration keeps a unique token and its contributing Scope alive until exact disposal. Compose returns a `once()` wrapper that removes its registration record, detaches the layer if this was its final registration, invokes the layer disposer, and releases the Scope. The layer disposer needs no separate `once()` wrapper. Layer cleanup depends on live registrations, not its size, computed result, or truthiness; `len(compose)` counts registrations. A rejected registration must leave layer data unchanged. Register through Compose, not directly on layers returned by queries. Layer registration and disposal must not explicitly reenter their Compose's mutations. Arbitrary layer changes are not transactionally rolled back. Cleanup failures propagate and are replayed by repeated disposer calls without retrying.
 
 `compose.derive(*, label=None, parents=..., binding=...)` creates a configured Scope for one Compose; `Compose.derive_many(*, label=None, parents=..., bindings=...)` configures several Composes on one new Scope. Both require explicit parents, accept ScopeBinding or Identity values, and create no lifecycle owner. Use `ctx.derive()` for owned children with mixed Context field and Compose bindings. An unbound Scope's first registration fixes a private unblocked binding. Withdrawal does not reset that configuration.
 

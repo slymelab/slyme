@@ -35,17 +35,16 @@ _S = TypeVar("_S")
 class ComposeLayer(Protocol[_P]):
     """Synchronous, token-addressed storage for one Identity.
 
-    register must leave data unchanged on failure. delete removes exactly that
-    registration. Neither operation explicitly reenters its owning Compose.
-    Compose alone calls these methods on the layers it owns.
+    register returns a synchronous disposer for exactly that registration and
+    must leave data unchanged on failure. Neither registration nor disposal
+    explicitly reenters its owning Compose. Compose alone registers on its layers
+    and invokes each returned disposer at most once.
     Registration arguments after token belong entirely to the application.
     """
 
     def register(
         self, token: object, /, *args: _P.args, **kwargs: _P.kwargs
-    ) -> None: ...
-
-    def delete(self, token: object, /) -> None: ...
+    ) -> Callable[[], None]: ...
 
 
 _L = TypeVar("_L", bound=ComposeLayer[...], covariant=True)
@@ -148,7 +147,7 @@ class Compose(Generic[_L, _R]):
             self._buckets[identity] = bucket
         token = object()
         try:
-            bucket.data.register(token, *args, **kwargs)
+            cleanup = bucket.data.register(token, *args, **kwargs)
         except BaseException:
             if not bucket.registrations:
                 del self._buckets[identity]
@@ -157,17 +156,19 @@ class Compose(Generic[_L, _R]):
 
         @once
         def dispose() -> None:
-            self._remove(identity, token)
+            self._remove(identity, token, cleanup)
 
         return dispose
 
-    def _remove(self, identity: Identity, token: object) -> None:
+    def _remove(
+        self, identity: Identity, token: object, cleanup: Callable[[], None]
+    ) -> None:
         bucket = self._buckets[identity]
         scope = bucket.registrations.pop(token)
         if not bucket.registrations:
             # Detach before releasing payloads: finalizers may register a new layer.
             del self._buckets[identity]
-        bucket.data.delete(token)
+        cleanup()
         del scope
 
     def layers(

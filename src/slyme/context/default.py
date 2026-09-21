@@ -20,7 +20,7 @@ compositions are installed separately for each root Context.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING
@@ -51,15 +51,17 @@ class TreeLayer:
     rules: dict[object, TreeRules] = field(default_factory=dict, init=False)
     _classes: set[type] = field(default_factory=set, init=False)
 
-    def register(self, token: object, /, rules: TreeRules) -> None:
+    def register(self, token: object, /, rules: TreeRules) -> Callable[[], None]:
         for cls in rules.handlers:
             if cls in self._classes:
                 raise ValueError(f"Type {cls!r} is already registered in this layer.")
         self.rules[token] = rules
         self._classes.update(rules.handlers)
 
-    def delete(self, token: object, /) -> None:
-        self._classes.difference_update(self.rules.pop(token).handlers)
+        def dispose() -> None:
+            self._classes.difference_update(self.rules.pop(token).handlers)
+
+        return dispose
 
     @staticmethod
     def merge(layers: Iterable[TreeLayer]) -> TreeRules:
@@ -74,23 +76,21 @@ class EvaluatorLayer:
     """Evaluator registrations with one handler per exact class in this layer."""
 
     handlers: dict[type, BatchEvaluatorFunc] = field(default_factory=dict, init=False)
-    _registrations: dict[object, tuple[type, ...]] = field(
-        default_factory=dict, init=False
-    )
 
     def register(
         self, token: object, /, handlers: Mapping[type, BatchEvaluatorFunc]
-    ) -> None:
+    ) -> Callable[[], None]:
         classes = tuple(handlers)
         for cls in classes:
             if cls in self.handlers:
                 raise ValueError(f"Type {cls!r} is already registered in this layer.")
         self.handlers.update(handlers)
-        self._registrations[token] = classes
 
-    def delete(self, token: object, /) -> None:
-        for cls in self._registrations.pop(token):
-            del self.handlers[cls]
+        def dispose() -> None:
+            for cls in classes:
+                del self.handlers[cls]
+
+        return dispose
 
     @staticmethod
     def merge(layers: Iterable[EvaluatorLayer]) -> dict[type, BatchEvaluatorFunc]:

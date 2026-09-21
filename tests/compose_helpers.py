@@ -1,6 +1,6 @@
 """Application-defined storage and queries used by composition tests."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import TypeVar
 
 _T = TypeVar("_T")
@@ -9,11 +9,13 @@ _V = TypeVar("_V")
 
 
 class ValueLayer(dict[object, _T]):
-    def register(self, token: object, /, value: _T) -> None:
+    def register(self, token: object, /, value: _T) -> Callable[[], None]:
         self[token] = value
 
-    def delete(self, token: object, /) -> None:
-        del self[token]
+        def dispose() -> None:
+            del self[token]
+
+        return dispose
 
 
 def collect_values(layers: Iterable[ValueLayer[_T]]) -> tuple[_T, ...]:

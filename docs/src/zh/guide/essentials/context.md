@@ -386,7 +386,7 @@ Scope viewer 和 binding identity 直接使用集合记录持有者。Context di
 
 `Compose` 负责登记 token、精确撤销和 Scope 可见性。`Compose[L, R]` 分别描述应用定义的 Layer 和默认 query 的结果类型。构造函数接受 `factory` 和可选的 `query`；每个活跃 Identity 都通过 factory 创建独立的 Layer。
 
-公开的 `ComposeLayer` 协议只要求两个同步方法：`register(token, /, *args, **kwargs)` 和 `delete(token)`，不要求继承该协议。`compose.register(scope, /, *args, **kwargs)` 选择 Identity、注入唯一 token，并原样转发所有业务参数。Layer 不接收隐式 Compose、Scope 或 Identity，其 register 签名决定可接受的业务参数，包括 prepend/append、metadata 等关键字选项。固定依赖可以由 factory 闭包提供；跨层检查放在显式接收 Compose 和 Scope 的上层操作中。
+公开的 `ComposeLayer` 协议只要求一个同步方法：`register(token, /, *args, **kwargs) -> Callable[[], None]`，返回的 disposer 精确移除本次登记的业务数据，不要求继承该协议。`compose.register(scope, /, *args, **kwargs)` 选择 Identity、注入唯一 token，并原样转发所有业务参数。Layer 不接收隐式 Compose、Scope 或 Identity，其 register 签名决定可接受的业务参数，包括 prepend/append、metadata 等关键字选项。固定依赖可以由 factory 闭包提供；跨层检查放在显式接收 Compose 和 Scope 的上层操作中。
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -395,8 +395,10 @@ class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
 
-    def delete(self, token, /):
-        del self[token]
+        def dispose():
+            del self[token]
+
+        return dispose
 
 root = Context()
 root.declare({"tools": Schema.leaf(mode="register")})
@@ -430,7 +432,7 @@ root.dispose()
 
 不要在查询迭代期间修改 Compose 的结构。调用 handler 前先保存所选 handler 的快照。快照持有对象，但不会延长其外部资源的生命周期。通过 Layer 自己的接口检查业务数据；Compose 不会从仅保存聚合结果的 Layer 重建原始值。
 
-每次成功登记都保留唯一 token 和贡献来源 Scope，直到精确撤销。最终登记撤销后删除 Identity 的 Layer；判断依据是登记存活状态，而不是层的大小、计算结果或真假值。`len(compose)` 返回活跃登记数量。拒绝登记时必须保持层数据不变；删除必须精确对应 token。Layer 方法不得显式重入所属 Compose 的修改操作，框架不对任意层内修改提供事务回滚。清理失败会抛给调用方；重复调用 disposer 重现同一错误，但不重试清理。
+每次成功登记都保留唯一 token 和贡献来源 Scope，直到精确撤销。Compose 返回 `once()` 包装的 disposer，负责移除登记记录，在最终登记退出时移除层，调用 Layer disposer，最后释放 Scope。Layer disposer 不需要另行包装 `once()`。层的清理依据是登记存活状态，而不是层的大小、计算结果或真假值；`len(compose)` 返回活跃登记数量。拒绝登记时必须保持层数据不变。登记应通过 Compose，不要直接调用查询返回的 Layer 的 register。Layer 登记和撤销不得显式重入所属 Compose 的修改操作，框架不对任意层内修改提供事务回滚。清理失败会抛给调用方；重复调用 disposer 重现同一错误，但不重试清理。
 
 `compose.derive(*, label=None, parents=..., binding=...)` 为一个 Compose 创建配置好的 Scope；`Compose.derive_many(*, label=None, parents=..., bindings=...)` 在一个新 Scope 上配置多个 Compose。两者都要求显式 parents，接受 ScopeBinding 或 Identity，且不创建生命周期所有者。使用 `ctx.derive()` 创建受拥有的子 Context，同时配置 Context 字段和 Compose 绑定。未绑定的 Scope 首次登记时固定为私有、未阻断的绑定；撤销不会重置该配置。
 
