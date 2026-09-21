@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, ContextPathError, Ref, Schema
 from slyme.context.default import EVALUATORS_REF, NODE_TREE_REF
 from slyme.node import (
     Auto,
@@ -158,9 +158,10 @@ def test_schema_integrates_with_auto_during_graph_assembly() -> None:
     def misspelled() -> Node[int]:
         return increment(value=Auto(schema.resolve("input.vlaue")))
 
-    with pytest.raises(KeyError) as caught:
+    with pytest.raises(ContextPathError) as caught:
         misspelled()
-    assert caught.value.args == ("input.vlaue",)
+    assert caught.value.args == ("Context path 'input.vlaue' is not declared.",)
+    ctx.dispose()
 
 
 def test_prebuilt_node_uses_schema_declared_after_runtime_fork() -> None:

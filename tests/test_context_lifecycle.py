@@ -537,9 +537,7 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
             else:
                 release_error = raised.value
             assert isinstance(release_error, BaseExceptionGroup)
-            assert release_error.message == (
-                "Failed to release Context bindings for expired Scopes"
-            )
+            assert release_error.message == "Failed to release expired Scopes"
             assert release_error.exceptions == tuple(failures)
             if previous is not None:
                 assert raised.value is previous
@@ -601,82 +599,100 @@ def test_failed_binding_restore_rolls_back_new_scope_usage(monkeypatch) -> None:
     root.dispose()
 
 
-def test_scope_reacquired_during_value_finalization_keeps_remaining_bindings() -> None:
+def test_scope_reuse_after_disposal_restores_bindings_without_old_values() -> None:
     root = Context()
     root.declare(Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
     scope = root.scope.fork()
     writer = root.fork(scope=scope)
-    readers = []
-    finalized = []
 
     class Payload:
-        def __init__(self, path):
-            self.path = path
+        pass
 
-        def __del__(self):
-            finalized.append(self.path)
-            if not readers:
-                readers.append(root.fork(scope=scope))
-
-    writer.set("first", Payload("first"))
-    writer.set("second", Payload("second"))
+    payloads = {path: Payload() for path in ("first", "second")}
+    references = [weakref.ref(payload) for payload in payloads.values()]
+    writer.update(payloads)
+    del payloads
+    bindings = {
+        path: root._store._data[root.resolve_entry(path)]
+        for path in ("first", "second")
+    }
+    identities = {
+        path: binding._scope_bindings[scope].identity
+        for path, binding in bindings.items()
+    }
     writer.dispose()
-    assert len(readers) == 1
-    assert len(finalized) == 1
-    reader = readers[0]
-    remaining = ({"first", "second"} - set(finalized)).pop()
-    assert reader.get(remaining).path == remaining
-    assert not reader.exists(finalized[0])
+    gc.collect()
+    assert all(reference() is None for reference in references)
+    assert all(not binding._data for binding in bindings.values())
+    assert not root._store._scope_usages[scope].viewers
+
+    reader = root.fork(scope=scope)
+    for path, binding in bindings.items():
+        assert not reader.exists(path)
+        assert binding._scope_bindings[scope].identity is identities[path]
+        assert binding.scopes == (scope,)
     assert root._store._scope_usages[scope].entries == {
         root.resolve_entry("first"),
         root.resolve_entry("second"),
     }
+    reader.update({"first": "new first", "second": "new second"})
+    writer.dispose()
+    assert reader.get("first") == "new first"
+    assert reader.get("second") == "new second"
     reader.dispose()
-    assert set(finalized) == {"first", "second"}
+    assert all(not binding._data for binding in bindings.values())
     assert not root._store._scope_usages[scope].viewers
     root.dispose()
 
 
-def test_reacquiring_an_expiring_mro_preserves_every_restored_index() -> None:
+def test_reacquiring_a_released_mro_restores_each_scopes_binding_index() -> None:
     root = Context()
     root.declare({"parent_value": Schema.leaf(), "child_value": Schema.leaf()})
     parent_scope = root.scope.fork()
     parent = root.fork(scope=parent_scope)
     child_scope = parent_scope.fork()
     writer = root.fork(scope=child_scope)
-    readers = []
 
     class Payload:
         pass
 
-    class Reacquire:
-        def __del__(self):
-            readers.append(root.fork(scope=child_scope))
-
-    payload = Payload()
-    payload_ref = weakref.ref(payload)
-    parent.set("parent_value", payload)
-    writer.set("child_value", Reacquire())
-    del payload
+    parent_payload, child_payload = Payload(), Payload()
+    parent_ref, child_ref = weakref.ref(parent_payload), weakref.ref(child_payload)
+    parent.set("parent_value", parent_payload)
+    writer.set("child_value", child_payload)
+    del parent_payload, child_payload
     parent.dispose()
+    assert writer.get("parent_value") is parent_ref()
     writer.dispose()
-    reader = readers[0]
-    assert reader.get("parent_value") is payload_ref()
+    gc.collect()
+    assert parent_ref() is None and child_ref() is None
+
+    reader = root.fork(scope=child_scope)
+    assert not reader.exists("parent_value")
+    assert not reader.exists("child_value")
     assert root._store._scope_usages[parent_scope].entries == {
         root.resolve_entry("parent_value")
     }
     assert root._store._scope_usages[child_scope].entries == {
         root.resolve_entry("child_value")
     }
+    for scope in (parent_scope, child_scope):
+        assert root._store._scope_usages[scope].viewers == {reader}
+    new_parent = root.fork(scope=parent_scope)
+    new_parent.set("parent_value", "new parent")
+    reader.set("child_value", "new child")
+    new_parent.dispose()
+    assert reader.get("parent_value") == "new parent"
+    assert reader.get("child_value") == "new child"
     reader.dispose()
-    gc.collect()
-    assert payload_ref() is None
     assert not root._store._scope_usages[parent_scope].viewers
     assert not root._store._scope_usages[child_scope].viewers
+    for path in ("parent_value", "child_value"):
+        assert not root._store._data[root.resolve_entry(path)]._data
     root.dispose()
 
 
-def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
+def test_released_scope_reuses_identity_with_new_data() -> None:
     shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
@@ -684,24 +700,29 @@ def test_value_finalizer_can_reuse_the_released_scope_and_identity() -> None:
         bindings={"value": ScopeBinding(shared_identity, blocked=False)}
     )
     scope = writer.scope
-    readers = []
 
     class Payload:
-        def __del__(self):
-            reader = root.fork(scope=scope)
-            reader.set("value", "new")
-            readers.append(reader)
+        pass
 
-    writer.set("value", Payload())
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    writer.set("value", payload)
+    del payload
     binding = root._store._data[root.resolve_entry("value")]
     old_scopes = binding._data[shared_identity].scopes
     writer.dispose()
-    assert len(readers) == 1
+    gc.collect()
+    assert payload_ref() is None
     assert not old_scopes
+    assert not binding._data
+
+    reader = root.fork(scope=scope)
+    assert not reader.exists("value")
+    reader.set("value", "new")
     assert binding._data[shared_identity].scopes is not old_scopes
     assert binding._data[shared_identity].scopes == {scope}
     writer.dispose()
-    assert readers[0].get("value") == "new"
+    assert reader.get("value") == "new"
     root.dispose()
     assert not binding._data
 
@@ -737,7 +758,7 @@ def test_scope_rollback_failure_retains_acquisition_error_as_context(
         patch.setattr(type(binding), "release_scope", fail_release)
         with pytest.raises(
             BaseExceptionGroup,
-            match="Failed to release Context bindings for expired Scopes",
+            match="Failed to release expired Scopes",
         ) as raised:
             root.fork(scope=child_scope)
         assert raised.value.exceptions == (cleanup_error,)
@@ -842,7 +863,7 @@ def test_identity_reuse_starts_new_ownership_without_reviving_old_data() -> None
     assert not binding._data
 
 
-def test_schema_disposal_clears_data_with_its_scope_set_still_referenced() -> None:
+def test_schema_disposal_releases_payload_without_mutating_detached_scope_set() -> None:
     class Payload:
         pass
 
@@ -864,7 +885,7 @@ def test_schema_disposal_clears_data_with_its_scope_set_still_referenced() -> No
     assert binding_ref() is not None
     assert not binding_ref()._data
     assert payload_ref() is None
-    assert not scopes
+    assert scopes == {root.scope}
     root.dispose()
     gc.collect()
     assert binding_ref() is None

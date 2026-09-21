@@ -74,6 +74,9 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Aligned Node and Wrapper deletion documentation and tests with idempotent
+  removal of absent bindings. Context regression tests cover explicit Scope
+  reuse after disposal, Schema withdrawal, and collection of detached values.
 - Retained sparse binding history in weak-key Scope usage records. The final
   viewer releases identity data without discarding the index; reusing a Scope
   restores only its indexed bindings and prunes withdrawn entries, without

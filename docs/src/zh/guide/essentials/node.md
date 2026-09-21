@@ -129,7 +129,7 @@ assert root(Context()) == 11
 assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
 ```
 
-使用 `get(name)` 读取绑定，使用 `set(name, value)` 保存任意绑定，使用 `delete(name)` 删除绑定。不存在的 key 会抛出 `KeyError`，除非通过 `get(name, default)` 提供回退值；回退值可以是包括 `None` 在内的任意值。返回回退值不会新增绑定，已有值（包括 `None`）始终优先。这些操作不会读取函数默认值。实时、只读的 `params` mapping 只包含已保存的绑定。`node(ctx, **kwargs)` 和 `node.acall(ctx, **kwargs)` 在 Auto 求值前，为本次调用浅覆盖绑定，不修改 `params`，也不合并嵌套容器。参数名可以与框架属性重合，因为参数不会投影为对象属性。
+使用 `get(name)` 读取绑定，使用 `set(name, value)` 保存任意绑定，使用 `delete(name)` 删除绑定。删除不存在的绑定不做任何操作。读取不存在的 key 会抛出 `KeyError`，除非通过 `get(name, default)` 提供回退值；回退值可以是包括 `None` 在内的任意值。返回回退值不会新增绑定，已有值（包括 `None`）始终优先。这些操作不会读取函数默认值。实时、只读的 `params` mapping 只包含已保存的绑定。`node(ctx, **kwargs)` 和 `node.acall(ctx, **kwargs)` 在 Auto 求值前，为本次调用浅覆盖绑定，不修改 `params`，也不合并嵌套容器。参数名可以与框架属性重合，因为参数不会投影为对象属性。
 
 工厂和可变绑定接受动态关键字名称与值，包括部分绑定和 Auto 树。类型声明保留执行结果类型，但不会根据底层函数参数逐项静态检查绑定。
 

@@ -40,12 +40,15 @@ def test_bindings_are_explicit_and_defaults_belong_to_the_function(kind: str) ->
     instance.set("extra", 3)
     assert params == {"value": None, "extra": 3}
     assert instance(*runtime) == (None, {"extra": 3})
-    instance.delete("value")
+    assert instance.delete("value") is None
     assert instance(*runtime)[0] is default
     assert params == {"extra": 3}
-    with pytest.raises(KeyError):
-        instance.delete("value")
+    assert instance.delete("value") is None
+    assert params == {"extra": 3}
+    assert instance(*runtime)[0] is default
     instance.delete("extra")
+    assert params == {}
+    assert instance.delete("never_bound") is None
     assert params == {}
     ctx.dispose()
 

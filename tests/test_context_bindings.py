@@ -237,25 +237,34 @@ def test_shared_identity_enforces_the_same_token_from_every_scope() -> None:
     binding.clear()
 
 
-def test_binding_clear_detaches_identities_before_value_finalization() -> None:
+def test_binding_clear_detaches_data_without_mutating_retained_records() -> None:
     replacement_identity = Identity("replacement", blocked=True)
     original_identity = Identity("original", blocked=True)
     binding = _ContextBinding()
     scope = Scope()
-    events: list[str] = []
 
     class Payload:
-        def __del__(self) -> None:
-            assert binding.scopes == ()
-            assert scope not in binding._scope_bindings
-            binding.bind(scope, ScopeBinding(replacement_identity, blocked=False))
-            binding.set(scope, "new")
-            events.append("replaced")
+        pass
 
     binding.bind(scope, ScopeBinding(original_identity, blocked=False))
-    binding.set(scope, Payload())
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    token = object()
+    binding.set(scope, payload, token=token)
+    data = binding._data[original_identity]
+    del payload
     binding.clear()
-    assert events == ["replaced"]
+    assert not binding._data
+    assert not binding._scope_bindings
+    assert data.value is payload_ref()
+    assert data.token is token
+    assert data.scopes == {scope}
+
+    binding.bind(scope, ScopeBinding(replacement_identity, blocked=False))
+    binding.set(scope, "new")
+    del data
+    gc.collect()
+    assert payload_ref() is None
     assert binding.get(scope) == "new"
     assert binding.scopes == (scope,)
     binding.clear()

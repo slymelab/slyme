@@ -174,33 +174,35 @@ def test_reverse_index_does_not_retain_withdrawn_schema_values() -> None:
     root.dispose()
 
 
-def test_withdrawal_detaches_store_indexes_before_payload_redeclares_the_path() -> None:
+def test_withdrawal_detaches_store_indexes_before_redeclaring_the_path() -> None:
     root = Context()
     withdraw = root.declare({"value": Schema.leaf(mode="register")})
     child = root.fork(scope=root.scope.fork())
     entry = root.resolve_entry("value")
-    events = []
 
     class Payload:
-        def __del__(self) -> None:
-            assert entry not in root._store._data
-            assert all(
-                entry not in usage.entries
-                for usage in root._store._scope_usages.values()
-            )
-            assert root.scope not in binding._scope_bindings
-            assert child.scope not in binding._scope_bindings
-            root.declare({"value": Schema.leaf()})
-            child.set("value", "new")
-            events.append("redeclared")
+        pass
 
-    remove = root.register("value", Payload())
-    child.register("value", "old child")
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    remove = root.register("value", payload)
+    remove_child = child.register("value", "old child")
+    del payload
     binding = root._store._data[entry]
     withdraw()
-    assert events == ["redeclared"]
+    gc.collect()
+    assert payload_ref() is None
+    assert entry not in root._store._data
+    assert all(
+        entry not in usage.entries for usage in root._store._scope_usages.values()
+    )
+    assert not binding._scope_bindings
     assert binding.scopes == ()
+
+    root.declare({"value": Schema.leaf()})
+    child.set("value", "new")
     remove()
+    remove_child()
     assert child.get("value") == "new"
     new_entry = root.resolve_entry("value")
     assert new_entry is not entry

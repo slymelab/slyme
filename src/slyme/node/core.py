@@ -110,7 +110,7 @@ class NodeElement:
         self._params[name] = value
 
     def delete(self, name: str) -> None:
-        """Remove a binding, raising KeyError when it is absent."""
+        """Remove a binding; an absent binding is a no-op."""
         self._params.pop(name, None)
 
 
