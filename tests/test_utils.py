@@ -96,6 +96,42 @@ def test_tree_paths_iteration_and_leaf_override() -> None:
     assert leaves == [[10, 20], 30]
 
 
+def test_explicit_leaf_bypasses_resolvers_in_both_traversal_paths() -> None:
+    value = [1, 2]
+
+    def resolver(element, aux):
+        pytest.fail("An explicit leaf must not resolve a container handler.")
+
+    rules = TreeRules(DATA_RULES.handlers, pre_resolvers=(resolver,))
+
+    def is_leaf(element, aux):
+        return element is value
+
+    leaves, definition = TreeEngine.flatten(value, rules=rules, is_leaf=is_leaf)
+    assert len(leaves) == 1 and leaves[0] is value
+    assert TreeEngine.unflatten(definition, leaves) is value
+    assert list(TreeEngine.iter(value, rules=rules, is_leaf=is_leaf)) == leaves
+    paths, _ = TreeEngine.flatten_with_key_path(value, rules=rules, is_leaf=is_leaf)
+    assert paths == [((), value)]
+    assert (
+        list(TreeEngine.iter_with_key_path(value, rules=rules, is_leaf=is_leaf))
+        == paths
+    )
+
+
+@pytest.mark.parametrize("value", [[], (), {}])
+def test_empty_containers_keep_their_structure_without_yielding_leaves(value) -> None:
+    leaves, definition = TreeEngine.flatten(value, rules=DATA_RULES)
+    assert leaves == []
+    rebuilt = TreeEngine.unflatten(definition, leaves)
+    assert type(rebuilt) is type(value)
+    assert rebuilt == value
+    assert list(TreeEngine.iter(value, rules=DATA_RULES)) == []
+    paths, _ = TreeEngine.flatten_with_key_path(value, rules=DATA_RULES)
+    assert paths == []
+    assert list(TreeEngine.iter_with_key_path(value, rules=DATA_RULES)) == []
+
+
 def test_tree_custom_handlers_and_explicit_resolver_priority() -> None:
     @dataclass
     class Box:

@@ -6,7 +6,7 @@ from collections.abc import Callable
 import pytest
 
 from slyme.context import Context, Schema
-from slyme.node import Node, Wrapper, create_node, create_wrapper, node, wrapper
+from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
 from slyme.node.exception import (
     NodeException,
     NodeExceptionRecord,
@@ -194,3 +194,52 @@ def test_compose_wrapper_can_short_circuit_without_calling_the_target() -> None:
     ctx = Context()
     assert chain(ctx) == "stopped"
     ctx.dispose()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("short_circuit", [False, True])
+async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
+    asynchronous: bool,
+    short_circuit: bool,
+) -> None:
+    ctx = Context()
+    ctx.declare({"value": Schema.leaf()})
+    ctx.set("value", 1)
+    child = ctx.derive()
+    child.set("value", 2)
+    events = []
+
+    @node
+    @continuation
+    def parameter(ctx: Context, /):
+        if asynchronous:
+            yield asyncio.sleep(0)
+        value = ctx.get("value")
+        events.append(("auto", value))
+        return value
+
+    @node
+    def target(ctx: Context, /, *, value):
+        events.append(("target", value))
+        return value
+
+    @wrapper
+    @continuation
+    def around(ctx: Context, wrapped: Node, call_next: Callable, /):
+        if short_circuit:
+            return "stopped"
+        first = yield call_next(child)
+        second = yield call_next(ctx)
+        return first, second
+
+    graph = target(value=Auto(parameter())).add_wrappers(around())
+    try:
+        result = await graph.acall(ctx)
+        if short_circuit:
+            assert result == "stopped"
+            assert events == []
+        else:
+            assert result == (2, 1)
+            assert events == [("auto", 2), ("target", 2), ("auto", 1), ("target", 1)]
+    finally:
+        await ctx.adispose()

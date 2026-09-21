@@ -149,8 +149,23 @@ class Node(NodeElement, Generic[_R]):
 
     @continuation
     def __call__(self, ctx: Context, /, **kwargs: Any) -> Generator[Any, Any, _R]:
+        """Snapshot bindings and wrappers; evaluate Auto when call_next delegates."""
         try:
-            return (yield self._call(ctx, kwargs))
+            wrappers = tuple(self.wrappers)
+            kwargs = {**self._params, **kwargs}
+            raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
+            if not eval_kwargs:
+                chain: Callable[[Context], _R | Awaitable[_R]] = partial(
+                    self._func, **raw_kwargs
+                )
+            else:
+
+                @continuation
+                def chain(call_ctx: Context) -> Generator[Any, Any, _R]:
+                    evaluated = yield eval_tree(call_ctx, eval_kwargs)
+                    return (yield self._func(call_ctx, **raw_kwargs, **evaluated))
+
+            return (yield Wrapper.compose(wrappers, wrapped=self, call_next=chain)(ctx))
         except NodeException:
             raise
         except Exception as error:
@@ -163,25 +178,6 @@ class Node(NodeElement, Generic[_R]):
         to finish any asynchronous work; this method does not schedule it.
         """
         return await_result(self(ctx, **kwargs))
-
-    def _call(
-        self, ctx: Context, overrides: Mapping[str, Any], /
-    ) -> _R | Awaitable[_R]:
-        wrappers = tuple(self.wrappers)
-        kwargs = {**self._params, **overrides}
-        raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
-        if not eval_kwargs:
-            chain: Callable[[Context], _R | Awaitable[_R]] = partial(
-                self._func, **raw_kwargs
-            )
-        else:
-
-            @continuation
-            def chain(call_ctx: Context) -> Generator[Any, Any, _R]:
-                evaluated = yield eval_tree(call_ctx, eval_kwargs)
-                return (yield self._func(call_ctx, **raw_kwargs, **evaluated))
-
-        return Wrapper.compose(wrappers, wrapped=self, call_next=chain)(ctx)
 
 
 class Wrapper(NodeElement, Generic[_R]):
@@ -232,29 +228,19 @@ class Wrapper(NodeElement, Generic[_R]):
         /,
         **kwargs: Any,
     ) -> Generator[Any, Any, _R]:
+        """Evaluate wrapper Auto bindings and invoke its function on this Context."""
         try:
-            return (yield self._call(ctx, wrapped, call_next, kwargs))
+            kwargs = {**self._params, **kwargs}
+            raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
+            if eval_kwargs:
+                raw_kwargs.update((yield eval_tree(ctx, eval_kwargs)))
+            return (yield self._func(ctx, wrapped, call_next, **raw_kwargs))
         except NodeException:
             raise
         except Exception as error:
             raise WrapperExceptionRecord(
                 exception_node=self, wrapped_node=wrapped
             ) from error
-
-    @continuation
-    def _call(
-        self,
-        ctx: Context,
-        wrapped: Node[Any],
-        call_next: Callable[[Context], Any | Awaitable[Any]],
-        overrides: Mapping[str, Any],
-        /,
-    ) -> Generator[Any, Any, _R]:
-        kwargs = {**self._params, **overrides}
-        raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
-        if eval_kwargs:
-            raw_kwargs.update((yield eval_tree(ctx, eval_kwargs)))
-        return (yield self._func(ctx, wrapped, call_next, **raw_kwargs))
 
 
 @overload

@@ -184,6 +184,11 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Tree traversal represents leaves with `None` internally, avoiding placeholder
+  container data and redundant flatten flags in both traversal paths.
+- Node and Wrapper execute directly in `__call__`, without separate `_call`
+  methods or nested Wrapper continuations. Node Auto evaluation remains deferred
+  to each `call_next` invocation, preserving short-circuiting and Context selection.
 - Compose accepts a layer factory and optional default query. `ComposeLayer`
   requires synchronous `register(token, /, *args, **kwargs)` returning a synchronous
   disposer, with no separate deletion method;

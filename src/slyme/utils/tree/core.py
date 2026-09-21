@@ -365,39 +365,24 @@ class TreeEngine:
         traverse_aux: TraverseAux,
         is_leaf: IsLeafFunc | None,
         rules: TreeRules,
-    ) -> tuple[bool, TreeHandler | None, Iterable[Any], Iterator[Any], TreeAux]:
-        """
-        Helper to check if an element should be flattened and prepare iterators.
-        Returns: (should_flatten, handler, children_iter, keys_iter, tree_aux)
-        """
-        # should_flatten check
-        should_flatten = is_leaf is None or not is_leaf(element, traverse_aux)
-        handler = None
-        if should_flatten:
-            handler = TreeEngine._lookup_handler(element, traverse_aux, rules)
-            should_flatten = handler is not None
-
-        if not should_flatten:
-            # Return defaults for non-flattenable
-            return False, None, [], iter([]), TreeAux()
-
-        assert handler is not None
+    ) -> tuple[TreeHandler, Iterable[Any], Iterator[Any], TreeAux] | None:
+        """Return container traversal data, or None for a leaf."""
+        if is_leaf is not None and is_leaf(element, traverse_aux):
+            return None
+        handler = TreeEngine._lookup_handler(element, traverse_aux, rules)
+        if handler is None:
+            return None
         children_iter, tree_aux = handler.flatten(element)
 
-        # Auto fill tree_aux info
-        # TODO: Maybe refactor this into a function when the
-        # auto fill logic grows.
         if tree_aux.cls is None:
             tree_aux = replace(tree_aux, cls=type(element))
 
-        # Resolve Keys for Path Tracking.
         if tree_aux.children_keys is not None:
             keys_iter = iter(tree_aux.children_keys)
         else:
-            # Default fallback: Generate SequenceKey for indices.
             keys_iter = (SequenceKey(i) for i in count())
 
-        return True, handler, children_iter, keys_iter, tree_aux
+        return handler, children_iter, keys_iter, tree_aux
 
     @staticmethod
     def _traverse(
@@ -408,12 +393,10 @@ class TreeEngine:
         rules: TreeRules,
     ) -> TreeDef:
         """Recursive core for traversal."""
-        should_flatten, handler, children_iter, keys_iter, tree_aux = (
-            TreeEngine._prepare_element(element, traverse_aux, is_leaf, rules)
-        )
+        prepared = TreeEngine._prepare_element(element, traverse_aux, is_leaf, rules)
 
-        if should_flatten:
-            assert handler is not None
+        if prepared is not None:
+            handler, children_iter, keys_iter, tree_aux = prepared
             # Recursively map children.
             child_defs = []
             for child in children_iter:
@@ -454,11 +437,10 @@ class TreeEngine:
         with_key_path: bool,
     ) -> Iterator[Any]:
         """Recursive core for iterator traversal."""
-        should_flatten, _, children_iter, keys_iter, _ = TreeEngine._prepare_element(
-            element, traverse_aux, is_leaf, rules
-        )
+        prepared = TreeEngine._prepare_element(element, traverse_aux, is_leaf, rules)
 
-        if should_flatten:
+        if prepared is not None:
+            _, children_iter, keys_iter, _ = prepared
             for child in children_iter:
                 try:
                     key = next(keys_iter)
