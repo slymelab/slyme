@@ -14,16 +14,15 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable, Generator
 from contextvars import ContextVar
 from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from inspect import isawaitable
-from typing import Any, Generic, NoReturn, TypeVar, cast, overload
+from typing import Any, Generic, TypeVar, overload
 
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import await_result, continuation
+from slyme.utils.execution import SharedAwaitable, await_result, continuation, once
 
 __all__ = ["Lifecycle"]
 
@@ -36,56 +35,30 @@ _DISPOSAL_CHAIN: ContextVar[tuple[object, ...]] = ContextVar(
 )
 
 
-class _Completion(Generic[_T]):
-    """One lazily scheduled operation whose result survives waiter cancellation."""
+class _GuardedAwaitable(Generic[_T]):
+    """Check each waiter before delegating to a shared completion."""
 
-    __slots__ = ("_operation", "_check", "_task")
+    __slots__ = ("_operation", "_check")
 
     def __init__(self, operation: Awaitable[_T], check: Callable[[], None]) -> None:
-        self._operation: Awaitable[_T] | None = operation
+        self._operation = operation
         self._check = check
-        self._task: asyncio.Task[_T] | None = None
-
-    @staticmethod
-    def _observe(task: asyncio.Task[Any]) -> None:
-        if not task.cancelled():
-            task.exception()
-
-    async def _wait(self) -> _T:
-        self._check()
-        if self._task is None:
-            self._task = asyncio.create_task(
-                await_result(cast(Awaitable[_T], self._operation))
-            )
-            self._operation = None
-            self._task.add_done_callback(self._observe)
-        return await asyncio.shield(self._task)
 
     def __await__(self) -> Generator[Any, None, _T]:
-        return self._wait().__await__()
+        self._check()
+        return self._operation.__await__()
 
 
 class _Effect:
     """Own setup and cleanup as one registration with a repeatable disposer."""
 
-    __slots__ = (
-        "owner",
-        "_cleanup",
-        "_setup",
-        "_pending",
-        "_disposing",
-        "_disposed",
-        "_error",
-    )
+    __slots__ = ("owner", "_cleanup", "_setup", "dispose")
 
     def __init__(self, owner: Lifecycle) -> None:
         self.owner: Lifecycle | None = owner
         self._cleanup: _Cleanup | None = None
-        self._setup: _Completion[_Disposer] | None = None
-        self._pending: _Completion[None] | None = None
-        self._disposing = False
-        self._disposed = False
-        self._error: BaseException | None = None
+        self._setup: _GuardedAwaitable[_Disposer] | None = None
+        self.dispose = Lifecycle._disposer(self._dispose, self._check)
 
     def _release(self) -> None:
         owner = self.owner
@@ -107,81 +80,40 @@ class _Effect:
                 "Lifecycle effect cannot await its own setup or cleanup."
             )
 
-    def _finish(self, error: BaseException | None = None) -> None:
-        self._cleanup = None
-        self._disposing = False
-        self._disposed = True
-        self._error = error
-        self._release()
-
     async def _finish_setup(self, setup: Awaitable[_Cleanup]) -> _Disposer:
-        token = _DISPOSAL_CHAIN.set(self._chain())
         try:
             self._cleanup = await setup
             return self.dispose
         except BaseException:
             self._release()
             raise
-        finally:
-            _DISPOSAL_CHAIN.reset(token)
 
-    def _fail_dispose(self, error: BaseException) -> NoReturn:
-        self._finish(error)
-        raise error
-
-    async def _await_cleanup(self, pending: Awaitable[None]) -> None:
+    async def _await(self, pending: Awaitable[_T]) -> _T:
         token = _DISPOSAL_CHAIN.set(self._chain())
         try:
-            await pending
+            return await pending
         finally:
             _DISPOSAL_CHAIN.reset(token)
 
-    def _dispose_cleanup(self) -> None | Awaitable[None]:
+    def _invoke(self, callback: Callable[[], _T | Awaitable[_T]]) -> _T | Awaitable[_T]:
         owner = self.owner
         guarded = owner._enter_sync_disposal_guard() if owner is not None else ()
-        cleanup = self._cleanup
-        self._cleanup = None
-
-        @continuation
-        def execute() -> Generator[Any, Any, None]:
-            try:
-                if cleanup is not None:
-                    yield cleanup()
-            except BaseException as error:
-                self._fail_dispose(error)
-            self._finish()
-
         try:
-            result = execute()
+            result = callback()
         finally:
             Lifecycle._exit_sync_disposal_guard(guarded)
-        return self._await_cleanup(result) if isawaitable(result) else None
+        return self._await(result) if isawaitable(result) else result
 
-    def dispose(self) -> None | Awaitable[None]:
-        self._check()
-        if self._pending is not None:
-            return self._pending
-        if self._disposing:
-            raise RuntimeError("Lifecycle effect disposal cannot be re-entered.")
-        if self._disposed:
-            if self._error is not None:
-                raise self._error
-            return None
-        self._disposing = True
-
-        @continuation
-        def execute() -> Generator[Any, Any, None]:
-            try:
-                yield self._setup
-            except BaseException as error:
-                self._fail_dispose(error)
-            yield self._dispose_cleanup()
-
-        result = execute()
-        if isawaitable(result):
-            self._pending = _Completion(result, self._check)
-            return self._pending
-        return None
+    @continuation
+    def _dispose(self) -> Generator[Any, Any, None]:
+        try:
+            yield self._setup
+            cleanup, self._cleanup = self._cleanup, None
+            if cleanup is not None:
+                yield self._invoke(cleanup)
+        finally:
+            self._cleanup = None
+            self._release()
 
 
 class _LifecycleState(Enum):
@@ -204,8 +136,7 @@ class Lifecycle:
     _finalizer: Callable[[], None] | None = field(default=None, init=False)
     _owned: dict[Lifecycle | _Effect, None] = field(default_factory=dict, init=False)
     _state: _LifecycleState = field(default=_LifecycleState.ACTIVE, init=False)
-    _dispose_pending: _Completion[None] | None = field(default=None, init=False)
-    _dispose_error: BaseException | None = field(default=None, init=False)
+    _dispose_once: _Disposer = field(init=False)
     _sync_disposal_guard_depth: int = field(default=0, init=False)
 
     def __post_init__(self, finalize: Callable[[], None] | None) -> None:
@@ -213,6 +144,28 @@ class Lifecycle:
             self.parent.assert_active()
             self.parent._owned[self] = None
         object.__setattr__(self, "_finalizer", finalize)
+        object.__setattr__(
+            self,
+            "_dispose_once",
+            self._disposer(self._dispose, self._assert_disposal_allowed),
+        )
+
+    @staticmethod
+    def _disposer(operation: _Disposer, check: Callable[[], None]) -> _Disposer:
+        execute = once(operation)
+        completion: _GuardedAwaitable[None] | None = None
+
+        def dispose() -> None | Awaitable[None]:
+            nonlocal completion
+            check()
+            result = execute()
+            if isawaitable(result):
+                if completion is None:
+                    completion = _GuardedAwaitable(result, check)
+                return completion
+            return result
+
+        return dispose
 
     def assert_readable(self) -> None:
         if self._state is _LifecycleState.DISPOSED:
@@ -300,37 +253,18 @@ class Lifecycle:
         self.assert_active()
         effect = _Effect(self)
         self._owned[effect] = None
-        guarded = self._enter_sync_disposal_guard()
         try:
-            cleanup = setup()
+            cleanup = effect._invoke(setup)
         except BaseException:
             effect._release()
             raise
-        finally:
-            self._exit_sync_disposal_guard(guarded)
         if isawaitable(cleanup):
-            effect._setup = _Completion(effect._finish_setup(cleanup), effect._check)
+            effect._setup = _GuardedAwaitable(
+                SharedAwaitable(effect._finish_setup(cleanup)), effect._check
+            )
             return effect._setup
         effect._cleanup = cleanup
         return effect.dispose
-
-    def _finish_dispose(self, error: BaseException | None) -> BaseException | None:
-        self._owned.clear()
-        finalizer = self._finalizer
-        object.__setattr__(self, "_finalizer", None)
-        try:
-            if finalizer is not None:
-                finalizer()
-        except BaseException as release_error:
-            if error is None:
-                error = release_error
-            else:
-                error.__cause__ = release_error
-        if self.parent is not None:
-            self.parent._forget_owned(self)
-        object.__setattr__(self, "_dispose_error", error)
-        object.__setattr__(self, "_state", _LifecycleState.DISPOSED)
-        return error
 
     def dispose(self) -> None | Awaitable[None]:
         """Release ownership in LIFO order, returning any unfinished cleanup.
@@ -341,27 +275,18 @@ class Lifecycle:
         Owned cleanup failures are grouped in cleanup execution order.
         Mutations in the entire ownership subtree are forbidden before the
         first cleanup; each Lifecycle remains readable until its own release.
+        Failures are not retrieved merely to suppress asyncio diagnostics.
         """
-        self._assert_disposal_allowed()
-        if self._dispose_pending is not None:
-            return self._dispose_pending
-        if self._state is _LifecycleState.DISPOSED:
-            if self._dispose_error is not None:
-                raise self._dispose_error
-            return None
-        if self._state is _LifecycleState.DISPOSING:
-            raise RuntimeError("Lifecycle disposal is already in progress.")
+        return self._dispose_once()
+
+    def _dispose(self) -> None | Awaitable[None]:
         self._close_subtree()
         object.__setattr__(self, "_state", _LifecycleState.DISPOSING)
         owned = reversed(tuple(self._owned))
 
-        def finish(error: BaseException | None = None) -> None:
-            error = self._finish_dispose(error)
-            if error is not None:
-                raise error
-
         @continuation
         def execute() -> Generator[Any, Any, None]:
+            error: BaseException | None = None
             errors = []
             try:
                 for item in owned:
@@ -371,19 +296,29 @@ class Lifecycle:
                         errors.append(e)
                 if errors:
                     raise exception_group("Lifecycle dispose failed", errors)
-            except BaseException as error:
-                finish(error)
-            else:
-                finish()
+            except BaseException as caught:
+                error = caught
+            finally:
+                self._owned.clear()
+                finalizer = self._finalizer
+                object.__setattr__(self, "_finalizer", None)
+                try:
+                    if finalizer is not None:
+                        finalizer()
+                except BaseException as release_error:
+                    if error is None:
+                        error = release_error
+                    else:
+                        error.__cause__ = release_error
+                finally:
+                    if self.parent is not None:
+                        self.parent._forget_owned(self)
+                    object.__setattr__(self, "_state", _LifecycleState.DISPOSED)
+            if error is not None:
+                raise error
 
         result = execute()
-        if isawaitable(result):
-            pending = _Completion(
-                self._await_dispose(result), self._assert_disposal_allowed
-            )
-            object.__setattr__(self, "_dispose_pending", pending)
-            return pending
-        return None
+        return self._await_dispose(result) if isawaitable(result) else None
 
     def adispose(self) -> Awaitable[None]:
         """Dispose with an always-awaitable result, preserving immediate cleanup.

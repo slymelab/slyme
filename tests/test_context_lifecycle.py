@@ -1143,52 +1143,6 @@ async def test_async_dispose_is_shared_and_runs_cleanup_once() -> None:
     assert calls == 1
 
 
-@pytest.mark.parametrize(
-    "rewait_before_cleanup_finishes",
-    [True, False],
-    ids=["before-finish", "after-finish"],
-)
-async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
-    rewait_before_cleanup_finishes: bool,
-) -> None:
-    started = asyncio.Event()
-    release = asyncio.Event()
-    ctx = Context()
-
-    async def cleanup() -> None:
-        started.set()
-        await release.wait()
-        raise ValueError("late cleanup failure")
-
-    ctx.effect(lambda: cleanup)
-    first_waiter = asyncio.create_task(await_result(ctx.dispose()))
-    await started.wait()
-    first_waiter.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await first_waiter
-
-    if rewait_before_cleanup_finishes:
-        repeated = asyncio.create_task(await_result(ctx.dispose()))
-        await asyncio.sleep(0)
-        assert not repeated.done()
-        release.set()
-    else:
-        release.set()
-        assert ctx._lifecycle._dispose_pending is not None
-        disposal_task = ctx._lifecycle._dispose_pending._task
-        assert disposal_task is not None
-        await asyncio.wait({disposal_task})
-        repeated = asyncio.create_task(await_result(ctx.dispose()))
-
-    with pytest.raises(BaseExceptionGroup) as caught:
-        await repeated
-    assert isinstance(caught.value.exceptions[0], ValueError)
-    assert str(caught.value.exceptions[0]) == "late cleanup failure"
-    with pytest.raises(BaseExceptionGroup) as replayed:
-        await await_result(ctx.dispose())
-    assert replayed.value is caught.value
-
-
 async def test_dispose_marks_context_before_scheduling_cleanup() -> None:
     started = asyncio.Event()
     release = asyncio.Event()
@@ -1334,7 +1288,7 @@ def test_sync_early_cleanup_blocks_owner_and_ancestor_disposal(
         events.append("start")
         with pytest.raises(RuntimeError, match="setup or cleanup"):
             target.dispose()
-        with pytest.raises(RuntimeError, match="cannot be re-entered"):
+        with pytest.raises(RuntimeError, match="cannot re-enter"):
             dispose_effect()
         events.append(child.get("value"))
 

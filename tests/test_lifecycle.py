@@ -105,6 +105,186 @@ async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
     await lifetime.adispose()
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_disposers_execute_once_per_lifetime_and_per_effect(asynchronous) -> None:
+    events = []
+    left = Lifecycle(finalize=lambda: events.append("left:finalize"))
+    right = Lifecycle(finalize=lambda: events.append("right:finalize"))
+
+    async def pending(name):
+        await asyncio.sleep(0)
+        events.append(name)
+
+    def cleanup(name):
+        if asynchronous:
+            return pending(name)
+        events.append(name)
+
+    first = left.effect(lambda: lambda: cleanup("left:first"))
+    left.effect(lambda: lambda: cleanup("left:second"))
+    right.effect(lambda: lambda: cleanup("right"))
+    await await_result(first())
+    await await_result(first())
+    await right.adispose()
+    await left.adispose()
+    await right.adispose()
+    await left.adispose()
+    assert events == [
+        "left:first",
+        "right",
+        "right:finalize",
+        "left:second",
+        "left:finalize",
+    ]
+
+
+@pytest.mark.parametrize(
+    "rewait_before_cleanup_finishes",
+    [True, False],
+    ids=["before-finish", "after-finish"],
+)
+async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
+    rewait_before_cleanup_finishes: bool,
+) -> None:
+    started, release, finalized = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    lifetime = Lifecycle(finalize=finalized.set)
+
+    async def cleanup() -> None:
+        started.set()
+        await release.wait()
+        raise ValueError("late cleanup failure")
+
+    lifetime.effect(lambda: cleanup)
+    completion = lifetime.dispose()
+    first_waiter = asyncio.create_task(await_result(completion))
+    await started.wait()
+    first_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_waiter
+
+    if rewait_before_cleanup_finishes:
+        repeated = asyncio.create_task(lifetime.adispose())
+        await asyncio.sleep(0)
+        assert not repeated.done()
+        release.set()
+    else:
+        release.set()
+        await finalized.wait()
+        repeated = asyncio.create_task(lifetime.adispose())
+
+    with pytest.raises(BaseExceptionGroup) as caught:
+        await repeated
+    assert isinstance(caught.value.exceptions[0], ValueError)
+    assert str(caught.value.exceptions[0]) == "late cleanup failure"
+    assert lifetime.dispose() is completion
+    with pytest.raises(BaseExceptionGroup) as replayed:
+        await lifetime.adispose()
+    assert replayed.value is caught.value
+
+
+@pytest.mark.parametrize("owner_disposal", [False, True])
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_cleanup_cannot_wait_on_a_saved_disposal_completion(
+    owner_disposal,
+    delegated,
+) -> None:
+    lifetime = Lifecycle()
+
+    async def cleanup() -> None:
+        if delegated:
+            await asyncio.create_task(await_result(completion))
+        else:
+            await completion
+
+    dispose_effect = lifetime.effect(lambda: cleanup)
+    completion = lifetime.dispose() if owner_disposal else dispose_effect()
+    if owner_disposal:
+        with pytest.raises(BaseExceptionGroup) as caught:
+            await asyncio.wait_for(completion, timeout=1)
+        error = caught.value.exceptions[0]
+        assert isinstance(error, RuntimeError)
+        assert "cannot be re-entered" in str(error)
+    else:
+        with pytest.raises(RuntimeError, match="cannot await its own"):
+            await asyncio.wait_for(completion, timeout=1)
+        await lifetime.adispose()
+    assert not lifetime._owned
+
+
+async def test_async_setup_cannot_wait_on_its_saved_completion() -> None:
+    lifetime = Lifecycle()
+
+    async def setup():
+        await asyncio.create_task(await_result(completion))
+        return lambda: None
+
+    completion = lifetime.effect(setup)
+    with pytest.raises(RuntimeError, match="cannot await its own"):
+        await asyncio.wait_for(completion, timeout=1)
+    assert not lifetime._owned
+    lifetime.dispose()
+
+
+@pytest.mark.parametrize("phase", ["setup", "dispose"])
+@pytest.mark.parametrize("observed", [False, True])
+async def test_background_failure_reaches_asyncio_diagnostics_unless_observed(
+    phase,
+    observed,
+) -> None:
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    reports = []
+    started, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    finalized = asyncio.Event()
+    lifetime = Lifecycle(finalize=finalized.set)
+
+    async def fail():
+        try:
+            started.set()
+            await release.wait()
+            raise ValueError(f"unobserved {phase} failure")
+        finally:
+            finished.set()
+
+    if phase == "setup":
+        completion = lifetime.effect(fail)
+    else:
+        lifetime.effect(lambda: fail)
+        completion = lifetime.dispose()
+    loop.set_exception_handler(lambda _, report: reports.append(report))
+    try:
+        waiter = asyncio.create_task(await_result(completion))
+        await started.wait()
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        release.set()
+        await finished.wait()
+        if phase == "setup":
+            lifetime.dispose()
+        await finalized.wait()
+        if observed:
+            expected = ValueError if phase == "setup" else BaseExceptionGroup
+            with pytest.raises(expected):
+                await completion
+        del waiter, completion, lifetime
+        gc.collect()
+
+        if observed:
+            assert not reports
+            return
+        assert len(reports) == 1
+        assert reports[0]["message"] == "Task exception was never retrieved"
+        error = reports[0]["exception"]
+        if phase == "dispose":
+            assert isinstance(error, BaseExceptionGroup)
+            (error,) = error.exceptions
+        assert isinstance(error, ValueError)
+        assert str(error) == f"unobserved {phase} failure"
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
 def test_lifecycle_releases_its_finalizer_reference() -> None:
     class Resource:
         def close(self):

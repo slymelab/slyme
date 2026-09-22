@@ -48,7 +48,9 @@ A Context owns its children and cleanup registered through `effect()`, `register
 
 Calling `dispose()` immediately marks the Context as disposing and runs its synchronous portion; await its asynchronous portion to schedule it. Early cleanup stays owned until completion, so owner disposal joins it. Removing an early registration preserves the remaining release order.
 
-Each owned cleanup finishes before the next starts, including asynchronous cleanup. A failure or cleanup cancellation does not skip remaining ownership or Scope release. Context reports owned cleanup failures as an exception group containing only failures in cleanup execution order; subsequent disposal calls observe that same terminal result without repeating cleanup. Context's generator loop orders cleanup, while a separate shared completion protects cleanup from waiter cancellation and supports repeated waits.
+Each owned cleanup finishes before the next starts, including asynchronous cleanup. A failure or cleanup cancellation does not skip remaining ownership or Scope release. Context reports owned cleanup failures as an exception group containing only failures in cleanup execution order; subsequent disposal calls observe that same terminal result without repeating cleanup. Lifecycle uses `once` and `SharedAwaitable` to share execution and results. Calls and waits both check for lifecycle reentry, including waits through previously obtained completion handles.
+
+Cancelling a setup or disposal waiter does not cancel the shared operation. Its caller must still await completion and handle failures. Slyme does not retrieve background failures just to suppress asyncio's unobserved-exception diagnostics; those diagnostics are not a substitute for application error handling.
 
 ## Auto values
 

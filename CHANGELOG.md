@@ -74,6 +74,10 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Lifecycle and effect disposal share execution through `once` and
+  `SharedAwaitable`, retaining LIFO cleanup and call-time and wait-time reentry
+  checks. Background failures are not retrieved just to suppress asyncio's
+  unobserved-exception diagnostics.
 - Aligned Node and Wrapper deletion documentation and tests with idempotent
   removal of absent bindings. Context regression tests cover explicit Scope
   reuse after disposal, Schema withdrawal, and collection of detached values.
