@@ -175,12 +175,12 @@ class Lifecycle:
     """Manage one Context's effects, disposal mode, and disposal state.
 
     Ownership ancestry comes from Context. Child disposal is an owned effect;
-    dispose_mode selects sequential or parallel cleanup. Context data is released
+    dispose_mode selects sequential or batch cleanup. Context data is released
     after all effects finish, including on failure.
     """
 
     ctx: Context
-    dispose_mode: Literal["sequential", "parallel"] = field(
+    dispose_mode: Literal["sequential", "batch"] = field(
         default="sequential", kw_only=True
     )
     _owned: dict[_Effect, None] = field(default_factory=dict, init=False)
@@ -321,7 +321,7 @@ class Lifecycle:
         once awaited, waiter cancellation does not cancel cleanup. Repeated
         calls share that completion and reproduce its terminal failure.
         Disposers are called in reverse registration order. Sequential mode
-        waits between calls; parallel mode joins all asynchronous results.
+        waits between calls; batch mode joins all asynchronous results.
         Failures are grouped in call order, not completion order.
         Mutations in the entire ownership subtree are forbidden before the
         first cleanup; each Lifecycle remains readable until its own release.

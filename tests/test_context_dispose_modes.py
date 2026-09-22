@@ -10,25 +10,20 @@ from slyme.utils.execution import await_result
 
 
 def test_disposal_mode_is_fixed_and_not_inherited() -> None:
-    root = Context(dispose_mode="parallel")
+    root = Context(dispose_mode="batch")
     direct = Context(parent=root)
     fork = root.fork()
     derived = root.derive()
-    parallel = root.derive(dispose_mode="parallel")
-    detached = root.fork(scope=Scope(), dispose_mode="parallel")
-    assert (
-        root.dispose_mode
-        == parallel.dispose_mode
-        == detached.dispose_mode
-        == "parallel"
-    )
+    batch = root.derive(dispose_mode="batch")
+    detached = root.fork(scope=Scope(), dispose_mode="batch")
+    assert root.dispose_mode == batch.dispose_mode == detached.dispose_mode == "batch"
     assert (
         direct.dispose_mode == fork.dispose_mode == derived.dispose_mode == "sequential"
     )
     assert direct.scope is fork.scope is root.scope
-    assert derived.scope.parents == parallel.scope.parents == (root.scope,)
+    assert derived.scope.parents == batch.scope.parents == (root.scope,)
     assert detached.scope.parents == ()
-    assert root._lifecycle.dispose_mode == "parallel"
+    assert root._lifecycle.dispose_mode == "batch"
     with pytest.raises(FrozenInstanceError):
         root.dispose_mode = "sequential"
     with pytest.raises(FrozenInstanceError):
@@ -36,7 +31,7 @@ def test_disposal_mode_is_fixed_and_not_inherited() -> None:
     assert root.dispose() is None
 
 
-@pytest.mark.parametrize("dispose_mode", ["sequential", "parallel"])
+@pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
 @pytest.mark.parametrize("fails", [False, True])
 def test_sync_disposal_finishes_inline_in_reverse_registration_order(
     dispose_mode, fails
@@ -70,9 +65,9 @@ def test_sync_disposal_finishes_inline_in_reverse_registration_order(
     assert not ctx._schema._stores
 
 
-def test_parallel_disposal_can_begin_outside_an_event_loop() -> None:
+def test_batch_disposal_can_begin_outside_an_event_loop() -> None:
     root = Context()
-    group = root.fork(dispose_mode="parallel")
+    group = root.fork(dispose_mode="batch")
     events = []
 
     async def cleanup(index):
@@ -91,14 +86,14 @@ def test_parallel_disposal_can_begin_outside_an_event_loop() -> None:
     assert not root.children
 
 
-async def test_parallel_children_keep_local_lifo_and_parent_declarations() -> None:
+async def test_batch_children_keep_local_lifo_and_parent_declarations() -> None:
     root = Context()
     events = []
     root.effect(lambda: lambda: events.append("root:release"))
     root.declare({"shared": Schema.leaf()})
     root.set("shared", "data")
     rules = root.get(DATA_TREE_REF)
-    plugins = root.fork(dispose_mode="parallel")
+    plugins = root.fork(dispose_mode="batch")
     started = [asyncio.Event(), asyncio.Event()]
     finish = [asyncio.Event(), asyncio.Event()]
     children = []
@@ -154,9 +149,9 @@ async def test_parallel_children_keep_local_lifo_and_parent_declarations() -> No
     assert not root._schema._stores
 
 
-async def test_parallel_cleanup_collects_sync_async_and_cancellation_failures_in_order():
+async def test_batch_cleanup_collects_sync_async_and_cancellation_failures_in_order():
     root = Context()
-    group = root.fork(dispose_mode="parallel")
+    group = root.fork(dispose_mode="batch")
     old_error, slow_error, new_error = (
         ValueError("old"),
         ValueError("slow"),
@@ -204,9 +199,9 @@ async def test_parallel_cleanup_collects_sync_async_and_cancellation_failures_in
     root.dispose()
 
 
-async def test_parallel_disposal_waits_for_pending_setups_despite_failure() -> None:
+async def test_batch_disposal_waits_for_pending_setups_despite_failure() -> None:
     root = Context()
-    group = root.fork(dispose_mode="parallel")
+    group = root.fork(dispose_mode="batch")
     started = [asyncio.Event(), asyncio.Event()]
     finish = asyncio.Event()
     failure = ValueError("setup failed")
@@ -243,7 +238,7 @@ async def test_parallel_disposal_waits_for_pending_setups_despite_failure() -> N
 
 async def test_branches_share_one_cleanup_without_delaying_independent_successors():
     root = Context()
-    group = root.fork(dispose_mode="parallel")
+    group = root.fork(dispose_mode="batch")
     a_started, b_started = asyncio.Event(), asyncio.Event()
     finish_a, finish_b = asyncio.Event(), asyncio.Event()
     c_done, d_done = asyncio.Event(), asyncio.Event()
@@ -265,7 +260,7 @@ async def test_branches_share_one_cleanup_without_delaying_independent_successor
     left.effect(lambda: dispose_b)
     right = group.fork()
     right.effect(lambda: c_done.set)
-    predecessors = right.fork(dispose_mode="parallel")
+    predecessors = right.fork(dispose_mode="batch")
     predecessors.effect(lambda: a)
     predecessors.effect(lambda: dispose_b)
 

@@ -71,7 +71,7 @@ def test_early_child_disposal_releases_parent_references() -> None:
 
 
 @pytest.mark.parametrize("fails", [False, True])
-@pytest.mark.parametrize("dispose_mode", ["sequential", "parallel"])
+@pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
 async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(
     fails, dispose_mode
 ):
@@ -242,7 +242,7 @@ async def test_disposers_execute_once_per_lifetime_and_per_effect(asynchronous) 
     [True, False],
     ids=["before-finish", "after-finish"],
 )
-@pytest.mark.parametrize("dispose_mode", ["sequential", "parallel"])
+@pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
 async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
     rewait_before_cleanup_finishes: bool,
     dispose_mode,
@@ -291,7 +291,7 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
 
 @pytest.mark.parametrize("owner_disposal", [False, True])
 @pytest.mark.parametrize("delegated", [False, True])
-@pytest.mark.parametrize("dispose_mode", ["sequential", "parallel"])
+@pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
 async def test_cleanup_cannot_wait_on_a_saved_disposal_completion(
     owner_disposal,
     delegated,

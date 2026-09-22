@@ -68,7 +68,7 @@ class Context:
         *,
         parent: Context | None = None,
         scope: Scope | None = None,
-        dispose_mode: Literal["sequential", "parallel"] = "sequential",
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
     ) -> None:
         """Create a lifetime and data view, installing defaults only for a new root."""
         if parent is not None:
@@ -115,7 +115,7 @@ class Context:
                 self.parent._children.pop(self)._release()
 
     @property
-    def dispose_mode(self) -> Literal["sequential", "parallel"]:
+    def dispose_mode(self) -> Literal["sequential", "batch"]:
         """Return the immutable disposal mode owned by this Context's Lifecycle."""
         return self._lifecycle.dispose_mode
 
@@ -172,7 +172,7 @@ class Context:
         """Close the subtree, finish cleanup in dispose_mode, then release data.
 
         Contexts remain readable until their own release, but cannot be mutated.
-        Sequential cleanup waits in LIFO order; parallel cleanup joins all items.
+        Sequential cleanup waits in LIFO order; batch cleanup joins all items.
         Await unfinished cleanup. Repeated calls share the same completion and error.
         """
         return self._lifecycle.dispose()
@@ -185,7 +185,7 @@ class Context:
         self,
         *,
         scope: Scope | None = None,
-        dispose_mode: Literal["sequential", "parallel"] = "sequential",
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
     ) -> Context:
         """Create an owned child, sharing Scope but not inheriting disposal mode."""
         return type(self)(parent=self, scope=scope, dispose_mode=dispose_mode)
@@ -197,7 +197,7 @@ class Context:
         parents: Scope | tuple[Scope, ...] | None = None,
         bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
         | None = None,
-        dispose_mode: Literal["sequential", "parallel"] = "sequential",
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
     ) -> Context:
         """Create an owned child and one new Scope configured for all targets.
 

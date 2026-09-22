@@ -46,29 +46,29 @@ Parameter bindings are shallow-snapshotted, not deep-copied. Mutating a non-Auto
 
 Call the relevant Node factory or assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. To materialize `assign` fields into a new root, create it, declare the copied paths, then call `snapshot.update(context.get("app").flatten())`; `register` fields require explicit `register()` calls on the new owner. None of these operations copies application values.
 
-A Context owns its children and cleanup registered through `effect()`, `register()`, and `declare()`. Its `dispose_mode` selects sequential or parallel cleanup of these directly owned items. `dispose()` returns `None` on synchronous completion or an awaitable when cleanup is asynchronous; `await await_result(ctx.dispose())` handles either. Context does not own arbitrary tasks using it: stop and await those tasks before disposal.
+A Context owns its children and cleanup registered through `effect()`, `register()`, and `declare()`. Its `dispose_mode` selects sequential or batch cleanup of these directly owned items. `dispose()` returns `None` on synchronous completion or an awaitable when cleanup is asynchronous; `await await_result(ctx.dispose())` handles either. Context does not own arbitrary tasks using it: stop and await those tasks before disposal.
 
 Calling `dispose()` immediately marks the Context as disposing and runs its synchronous portion; await its asynchronous portion to schedule it. Early cleanup stays owned until completion, so owner disposal joins it. Removing an early registration preserves the remaining release order.
 
-Sequential cleanup waits for each item before calling the next. Parallel cleanup calls every disposer before awaiting their asynchronous results together. Both visit items in reverse registration order; synchronous work runs inline without requiring an event loop. A failure or cleanup cancellation does not skip remaining ownership or Scope release. Context reports failures in reverse registration order, independently of completion order; subsequent disposal calls observe that same terminal result without repeating cleanup. Lifecycle uses `once` and `SharedAwaitable` to share execution and results. Calls and waits both check for lifecycle reentry, including waits through previously obtained completion handles.
+Sequential cleanup waits for each item before calling the next. Batch cleanup calls every disposer before awaiting their asynchronous results together. Both visit items in reverse registration order; synchronous work runs inline without requiring an event loop. A failure or cleanup cancellation does not skip remaining ownership or Scope release. Context reports failures in reverse registration order, independently of completion order; subsequent disposal calls observe that same terminal result without repeating cleanup. Lifecycle uses `once` and `SharedAwaitable` to share execution and results. Calls and waits both check for lifecycle reentry, including waits through previously obtained completion handles.
 
 Cancelling a setup or disposal waiter does not cancel the shared operation. Its caller must still await completion and handle failures. Slyme does not retrieve background failures just to suppress asyncio's unobserved-exception diagnostics; those diagnostics are not a substitute for application error handling.
 
 ## Cleanup groups
 
-`Context()`, `fork()`, and `derive()` accept `dispose_mode="sequential" | "parallel"`, defaulting to `"sequential"` on every new Context. The mode is immutable and is not inherited from the parent. It affects cleanup only, not setup or Node execution. A parent waits for a child's complete cleanup regardless of the child's internal mode.
+`Context()`, `fork()`, and `derive()` accept `dispose_mode="sequential" | "batch"`, defaulting to `"sequential"` on every new Context. The mode is immutable and is not inherited from the parent. It affects cleanup only, not setup or Node execution. A parent waits for a child's complete cleanup regardless of the child's internal mode.
 
 ```python
 root = Context()
 root.declare(R)
-plugins = root.fork(dispose_mode="parallel")
+plugins = root.fork(dispose_mode="batch")
 plugin_a = plugins.fork()
 plugin_b = plugins.fork()
 ```
 
-Here plugin_a and plugin_b clean up concurrently, each in local LIFO order. Root declarations and framework defaults remain installed until both finish. Additional forks allow arbitrary nesting of cleanup modes without adding Scope inheritance layers. Each operation belongs to the Context on which it is called; no implicit current group or disposer transfer is involved.
+Here plugin_a and plugin_b clean up as a batch, awaiting their asynchronous work concurrently, each in local LIFO order. Root declarations and framework defaults remain installed until both finish. Additional forks allow arbitrary nesting of cleanup modes without adding Scope inheritance layers. Each operation belongs to the Context on which it is called; no implicit current group or disposer transfer is involved.
 
-Parallel siblings must tolerate overlapping cleanup. Register shared dependencies on a sequential parent before creating their consumers, or establish explicit waits. Read access during cleanup does not prevent a concurrent effect from withdrawing a field. Plugin dependency ordering is not inferred from Context visibility.
+Siblings in a batch must tolerate overlapping cleanup. Register shared dependencies on a sequential parent before creating their consumers, or establish explicit waits. Read access during cleanup does not prevent a concurrent effect from withdrawing a field. Plugin dependency ordering is not inferred from Context visibility.
 
 Different cleanup functions can wait on the same early disposer; it executes once and all waiters join its completion. Cross-group waits must be acyclic. Put an operation's prerequisites inside its shared cleanup, not separately at each caller, and avoid an independent cleanup entry point that bypasses them. Shared waits do not count users or wait for every caller to arrive. Cleanup failures remain observable along each waiting branch and may appear in multiple nested failure groups.
 

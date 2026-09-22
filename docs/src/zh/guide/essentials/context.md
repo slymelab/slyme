@@ -364,7 +364,7 @@ Context 强持有 binding 表。注册 disposer 捕获 Binding、Scope 和安装
 
 `ctx.effect(setup)` 管理一次 setup 及其 cleanup。同步 setup 立即运行，并返回提前 disposer；如果 setup 返回 awaitable，`effect()` 则返回一个解析为 disposer 的 awaitable。两种情况统一使用 `await await_result(ctx.effect(setup))`。异步 setup 在启动前就已登记归属：即使调用者没有等待注册，owner 释放时也会等待 setup，再执行其 cleanup。使用取得的资源前必须等待 setup；如果 setup 在返回 cleanup 前失败，部分资源的回滚仍由 setup 自己负责。
 
-parent 会强引用并拥有子 Context。每个 Context 按登记逆序调用直接拥有的 disposer。`dispose_mode="sequential"` 等待每项结束后再调用下一项；`"parallel"` 先调用所有项，再一起等待异步结果。构造、`fork()` 和 `derive()` 均独立默认使用串行策略。嵌套分组和共享等待参见[生命周期](./lifecycle.md#清理分组)。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.utils.execution` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出异常组，只按登记逆序保存失败，不依赖完成顺序；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
+parent 会强引用并拥有子 Context。每个 Context 按登记逆序调用直接拥有的 disposer。`dispose_mode="sequential"` 等待每项结束后再调用下一项；`"batch"` 先调用所有项，再一起等待异步结果。构造、`fork()` 和 `derive()` 均独立默认使用串行策略。嵌套分组和共享等待参见[生命周期](./lifecycle.md#清理分组)。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.utils.execution` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出异常组，只按登记逆序保存失败，不依赖完成顺序；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
 
 `dispose()` 会在执行任何 cleanup 前，同步禁止整棵所属 Context 子树的修改，包括新增 effect 和子 Context。修改检查只读取接收调用的 Context 自身状态，不受生命周期深度影响。每个 Context 在自身释放完成前仍可读取。尚未轮到清理的子 Context 仍可提前 dispose；已经开始的清理保留原来的共享完成结果。所属子树之外的 Context 即使共享或继承其 Scope，仍可修改。这不会取消正在运行的 Node task，也不会冻结 Context 值中存储的对象。
 
