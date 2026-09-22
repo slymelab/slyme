@@ -2,11 +2,11 @@
 
 `Context` 同时提供声明式可变数据视图与生命周期归属。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。应用根保存以有效 Schema leaf entry 为 key 的平铺 binding，其中的值按绑定到 Scope 的叶子局部 identity 建立索引。读取默认沿绑定 Scope 的 C3 顺序查找，写入则修改绑定到该 Scope 的 identity。
 
-Context 私有持有三个协作对象：`Schema` 定义路径和 metadata，`ContextStore` 保存分层值及其 viewer，`Lifecycle` 管理 effect 和子生命周期。同一应用中的 Context 共享 Schema 和 Store，但各自独占一个 Lifecycle。Context 通过 `declare()`、`resolve()`、`resolve_entry()` 和 `entries` 暴露声明操作，调用方不必访问私有对象。`entries` 包含声明的 container 和未赋值 leaf，而 `keys()` 和 `flatten()` 描述可见值。
+Context 私有持有三个协作对象：`Schema` 定义路径和 metadata，`ContextStore` 保存分层值及其 viewer，`Lifecycle` 管理 effect 和释放状态。父子树只由 Context 维护，通过 `parent` 和只读的 `children` tuple 快照暴露。同一应用中的 Context 共享 Schema 和 Store，但各自独占一个 Lifecycle。Context 通过 `declare()`、`resolve()`、`resolve_entry()` 和 `entries` 暴露声明操作，调用方不必访问私有对象。`entries` 包含声明的 container 和未赋值 leaf，而 `keys()` 和 `flatten()` 描述可见值。
 
 Context 通过 Schema 解析路径、检查 leaf/container 角色，再将 `RefEntry` 交给 Store。Store 处理分层值和写入模式；Context 根据 Store 返回的可见条目组织 view、keys 和字典。ContextView 只调整相对路径，不重复解析。Binding 和 Store 使用 `get/set/delete` 操作值；取不到可见值时，内部 getter 返回缺值哨兵。存在性检查和条目遍历无需通过异常处理缺值。Context 负责返回用户默认值或抛出 `ContextPathError`；默认值不会隐藏路径未声明的错误。
 
-Context 协调组件归属，ContextView 通过 Context 完成访问。Store 独占维护 viewer 和反向索引，每个私有 binding 则独占维护自己的 identity、值与注册 token，不持有 Store 的状态。字段撤销先移除 Store 索引，再清空 binding 数据，因此值的析构函数可以重新声明同一路径，而旧清理不会删除新数据。Schema 自己登记和解绑 Store，仅向其通知字段撤销；Lifecycle 执行传入的最终清理函数，不依赖 Schema 或 Store。Scope 只保存可见性信息，不管理可变数据或清理归属。
+Context 协调组件归属，ContextView 通过 Context 完成访问。Store 独占维护 viewer 和反向索引，每个私有 binding 则独占维护自己的 identity、值与注册 token，不持有 Store 的状态。字段撤销先移除 Store 索引，再清空 binding 数据，因此值的析构函数可以重新声明同一路径，而旧清理不会删除新数据。Schema 自己登记和解绑 Store，仅向其通知字段撤销；Lifecycle 持有所属 Context，并在 effect 清理后调用其数据释放方法。Scope 只保存可见性信息，不管理可变数据或清理归属。
 
 普通 Context 操作在委托前检查自身 Lifecycle。释放期间可以读取，直到该 Context 完成释放，但禁止写入、声明、新增 effect 和创建子级。内部撤销和 Scope 释放检查精确的持有记录，在清理期间仍可执行。共享的 Schema 和 Store 不采用某个调用者的生命周期状态，其他活跃 Context 可以继续使用它们。
 

@@ -464,6 +464,7 @@ def test_failed_mixed_configuration_releases_context_data_and_child() -> None:
             }
         )
     assert tuple(root._lifecycle._owned) == children
+    assert not root.children
     assert not root._store._data[root.resolve_entry("value")]._data
     assert not tuple(values.layers())
     root.dispose()

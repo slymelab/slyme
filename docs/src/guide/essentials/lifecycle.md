@@ -1,6 +1,8 @@
 # Lifecycle
 
-`Lifecycle` is also an independently usable effect owner, exported from `slyme.context`. `Lifecycle(parent=owner)` joins an ownership tree without requiring Schema, Store, or Scope. Its `effect()`, `dispose()`, and `adispose()` follow the same rules as Context. An optional synchronous `finalize` callback runs once after all owned cleanup, including when cleanup fails; it is not an independently revocable effect. Context uses this finalizer to release its data viewers and, for an application root, detach its Store from Schema. Register application cleanup with `ctx.effect()` rather than overriding `Context.dispose()`: the ownership tree is traversed by Lifecycle.
+Each Context creates one private `Lifecycle(ctx)` to manage its effects and disposal state. Context alone stores the parent/child tree; Lifecycle follows its `ctx` to find ancestors and children. Child disposal is registered as an internal parent effect, preserving LIFO order with other effects. After all effects finish, including on failure, Lifecycle calls Context's data release method; an application root also detaches its Store from Schema. Lifecycle has no independent parent or finalizer configuration. Register application cleanup with `ctx.effect()` rather than overriding `Context.dispose()`.
+
+`ctx.children` returns a tuple snapshot of direct children in creation order. A child remains attached during asynchronous cleanup and is removed when release finishes, even on failure. Disposed Contexts have no children but retain their original `parent` reference. Scope inheritance is independent of this ownership tree.
 
 Slyme uses one live `Node` graph rather than separate definition and execution trees. Creating a decorated function builds a mutable Node; calling it executes that same Node with its current parameters.
 

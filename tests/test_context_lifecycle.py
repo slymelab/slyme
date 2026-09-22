@@ -186,7 +186,7 @@ async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None
     assert effect in child._lifecycle._owned
     disposing = asyncio.create_task(await_result(root.dispose()))
     await asyncio.sleep(0)
-    assert child._lifecycle in root._lifecycle._owned
+    assert child in root.children
     assert not disposing.done()
     finish.set()
     await asyncio.gather(early, disposing)
@@ -404,7 +404,7 @@ def test_context_registers_and_releases_every_scope_in_its_mro() -> None:
     assert {scope: usage.viewers for scope, usage in viewers.items()} == before
     assert tuple(root._lifecycle._owned) == (
         *initial_owned,
-        owner._lifecycle,
+        root._children[owner],
     )
     root.dispose()
 
@@ -550,6 +550,7 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
     assert set(calls[len(bindings) :]) == {
         (binding, parent_scope) for binding in bindings
     }
+    assert not root.children
     assert tuple(root._lifecycle._owned) == initial_owned
     assert root._store._scope_usages is not None
     assert root._store._scope_usages[root.scope].viewers == {root}
@@ -595,7 +596,8 @@ def test_failed_binding_restore_rolls_back_new_scope_usage(monkeypatch) -> None:
     assert {scope: usage.viewers for scope, usage in viewers.items()} == before
     assert binding._data[identity].scopes == {writer.scope}
     assert writer.get("value") == "live"
-    assert tuple(root._lifecycle._owned) == (*initial_owned, writer._lifecycle)
+    assert root.children == (writer,)
+    assert tuple(root._lifecycle._owned) == (*initial_owned, root._children[writer])
     root.dispose()
 
 

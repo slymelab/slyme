@@ -23,7 +23,7 @@ from slyme.utils.tree import TreeEngine
 
 from .compose import Compose
 from .default import DATA_TREE_REF, _install
-from .lifecycle import Lifecycle, _Cleanup, _Disposer
+from .lifecycle import Lifecycle, _Cleanup, _Disposer, _Effect
 from .schema import (
     ContextKey,
     ContextPathError,
@@ -49,6 +49,7 @@ class Context:
 
     Forks retain the same Schema and Store references for their entire lifetime;
     these objects may change their contents, but cannot be replaced on a Context.
+    Context owns the parent/child tree; Lifecycle owns effects and disposal state.
     Roots install independent framework Composes under `$`. All reads, including
     framework configuration, follow the bound Scope without a root fallback.
     """
@@ -56,6 +57,7 @@ class Context:
     parent: Context | None = field(init=False)
     scope: Scope = field(init=False)
     root: Context = field(init=False)
+    _children: dict[Context, _Effect] = field(init=False)
     _schema: Schema = field(init=False)
     _store: ContextStore = field(init=False)
     _lifecycle: Lifecycle = field(init=False)
@@ -80,24 +82,19 @@ class Context:
         object.__setattr__(self, "parent", parent)
         object.__setattr__(self, "scope", bound_scope)
         object.__setattr__(self, "root", self if parent is None else parent.root)
+        object.__setattr__(self, "_children", {})
         object.__setattr__(self, "_schema", schema)
         object.__setattr__(self, "_store", store)
+        object.__setattr__(self, "_lifecycle", Lifecycle(self))
         try:
             store.acquire_scope(self, bound_scope)
         except BaseException:
             if parent is None:
                 store.dispose()
             raise
-        try:
-            lifecycle = Lifecycle(
-                parent=None if parent is None else parent._lifecycle,
-                finalize=self._release,
-            )
-        except BaseException:
-            self._release()
-            raise
-        object.__setattr__(self, "_lifecycle", lifecycle)
-        if parent is None:
+        if parent is not None:
+            parent._children[self] = parent._lifecycle._own(self.dispose)
+        else:
             try:
                 _install(self)
             except BaseException:
@@ -110,6 +107,13 @@ class Context:
         finally:
             if self.parent is None:
                 self._store.dispose()
+            else:
+                self.parent._children.pop(self)._release()
+
+    @property
+    def children(self) -> tuple[Context, ...]:
+        """Snapshot children in creation order, retaining those still disposing."""
+        return tuple(self._children)
 
     @property
     def entries(self) -> tuple[RefEntry[Any], ...]:

@@ -16,13 +16,16 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Generator
 from contextvars import ContextVar
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from enum import Enum
 from inspect import isawaitable
-from typing import Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import SharedAwaitable, await_result, continuation, once
+
+if TYPE_CHECKING:
+    from .core import Context
 
 __all__ = ["Lifecycle"]
 
@@ -71,7 +74,8 @@ class _Effect:
         owner = self.owner
         while owner is not None:
             owners.append(owner)
-            owner = owner.parent
+            parent = owner.ctx.parent
+            owner = None if parent is None else parent._lifecycle
         return (*_DISPOSAL_CHAIN.get(), *owners)
 
     def _check(self) -> None:
@@ -125,25 +129,19 @@ class _LifecycleState(Enum):
 
 @dataclass(frozen=True, repr=False, eq=False)
 class Lifecycle:
-    """Own effects and child lifetimes, independently of data and visibility.
+    """Manage one Context's effects and disposal state.
 
-    The synchronous finalizer runs after all owned cleanup, even on failure.
-    It is not an effect and cannot be revoked independently of this lifetime.
+    Ownership ancestry comes from Context. Child disposal is an owned effect;
+    Context data is released after all effects finish, including on failure.
     """
 
-    parent: Lifecycle | None = None
-    finalize: InitVar[Callable[[], None] | None] = field(default=None, kw_only=True)
-    _finalizer: Callable[[], None] | None = field(default=None, init=False)
-    _owned: dict[Lifecycle | _Effect, None] = field(default_factory=dict, init=False)
+    ctx: Context
+    _owned: dict[_Effect, None] = field(default_factory=dict, init=False)
     _state: _LifecycleState = field(default=_LifecycleState.ACTIVE, init=False)
     _dispose_once: _Disposer = field(init=False)
     _sync_disposal_guard_depth: int = field(default=0, init=False)
 
-    def __post_init__(self, finalize: Callable[[], None] | None) -> None:
-        if self.parent is not None:
-            self.parent.assert_active()
-            self.parent._owned[self] = None
-        object.__setattr__(self, "_finalizer", finalize)
+    def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "_dispose_once",
@@ -184,28 +182,26 @@ class Lifecycle:
         """Forbid mutations throughout the ownership subtree before cleanup."""
         if self._state is not _LifecycleState.ACTIVE:
             return
-        pending = [self]
+        pending = [self.ctx]
         while pending:
-            lifecycle = pending.pop()
-            object.__setattr__(lifecycle, "_state", _LifecycleState.CLOSING)
-            for child in lifecycle._owned:
-                if (
-                    isinstance(child, Lifecycle)
-                    and child._state is _LifecycleState.ACTIVE
-                ):
+            ctx = pending.pop()
+            object.__setattr__(ctx._lifecycle, "_state", _LifecycleState.CLOSING)
+            for child in ctx._children:
+                if child._lifecycle._state is _LifecycleState.ACTIVE:
                     pending.append(child)
 
     def _enter_sync_disposal_guard(self) -> tuple[Lifecycle, ...]:
         guarded: list[Lifecycle] = []
-        current: Lifecycle | None = self
-        while current is not None:
+        ctx: Context | None = self.ctx
+        while ctx is not None:
+            current = ctx._lifecycle
             object.__setattr__(
                 current,
                 "_sync_disposal_guard_depth",
                 current._sync_disposal_guard_depth + 1,
             )
             guarded.append(current)
-            current = current.parent
+            ctx = ctx.parent
         return tuple(guarded)
 
     @staticmethod
@@ -225,7 +221,13 @@ class Lifecycle:
                 "Lifecycle disposal cannot be re-entered from effect setup or cleanup."
             )
 
-    def _forget_owned(self, owned: Lifecycle | _Effect) -> None:
+    def _own(self, cleanup: _Cleanup | None = None) -> _Effect:
+        effect = _Effect(self)
+        effect._cleanup = cleanup
+        self._owned[effect] = None
+        return effect
+
+    def _forget_owned(self, owned: _Effect) -> None:
         self._owned.pop(owned, None)
 
     @overload
@@ -251,8 +253,7 @@ class Lifecycle:
         Setup and cleanup cannot dispose their owner or an ancestor.
         """
         self.assert_active()
-        effect = _Effect(self)
-        self._owned[effect] = None
+        effect = self._own()
         try:
             cleanup = effect._invoke(setup)
         except BaseException:
@@ -300,19 +301,14 @@ class Lifecycle:
                 error = caught
             finally:
                 self._owned.clear()
-                finalizer = self._finalizer
-                object.__setattr__(self, "_finalizer", None)
                 try:
-                    if finalizer is not None:
-                        finalizer()
+                    self.ctx._release()
                 except BaseException as release_error:
                     if error is None:
                         error = release_error
                     else:
                         error.__cause__ = release_error
                 finally:
-                    if self.parent is not None:
-                        self.parent._forget_owned(self)
                     object.__setattr__(self, "_state", _LifecycleState.DISPOSED)
             if error is not None:
                 raise error

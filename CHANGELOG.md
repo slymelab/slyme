@@ -218,7 +218,10 @@ breaking changes when they are documented here.
   owned Lifecycle. Schema access uses Context `resolve()`, `resolve_entry()`,
   and `entries`; direct `ctx.schema` access is removed. Normal access checks
   the calling Lifecycle; cleanup uses exact ownership without active-state checks.
-- Exported independently usable `ContextStore` and `Lifecycle`. Ref lives in
+- Context owns the single parent/child tree and exposes a `children` snapshot.
+  Lifecycle is bound to its Context, with no independent parent or finalizer;
+  child disposal is an effect preserving registration-order LIFO cleanup.
+- Exported `ContextStore` and the Context-owned `Lifecycle` type. Ref lives in
   `context.schema`, and tree engines live with their Schema or Store consumers;
   the separate `context.ref` and `context.tree` modules are removed.
 - Node inspection rules live alongside Node and Wrapper in `node.core`.

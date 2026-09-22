@@ -256,7 +256,7 @@ def test_failed_update_keeps_the_explicitly_created_context_alive() -> None:
     with pytest.raises(ContextPathError, match="register"):
         child.update({"value": "changed", "service": object()})
     assert root.get("value") == "original"
-    assert child._lifecycle in root._lifecycle._owned
+    assert child in root.children
     assert root._store._scope_usages[root.scope].viewers == {root, child}
     child.update({"value": "valid"})
     assert root.get("value") == "valid"

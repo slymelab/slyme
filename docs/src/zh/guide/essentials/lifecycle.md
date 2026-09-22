@@ -1,6 +1,8 @@
 # 生命周期（Lifecycle）
 
-`Lifecycle` 也是可独立使用的 effect owner，从 `slyme.context` 导出。`Lifecycle(parent=owner)` 加入生命周期树，不需要 Schema、Store 或 Scope。其 `effect()`、`dispose()` 和 `adispose()` 与 Context 采用相同规则。可选的同步 `finalize` 回调在所有归属项清理结束后执行一次，清理失败也会执行；它不是可独立撤销的 effect。Context 用该回调释放数据 viewer，应用根还会将 Store 从 Schema 注销。应用应通过 `ctx.effect()` 登记清理，而不是重写 `Context.dispose()`；归属树由 Lifecycle 遍历。
+每个 Context 创建一个私有的 `Lifecycle(ctx)`，管理自身 effect 和释放状态。父子树只由 Context 保存；Lifecycle 通过自己的 `ctx` 查找祖先和子级。子级释放登记为父级的内部 effect，与其他 effect 一起保持 LIFO 顺序。所有 effect 结束后，包括清理失败时，Lifecycle 调用 Context 的数据释放方法；应用根还会将 Store 从 Schema 注销。Lifecycle 没有独立的 parent 或 finalizer 配置。应用应通过 `ctx.effect()` 登记清理，而不是重写 `Context.dispose()`。
+
+`ctx.children` 按创建顺序返回直接子级的 tuple 快照。子级在异步清理期间仍然挂靠父级，释放结束后才移除，失败时也会移除。已释放的 Context 没有子级，但保留原来的 `parent` 引用。Scope 继承与这棵归属树相互独立。
 
 Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行树。调用装饰后的函数会创建可变 Node；调用这个 Node 时，会使用它的当前参数直接执行。
 

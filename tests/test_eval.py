@@ -477,7 +477,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert events == ["cleanup started"]
-        assert children[0]._lifecycle in ctx._lifecycle._owned
+        assert children[0] in ctx.children
     finally:
         release.set()
         if cleanup_fails:

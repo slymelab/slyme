@@ -9,7 +9,6 @@ from slyme.context import (
     Context,
     ContextStore,
     Identity,
-    Lifecycle,
     Schema,
     Scope,
     ScopeBinding,
@@ -19,27 +18,107 @@ from slyme.utils.execution import await_result
 
 
 def test_lifecycle_disposal_visits_each_descendant_once() -> None:
-    checked: list[Lifecycle] = []
+    checked: list[Context] = []
 
-    class TrackedLifecycle(Lifecycle):
+    class TrackedContext(Context):
         def dispose(self):
             checked.append(self)
             return super().dispose()
 
-    root = TrackedLifecycle()
-    left = TrackedLifecycle(parent=root)
-    grandchild = TrackedLifecycle(parent=left)
-    right = TrackedLifecycle(parent=root)
+    root = TrackedContext()
+    left = root.fork()
+    grandchild = left.fork()
+    right = root.fork()
     root.dispose()
     assert checked == [root, right, left, grandchild]
+
+
+def test_context_children_snapshot_tracks_ownership_not_scope_ancestry() -> None:
+    root = Context()
+    first = root.fork()
+    second = root.fork(scope=Scope())
+    grandchild = first.fork(scope=second.scope)
+    snapshot = root.children
+    assert snapshot == (first, second)
+    assert first.children == (grandchild,)
+    assert second.children == ()
+    assert grandchild._lifecycle.ctx.parent is first
+    assert set(root._children.values()).issubset(root._lifecycle._owned)
+    with pytest.raises(FrozenInstanceError):
+        first.parent = second
+    first.dispose()
+    assert snapshot == (first, second)
+    assert root.children == (second,)
+    assert first.children == ()
+    assert first.parent is root
+    second._lifecycle.assert_active()
+    root.dispose()
+    assert root.children == ()
+
+
+def test_early_child_disposal_releases_parent_references() -> None:
+    root = Context()
+    initial_owned = tuple(root._lifecycle._owned)
+    child = root.fork()
+    reference = weakref.ref(child)
+    child.dispose()
+    assert not root.children
+    assert tuple(root._lifecycle._owned) == initial_owned
+    del child
+    gc.collect()
+    assert reference() is None
+    root.dispose()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(fails):
+    root = Context()
+    child = root.fork()
+    started, finish = asyncio.Event(), asyncio.Event()
+    failure = ValueError("child cleanup")
+
+    async def cleanup():
+        started.set()
+        await finish.wait()
+        if fails:
+            raise failure
+
+    child.effect(lambda: cleanup)
+    early = asyncio.create_task(child.adispose())
+    await started.wait()
+    early.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await early
+    disposing = asyncio.create_task(root.adispose())
+    await asyncio.sleep(0)
+    assert root.children == (child,)
+    assert root._children[child] in root._lifecycle._owned
+    assert not disposing.done()
+    finish.set()
+    if fails:
+        with pytest.raises(BaseExceptionGroup) as caught:
+            await disposing
+        assert caught.value.exceptions[0].exceptions == (failure,)
+    else:
+        await disposing
+    assert not root.children
+    assert not root._lifecycle._owned
+    assert not root._schema._stores
 
 
 def test_lifecycle_finalizes_after_owned_cleanup_even_on_failure() -> None:
     events = []
     failure = ValueError("cleanup")
-    lifetime = Lifecycle(finalize=lambda: events.append("finalize"))
+
+    class TrackedContext(Context):
+        def _release(self):
+            super()._release()
+            events.append("finalize" if self.parent is None else "child")
+
+    ctx = TrackedContext()
+    lifetime = ctx._lifecycle
     lifetime.effect(lambda: lambda: events.append("first"))
-    child = Lifecycle(parent=lifetime, finalize=lambda: events.append("child"))
+    child = ctx.fork()
 
     def fail():
         events.append("failure")
@@ -51,22 +130,24 @@ def test_lifecycle_finalizes_after_owned_cleanup_even_on_failure() -> None:
     assert caught.value.exceptions == (failure,)
     assert events == ["failure", "child", "first", "finalize"]
     assert not lifetime._owned
-    assert lifetime._finalizer is None
+    assert not ctx.children
     child.dispose()
     with pytest.raises(BaseExceptionGroup) as repeated:
         lifetime.dispose()
     assert repeated.value is caught.value
 
 
-def test_lifecycle_finalizer_failure_is_retained_without_repeating_cleanup() -> None:
+def test_lifecycle_release_failure_is_retained_without_repeating_cleanup() -> None:
     calls = []
     failure = ValueError("finalize")
 
-    def finalize():
-        calls.append("finalize")
-        raise failure
+    class FailingContext(Context):
+        def _release(self):
+            super()._release()
+            calls.append("finalize")
+            raise failure
 
-    lifetime = Lifecycle(finalize=finalize)
+    lifetime = FailingContext()._lifecycle
     for _ in range(2):
         with pytest.raises(ValueError) as caught:
             lifetime.dispose()
@@ -80,7 +161,14 @@ async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
     started = asyncio.Event()
     finish = asyncio.Event()
     events = []
-    lifetime = Lifecycle(finalize=lambda: events.append("finalize"))
+
+    class TrackedContext(Context):
+        def _release(self):
+            super()._release()
+            events.append("finalize")
+
+    ctx = TrackedContext()
+    lifetime = ctx._lifecycle
 
     async def cleanup():
         started.set()
@@ -92,7 +180,7 @@ async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
     await started.wait()
     lifetime.assert_readable()
     with pytest.raises(RuntimeError, match="disposed"):
-        Lifecycle(parent=lifetime)
+        ctx.fork()
     with pytest.raises(RuntimeError, match="disposed"):
         lifetime.effect(lambda: pytest.fail("setup must not run"))
     first.cancel()
@@ -108,8 +196,16 @@ async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_disposers_execute_once_per_lifetime_and_per_effect(asynchronous) -> None:
     events = []
-    left = Lifecycle(finalize=lambda: events.append("left:finalize"))
-    right = Lifecycle(finalize=lambda: events.append("right:finalize"))
+
+    class TrackedContext(Context):
+        def _release(self):
+            super()._release()
+            events.append(
+                "left:finalize" if self._lifecycle is left else "right:finalize"
+            )
+
+    left = TrackedContext()._lifecycle
+    right = TrackedContext()._lifecycle
 
     async def pending(name):
         await asyncio.sleep(0)
@@ -147,7 +243,13 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
     rewait_before_cleanup_finishes: bool,
 ) -> None:
     started, release, finalized = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    lifetime = Lifecycle(finalize=finalized.set)
+
+    class TrackedContext(Context):
+        def _release(self):
+            super()._release()
+            finalized.set()
+
+    lifetime = TrackedContext()._lifecycle
 
     async def cleanup() -> None:
         started.set()
@@ -188,7 +290,7 @@ async def test_cleanup_cannot_wait_on_a_saved_disposal_completion(
     owner_disposal,
     delegated,
 ) -> None:
-    lifetime = Lifecycle()
+    lifetime = Context()._lifecycle
 
     async def cleanup() -> None:
         if delegated:
@@ -212,7 +314,8 @@ async def test_cleanup_cannot_wait_on_a_saved_disposal_completion(
 
 
 async def test_async_setup_cannot_wait_on_its_saved_completion() -> None:
-    lifetime = Lifecycle()
+    lifetime = Context()._lifecycle
+    initial_owned = tuple(lifetime._owned)
 
     async def setup():
         await asyncio.create_task(await_result(completion))
@@ -221,7 +324,7 @@ async def test_async_setup_cannot_wait_on_its_saved_completion() -> None:
     completion = lifetime.effect(setup)
     with pytest.raises(RuntimeError, match="cannot await its own"):
         await asyncio.wait_for(completion, timeout=1)
-    assert not lifetime._owned
+    assert tuple(lifetime._owned) == initial_owned
     lifetime.dispose()
 
 
@@ -236,7 +339,13 @@ async def test_background_failure_reaches_asyncio_diagnostics_unless_observed(
     reports = []
     started, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
     finalized = asyncio.Event()
-    lifetime = Lifecycle(finalize=finalized.set)
+
+    class TrackedContext(Context):
+        def _release(self):
+            super()._release()
+            finalized.set()
+
+    lifetime = TrackedContext()._lifecycle
 
     async def fail():
         try:
@@ -285,14 +394,15 @@ async def test_background_failure_reaches_asyncio_diagnostics_unless_observed(
         loop.set_exception_handler(previous_handler)
 
 
-def test_lifecycle_releases_its_finalizer_reference() -> None:
+def test_lifecycle_releases_effect_resource_references() -> None:
     class Resource:
         def close(self):
             pass
 
     resource = Resource()
     reference = weakref.ref(resource)
-    lifetime = Lifecycle(finalize=resource.close)
+    lifetime = Context()._lifecycle
+    lifetime.effect(lambda resource=resource: resource.close)
     del resource
     assert reference() is not None
     lifetime.dispose()
@@ -313,7 +423,10 @@ def test_context_shares_store_and_schema_but_not_lifecycle() -> None:
     assert root._store is child._store
     assert other._store is not root._store
     assert root._lifecycle is not child._lifecycle
-    assert child._lifecycle.parent is root._lifecycle
+    assert child._lifecycle.ctx is child
+    assert root._lifecycle.ctx is root
+    assert child.parent is root
+    assert root.children == (child,)
     with pytest.raises(FrozenInstanceError):
         child._schema = Schema()
     with pytest.raises(FrozenInstanceError):

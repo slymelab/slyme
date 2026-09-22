@@ -818,7 +818,7 @@ async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_e
         with pytest.raises(asyncio.CancelledError) as caught:
             await task
         assert caught.value.__cause__ is None
-        assert children[0]._lifecycle in ctx._lifecycle._owned
+        assert children[0] in ctx.children
     finally:
         release_cleanup.set()
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
@@ -903,7 +903,7 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
         with pytest.raises(asyncio.CancelledError) as caught:
             await task
         assert caught.value.__cause__ is None
-        assert children[0]._lifecycle in ctx._lifecycle._owned
+        assert children[0] in ctx.children
     finally:
         release_cleanup.set()
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
