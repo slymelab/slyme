@@ -285,7 +285,6 @@ class Lifecycle:
     def effect(
         self, setup: Callable[[], Awaitable[_Cleanup]]
     ) -> Awaitable[_Disposer]: ...
-
     @overload
     def effect(
         self, setup: Callable[[], _Cleanup | Awaitable[_Cleanup]]
