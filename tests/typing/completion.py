@@ -1,7 +1,7 @@
 """Static checks for the awaited result type of unified execution APIs."""
 
 from collections.abc import Awaitable, Callable, Generator
-from typing import Any
+from typing import Any, Literal
 
 from typing_extensions import assert_type
 
@@ -71,6 +71,10 @@ def mixed_wrapper(
 
 
 async def check_types(ctx: Context) -> None:
+    assert_type(ctx.dispose_mode, Literal["sequential", "parallel"])
+    assert_type(Context(dispose_mode="parallel"), Context)
+    assert_type(ctx.fork(dispose_mode="parallel"), Context)
+    assert_type(ctx.derive(dispose_mode="parallel"), Context)
     assert_type(create_node(direct), Node[int])
     assert_type(create_node(direct_async), Node[int])
     assert_type(create_node(direct_mixed, {"value": 1}), Node[int])

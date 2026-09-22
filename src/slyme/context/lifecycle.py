@@ -14,12 +14,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Generator
+import asyncio
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from inspect import isawaitable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import SharedAwaitable, await_result, continuation, once
@@ -120,6 +121,48 @@ class _Effect:
             self._release()
 
 
+@continuation
+def _sequential(effects: Sequence[_Effect]) -> Generator[Any, Any, None]:
+    errors = []
+    for effect in effects:
+        try:
+            yield effect.dispose()
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        raise exception_group("Lifecycle dispose failed", errors)
+
+
+@continuation
+def _batch(effects: Sequence[_Effect]) -> Generator[Any, Any, None]:
+    errors: list[tuple[int, BaseException]] = []
+    pending: list[Awaitable[None]] = []
+
+    @continuation
+    def dispose(index: int, effect: _Effect) -> Generator[Any, Any, None]:
+        try:
+            yield effect.dispose()
+        except BaseException as error:
+            errors.append((index, error))
+
+    for index, effect in enumerate(effects):
+        result = dispose(index, effect)
+        if isawaitable(result):
+            pending.append(result)
+
+    if pending:
+
+        async def gather() -> None:
+            await asyncio.gather(*pending)
+
+        yield gather()
+    if errors:
+        errors.sort(key=lambda item: item[0])
+        raise exception_group(
+            "Lifecycle dispose failed", [error for _, error in errors]
+        )
+
+
 class _LifecycleState(Enum):
     ACTIVE = "active"
     CLOSING = "closing"
@@ -129,13 +172,17 @@ class _LifecycleState(Enum):
 
 @dataclass(frozen=True, repr=False, eq=False)
 class Lifecycle:
-    """Manage one Context's effects and disposal state.
+    """Manage one Context's effects, disposal mode, and disposal state.
 
     Ownership ancestry comes from Context. Child disposal is an owned effect;
-    Context data is released after all effects finish, including on failure.
+    dispose_mode selects sequential or parallel cleanup. Context data is released
+    after all effects finish, including on failure.
     """
 
     ctx: Context
+    dispose_mode: Literal["sequential", "parallel"] = field(
+        default="sequential", kw_only=True
+    )
     _owned: dict[_Effect, None] = field(default_factory=dict, init=False)
     _state: _LifecycleState = field(default=_LifecycleState.ACTIVE, init=False)
     _dispose_once: _Disposer = field(init=False)
@@ -268,12 +315,14 @@ class Lifecycle:
         return effect.dispose
 
     def dispose(self) -> None | Awaitable[None]:
-        """Release ownership in LIFO order, returning any unfinished cleanup.
+        """Release owned effects using this Lifecycle's disposal mode.
 
         Synchronous cleanup runs immediately. Await asynchronous completion;
         once awaited, waiter cancellation does not cancel cleanup. Repeated
         calls share that completion and reproduce its terminal failure.
-        Owned cleanup failures are grouped in cleanup execution order.
+        Disposers are called in reverse registration order. Sequential mode
+        waits between calls; parallel mode joins all asynchronous results.
+        Failures are grouped in call order, not completion order.
         Mutations in the entire ownership subtree are forbidden before the
         first cleanup; each Lifecycle remains readable until its own release.
         Failures are not retrieved merely to suppress asyncio diagnostics.
@@ -283,20 +332,14 @@ class Lifecycle:
     def _dispose(self) -> None | Awaitable[None]:
         self._close_subtree()
         object.__setattr__(self, "_state", _LifecycleState.DISPOSING)
-        owned = reversed(tuple(self._owned))
+        owned = tuple(reversed(self._owned))
+        execute_owned = _sequential if self.dispose_mode == "sequential" else _batch
 
         @continuation
         def execute() -> Generator[Any, Any, None]:
             error: BaseException | None = None
-            errors = []
             try:
-                for item in owned:
-                    try:
-                        yield item.dispose()
-                    except BaseException as e:
-                        errors.append(e)
-                if errors:
-                    raise exception_group("Lifecycle dispose failed", errors)
+                yield execute_owned(owned)
             except BaseException as caught:
                 error = caught
             finally:

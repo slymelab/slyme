@@ -10,6 +10,11 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Immutable `Context.dispose_mode` selects sequential LIFO or parallel cleanup.
+  Context construction, `fork()`, and `derive()` default independently to
+  `"sequential"`; parallel groups join all cleanup and report failures in reverse
+  registration order. Nested Contexts and shared early disposers compose cleanup
+  dependencies without an additional Effect grouping API.
 - Context-owned Tree rules and Auto evaluators, installed by `context/default.py`
   in independent Composes at `$.tree.data`, `$.tree.node`, and `$.eval.handlers`.
   Defaults follow normal Scope visibility with no root fallback and are released

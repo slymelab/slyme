@@ -674,9 +674,10 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
 
 def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
     parameters = inspect.signature(Context).parameters
-    assert tuple(parameters) == ("parent", "scope")
+    assert tuple(parameters) == ("parent", "scope", "dispose_mode")
     assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters.values())
-    assert all(p.default is None for p in parameters.values())
+    assert parameters["parent"].default is parameters["scope"].default is None
+    assert parameters["dispose_mode"].default == "sequential"
     ctx = Context()
     assert ctx.to_dict() == {
         "$": ctx.get("$").to_dict(),
@@ -698,7 +699,7 @@ def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
     ctx.dispose()
 
 
-def test_context_constructor_accepts_only_keyword_parent_and_scope() -> None:
+def test_context_constructor_accepts_keyword_ownership_and_visibility() -> None:
     root = Context()
     root.declare(R)
     root.update({R.resolve("a.b.c"): 1})

@@ -49,7 +49,8 @@ class Context:
 
     Forks retain the same Schema and Store references for their entire lifetime;
     these objects may change their contents, but cannot be replaced on a Context.
-    Context owns the parent/child tree; Lifecycle owns effects and disposal state.
+    Context owns the parent/child tree; Lifecycle owns effects, disposal mode,
+    and disposal state.
     Roots install independent framework Composes under `$`. All reads, including
     framework configuration, follow the bound Scope without a root fallback.
     """
@@ -67,6 +68,7 @@ class Context:
         *,
         parent: Context | None = None,
         scope: Scope | None = None,
+        dispose_mode: Literal["sequential", "parallel"] = "sequential",
     ) -> None:
         """Create a lifetime and data view, installing defaults only for a new root."""
         if parent is not None:
@@ -85,7 +87,9 @@ class Context:
         object.__setattr__(self, "_children", {})
         object.__setattr__(self, "_schema", schema)
         object.__setattr__(self, "_store", store)
-        object.__setattr__(self, "_lifecycle", Lifecycle(self))
+        object.__setattr__(
+            self, "_lifecycle", Lifecycle(self, dispose_mode=dispose_mode)
+        )
         try:
             store.acquire_scope(self, bound_scope)
         except BaseException:
@@ -109,6 +113,11 @@ class Context:
                 self._store.dispose()
             else:
                 self.parent._children.pop(self)._release()
+
+    @property
+    def dispose_mode(self) -> Literal["sequential", "parallel"]:
+        """Return the immutable disposal mode owned by this Context's Lifecycle."""
+        return self._lifecycle.dispose_mode
 
     @property
     def children(self) -> tuple[Context, ...]:
@@ -160,9 +169,10 @@ class Context:
         return self._lifecycle.effect(setup)
 
     def dispose(self) -> None | Awaitable[None]:
-        """Close the owned subtree, clean resources in LIFO order, then release data.
+        """Close the subtree, finish cleanup in dispose_mode, then release data.
 
         Contexts remain readable until their own release, but cannot be mutated.
+        Sequential cleanup waits in LIFO order; parallel cleanup joins all items.
         Await unfinished cleanup. Repeated calls share the same completion and error.
         """
         return self._lifecycle.dispose()
@@ -171,9 +181,14 @@ class Context:
         """Always return an awaitable for disposal, retaining immediate sync cleanup."""
         return self._lifecycle.adispose()
 
-    def fork(self, *, scope: Scope | None = None) -> Context:
-        """Create an owned child sharing this Scope unless another is supplied."""
-        return type(self)(parent=self, scope=scope)
+    def fork(
+        self,
+        *,
+        scope: Scope | None = None,
+        dispose_mode: Literal["sequential", "parallel"] = "sequential",
+    ) -> Context:
+        """Create an owned child, sharing Scope but not inheriting disposal mode."""
+        return type(self)(parent=self, scope=scope, dispose_mode=dispose_mode)
 
     def derive(
         self,
@@ -182,6 +197,7 @@ class Context:
         parents: Scope | tuple[Scope, ...] | None = None,
         bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
         | None = None,
+        dispose_mode: Literal["sequential", "parallel"] = "sequential",
     ) -> Context:
         """Create an owned child and one new Scope configured for all targets.
 
@@ -193,7 +209,8 @@ class Context:
         An Identity is shorthand for ScopeBinding(identity=identity).
         Unselected targets inherit. None or empty bindings create a new Scope
         without explicit bindings. derive() is equivalent to
-        fork(scope=self.scope.fork()).
+        fork(scope=self.scope.fork()). Disposal mode defaults to sequential,
+        independently of the parent.
         """
         self._lifecycle.assert_active()
         prepared = tuple(
@@ -206,7 +223,10 @@ class Context:
             for target, binding in (bindings or {}).items()
         )
         child = self.fork(
-            scope=Scope(label=label, parents=self.scope if parents is None else parents)
+            scope=Scope(
+                label=label, parents=self.scope if parents is None else parents
+            ),
+            dispose_mode=dispose_mode,
         )
         try:
             for target, binding in prepared:

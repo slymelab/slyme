@@ -184,7 +184,7 @@ assert ctx.extract({"name": R.resolve("user.name"), "age": R.resolve("user.age")
 }
 ```
 
-`Context(*, parent=None, scope=None)` 建立归属和可见性。根创建自己的 Schema 和 Store，并在 `$` 下安装独立的框架配置；子级共享 parent 的 Schema 和 Store，不重复安装默认配置。`root` 是固定字段：根指向自身，子级指向同一个应用根。Context 的属性绑定不可重赋值，但声明的数据仍可修改。创建后通过 `declare()` 声明路径，再用 `update()` 或 `set()` 赋值。所有数据访问都要求路径已声明，包括带 default 的读取和 `exists()` 检查。`update()` 只接受 `assign` 字段。
+`Context(*, parent=None, scope=None, dispose_mode="sequential")` 建立归属和可见性。根创建自己的 Schema 和 Store，并在 `$` 下安装独立的框架配置；子级共享 parent 的 Schema 和 Store，不重复安装默认配置。`root` 是固定字段：根指向自身，子级指向同一个应用根。Context 的属性绑定不可重赋值，但声明的数据仍可修改。创建后通过 `declare()` 声明路径，再用 `update()` 或 `set()` 赋值。所有数据访问都要求路径已声明，包括带 default 的读取和 `exists()` 检查。`update()` 只接受 `assign` 字段。
 
 应用既可以预先构建 Schema，再通过 `ctx.declare(schema)` 导入，也可以直接声明 dict。导入会把当前定义复制到应用自己的 Schema，声明所有权独立；源 Schema 后续的新增或撤销不会自动传播。即使导入同一个源，不同根的 Schema 仍相互独立。同一应用的 Context 所声明的变动，已有 fork 会立即看到：
 
@@ -311,7 +311,7 @@ Context parent 关系与 Scope 祖先关系彼此独立。parent 决定生命周
 
 数据清理不改变配置。复用已保存的 Scope 会保留该字段的绑定和局部阻断；复用 Identity 会保留身份级阻断。已清理的值不会恢复。撤销 Schema 的最终声明会移除该字段的绑定，但不能改变外部仍持有的 Identity。这些规则控制查找，不是插件之间的权限控制。
 
-`ctx.derive(*, label=None, parents=None, bindings=None)` 创建由当前 Context 管理的子 Context，并为全部 target 创建同一个新 Scope。`parents=None` 继承 `ctx.scope`；显式 Scope 或 tuple 指定新 Scope 的直接父级，`()` 创建独立 Scope。生命周期仍由 `ctx` 管理。路径或 Ref key 配置已声明的 leaf；Compose 对象 key 配置贡献层，不替换 Context 中的值。每个值可以是 ScopeBinding 或 Identity。直接传 Identity 等价于 `ScopeBinding(identity=identity)`，映射中的单个值不接受 None。`ScopeBinding()` 创建私有 Identity 且不阻断；`ScopeBinding(identity=shared)` 选择共享存储。两级阻断均需显式设置 `blocked=True`。未指定的 target 沿指定父集继承。省略 bindings、传入 None 或空映射均会创建新 Scope，不配置显式绑定。无参 `ctx.derive()` 等价于 `ctx.fork(scope=ctx.scope.fork())`。共享 identity 不会让新 Scope 的阻断影响无继承关系的其他 Scope：
+`ctx.derive(*, label=None, parents=None, bindings=None, dispose_mode="sequential")` 创建由当前 Context 管理的子 Context，并为全部 target 创建同一个新 Scope。`parents=None` 继承 `ctx.scope`；显式 Scope 或 tuple 指定新 Scope 的直接父级，`()` 创建独立 Scope。生命周期仍由 `ctx` 管理。路径或 Ref key 配置已声明的 leaf；Compose 对象 key 配置贡献层，不替换 Context 中的值。每个值可以是 ScopeBinding 或 Identity。直接传 Identity 等价于 `ScopeBinding(identity=identity)`，映射中的单个值不接受 None。`ScopeBinding()` 创建私有 Identity 且不阻断；`ScopeBinding(identity=shared)` 选择共享存储。两级阻断均需显式设置 `blocked=True`。未指定的 target 沿指定父集继承。省略 bindings、传入 None 或空映射均会创建新 Scope，不配置显式绑定。无参 `ctx.derive()` 等价于 `ctx.fork(scope=ctx.scope.fork())`。共享 identity 不会让新 Scope 的阻断影响无继承关系的其他 Scope：
 
 ```python
 from slyme.context import Identity
@@ -364,7 +364,7 @@ Context 强持有 binding 表。注册 disposer 捕获 Binding、Scope 和安装
 
 `ctx.effect(setup)` 管理一次 setup 及其 cleanup。同步 setup 立即运行，并返回提前 disposer；如果 setup 返回 awaitable，`effect()` 则返回一个解析为 disposer 的 awaitable。两种情况统一使用 `await await_result(ctx.effect(setup))`。异步 setup 在启动前就已登记归属：即使调用者没有等待注册，owner 释放时也会等待 setup，再执行其 cleanup。使用取得的资源前必须等待 setup；如果 setup 在返回 cleanup 前失败，部分资源的回滚仍由 setup 自己负责。
 
-parent 会强引用并拥有子 Context。每个 Context 按后进先出顺序处理直接拥有的 effect 与子 Context，并递归销毁子级。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.utils.execution` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出异常组，只按清理执行顺序保存失败；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
+parent 会强引用并拥有子 Context。每个 Context 按登记逆序调用直接拥有的 disposer。`dispose_mode="sequential"` 等待每项结束后再调用下一项；`"parallel"` 先调用所有项，再一起等待异步结果。构造、`fork()` 和 `derive()` 均独立默认使用串行策略。嵌套分组和共享等待参见[生命周期](./lifecycle.md#清理分组)。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.utils.execution` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出异常组，只按登记逆序保存失败，不依赖完成顺序；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
 
 `dispose()` 会在执行任何 cleanup 前，同步禁止整棵所属 Context 子树的修改，包括新增 effect 和子 Context。修改检查只读取接收调用的 Context 自身状态，不受生命周期深度影响。每个 Context 在自身释放完成前仍可读取。尚未轮到清理的子 Context 仍可提前 dispose；已经开始的清理保留原来的共享完成结果。所属子树之外的 Context 即使共享或继承其 Scope，仍可修改。这不会取消正在运行的 Node task，也不会冻结 Context 值中存储的对象。
 

@@ -1,6 +1,6 @@
 # 生命周期（Lifecycle）
 
-每个 Context 创建一个私有的 `Lifecycle(ctx)`，管理自身 effect 和释放状态。父子树只由 Context 保存；Lifecycle 通过自己的 `ctx` 查找祖先和子级。子级释放登记为父级的内部 effect，与其他 effect 一起保持 LIFO 顺序。所有 effect 结束后，包括清理失败时，Lifecycle 调用 Context 的数据释放方法；应用根还会将 Store 从 Schema 注销。Lifecycle 没有独立的 parent 或 finalizer 配置。应用应通过 `ctx.effect()` 登记清理，而不是重写 `Context.dispose()`。
+每个 Context 创建一个私有的 `Lifecycle(ctx, dispose_mode=...)`，管理自身 effect、释放策略和释放状态。`ctx.dispose_mode` 是转发到 Lifecycle 的只读 property，不重复存储。父子树只由 Context 保存；Lifecycle 通过自己的 `ctx` 查找祖先和子级。子级释放登记为父级的内部 effect，遵循父级的释放策略。所有 effect 结束后，包括清理失败时，Lifecycle 调用 Context 的数据释放方法；应用根还会将 Store 从 Schema 注销。Lifecycle 没有独立的 parent 或 finalizer 配置。应用应通过 `ctx.effect()` 登记清理，而不是重写 `Context.dispose()`。
 
 `ctx.children` 按创建顺序返回直接子级的 tuple 快照。子级在异步清理期间仍然挂靠父级，释放结束后才移除，失败时也会移除。已释放的 Context 没有子级，但保留原来的 `parent` 引用。Scope 继承与这棵归属树相互独立。
 
@@ -46,13 +46,31 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；所选业务子树的字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.update(context.get("app").flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
 
-Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare()` 注册的 cleanup，按直接归属项的后进先出顺序递归释放。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
+Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare()` 注册的 cleanup。其 `dispose_mode` 决定直接归属项采用串行还是并发清理。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
 
 `dispose()` 调用时立即标记释放中并运行同步部分，异步部分需要等待后才调度。提前清理的登记项在完成前仍由 Context 持有，owner 释放会加入同一次清理；移除它不会改变其余登记项的释放顺序。
 
-每项清理完成后才开始下一项，包括异步清理。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 将归属项清理错误组成异常组，只按清理执行顺序保存失败；后续释放调用观察同一个最终结果，不重复执行 cleanup。Lifecycle 使用 `once` 和 `SharedAwaitable` 共享执行及结果。调用和等待都会检查生命周期重入，包括通过先前取得的完成句柄进行等待。
+串行清理等待每项结束后才调用下一项；并发清理先调用所有 disposer，再一起等待异步结果。两种模式均按登记逆序访问各项，同步操作直接执行，无需事件循环。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 按登记逆序汇总失败，不依赖完成顺序；后续释放调用观察同一个最终结果，不重复执行 cleanup。Lifecycle 使用 `once` 和 `SharedAwaitable` 共享执行及结果。调用和等待都会检查生命周期重入，包括通过先前取得的完成句柄进行等待。
 
 取消 setup 或释放的等待者不会取消共享操作，调用方仍须等待完成并处理失败。Slyme 不会仅为抑制 asyncio 的未观察异常诊断而提取后台异常；这些诊断不能替代应用的错误处理。
+
+## 清理分组
+
+`Context()`、`fork()` 和 `derive()` 接受 `dispose_mode="sequential" | "parallel"`，每个新 Context 均默认使用 `"sequential"`。策略不可修改，也不继承父级配置。它只影响清理，不影响 setup 或 Node 执行。无论子级采用何种内部策略，父级都会等待子级完整清理。
+
+```python
+root = Context()
+root.declare(R)
+plugins = root.fork(dispose_mode="parallel")
+plugin_a = plugins.fork()
+plugin_b = plugins.fork()
+```
+
+这里 plugin_a 与 plugin_b 并发清理，各自内部保持 LIFO。根声明和框架默认配置保留到两者结束。继续 fork 可以任意嵌套清理策略，不增加 Scope 继承层。操作归属于调用它的 Context，不存在隐式的当前分组或 disposer 转移。
+
+并发的兄弟项必须允许清理重叠。共享依赖应先登记到串行父级，再创建消费者，或者显式建立等待关系。清理期间允许读取，并不阻止其他并发 effect 撤销字段。Context 不会根据数据可见性推导插件卸载顺序。
+
+不同 cleanup 可以等待同一个提前 disposer，它只执行一次，所有等待者共享完成结果。跨组等待必须无环。操作的前置条件应放在其共享清理内部，而不是分散在各调用方；也不能另有绕过这些条件的独立清理入口。共享等待不会统计使用者，也不会等所有调用方到达。每个等待分支都能观察到清理失败，因此同一失败可能出现在多个嵌套异常组中。
 
 ## Auto 值
 
