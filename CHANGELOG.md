@@ -10,6 +10,11 @@ breaking changes when they are documented here.
 
 ### Added
 
+- Generic `Context[A]` facets, created by an optional synchronous `facet_factory`
+  on Context construction, `fork()`, or `derive()`. Facets are per-Context,
+  remain available after disposal, and are not inherited or automatically
+  disposed. Factory return types determine facet types; bare Context defaults
+  to Any. Derive bindings are installed before the factory runs.
 - Immutable `Context.dispose_mode` selects sequential LIFO or batch cleanup.
   Context construction, `fork()`, and `derive()` default independently to
   `"sequential"`; batch groups join all cleanup and report failures in reverse
@@ -203,6 +208,8 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- `Context.fork()` and `Context.derive()` create base Context instances;
+  `Scope.fork()` creates a base Scope, without propagating receiver subclasses.
 - Tree traversal represents leaves with `None` internally, avoiding placeholder
   container data and redundant flatten flags in both traversal paths.
 - Node and Wrapper execute directly in `__call__`, without separate `_call`

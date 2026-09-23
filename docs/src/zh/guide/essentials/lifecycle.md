@@ -14,6 +14,37 @@ Lifecycle 状态依次为 `ACTIVE → DISPOSE_PENDING → DISPOSING → DISPOSED
 
 Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行树。调用装饰后的函数会创建可变 Node；调用这个 Node 时，会使用它的当前参数直接执行。
 
+## Context facet
+
+`Context[A]` 通过普通只读属性 `facet: A` 关联一个业务对象。不标注泛型的 `Context` 和未提供工厂的创建调用默认使用 `Context[Any]`；可以显式写 `Context[None]`，但并不强制。facet 对象自身的内容可以变化。框架不要求基类或协议，不代理 facet 方法，也不自动调用其 setup 或释放方法。
+
+`Context()`、`fork()` 和 `derive()` 接受 `facet_factory(ctx)`。工厂同步执行一次，收到的新 Context 已建立归属、Scope viewer、根默认配置以及 derive 的所有 bindings。返回值原样保存，不会自动 await。工厂返回前不可访问 facet，框架不保留工厂本身。建议在构造完成后注册 effect。工厂内注册 effect 不会被禁止或特殊检查，但工厂失败时，不能依赖同步构造回滚来等待异步 setup 或 cleanup。
+
+```python
+from slyme.context import Context
+
+
+class Plugin:
+    def __init__(self, ctx: "Context[Plugin]"):
+        self.ctx = ctx
+        self.active_ctx: Context | None = None
+
+    def unload(self):
+        if self.active_ctx is not None:
+            return self.active_ctx.dispose()
+
+
+root = Context()
+instance = root.fork(facet_factory=Plugin)  # Context[Plugin]
+plugin = instance.facet                   # Plugin，而不是 Plugin | None
+plugin.active_ctx = instance.fork()       # 不继承 facet
+plugin.unload()                           # 本例只有同步清理
+plugin.active_ctx = instance.fork()       # 新的一次激活
+root.dispose()
+```
+
+facet 属于 Context 实例，而不是 Scope 身份。即使共享父级 Scope，子级也默认得到 `None`，除非自己的工厂提供了值。子级 facet 类型独立于父级。可以通过 `lambda ctx: existing_plugin` 这样的工厂显式共享已有对象。释放后仍保留 facet 供查询；Context 与 facet 的引用遵循普通 Python 对象生命周期。资源清理仍应交给 effect，而不是对象回收。插件发现、依赖管理和 active Context 的登记维护仍由扩展负责。
+
 ## 构建与修改
 
 ```python

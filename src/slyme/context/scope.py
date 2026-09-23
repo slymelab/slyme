@@ -115,8 +115,8 @@ class Scope:
         *,
         label: Any | None = None,
     ) -> Scope:
-        """Create a child Scope with this Scope as its only direct parent."""
-        return type(self)(label=label, parents=self)
+        """Create a base Scope with this Scope as its only direct parent."""
+        return Scope(label=label, parents=self)
 
     @overload
     def find(self, label: Any, default: Scope | _Missing = _MISSING) -> Scope: ...

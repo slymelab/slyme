@@ -20,13 +20,14 @@ from slyme.utils.execution import await_result
 
 def test_lifecycle_disposal_visits_each_descendant_once(monkeypatch) -> None:
     checked: list[Context] = []
+    dispose = Context.dispose
 
-    class TrackedContext(Context):
-        def dispose(self):
-            checked.append(self)
-            return super().dispose()
+    def track_dispose(ctx):
+        checked.append(ctx)
+        return dispose(ctx)
 
-    root = TrackedContext()
+    monkeypatch.setattr(Context, "dispose", track_dispose)
+    root = Context()
     left = root.fork()
     grandchild = left.fork()
     right = root.fork()
@@ -129,16 +130,17 @@ async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(
     assert not root._schema._stores
 
 
-def test_lifecycle_finalizes_after_owned_cleanup_even_on_failure() -> None:
+def test_lifecycle_finalizes_after_owned_cleanup_even_on_failure(monkeypatch) -> None:
     events = []
     failure = ValueError("cleanup")
+    finalize = Context._finalize
 
-    class TrackedContext(Context):
-        def _finalize(self):
-            super()._finalize()
-            events.append("finalize" if self.parent is None else "child")
+    def track_finalize(ctx):
+        finalize(ctx)
+        events.append("finalize" if ctx.parent is None else "child")
 
-    ctx = TrackedContext()
+    monkeypatch.setattr(Context, "_finalize", track_finalize)
+    ctx = Context()
     lifetime = ctx._lifecycle
     lifetime.effect(lambda: lambda: events.append("first"))
     child = ctx.fork()

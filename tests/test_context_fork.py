@@ -243,6 +243,24 @@ def test_fork_distinguishes_shared_supplied_and_new_scopes() -> None:
     root.dispose()
 
 
+@pytest.mark.parametrize("method", ["fork", "derive"])
+def test_context_children_do_not_propagate_the_parents_subclass(method) -> None:
+    class ApplicationContext(Context):
+        def __init__(self, application):
+            super().__init__(facet_factory=lambda ctx: application)
+
+    root = ApplicationContext("application")
+    child = getattr(root, method)()
+    configured = getattr(root, method)(facet_factory=lambda ctx: ctx.parent.facet)
+    assert type(child) is type(configured) is Context
+    assert child.parent is configured.parent is root
+    assert child.root is configured.root is root
+    assert child.facet is None
+    assert configured.facet == "application"
+    root.dispose()
+    assert not root.children
+
+
 def test_derive_rejects_inconsistent_parents_before_registering_a_child() -> None:
     root = Context()
     root.declare({"value": Schema.leaf()})

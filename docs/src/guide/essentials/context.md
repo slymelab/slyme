@@ -279,6 +279,8 @@ Every read operation accepts `local=True` to inspect only `ctx.scope`. The defau
 
 ## Context lifetime and Scope lookup {#scope}
 
+`Context.fork()` and `Context.derive()` create base `Context` instances; `Scope.fork()` creates a base `Scope`. These methods do not propagate the receiver's Python subclass. Use facets and composition for business extensions.
+
 `fork()` creates an owned child Context whose `parent` is the receiver. It shares the receiver's Scope by default, so Contexts in the same application root and bound to that Scope observe the same local values. Pass an explicit child Scope when a distinct data layer is required:
 
 ```python

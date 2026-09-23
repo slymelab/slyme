@@ -14,6 +14,37 @@ Construction registers child ownership before acquiring Scope visibility. Acquis
 
 Slyme uses one live `Node` graph rather than separate definition and execution trees. Creating a decorated function builds a mutable Node; calling it executes that same Node with its current parameters.
 
+## Context facets
+
+`Context[A]` associates one business object with a Context through the ordinary read-only `facet: A` attribute. Bare `Context` and construction without a factory default to `Context[Any]`; an explicit `Context[None]` is available but not required. The facet's contents may be mutable. The framework does not require a base class or protocol, proxy facet methods, or automatically call its setup or disposal methods.
+
+`Context()`, `fork()`, and `derive()` accept `facet_factory(ctx)`. Each factory runs once and synchronously receives the new Context after its ownership, Scope viewers, root defaults, and any derive bindings are ready. The result is stored unchanged; factory results are not awaited. The facet is unavailable until the factory returns, and the factory itself is not retained. Prefer registering effects after construction. Effect registration inside factories is not prohibited or specially checked, but a factory failure cannot rely on synchronous construction rollback to await asynchronous setup or cleanup.
+
+```python
+from slyme.context import Context
+
+
+class Plugin:
+    def __init__(self, ctx: "Context[Plugin]"):
+        self.ctx = ctx
+        self.active_ctx: Context | None = None
+
+    def unload(self):
+        if self.active_ctx is not None:
+            return self.active_ctx.dispose()
+
+
+root = Context()
+instance = root.fork(facet_factory=Plugin)  # Context[Plugin]
+plugin = instance.facet                   # Plugin, not Plugin | None
+plugin.active_ctx = instance.fork()       # No inherited facet
+plugin.unload()                           # This example has synchronous cleanup
+plugin.active_ctx = instance.fork()       # A fresh activation
+root.dispose()
+```
+
+Facets belong to Context instances, not Scope identities. A child receives `None` unless its own factory provides a value, even when it shares its parent's Scope. A child's facet type is independent of its parent's type. Existing objects can be shared explicitly with a factory such as `lambda ctx: existing_plugin`. Disposal retains the facet for inspection; Context and facet references follow ordinary Python object lifetime. Resource cleanup still belongs in effects, not object collection. Plugin discovery, dependency management, and active-context bookkeeping remain extension responsibilities.
+
 ## Build and modify
 
 ```python

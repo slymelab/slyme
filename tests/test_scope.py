@@ -76,6 +76,19 @@ def test_scope_fork_is_explicitly_single_parent() -> None:
         root.fork(other)  # type: ignore[call-arg]
 
 
+def test_scope_fork_does_not_propagate_the_parents_subclass() -> None:
+    class ApplicationScope(Scope):
+        def __init__(self, application):
+            super().__init__(label=application)
+
+    parent = ApplicationScope("application")
+    child = parent.fork(label="child")
+    assert type(child) is Scope
+    assert child.label == "child"
+    assert child.parents == (parent,)
+    assert child.mro == (child, parent)
+
+
 def test_scope_rejects_an_inconsistent_c3_graph() -> None:
     root = Scope(label="root")
     x = root.fork(label="x")

@@ -69,9 +69,9 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
         Scope,
     )
     assert_type(Compose.derive_many(label="root", parents=(), bindings={}), Scope)
-    ctx.fork(bindings={})  # type: ignore[call-arg]
-    ctx.derive(bindings={}, scope=ctx.scope)  # type: ignore[call-arg]
-    ctx.derive({})  # type: ignore[misc]
+    ctx.fork(bindings={})  # type: ignore[call-overload]
+    ctx.derive(bindings={}, scope=ctx.scope)  # type: ignore[call-overload]
+    ctx.derive({})  # type: ignore[call-overload]
     values.derive()  # type: ignore[call-arg]
     values.derive(ctx.scope)  # type: ignore[misc, call-arg]
     Compose.derive_many(bindings={})  # type: ignore[call-arg]

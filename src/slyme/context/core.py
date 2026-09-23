@@ -17,7 +17,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, TypeVar, overload
+from typing import Any, Generic, Literal, overload
+
+from typing_extensions import TypeVar
 
 from slyme.utils.execution import once
 from slyme.utils.tree import TreeEngine
@@ -40,12 +42,13 @@ from .store import ContextStore
 
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
+_A = TypeVar("_A", default=Any, covariant=True)
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True, repr=False, eq=False, init=False)
-class Context:
+class Context(Generic[_A]):
     """Coordinate shared declarations and data with one owned Lifecycle.
 
     Forks retain the same Schema and Store references for their entire lifetime;
@@ -54,11 +57,14 @@ class Context:
     and disposal state.
     Roots install independent framework Composes under `$`. All reads, including
     framework configuration, follow the bound Scope without a root fallback.
+    The optional facet is a per-Context business object, created synchronously
+    and retained after disposal. It is not inherited or automatically disposed.
     """
 
     parent: Context | None = field(init=False)
     scope: Scope = field(init=False)
     root: Context = field(init=False)
+    facet: _A = field(init=False)
     _children: dict[Context, _Effect] = field(init=False)
     _schema: Schema = field(init=False)
     _store: ContextStore = field(init=False)
@@ -70,8 +76,14 @@ class Context:
         parent: Context | None = None,
         scope: Scope | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: Callable[[Context[_A]], _A] | None = None,
     ) -> None:
-        """Create a lifetime and data view, installing defaults only for a new root."""
+        """Create a lifetime and data view, then construct the facet if supplied.
+
+        The factory receives this initialized Context but must not read its
+        facet before returning. Prefer registering effects after construction;
+        failure rollback cannot await asynchronous setup or cleanup.
+        """
         if parent is not None:
             parent._lifecycle.assert_active()
             schema = parent._schema
@@ -100,9 +112,14 @@ class Context:
             store.acquire_scope(self, bound_scope)
             if parent is None:
                 _install(self)
+            object.__setattr__(
+                self,
+                "facet",
+                facet_factory(self) if facet_factory is not None else None,
+            )
         except BaseException:
-            # NOTE: Initialization and its registered cleanup must remain internal
-            # and synchronous; this rollback cannot await asynchronous disposal.
+            # NOTE: Internal initialization is synchronous. A facet factory that
+            # registers asynchronous cleanup cannot rely on this rollback to await it.
             self.dispose()
             raise
 
@@ -187,15 +204,38 @@ class Context:
         """
         return self._lifecycle.dispose()
 
+    @overload
     def fork(
         self,
         *,
         scope: Scope | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: Callable[[Context[_T]], _T],
+    ) -> Context[_T]: ...
+    @overload
+    def fork(
+        self,
+        *,
+        scope: Scope | None = None,
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: None = None,
+    ) -> Context: ...
+    def fork(
+        self,
+        *,
+        scope: Scope | None = None,
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: Callable[[Context], Any] | None = None,
     ) -> Context:
-        """Create an owned child, sharing Scope but not inheriting disposal mode."""
-        return type(self)(parent=self, scope=scope, dispose_mode=dispose_mode)
+        """Create a base Context, sharing Scope but not subclass, mode, or facet."""
+        return Context(
+            parent=self,
+            scope=scope,
+            dispose_mode=dispose_mode,
+            facet_factory=facet_factory,
+        )
 
+    @overload
     def derive(
         self,
         *,
@@ -204,6 +244,28 @@ class Context:
         bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
         | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: Callable[[Context[_T]], _T],
+    ) -> Context[_T]: ...
+    @overload
+    def derive(
+        self,
+        *,
+        label: Any | None = None,
+        parents: Scope | tuple[Scope, ...] | None = None,
+        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
+        | None = None,
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: None = None,
+    ) -> Context: ...
+    def derive(
+        self,
+        *,
+        label: Any | None = None,
+        parents: Scope | tuple[Scope, ...] | None = None,
+        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
+        | None = None,
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: Callable[[Context], Any] | None = None,
     ) -> Context:
         """Create an owned child and one new Scope configured for all targets.
 
@@ -217,6 +279,8 @@ class Context:
         without explicit bindings. derive() is equivalent to
         fork(scope=self.scope.fork()). Disposal mode defaults to sequential,
         independently of the parent.
+        The facet factory runs after all bindings are installed. Without a
+        factory, the child's facet is None, regardless of its parent's facet.
         """
         self._lifecycle.assert_active()
         prepared = tuple(
@@ -228,22 +292,22 @@ class Context:
             )
             for target, binding in (bindings or {}).items()
         )
-        child = self.fork(
-            scope=Scope(
-                label=label, parents=self.scope if parents is None else parents
-            ),
-            dispose_mode=dispose_mode,
-        )
-        try:
+
+        def create_facet(child: Context) -> Any:
             for target, binding in prepared:
                 if isinstance(target, Compose):
                     target._bind(child.scope, binding)
                 else:
                     self._store.bind(child.scope, target, binding)
-        except BaseException:
-            child.dispose()
-            raise
-        return child
+            return facet_factory(child) if facet_factory is not None else None
+
+        return self.fork(
+            scope=Scope(
+                label=label, parents=self.scope if parents is None else parents
+            ),
+            dispose_mode=dispose_mode,
+            facet_factory=create_facet,
+        )
 
     def _entry_value(
         self,

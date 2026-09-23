@@ -267,6 +267,8 @@ ctx.set(R.resolve("user.name"), "Ada")  # 一个结构 branch 和 leaf
 
 ## Context 生命周期与 Scope 查找 {#scope}
 
+`Context.fork()` 和 `Context.derive()` 创建基础 `Context` 实例；`Scope.fork()` 创建基础 `Scope`。这些方法不传播调用方的 Python 子类，业务扩展应使用 facet 和组合。
+
 `fork()` 创建由当前 Context 管理的子 Context，其 `parent` 为当前 Context。默认情况下两者共享 Scope，因此同一应用根中绑定到该 Scope 的 Context 会看到相同的局部值。需要不同数据层时，应显式传入 child Scope：
 
 ```python
