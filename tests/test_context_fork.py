@@ -159,7 +159,7 @@ def test_derive_allocates_distinct_identities_for_separate_bindings() -> None:
 def test_derive_validates_all_paths_before_creating_a_child(path: str) -> None:
     root = Context()
     root.declare({"group": {"value": Schema.leaf()}})
-    children = tuple(root._lifecycle._owned)
+    children = tuple(root._lifecycle._effects)
     bindings = dict(root._store._data)
     with pytest.raises(ContextPathError):
         root.derive(
@@ -168,7 +168,7 @@ def test_derive_validates_all_paths_before_creating_a_child(path: str) -> None:
                 path: ScopeBinding(blocked=True),
             }
         )
-    assert tuple(root._lifecycle._owned) == children
+    assert tuple(root._lifecycle._effects) == children
     assert root._store._data == bindings
     root.dispose()
 
@@ -180,7 +180,7 @@ def test_derive_releases_partial_bindings_on_conflict() -> None:
     peer = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
     peer.set("value", "retained")
     binding = root._store._data[root.resolve_entry("value")]
-    children = tuple(root._lifecycle._owned)
+    children = tuple(root._lifecycle._effects)
     with pytest.raises(ValueError, match="immutable"):
         root.derive(
             bindings={
@@ -188,7 +188,7 @@ def test_derive_releases_partial_bindings_on_conflict() -> None:
                 Ref("value"): ScopeBinding(),
             }
         )
-    assert tuple(root._lifecycle._owned) == children
+    assert tuple(root._lifecycle._effects) == children
     assert binding._data[shared_identity].scopes == {peer.scope}
     assert not shared_identity.blocked
     assert peer.get("value") == "retained"
@@ -250,7 +250,7 @@ def test_derive_rejects_inconsistent_parents_before_registering_a_child() -> Non
     xy = Scope(parents=(left, right))
     yx = Scope(parents=(right, left))
     values = Compose(factory=ValueLayer, query=collect_values)
-    children = tuple(root._lifecycle._owned)
+    children = tuple(root._lifecycle._effects)
     data = dict(root._store._data)
     with pytest.raises(TypeError, match="consistent Scope C3"):
         root.derive(
@@ -260,7 +260,7 @@ def test_derive_rejects_inconsistent_parents_before_registering_a_child() -> Non
                 values: ScopeBinding(blocked=True),
             },
         )
-    assert tuple(root._lifecycle._owned) == children
+    assert tuple(root._lifecycle._effects) == children
     assert root._store._data == data
     assert not values._scope_bindings
     root.dispose()
@@ -437,7 +437,7 @@ def test_path_and_compose_object_targets_configure_different_storage() -> None:
 def test_derive_preflights_paths_before_touching_any_compose() -> None:
     root = Context()
     values = Compose(factory=ValueLayer, query=collect_values)
-    children = tuple(root._lifecycle._owned)
+    children = tuple(root._lifecycle._effects)
     with pytest.raises(ContextPathError):
         root.derive(
             bindings={
@@ -446,7 +446,7 @@ def test_derive_preflights_paths_before_touching_any_compose() -> None:
             }
         )
     assert not values._scope_bindings
-    assert tuple(root._lifecycle._owned) == children
+    assert tuple(root._lifecycle._effects) == children
     root.dispose()
 
 
@@ -454,7 +454,7 @@ def test_failed_mixed_configuration_releases_context_data_and_child() -> None:
     root = Context()
     root.declare({"value": Schema.leaf()})
     values = Compose(factory=ValueLayer, query=collect_values)
-    children = tuple(root._lifecycle._owned)
+    children = tuple(root._lifecycle._effects)
     with pytest.raises(ValueError, match="immutable"):
         root.derive(
             bindings={
@@ -463,7 +463,7 @@ def test_failed_mixed_configuration_releases_context_data_and_child() -> None:
                 Ref("value"): ScopeBinding(blocked=True),
             }
         )
-    assert tuple(root._lifecycle._owned) == children
+    assert tuple(root._lifecycle._effects) == children
     assert not root.children
     assert not root._store._data[root.resolve_entry("value")]._data
     assert not tuple(values.layers())
@@ -582,9 +582,9 @@ def test_default_binding_falls_back_after_local_value_removal(
 def test_compose_derive_does_not_register_a_context_or_own_contributions() -> None:
     root = Context()
     values = Compose(factory=ValueLayer, query=collect_values)
-    children = tuple(root._lifecycle._owned)
+    children = tuple(root._lifecycle._effects)
     scope = values.derive(parents=root.scope, binding=ScopeBinding())
-    assert tuple(root._lifecycle._owned) == children
+    assert tuple(root._lifecycle._effects) == children
     assert scope not in root._store._scope_usages
     remove = values.register(scope, "independent")
     root.dispose()

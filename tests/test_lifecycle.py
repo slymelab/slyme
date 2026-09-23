@@ -13,12 +13,12 @@ from slyme.context import (
     Scope,
     ScopeBinding,
 )
-from slyme.context.lifecycle import _Effect
+from slyme.context.lifecycle import Lifecycle, _Effect, _LifecycleState
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
 
 
-def test_lifecycle_disposal_visits_each_descendant_once() -> None:
+def test_lifecycle_disposal_visits_each_descendant_once(monkeypatch) -> None:
     checked: list[Context] = []
 
     class TrackedContext(Context):
@@ -30,8 +30,25 @@ def test_lifecycle_disposal_visits_each_descendant_once() -> None:
     left = root.fork()
     grandchild = left.fork()
     right = root.fork()
+    states = {ctx: [] for ctx in (root, left, grandchild, right)}
+    set_state = Lifecycle._set_state
+
+    def track_state(lifecycle, state):
+        states[lifecycle.ctx].append(state)
+        set_state(lifecycle, state)
+
+    monkeypatch.setattr(Lifecycle, "_set_state", track_state)
     root.dispose()
     assert checked == [root, right, left, grandchild]
+    assert all(
+        transitions
+        == [
+            _LifecycleState.DISPOSE_PENDING,
+            _LifecycleState.DISPOSING,
+            _LifecycleState.DISPOSED,
+        ]
+        for transitions in states.values()
+    )
 
 
 def test_context_children_snapshot_tracks_ownership_not_scope_ancestry() -> None:
@@ -44,7 +61,7 @@ def test_context_children_snapshot_tracks_ownership_not_scope_ancestry() -> None
     assert first.children == (grandchild,)
     assert second.children == ()
     assert grandchild._lifecycle.ctx.parent is first
-    assert set(root._children.values()).issubset(root._lifecycle._owned)
+    assert set(root._children.values()).issubset(root._lifecycle._effects)
     with pytest.raises(FrozenInstanceError):
         first.parent = second
     first.dispose()
@@ -59,12 +76,12 @@ def test_context_children_snapshot_tracks_ownership_not_scope_ancestry() -> None
 
 def test_early_child_disposal_releases_parent_references() -> None:
     root = Context()
-    initial_owned = tuple(root._lifecycle._owned)
+    initial_effects = tuple(root._lifecycle._effects)
     child = root.fork()
     reference = weakref.ref(child)
     child.dispose()
     assert not root.children
-    assert tuple(root._lifecycle._owned) == initial_owned
+    assert tuple(root._lifecycle._effects) == initial_effects
     del child
     gc.collect()
     assert reference() is None
@@ -93,10 +110,12 @@ async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(
     early.cancel()
     with pytest.raises(asyncio.CancelledError):
         await early
+    assert child._lifecycle._state is _LifecycleState.DISPOSING
     disposing = asyncio.create_task(await_result(root.dispose()))
+    assert child._lifecycle._state is _LifecycleState.DISPOSING
     await asyncio.sleep(0)
     assert root.children == (child,)
-    assert root._children[child] in root._lifecycle._owned
+    assert root._children[child] in root._lifecycle._effects
     assert not disposing.done()
     finish.set()
     if fails:
@@ -106,7 +125,7 @@ async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(
     else:
         await disposing
     assert not root.children
-    assert not root._lifecycle._owned
+    assert not root._lifecycle._effects
     assert not root._schema._stores
 
 
@@ -133,7 +152,7 @@ def test_lifecycle_finalizes_after_owned_cleanup_even_on_failure() -> None:
         lifetime.dispose()
     assert caught.value.exceptions == (failure,)
     assert events == ["failure", "child", "first", "finalize"]
-    assert not lifetime._owned
+    assert not lifetime._effects
     assert not ctx.children
     child.dispose()
     with pytest.raises(BaseExceptionGroup) as repeated:
@@ -189,7 +208,7 @@ def test_child_and_parent_share_once_only_finalization(monkeypatch) -> None:
     assert effects.count(child_effect) == 1
     assert viewers == [child, root]
     assert not root.children
-    assert not root._lifecycle._owned
+    assert not root._lifecycle._effects
 
 
 async def test_failed_setup_and_disposal_share_once_only_finalization(
@@ -211,7 +230,7 @@ async def test_failed_setup_and_disposal_share_once_only_finalization(
         raise failure
 
     registration = ctx.effect(setup)
-    effect = next(reversed(ctx._lifecycle._owned))
+    effect = next(reversed(ctx._lifecycle._effects))
     with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(ctx.dispose())
     assert caught.value.exceptions == (failure,)
@@ -220,7 +239,7 @@ async def test_failed_setup_and_disposal_share_once_only_finalization(
     assert setup_error.value is failure
     effect.finalize()
     assert calls.count(effect) == 1
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
 
 
 def test_effect_finalization_failure_is_retained_without_retry(monkeypatch) -> None:
@@ -237,7 +256,7 @@ def test_effect_finalization_failure_is_retained_without_retry(monkeypatch) -> N
     monkeypatch.setattr(_Effect, "finalize", fail)
     cleanup_calls = []
     dispose = ctx.effect(lambda: lambda: cleanup_calls.append("cleanup"))
-    effect = next(reversed(ctx._lifecycle._owned))
+    effect = next(reversed(ctx._lifecycle._effects))
     for _ in range(2):
         with pytest.raises(ValueError) as caught:
             dispose()
@@ -559,7 +578,7 @@ def test_failed_binding_leaves_child_disposal_to_its_owner() -> None:
     replacement_identity = Identity("replacement")
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    initial_owned = tuple(root._lifecycle._owned)
+    initial_effects = tuple(root._lifecycle._effects)
     root.update({"value": "root"})
     child = root.derive(
         bindings={"value": ScopeBinding(original_identity, blocked=False)}
@@ -573,7 +592,7 @@ def test_failed_binding_leaves_child_disposal_to_its_owner() -> None:
     assert child.get("value") == "root"
     assert root._store._scope_usages[child.scope].viewers == {child}
     child.dispose()
-    assert tuple(root._lifecycle._owned) == initial_owned
+    assert tuple(root._lifecycle._effects) == initial_effects
     assert {
         scope for scope, usage in root._store._scope_usages.items() if usage.viewers
     } == {root.scope}
@@ -581,7 +600,7 @@ def test_failed_binding_leaves_child_disposal_to_its_owner() -> None:
     root.dispose()
 
 
-async def test_closing_context_does_not_freeze_shared_data_or_block_revocation() -> (
+async def test_disposing_context_does_not_freeze_shared_data_or_block_revocation() -> (
     None
 ):
     root = Context()

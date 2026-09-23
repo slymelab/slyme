@@ -209,7 +209,7 @@ def test_assignment_cannot_create_an_empty_registration(operation: str) -> None:
     schema = Schema({"service": Schema.leaf(mode="register")})
     ctx = Context()
     ctx.declare(schema)
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(ContextPathError, match="register"):
         if operation == "set":
             ctx.set("service", object())
@@ -220,7 +220,7 @@ def test_assignment_cannot_create_an_empty_registration(operation: str) -> None:
     assert set(ctx._store._data) == {
         ctx.resolve_entry(ref.path) for ref in ctx.get("$").flatten()
     }
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -281,7 +281,7 @@ def test_shared_identity_has_one_registration_and_allows_reinstallation() -> Non
     remove = left.register("service", payload)
     with pytest.raises(ContextPathError, match="existing local"):
         right.register("service", object())
-    assert not right._lifecycle._owned
+    assert not right._lifecycle._effects
     right.get("service").append("mutable payload")
     assert payload == ["mutable payload"]
     remove()
@@ -582,14 +582,14 @@ def test_barrier_visibility_with_shared_identity_and_different_ancestry(
     right_parent = root.fork(scope=root.scope.fork())
     left_parent.set("value", "left parent")
     right_parent.set("value", "right parent")
-    owned = tuple(root._lifecycle._owned)
+    owned = tuple(root._lifecycle._effects)
     left = left_parent.derive(
         bindings={"value": ScopeBinding(shared_identity, blocked=mode == "scope")}
     )
     right = right_parent.derive(
         bindings={"value": ScopeBinding(shared_identity, blocked=False)}
     )
-    assert tuple(root._lifecycle._owned) == owned
+    assert tuple(root._lifecycle._effects) == owned
     assert not left.exists("value")
     assert right.get("value", None) == ("right parent" if mode == "scope" else None)
     right.set("value", "shared value")

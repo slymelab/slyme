@@ -93,7 +93,9 @@ class Context:
         )
         object.__setattr__(self, "_finalize", once(self._finalize))
         if parent is not None:
-            parent._children[self] = parent._lifecycle._own(lambda: self.dispose)
+            parent._children[self] = parent._lifecycle._register_effect(
+                lambda: self.dispose
+            )
         try:
             store.acquire_scope(self, bound_scope)
             if parent is None:

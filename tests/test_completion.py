@@ -54,14 +54,14 @@ async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
         return value + 1
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     graph = parent(value=Auto(child()))
     pending = graph(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["call"]
     assert await await_result(pending) == 5
     assert events == ["call", "await", "parent"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -82,10 +82,10 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
         return sum(values)
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     result = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
     assert await asyncio.wait_for(await_result(result), 1) == 3
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -108,14 +108,14 @@ async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
         return sum(values)
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     before = asyncio.all_tasks()
     pending = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
     assert events == [("call", 1), ("call", 2)]
     assert asyncio.all_tasks() == before
     assert await await_result(pending) == 3
     assert events == [("call", 1), ("call", 2), ("await", 1), ("await", 2)]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -261,7 +261,7 @@ async def test_context_owns_async_setup_before_caller_waits(await_setup: bool) -
         await await_result(early())
     await await_result(ctx.dispose())
     assert events == ["setup", "cleanup"]
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
     early = await await_result(registration)
     await await_result(early())
 
@@ -295,7 +295,7 @@ async def test_owner_disposal_joins_inflight_setup_after_waiter_cancelled() -> N
     finish.set()
     await asyncio.wait_for(disposal, 1)
     assert events == ["setup", "cleanup"]
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
 
 
 @pytest.mark.parametrize("phase", ["setup", "cleanup"])
@@ -351,7 +351,7 @@ async def test_independent_disposer_created_inside_effect_can_wait_for_it(
         await await_result(root.dispose())
 
     assert events == (["setup", "cleanup"] if phase == "setup" else ["cleanup"])
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
     assert not root._children
 
 
@@ -415,7 +415,7 @@ async def test_continuation_composes_node_setup_and_disposal(asynchronous) -> No
     assert inspect.isawaitable(result) is asynchronous
     assert await await_result(result) == 5
     assert events == ["setup", "node", "cleanup"]
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
 
 
 def test_setup_can_request_disposal_after_registration_returns() -> None:
@@ -439,7 +439,7 @@ def test_setup_can_request_disposal_after_registration_returns() -> None:
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_setup_failure_detaches_registration(asynchronous: bool) -> None:
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     failure = ValueError("setup")
 
     def fail():
@@ -452,7 +452,7 @@ async def test_setup_failure_detaches_registration(asynchronous: bool) -> None:
     with pytest.raises(ValueError) as caught:
         await await_result(ctx.effect(async_fail if asynchronous else fail))
     assert caught.value is failure
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     assert ctx.dispose() is None
 
 
@@ -475,7 +475,7 @@ async def test_setup_failure_during_owner_disposal_keeps_cleaning_and_replays() 
         await await_result(registration)
     assert caught.value is failure
     assert events == ["last", "first"]
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
 
 
 async def test_async_setup_cleanup_failure_replays_without_repeating() -> None:
@@ -521,11 +521,11 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
         return call_next(ctx) + extra
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     assert (
         await await_result(value().add_wrappers(add(extra=Auto(parameter())))(ctx)) == 5
     )
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -569,7 +569,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
         return value
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(NodeExceptionRecord) as caught:
         await await_result(parent(value=Auto(child()))(ctx))
     group = caught.value.__cause__
@@ -583,7 +583,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
     assert isinstance(node_error, NodeExceptionRecord)
     assert node_error.__cause__ is failure
     assert child_errors.__cause__ is None
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 

@@ -537,15 +537,15 @@ def test_schema_registers_roots_without_registering_children() -> None:
     left = Context()
     right = Context()
     schema = left._schema
-    initial_owned = tuple(left._lifecycle._owned)
+    initial_effects = tuple(left._lifecycle._effects)
     child = left.fork()
     grandchild = child.fork()
     assert schema._stores == {left._store}
     assert right._schema._stores == {right._store}
     child.dispose()
     assert schema._stores == {left._store}
-    assert tuple(left._lifecycle._owned) == initial_owned
-    assert not grandchild._lifecycle._owned
+    assert tuple(left._lifecycle._effects) == initial_effects
+    assert not grandchild._lifecycle._effects
     left.dispose()
     assert not schema._stores
     assert right._schema._stores == {right._store}

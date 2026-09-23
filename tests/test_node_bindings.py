@@ -94,7 +94,7 @@ def test_call_overrides_bindings_before_auto_evaluation(kind: str) -> None:
     instance = factory(value=binding, options=original)
     ctx = Context()
     ctx.declare(Schema({"value": Schema.leaf()}))
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     ctx.update({"value": 4})
     runtime = (ctx,) if kind == "node" else (ctx, child(), lambda ctx: None)
     replacement = {"right": 2}
@@ -110,7 +110,7 @@ def test_call_overrides_bindings_before_auto_evaluation(kind: str) -> None:
     assert calls == ["child"]
     assert instance.params == {"value": binding, "options": original}
     assert instance.get("options") is original
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -128,7 +128,7 @@ def test_native_parameter_errors_are_reported_at_invocation() -> None:
 
     instance = required()
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(NodeExceptionRecord) as missing:
         instance(ctx)
     assert isinstance(missing.value.__cause__, TypeError)
@@ -140,7 +140,7 @@ def test_native_parameter_errors_are_reported_at_invocation() -> None:
     assert isinstance(unexpected.value.__cause__, TypeError)
     assert "unknown" in str(unexpected.value.__cause__)
     assert calls == ["child"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     instance.delete("unknown")
     assert instance(ctx, value=2) == 2
 

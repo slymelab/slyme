@@ -60,13 +60,13 @@ def test_auto_async_result_can_be_created_before_starting_event_loop(
         return value
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     graph = parent(value=Auto(child()))
     pending = await_result(graph(ctx)) if adapt else graph(ctx)
     assert not events
     assert asyncio.run(await_result(pending)) == 7
     assert events == ["child", "cleanup", "parent"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -84,7 +84,7 @@ async def test_concurrent_evaluations_keep_results_and_children_separate() -> No
 
     for index, ctx in enumerate(contexts):
         ctx.set("value", index * 10)
-    owned = [tuple(ctx._lifecycle._owned) for ctx in contexts]
+    owned = [tuple(ctx._lifecycle._effects) for ctx in contexts]
     pending = [
         await_result(eval_tree(ctx, [ctx.resolve("value"), read(index=index)]))
         for index, ctx in enumerate(contexts)
@@ -93,7 +93,7 @@ async def test_concurrent_evaluations_keep_results_and_children_separate() -> No
         [0, 1],
         [10, 11],
     ]
-    assert [tuple(ctx._lifecycle._owned) for ctx in contexts] == owned
+    assert [tuple(ctx._lifecycle._effects) for ctx in contexts] == owned
     root.dispose()
 
 
@@ -143,7 +143,7 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
     schema = Schema({"first": Schema.leaf(), "second": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     visited = []
     failure = ValueError("child failed")
 
@@ -195,7 +195,7 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
     assert isinstance(child_error, NodeExceptionRecord)
     assert child_error.__cause__ is failure
     assert visited == ["child", "cleanup"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -231,7 +231,7 @@ async def test_auto_reports_cleanup_failures_with_node_exception_context(
         return 2
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(
             node_evaluator(ctx, [failing(index=0), failing(index=1), successful()])
@@ -252,7 +252,7 @@ async def test_auto_reports_cleanup_failures_with_node_exception_context(
         assert events == [
             (event, index) for index in range(3) for event in ("run", "cleanup")
         ]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -275,7 +275,7 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
         return 2
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(BaseExceptionGroup) as caught:
         node_evaluator(ctx, [first(), second()])
     cleanup_error = caught.value.exceptions[0]
@@ -284,7 +284,7 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
     assert len(caught.value.exceptions) == 1
     assert caught.value.__cause__ is None
     assert events == ["cleanup", "second"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
 
 
 async def test_sync_auto_failure_still_starts_async_siblings() -> None:
@@ -301,14 +301,14 @@ async def test_sync_auto_failure_still_starts_async_siblings() -> None:
         return 1
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     pending = node_evaluator(ctx, [failing(), asynchronous()])
     assert inspect.isawaitable(pending)
     assert visited == ["sync"]
     with pytest.raises(BaseExceptionGroup):
         await pending
     assert visited == ["sync", "async"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
 
 
 async def test_auto_keeps_exception_objects_returned_as_data() -> None:
@@ -324,10 +324,10 @@ async def test_auto_keeps_exception_objects_returned_as_data() -> None:
         return second
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     result = await await_result(node_evaluator(ctx, [asynchronous(), synchronous()]))
     assert result[0] is first and result[1] is second
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
 
 
 @pytest.mark.parametrize("fails", [False, True])
@@ -349,7 +349,7 @@ async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
         return 2
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(await_result(node_evaluator(ctx, [child(), waiting()])))
     await cleaned.wait()
     assert not task.done()
@@ -363,7 +363,7 @@ async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
         assert len(caught.value.exceptions) == 1
     else:
         assert await task == [1, 2]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -388,7 +388,7 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
         return 2
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(
         await_result(node_evaluator(ctx, [cancelled(), sibling()]))
     )
@@ -404,7 +404,7 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
     assert "sibling finished" in events
     assert events.count("cleanup:cancelled") == 1
     assert events.count("cleanup:sibling") == 1
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
 
 
 async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None:
@@ -426,7 +426,7 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
         return 1
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
     await started.wait()
     task.cancel()
@@ -437,7 +437,7 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cleaned.is_set()
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
@@ -467,7 +467,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         raise failure
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
     await started.wait()
     try:
@@ -487,7 +487,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         else:
             await await_result(children[0].dispose())
     assert events == ["cleanup started", "cleanup finished"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 

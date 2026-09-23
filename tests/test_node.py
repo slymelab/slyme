@@ -137,10 +137,10 @@ async def test_await_result_composes_async_auto_and_wrapper_with_sync_parent() -
         return await await_result(call_next(ctx)) + 1
 
     ctx = Context()
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     graph = parent(value=Auto(child())).add_wrappers(increment())
     assert await await_result(graph(ctx)) == 13
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -593,13 +593,13 @@ async def test_sync_auto_promotes_async_cleanup_before_parent_execution() -> Non
 
     ctx = Context()
     ctx.declare(R)
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     pending = parent(value=Auto(child()))(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["child"]
     assert await await_result(pending) == 1
     assert events == ["child", "cleanup", "parent"]
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
 
 
 async def test_async_auto_awaits_child_cleanup_before_parent_execution() -> None:
@@ -756,7 +756,7 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
 
     ctx = Context()
     ctx.declare(R)
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(parent(values=Auto([waiting(), failing()]))(ctx))
     await failed.wait()
     await asyncio.sleep(0)
@@ -776,7 +776,7 @@ async def test_async_auto_failure_waits_for_siblings_without_cancelling() -> Non
     assert str(failure.__cause__) == "child failed"
     assert cleaned.is_set()
     assert not cancelled.is_set()
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
 
 
 async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_errors() -> (
@@ -812,7 +812,7 @@ async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_e
 
     ctx = Context()
     ctx.declare(R)
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(parent(values=Auto([failing(), waiting()]))(ctx))
     await cleanup_started.wait()
     try:
@@ -826,7 +826,7 @@ async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_e
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
             await await_result(children[0].dispose())
     assert cleanup_result.value.exceptions[0] is cleanup_failure
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 
@@ -865,12 +865,12 @@ async def test_repeated_auto_cancellation_leaves_child_cleanup_running(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert not cleanup_finished.is_set()
-        assert ctx._lifecycle._owned
+        assert ctx._lifecycle._effects
     finally:
         release_cleanup.set()
         await await_result(ctx.dispose())
     assert cleanup_finished.is_set()
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
 
 
 async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
@@ -897,7 +897,7 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
 
     ctx = Context()
     ctx.declare(R)
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(parent(value=Auto(child()))(ctx))
     await cleanup_started.wait()
     try:
@@ -911,7 +911,7 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
             await await_result(children[0].dispose())
     assert cleanup_result.value.exceptions[0] is cleanup_failure
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 

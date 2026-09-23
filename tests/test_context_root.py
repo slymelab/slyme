@@ -81,7 +81,7 @@ def test_root_rejects_leaf_operations_without_partial_writes(
 ) -> None:
     ctx = Context()
     ctx.declare(Schema({"value": Schema.leaf()}))
-    initial_owned = tuple(ctx._lifecycle._owned)
+    initial_effects = tuple(ctx._lifecycle._effects)
     ctx.update({"value": 1})
     with pytest.raises(ContextPathError, match="container, not a leaf"):
         if operation == "update":
@@ -95,7 +95,7 @@ def test_root_rejects_leaf_operations_without_partial_writes(
         else:
             getattr(ctx, operation)(key, {})
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "value": 1}
-    assert tuple(ctx._lifecycle._owned) == initial_owned
+    assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
 
 

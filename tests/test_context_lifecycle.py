@@ -20,7 +20,7 @@ async def test_await_result_runs_sync_cleanup_immediately_without_scheduling() -
     tasks = asyncio.all_tasks()
     result = await_result(ctx.dispose())
     assert events == ["cleaned"]
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
     assert asyncio.all_tasks() == tasks
     assert await result is None
     assert await await_result(ctx.dispose()) is None
@@ -43,7 +43,7 @@ def test_await_result_preserves_immediate_cleanup_errors() -> None:
         if previous is not None:
             assert caught.value is previous
         previous = caught.value
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
 
 
 async def test_await_result_retains_cleanup_result_after_waiter_cancellation() -> None:
@@ -76,7 +76,7 @@ async def test_await_result_retains_cleanup_result_after_waiter_cancellation() -
         with pytest.raises(BaseExceptionGroup) as caught:
             await await_result(ctx.dispose())
         assert caught.value.exceptions == (failure,)
-    assert calls == 1 and not ctx._lifecycle._owned
+    assert calls == 1 and not ctx._lifecycle._effects
 
 
 def test_context_disposes_direct_ownership_in_lifo_order_recursively() -> None:
@@ -142,7 +142,7 @@ async def test_mixed_ownership_preserves_lifo_after_arbitrary_early_release(
     else:
         root.dispose()
     assert events == ["early-effect", "early-child", "last", "child", "first"]
-    assert not root._lifecycle._owned
+    assert not root._lifecycle._effects
 
 
 def test_sync_disposal_snapshot_handles_sibling_cleanup_and_failure() -> None:
@@ -166,7 +166,7 @@ def test_sync_disposal_snapshot_handles_sibling_cleanup_and_failure() -> None:
     assert child_error.exceptions == (failure,)
     assert caught.value.exceptions == (child_error, child_error)
     assert events == ["child", "middle"]
-    assert not root._lifecycle._owned
+    assert not root._lifecycle._effects
 
 
 async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None:
@@ -180,17 +180,17 @@ async def test_early_async_disposal_stays_owned_until_cleanup_finishes() -> None
         await finish.wait()
 
     release = child.effect(lambda: cleanup)
-    effect = next(iter(child._lifecycle._owned))
+    effect = next(iter(child._lifecycle._effects))
     early = asyncio.create_task(await_result(release()))
     await started.wait()
-    assert effect in child._lifecycle._owned
+    assert effect in child._lifecycle._effects
     disposing = asyncio.create_task(await_result(root.dispose()))
     await asyncio.sleep(0)
     assert child in root.children
     assert not disposing.done()
     finish.set()
     await asyncio.gather(early, disposing)
-    assert not child._lifecycle._owned and not root._lifecycle._owned
+    assert not child._lifecycle._effects and not root._lifecycle._effects
 
 
 @pytest.mark.parametrize("async_setup", [False, True])
@@ -244,7 +244,7 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
         else:
             await await_result(root.dispose())
     assert events == ["last", "child:start", "child:finish", "first"]
-    assert not root._lifecycle._owned and not child._lifecycle._owned
+    assert not root._lifecycle._effects and not child._lifecycle._effects
 
 
 def test_failed_sync_effect_disposal_replays_error_without_repeating_cleanup() -> None:
@@ -390,7 +390,7 @@ def test_reused_scope_does_not_restore_data_or_repeat_old_context_disposal() -> 
 def test_context_registers_and_releases_every_scope_in_its_mro() -> None:
     root = Context()
     parent_scope = root.scope.fork()
-    initial_owned = tuple(root._lifecycle._owned)
+    initial_effects = tuple(root._lifecycle._effects)
     owner = root.fork(scope=parent_scope)
     viewers = root._store._scope_usages
     assert viewers is not None
@@ -402,8 +402,8 @@ def test_context_registers_and_releases_every_scope_in_its_mro() -> None:
     child.dispose()
     before[child_scope] = set()
     assert {scope: usage.viewers for scope, usage in viewers.items()} == before
-    assert tuple(root._lifecycle._owned) == (
-        *initial_owned,
+    assert tuple(root._lifecycle._effects) == (
+        *initial_effects,
         root._children[owner],
     )
     root.dispose()
@@ -495,7 +495,7 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
 ) -> None:
     root = Context()
     root.declare(Schema({"first": Schema.leaf(), "second": Schema.leaf()}))
-    initial_owned = tuple(root._lifecycle._owned)
+    initial_effects = tuple(root._lifecycle._effects)
     parent_scope = root.scope.fork()
     parent = root.fork(scope=parent_scope)
     parent.update({"first": "parent", "second": "parent"})
@@ -551,7 +551,7 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
         (binding, parent_scope) for binding in bindings
     }
     assert not root.children
-    assert tuple(root._lifecycle._owned) == initial_owned
+    assert tuple(root._lifecycle._effects) == initial_effects
     assert root._store._scope_usages is not None
     assert root._store._scope_usages[root.scope].viewers == {root}
     for scope in (child.scope, parent_scope):
@@ -571,7 +571,7 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
 def test_failed_binding_restore_rolls_back_new_scope_usage(monkeypatch) -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    initial_owned = tuple(root._lifecycle._owned)
+    initial_effects = tuple(root._lifecycle._effects)
     identity = Identity(blocked=True)
     previous = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
     scope = previous.scope
@@ -597,7 +597,7 @@ def test_failed_binding_restore_rolls_back_new_scope_usage(monkeypatch) -> None:
     assert binding._data[identity].scopes == {writer.scope}
     assert writer.get("value") == "live"
     assert root.children == (writer,)
-    assert tuple(root._lifecycle._owned) == (*initial_owned, root._children[writer])
+    assert tuple(root._lifecycle._effects) == (*initial_effects, root._children[writer])
     root.dispose()
 
 
@@ -736,7 +736,7 @@ def test_scope_restoration_failure_uses_context_disposal(
 ) -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    initial_owned = tuple(root._lifecycle._owned)
+    initial_effects = tuple(root._lifecycle._effects)
     root.set("value", "live")
     binding = root._store._data[root.resolve_entry("value")]
     previous = root.derive(bindings={"value": ScopeBinding(blocked=True)})
@@ -751,7 +751,7 @@ def test_scope_restoration_failure_uses_context_disposal(
 
     def fail_restore(self, scope):
         child = next(iter(root._store._scope_usages[scope].viewers))
-        assert root._children[child] in root._lifecycle._owned
+        assert root._children[child] in root._lifecycle._effects
         assert all(
             child in root._store._scope_usages[parent].viewers
             for parent in child.scope.mro
@@ -798,7 +798,7 @@ def test_scope_restoration_failure_uses_context_disposal(
     assert root._store._scope_usages is not None
     assert root._store._scope_usages[root.scope].viewers == {root}
     assert not root._store._scope_usages[child_scope].viewers
-    assert tuple(root._lifecycle._owned) == initial_owned
+    assert tuple(root._lifecycle._effects) == initial_effects
     assert root.get("value") == "live"
     root.dispose()
 
@@ -1327,7 +1327,7 @@ def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
     assert events == ["last", "sibling", "grandchild", "child", "first"]
 
 
-async def test_closing_child_can_dispose_while_parent_cleanup_waits() -> None:
+async def test_dispose_pending_child_can_dispose_while_parent_cleanup_waits() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     root.update({"value": 1})
@@ -1406,7 +1406,7 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
     else:
         assert results == [None, None]
     assert calls == 1
-    assert not root._lifecycle._owned and not child._lifecycle._owned
+    assert not root._lifecycle._effects and not child._lifecycle._effects
     if fail:
         with pytest.raises(BaseExceptionGroup) as caught:
             await await_result(root.dispose())

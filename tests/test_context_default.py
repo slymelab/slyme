@@ -54,13 +54,13 @@ def test_rule_definitions_support_inspection_without_a_context() -> None:
 
 def test_defaults_are_root_owned_and_forks_do_not_install_again() -> None:
     left, right = Context(), Context()
-    baseline = tuple(left._lifecycle._owned)
+    baseline = tuple(left._lifecycle._effects)
     child = left.fork()
     for ref in (DATA_TREE_REF, NODE_TREE_REF, EVALUATORS_REF):
         assert child.get(ref) is left.get(ref)
         assert left.get(ref) is not right.get(ref)
-    assert not child._lifecycle._owned
-    assert tuple(left._lifecycle._owned) == (*baseline, left._children[child])
+    assert not child._lifecycle._effects
+    assert tuple(left._lifecycle._effects) == (*baseline, left._children[child])
     data = left.get(DATA_TREE_REF)
     child.effect(lambda: data.register(child.scope, TreeRules({Box: BOX_HANDLER})))
     assert Box in data.resolve(left.scope).handlers
@@ -319,7 +319,7 @@ def test_failed_default_installation_releases_partial_root(monkeypatch) -> None:
     assert not ctx._schema._stores
     assert not ctx._store._data
     assert all(not usage.viewers for usage in ctx._store._scope_usages.values())
-    assert not ctx._lifecycle._owned
+    assert not ctx._lifecycle._effects
 
 
 @pytest.mark.parametrize(

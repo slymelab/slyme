@@ -51,7 +51,7 @@ class _Effect:
         owner = self.owner
         self.owner = None
         if owner is not None:
-            owner._forget_owned(self)
+            owner._unregister_effect(self)
 
     @continuation
     def setup(self) -> Generator[Any, Any, _Disposer]:
@@ -120,7 +120,7 @@ def _batch(effects: Sequence[_Effect]) -> Generator[Any, Any, None]:
 
 class _LifecycleState(Enum):
     ACTIVE = "active"
-    CLOSING = "closing"
+    DISPOSE_PENDING = "dispose_pending"
     DISPOSING = "disposing"
     DISPOSED = "disposed"
 
@@ -138,11 +138,14 @@ class Lifecycle:
     dispose_mode: Literal["sequential", "batch"] = field(
         default="sequential", kw_only=True
     )
-    _owned: dict[_Effect, None] = field(default_factory=dict, init=False)
+    _effects: dict[_Effect, None] = field(default_factory=dict, init=False)
     _state: _LifecycleState = field(default=_LifecycleState.ACTIVE, init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dispose", once(self.dispose))
+
+    def _set_state(self, state: _LifecycleState) -> None:
+        object.__setattr__(self, "_state", state)
 
     def assert_readable(self) -> None:
         if self._state is _LifecycleState.DISPOSED:
@@ -153,29 +156,33 @@ class Lifecycle:
             return
         if self._state is _LifecycleState.DISPOSED:
             raise RuntimeError("Lifecycle has been disposed.")
-        if self._state is _LifecycleState.CLOSING:
+        if self._state is _LifecycleState.DISPOSE_PENDING:
             raise RuntimeError("An ancestor Lifecycle is being disposed.")
         raise RuntimeError("Lifecycle is being disposed.")
 
-    def _close_subtree(self) -> None:
+    def _prepare_dispose(self) -> None:
         """Forbid mutations throughout the ownership subtree before cleanup."""
         if self._state is not _LifecycleState.ACTIVE:
             return
         pending = [self.ctx]
         while pending:
             ctx = pending.pop()
-            object.__setattr__(ctx._lifecycle, "_state", _LifecycleState.CLOSING)
+            ctx._lifecycle._set_state(_LifecycleState.DISPOSE_PENDING)
             for child in ctx._children:
                 if child._lifecycle._state is _LifecycleState.ACTIVE:
                     pending.append(child)
 
-    def _own(self, setup: Callable[[], _Cleanup | Awaitable[_Cleanup]]) -> _Effect:
+    def _register_effect(
+        self, setup: Callable[[], _Cleanup | Awaitable[_Cleanup]]
+    ) -> _Effect:
+        """Create and register an effect without running setup."""
         effect = _Effect(self, setup)
-        self._owned[effect] = None
+        self._effects[effect] = None
         return effect
 
-    def _forget_owned(self, owned: _Effect) -> None:
-        self._owned.pop(owned, None)
+    def _unregister_effect(self, effect: _Effect) -> None:
+        """Remove an effect without running cleanup."""
+        self._effects.pop(effect, None)
 
     @overload
     def effect(self, setup: Callable[[], Callable[[], None]]) -> Callable[[], None]: ...
@@ -201,7 +208,7 @@ class Lifecycle:
         calls are unsupported; lifecycle reentry and wait cycles are not checked.
         """
         self.assert_active()
-        return self._own(setup).setup()
+        return self._register_effect(setup).setup()
 
     @continuation
     def dispose(self) -> Generator[Any, Any, None]:
@@ -217,18 +224,18 @@ class Lifecycle:
         first cleanup; each Lifecycle remains readable until its own release.
         Failures are not retrieved merely to suppress asyncio diagnostics.
         """
-        self._close_subtree()
-        object.__setattr__(self, "_state", _LifecycleState.DISPOSING)
-        owned = tuple(reversed(self._owned))
-        execute_owned = _sequential if self.dispose_mode == "sequential" else _batch
+        self._prepare_dispose()
+        self._set_state(_LifecycleState.DISPOSING)
+        effects = tuple(reversed(self._effects))
+        execute_effects = _sequential if self.dispose_mode == "sequential" else _batch
 
         error: BaseException | None = None
         try:
-            yield execute_owned(owned)
+            yield execute_effects(effects)
         except BaseException as caught:
             error = caught
         finally:
-            self._owned.clear()
+            self._effects.clear()
             try:
                 self.ctx._finalize()
             except BaseException as finalize_error:
@@ -237,6 +244,6 @@ class Lifecycle:
                 else:
                     error.__cause__ = finalize_error
             finally:
-                object.__setattr__(self, "_state", _LifecycleState.DISPOSED)
+                self._set_state(_LifecycleState.DISPOSED)
         if error is not None:
             raise error

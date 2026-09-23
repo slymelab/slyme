@@ -331,7 +331,7 @@ async def test_context_owned_cleanup_does_not_read_config(
     assert_indexes(root._schema, set())
     assert not root._store._data
     assert all(not usage.viewers for usage in root._store._scope_usages.values())
-    assert not root._lifecycle._owned
+    assert not root._lifecycle._effects
 
 
 def test_failed_declaration_rollback_does_not_read_config(monkeypatch) -> None:
