@@ -72,7 +72,7 @@ def mixed_wrapper(
 
 async def check_types(ctx: Context) -> None:
     assert_type(ctx.dispose_mode, Literal["sequential", "batch"])
-    assert_type(Context(dispose_mode="batch"), Context)
+    assert_type(Context(parent=ctx, dispose_mode="batch"), Context)
     assert_type(ctx.fork(dispose_mode="batch"), Context)
     assert_type(ctx.derive(dispose_mode="batch"), Context)
     assert_type(create_node(direct), Node[int])

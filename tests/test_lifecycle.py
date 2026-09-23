@@ -94,7 +94,8 @@ def test_early_child_disposal_releases_parent_references() -> None:
 async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(
     fails, dispose_mode
 ):
-    root = Context(dispose_mode=dispose_mode)
+    application = Context()
+    root = application.fork(dispose_mode=dispose_mode)
     child = root.fork()
     started, finish = asyncio.Event(), asyncio.Event()
     failure = ValueError("child cleanup")
@@ -127,6 +128,7 @@ async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(
         await disposing
     assert not root.children
     assert not root._lifecycle._effects
+    application.dispose()
     assert not root._schema._stores
 
 
@@ -200,7 +202,8 @@ async def test_finalize_failure_preserves_cleanup_error_context(
             events.append("finalize")
             raise finalize_failure
 
-    ctx = FailingContext(dispose_mode=dispose_mode)
+    root = Context()
+    ctx = FailingContext(parent=root, dispose_mode=dispose_mode)
 
     def fail_cleanup():
         events.append("cleanup")
@@ -225,6 +228,7 @@ async def test_finalize_failure_preserves_cleanup_error_context(
     assert events[-1] == "finalize"
     assert events.count("finalize") == 1
     assert not ctx._lifecycle._effects
+    root.dispose()
     assert not ctx._schema._stores
     assert ctx._lifecycle._state is _LifecycleState.DISPOSED
 
@@ -452,7 +456,8 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
             super()._finalize()
             finalized.set()
 
-    lifetime = TrackedContext(dispose_mode=dispose_mode)._lifecycle
+    root = Context()
+    lifetime = TrackedContext(parent=root, dispose_mode=dispose_mode)._lifecycle
 
     async def cleanup() -> None:
         started.set()
@@ -485,6 +490,7 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
     with pytest.raises(BaseExceptionGroup) as replayed:
         await await_result(lifetime.dispose())
     assert replayed.value is caught.value
+    root.dispose()
 
 
 @pytest.mark.parametrize("phase", ["setup", "dispose"])

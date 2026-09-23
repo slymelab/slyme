@@ -304,7 +304,8 @@ async def test_owner_disposal_joins_inflight_setup_after_waiter_cancelled() -> N
 async def test_independent_disposer_created_inside_effect_can_wait_for_it(
     phase, ancestor, dispose_mode
 ) -> None:
-    root = Context(dispose_mode=dispose_mode)
+    application = Context()
+    root = application.fork(dispose_mode=dispose_mode)
     ctx = root.fork(dispose_mode=dispose_mode)
     target = root if ancestor else ctx
     started, finish, requested, disposing = (asyncio.Event() for _ in range(4))
@@ -348,7 +349,7 @@ async def test_independent_disposer_created_inside_effect_can_wait_for_it(
         requested.set()
         finish.set()
         await asyncio.wait_for(asyncio.gather(waiter, *disposals), 1)
-        await await_result(root.dispose())
+        await await_result(application.dispose())
 
     assert events == (["setup", "cleanup"] if phase == "setup" else ["cleanup"])
     assert not ctx._lifecycle._effects

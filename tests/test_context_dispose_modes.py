@@ -10,25 +10,41 @@ from slyme.utils.execution import await_result
 
 
 def test_disposal_mode_is_fixed_and_not_inherited() -> None:
-    root = Context(dispose_mode="batch")
-    direct = Context(parent=root)
-    fork = root.fork()
-    derived = root.derive()
-    batch = root.derive(dispose_mode="batch")
-    detached = root.fork(scope=Scope(), dispose_mode="batch")
-    assert root.dispose_mode == batch.dispose_mode == detached.dispose_mode == "batch"
+    root = Context()
+    group = root.fork(dispose_mode="batch")
+    direct = Context(parent=group)
+    fork = group.fork()
+    derived = group.derive()
+    batch = group.derive(dispose_mode="batch")
+    detached = group.fork(scope=Scope(), dispose_mode="batch")
+    assert group.dispose_mode == batch.dispose_mode == detached.dispose_mode == "batch"
+    assert root.dispose_mode == "sequential"
     assert (
         direct.dispose_mode == fork.dispose_mode == derived.dispose_mode == "sequential"
     )
     assert direct.scope is fork.scope is root.scope
     assert derived.scope.parents == batch.scope.parents == (root.scope,)
     assert detached.scope.parents == ()
-    assert root._lifecycle.dispose_mode == "batch"
+    assert group._lifecycle.dispose_mode == "batch"
     with pytest.raises(FrozenInstanceError):
-        root.dispose_mode = "sequential"
+        group.dispose_mode = "sequential"
     with pytest.raises(FrozenInstanceError):
-        root._lifecycle.dispose_mode = "sequential"
+        group._lifecycle.dispose_mode = "sequential"
     assert root.dispose() is None
+
+
+@pytest.mark.parametrize("scope", [None, Scope(), Scope(parents=Scope())])
+def test_root_rejects_batch_disposal_before_initialization(scope, monkeypatch) -> None:
+    def unexpected_schema():
+        pytest.fail("Root mode must be checked before creating shared storage")
+
+    monkeypatch.setattr("slyme.context.core.Schema", unexpected_schema)
+    with pytest.raises(ValueError, match="Root Context requires sequential disposal"):
+        Context(
+            scope=scope,
+            dispose_mode="batch",
+            facet_factory=lambda ctx: pytest.fail("Facet factory must not run"),
+        )
 
 
 @pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
@@ -36,7 +52,8 @@ def test_disposal_mode_is_fixed_and_not_inherited() -> None:
 def test_sync_disposal_finishes_inline_in_reverse_registration_order(
     dispose_mode, fails
 ):
-    ctx = Context(dispose_mode=dispose_mode)
+    root = Context()
+    ctx = root.fork(dispose_mode=dispose_mode)
     events = []
     failure = ValueError("middle")
 
@@ -62,6 +79,7 @@ def test_sync_disposal_finishes_inline_in_reverse_registration_order(
         assert ctx.dispose() is None
     assert events == ["last", "child", "middle", "first"]
     assert not ctx.children
+    root.dispose()
     assert not ctx._schema._stores
 
 
@@ -110,6 +128,7 @@ async def test_batch_children_keep_local_lifo_and_parent_declarations() -> None:
             assert child.get("shared") == "data"
             assert child.get(f"plugin{index}") == index
             assert child.get(DATA_TREE_REF) is rules
+            assert rules.resolve(child.scope).handlers
             events.append(f"{index}:worker")
 
         child.effect(lambda: cleanup)

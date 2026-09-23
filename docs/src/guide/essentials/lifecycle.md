@@ -95,7 +95,7 @@ Cancelling a setup or disposal waiter does not cancel the shared operation. Its 
 
 ## Cleanup groups
 
-`Context()`, `fork()`, and `derive()` accept `dispose_mode="sequential" | "batch"`, defaulting to `"sequential"` on every new Context. The mode is immutable and is not inherited from the parent. It affects cleanup only, not setup or Node execution. A parent waits for a child's complete cleanup regardless of the child's internal mode.
+Roots (`parent=None`) require `dispose_mode="sequential"` so framework defaults remain available during cleanup; requesting `"batch"` raises `ValueError` before initialization. Child construction, `fork()`, and `derive()` accept `"sequential" | "batch"`, defaulting to `"sequential"` on every new Context. The mode is immutable and is not inherited from the parent. It affects cleanup only, not setup or Node execution. A parent waits for a child's complete cleanup regardless of the child's internal mode.
 
 ```python
 root = Context()

@@ -122,8 +122,10 @@ DATA_RULES = TreeRules(
 )
 
 
-def _install(ctx: Context) -> None:
-    # Context is already constructed before importing Node's default behavior.
+def _apply(ctx: Context) -> None:
+    # Root-only; derive creates children of existing Contexts, so default
+    # registrations never run ahead of a derived child's explicit Scope bindings.
+    # Lazy imports avoid the Context/Node import cycle.
     from slyme.node.core import NODE_RULES, Node
     from slyme.node.eval import node_evaluator, ref_evaluator
 

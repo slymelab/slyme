@@ -26,8 +26,8 @@ from slyme.context.schema import _Declaration
 
 def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> None:
     Context(parent=ctx, scope=ctx.scope)
-    Context(data={})  # type: ignore[call-arg]
-    Context(schema=schema)  # type: ignore[call-arg]
+    Context(data={})  # type: ignore[call-overload]
+    Context(schema=schema)  # type: ignore[call-overload]
     assert_type(ctx.entries, tuple[RefEntry[Any], ...])
     assert_type(ctx.resolve("value"), Ref[Any])
     assert_type(ctx.resolve(Ref("value"), role="leaf"), Ref[Any])

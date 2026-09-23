@@ -208,6 +208,8 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Root Contexts require sequential disposal to keep framework defaults available
+  throughout cleanup. Batch disposal remains available on child Contexts.
 - `Context.fork()` and `Context.derive()` create base Context instances;
   `Scope.fork()` creates a base Scope, without propagating receiver subclasses.
 - Tree traversal represents leaves with `None` internally, avoiding placeholder

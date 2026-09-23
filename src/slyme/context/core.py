@@ -25,7 +25,7 @@ from slyme.utils.execution import once
 from slyme.utils.tree import TreeEngine
 
 from .compose import Compose
-from .default import DATA_TREE_REF, _install
+from .default import DATA_TREE_REF, _apply
 from .lifecycle import Lifecycle, _Cleanup, _Disposer, _Effect
 from .schema import (
     ContextKey,
@@ -70,6 +70,24 @@ class Context(Generic[_A]):
     _store: ContextStore = field(init=False)
     _lifecycle: Lifecycle = field(init=False)
 
+    @overload
+    def __init__(
+        self,
+        *,
+        parent: None = None,
+        scope: Scope | None = None,
+        dispose_mode: Literal["sequential"] = "sequential",
+        facet_factory: Callable[[Context[_A]], _A] | None = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        *,
+        parent: Context,
+        scope: Scope | None = None,
+        dispose_mode: Literal["sequential", "batch"] = "sequential",
+        facet_factory: Callable[[Context[_A]], _A] | None = None,
+    ) -> None: ...
     def __init__(
         self,
         *,
@@ -83,7 +101,11 @@ class Context(Generic[_A]):
         The factory receives this initialized Context but must not read its
         facet before returning. Prefer registering effects after construction;
         failure rollback cannot await asynchronous setup or cleanup.
+        Roots require sequential disposal to preserve defaults during cleanup.
         """
+        # Root defaults must outlive all child and user effect cleanup.
+        if parent is None and dispose_mode != "sequential":
+            raise ValueError("Root Context requires sequential disposal.")
         if parent is not None:
             parent._lifecycle.assert_active()
             schema = parent._schema
@@ -111,7 +133,7 @@ class Context(Generic[_A]):
         try:
             store.acquire_scope(self, bound_scope)
             if parent is None:
-                _install(self)
+                _apply(self)
             object.__setattr__(
                 self,
                 "facet",

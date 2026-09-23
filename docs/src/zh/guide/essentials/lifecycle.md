@@ -95,7 +95,7 @@ Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare(
 
 ## 清理分组
 
-`Context()`、`fork()` 和 `derive()` 接受 `dispose_mode="sequential" | "batch"`，每个新 Context 均默认使用 `"sequential"`。策略不可修改，也不继承父级配置。它只影响清理，不影响 setup 或 Node 执行。无论子级采用何种内部策略，父级都会等待子级完整清理。
+根 Context（`parent=None`）要求 `dispose_mode="sequential"`，确保框架默认配置在清理期间仍然可用；指定 `"batch"` 会在初始化前抛出 `ValueError`。子 Context 的构造、`fork()` 和 `derive()` 接受 `"sequential" | "batch"`，每个新 Context 均默认使用 `"sequential"`。策略不可修改，也不继承父级配置。它只影响清理，不影响 setup 或 Node 执行。无论子级采用何种内部策略，父级都会等待子级完整清理。
 
 ```python
 root = Context()

@@ -6,7 +6,7 @@ from typing import Any
 
 from typing_extensions import assert_type
 
-from slyme.context import Context
+from slyme.context import Context, Scope
 
 
 class Plugin:
@@ -27,6 +27,14 @@ def check_types(ctx: Context) -> None:
     assert_type(Context(facet_factory=None), Context[Any])
     assert_type(Context(facet_factory=Plugin), Context[Plugin])
     assert_type(Context[Plugin](facet_factory=Plugin).facet, Plugin)
+    assert_type(Context(dispose_mode="sequential"), Context[Any])
+    assert_type(
+        Context(parent=None, scope=Scope(), facet_factory=Plugin), Context[Plugin]
+    )
+    assert_type(Context(parent=ctx, dispose_mode="batch"), Context[Any])
+    assert_type(
+        Context(parent=ctx, dispose_mode="batch", facet_factory=Plugin), Context[Plugin]
+    )
     plugin_ctx = ctx.fork(facet_factory=Plugin)
     assert_type(plugin_ctx, Context[Plugin])
     assert_type(plugin_ctx.facet, Plugin)
@@ -47,3 +55,6 @@ def check_types(ctx: Context) -> None:
     assert_type(generic.facet, object)
     plugin_ctx.facet = Plugin(plugin_ctx)  # type: ignore[misc]
     Context[int](facet_factory=Plugin)  # type: ignore[arg-type]
+    Context(dispose_mode="batch")  # type: ignore[call-overload]
+    Context(parent=None, dispose_mode="batch")  # type: ignore[call-overload]
+    Context(scope=Scope(), dispose_mode="batch")  # type: ignore[call-overload]

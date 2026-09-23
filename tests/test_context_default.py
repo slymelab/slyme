@@ -301,19 +301,19 @@ def test_context_tree_operations_use_the_same_scoped_rules() -> None:
     root.dispose()
 
 
-def test_failed_default_installation_releases_partial_root(monkeypatch) -> None:
+def test_failed_default_application_releases_partial_root(monkeypatch) -> None:
     from slyme.context import core
 
-    install = core._install
+    apply_defaults = core._apply
     constructed = []
 
     def fail(ctx):
         constructed.append(ctx)
-        install(ctx)
-        raise ValueError("installation failed")
+        apply_defaults(ctx)
+        raise ValueError("applying defaults failed")
 
-    monkeypatch.setattr(core, "_install", fail)
-    with pytest.raises(ValueError, match="installation failed"):
+    monkeypatch.setattr(core, "_apply", fail)
+    with pytest.raises(ValueError, match="applying defaults failed"):
         Context()
     ctx = constructed[0]
     assert not ctx._schema._stores
