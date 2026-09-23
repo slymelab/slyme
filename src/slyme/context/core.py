@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, TypeVar, overload
 
+from slyme.utils.execution import once
 from slyme.utils.tree import TreeEngine
 
 from .compose import Compose
@@ -90,29 +91,31 @@ class Context:
         object.__setattr__(
             self, "_lifecycle", Lifecycle(self, dispose_mode=dispose_mode)
         )
-        try:
-            store.acquire_scope(self, bound_scope)
-        except BaseException:
-            if parent is None:
-                store.dispose()
-            raise
+        object.__setattr__(self, "_finalize", once(self._finalize))
         if parent is not None:
             parent._children[self] = parent._lifecycle._own(lambda: self.dispose)
-        else:
-            try:
-                _install(self)
-            except BaseException:
-                self.dispose()
-                raise
-
-    def _release(self) -> None:
         try:
+            store.acquire_scope(self, bound_scope)
+            if parent is None:
+                _install(self)
+        except BaseException:
+            # NOTE: Initialization and its registered cleanup must remain internal
+            # and synchronous; this rollback cannot await asynchronous disposal.
+            self.dispose()
+            raise
+
+    def _finalize(self) -> None:
+        """Finish internal bookkeeping once after effect cleanup, retaining failure."""
+        try:
+            # NOTE: acquire_scope must register this viewer for the entire Scope
+            # MRO before restoring bindings; release relies on those registrations
+            # even when construction fails.
             self._store.release_scope(self, self.scope)
         finally:
             if self.parent is None:
                 self._store.dispose()
             else:
-                self.parent._children.pop(self)._release()
+                self.parent._children.pop(self).finalize()
 
     @property
     def dispose_mode(self) -> Literal["sequential", "batch"]:

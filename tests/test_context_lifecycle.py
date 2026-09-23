@@ -729,8 +729,10 @@ def test_released_scope_reuses_identity_with_new_data() -> None:
     assert not binding._data
 
 
-def test_scope_rollback_failure_retains_acquisition_error_as_context(
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_scope_restoration_failure_uses_context_disposal(
     monkeypatch: pytest.MonkeyPatch,
+    cleanup_fails: bool,
 ) -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
@@ -744,27 +746,55 @@ def test_scope_rollback_failure_retains_acquisition_error_as_context(
     cleanup_error = ValueError("cleanup failed")
     original = type(binding).release_scope
     original_restore = type(binding).restore_scope
+    release_scope = type(root._store).release_scope
+    constructed, released = [], []
 
     def fail_restore(self, scope):
+        child = next(iter(root._store._scope_usages[scope].viewers))
+        assert root._children[child] in root._lifecycle._owned
+        assert all(
+            child in root._store._scope_usages[parent].viewers
+            for parent in child.scope.mro
+        )
+        constructed.append(child)
         if original_restore(self, scope):
             raise acquisition_error
         return False
 
     def fail_release(self, scope):
         original(self, scope)
-        if scope is child_scope:
+        if scope is child_scope and cleanup_fails:
             raise cleanup_error
+
+    def record_release(store, viewer, scope):
+        released.append(viewer)
+        release_scope(store, viewer, scope)
 
     with monkeypatch.context() as patch:
         patch.setattr(type(binding), "restore_scope", fail_restore)
         patch.setattr(type(binding), "release_scope", fail_release)
-        with pytest.raises(
-            BaseExceptionGroup,
-            match="Failed to release expired Scopes",
-        ) as raised:
-            root.fork(scope=child_scope)
-        assert raised.value.exceptions == (cleanup_error,)
-        assert raised.value.__context__ is acquisition_error
+        patch.setattr(type(root._store), "release_scope", record_release)
+        if cleanup_fails:
+            with pytest.raises(
+                BaseExceptionGroup,
+                match="Failed to release expired Scopes",
+            ) as raised:
+                root.fork(scope=child_scope)
+            assert raised.value.exceptions == (cleanup_error,)
+            assert raised.value.__context__ is acquisition_error
+            with pytest.raises(BaseExceptionGroup) as repeated:
+                constructed[0].dispose()
+            assert repeated.value is raised.value
+        else:
+            with pytest.raises(ValueError) as raised:
+                root.fork(scope=child_scope)
+            assert raised.value is acquisition_error
+            assert constructed[0].dispose() is None
+    assert released == constructed
+    assert len(constructed) == 1
+    assert not root.children
+    with pytest.raises(RuntimeError, match="disposed"):
+        constructed[0]._lifecycle.assert_readable()
     assert root._store._scope_usages is not None
     assert root._store._scope_usages[root.scope].viewers == {root}
     assert not root._store._scope_usages[child_scope].viewers

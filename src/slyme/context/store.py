@@ -185,6 +185,7 @@ class ContextStore:
         self._data.clear()
 
     def acquire_scope(self, viewer: object, requested_scope: Scope) -> None:
+        """Register all viewers before restoring bindings; Context owns rollback."""
         usages = self._scope_usages
         restored_scopes: list[Scope] = []
         for scope in requested_scope.mro:
@@ -194,19 +195,16 @@ class ContextStore:
             elif not usage.viewers:
                 restored_scopes.append(scope)
             usage.viewers.add(viewer)
-        try:
-            # Restore identity data -> scopes binding
-            for scope in restored_scopes:
-                entries = usages[scope].entries
-                for entry in tuple(entries):
-                    binding = self._data.get(entry)
-                    if binding is None or not binding.restore_scope(scope):
-                        entries.discard(entry)
-        except BaseException:
-            self.release_scope(viewer, requested_scope)
-            raise
+        # Restore identity data -> scopes binding
+        for scope in restored_scopes:
+            entries = usages[scope].entries
+            for entry in tuple(entries):
+                binding = self._data.get(entry)
+                if binding is None or not binding.restore_scope(scope):
+                    entries.discard(entry)
 
     def release_scope(self, viewer: object, requested_scope: Scope) -> None:
+        """Release one registered viewer exactly once, even after restoration fails."""
         usages = self._scope_usages
         expired: list[tuple[Scope, _ScopeUsage]] = []
         for scope in requested_scope.mro:

@@ -1,8 +1,12 @@
 # 生命周期（Lifecycle）
 
-每个 Context 创建一个私有的 `Lifecycle(ctx, dispose_mode=...)`，管理自身 effect、释放策略和释放状态。`ctx.dispose_mode` 是转发到 Lifecycle 的只读 property，不重复存储。父子树只由 Context 保存；Lifecycle 通过自己的 `ctx` 查找祖先和子级。子级释放登记为父级的内部 effect，遵循父级的释放策略。所有 effect 结束后，包括清理失败时，Lifecycle 调用 Context 的数据释放方法；应用根还会将 Store 从 Schema 注销。Lifecycle 没有独立的 parent 或 finalizer 配置。应用应通过 `ctx.effect()` 登记清理，而不是重写 `Context.dispose()`。
+每个 Context 创建一个私有的 `Lifecycle(ctx, dispose_mode=...)`，管理自身 effect、释放策略和释放状态。`ctx.dispose_mode` 是转发到 Lifecycle 的只读 property，不重复存储。父子树只由 Context 保存；Lifecycle 通过自己的 `ctx` 查找祖先和子级。子级释放登记为父级的内部 effect，遵循父级的释放策略。所有 effect 结束后，包括清理失败时，Lifecycle 调用 `Context._finalize()` 完成内部归属和数据收尾；应用根还会将 Store 从 Schema 注销。Lifecycle 没有独立的 parent 或 finalizer 配置。应用应通过 `ctx.effect()` 登记清理，而不是重写 `Context.dispose()`。
+
+Effect 的 `setup`、`dispose`、`finalize`，Lifecycle 的 `dispose`，以及 Context 的 `_finalize` 都在每个实例上使用 `once` 包装，以同名实例属性遮蔽类方法。各实例独立保存结果或异常。finalize 只处理内部收尾；应用必须调用 `dispose()`，先执行所拥有的清理。
 
 `ctx.children` 按创建顺序返回直接子级的 tuple 快照。子级在异步清理期间仍然挂靠父级，释放结束后才移除，失败时也会移除。已释放的 Context 没有子级，但保留原来的 `parent` 引用。Scope 继承与这棵归属树相互独立。
+
+构造过程先登记子级归属，再获取 Scope 可见性。获取时先登记整个 MRO 的 viewer，再恢复 binding 数据。恢复或默认配置安装失败时，统一通过 Context dispose 回滚，Store acquire 不自行回滚。每次 viewer 登记必须恰好释放一次；Context dispose 和 finalize 的重复调用由各实例的 `once` 包装处理。
 
 Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行树。调用装饰后的函数会创建可变 Node；调用这个 Node 时，会使用它的当前参数直接执行。
 

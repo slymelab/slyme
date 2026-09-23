@@ -18,7 +18,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import partial
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -37,35 +36,36 @@ _Disposer = Callable[[], None | Awaitable[None]]
 class _Effect:
     """Own setup and cleanup as one registration with a repeatable disposer."""
 
-    __slots__ = ("owner", "_cleanup", "setup", "dispose")
-
     def __init__(
         self, owner: Lifecycle, setup: Callable[[], _Cleanup | Awaitable[_Cleanup]]
     ) -> None:
         self.owner: Lifecycle | None = owner
+        self._setup_callback = setup
         self._cleanup: _Cleanup | None = None
-        self.setup = once(partial(self._setup, setup))
-        self.dispose = once(self._dispose)
+        object.__setattr__(self, "setup", once(self.setup))
+        object.__setattr__(self, "dispose", once(self.dispose))
+        object.__setattr__(self, "finalize", once(self.finalize))
 
-    def _release(self) -> None:
+    def finalize(self) -> None:
+        """Finish internal ownership bookkeeping without invoking user callbacks."""
         owner = self.owner
         self.owner = None
         if owner is not None:
             owner._forget_owned(self)
 
     @continuation
-    def _setup(
-        self, setup: Callable[[], _Cleanup | Awaitable[_Cleanup]]
-    ) -> Generator[Any, Any, _Disposer]:
+    def setup(self) -> Generator[Any, Any, _Disposer]:
         try:
-            self._cleanup = yield setup()
+            self._cleanup = yield self._setup_callback()
             return self.dispose
         except BaseException:
-            self._release()
+            self.finalize()
             raise
+        finally:
+            del self._setup_callback
 
     @continuation
-    def _dispose(self) -> Generator[Any, Any, None]:
+    def dispose(self) -> Generator[Any, Any, None]:
         try:
             yield self.setup()
             cleanup, self._cleanup = self._cleanup, None
@@ -73,7 +73,7 @@ class _Effect:
                 yield cleanup()
         finally:
             self._cleanup = None
-            self._release()
+            self.finalize()
 
 
 @continuation
@@ -140,10 +140,9 @@ class Lifecycle:
     )
     _owned: dict[_Effect, None] = field(default_factory=dict, init=False)
     _state: _LifecycleState = field(default=_LifecycleState.ACTIVE, init=False)
-    _dispose_once: _Disposer = field(init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_dispose_once", once(self._dispose))
+        object.__setattr__(self, "dispose", once(self.dispose))
 
     def assert_readable(self) -> None:
         if self._state is _LifecycleState.DISPOSED:
@@ -204,7 +203,8 @@ class Lifecycle:
         self.assert_active()
         return self._own(setup).setup()
 
-    def dispose(self) -> None | Awaitable[None]:
+    @continuation
+    def dispose(self) -> Generator[Any, Any, None]:
         """Release owned effects using this Lifecycle's disposal mode.
 
         Synchronous cleanup runs immediately. Await asynchronous completion;
@@ -217,10 +217,6 @@ class Lifecycle:
         first cleanup; each Lifecycle remains readable until its own release.
         Failures are not retrieved merely to suppress asyncio diagnostics.
         """
-        return self._dispose_once()
-
-    @continuation
-    def _dispose(self) -> Generator[Any, Any, None]:
         self._close_subtree()
         object.__setattr__(self, "_state", _LifecycleState.DISPOSING)
         owned = tuple(reversed(self._owned))
@@ -234,12 +230,12 @@ class Lifecycle:
         finally:
             self._owned.clear()
             try:
-                self.ctx._release()
-            except BaseException as release_error:
+                self.ctx._finalize()
+            except BaseException as finalize_error:
                 if error is None:
-                    error = release_error
+                    error = finalize_error
                 else:
-                    error.__cause__ = release_error
+                    error.__cause__ = finalize_error
             finally:
                 object.__setattr__(self, "_state", _LifecycleState.DISPOSED)
         if error is not None:

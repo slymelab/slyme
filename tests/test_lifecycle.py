@@ -13,6 +13,7 @@ from slyme.context import (
     Scope,
     ScopeBinding,
 )
+from slyme.context.lifecycle import _Effect
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
 
@@ -114,8 +115,8 @@ def test_lifecycle_finalizes_after_owned_cleanup_even_on_failure() -> None:
     failure = ValueError("cleanup")
 
     class TrackedContext(Context):
-        def _release(self):
-            super()._release()
+        def _finalize(self):
+            super()._finalize()
             events.append("finalize" if self.parent is None else "child")
 
     ctx = TrackedContext()
@@ -140,13 +141,13 @@ def test_lifecycle_finalizes_after_owned_cleanup_even_on_failure() -> None:
     assert repeated.value is caught.value
 
 
-def test_lifecycle_release_failure_is_retained_without_repeating_cleanup() -> None:
+def test_lifecycle_finalize_failure_is_retained_without_repeating_cleanup() -> None:
     calls = []
     failure = ValueError("finalize")
 
     class FailingContext(Context):
-        def _release(self):
-            super()._release()
+        def _finalize(self):
+            super()._finalize()
             calls.append("finalize")
             raise failure
 
@@ -155,9 +156,141 @@ def test_lifecycle_release_failure_is_retained_without_repeating_cleanup() -> No
         with pytest.raises(ValueError) as caught:
             lifetime.dispose()
         assert caught.value is failure
+        with pytest.raises(ValueError) as finalized:
+            lifetime.ctx._finalize()
+        assert finalized.value is failure
     assert calls == ["finalize"]
     with pytest.raises(RuntimeError, match="disposed"):
         lifetime.assert_readable()
+
+
+def test_child_and_parent_share_once_only_finalization(monkeypatch) -> None:
+    effects, viewers = [], []
+    finalize = _Effect.finalize
+    release_scope = ContextStore.release_scope
+
+    def record_finalize(effect):
+        effects.append(effect)
+        finalize(effect)
+
+    def record_release(store, viewer, scope):
+        viewers.append(viewer)
+        release_scope(store, viewer, scope)
+
+    monkeypatch.setattr(_Effect, "finalize", record_finalize)
+    monkeypatch.setattr(ContextStore, "release_scope", record_release)
+    root = Context()
+    child = root.fork()
+    child_effect = root._children[child]
+    root.dispose()
+    child_effect.finalize()
+    child._finalize()
+    root._finalize()
+    assert effects.count(child_effect) == 1
+    assert viewers == [child, root]
+    assert not root.children
+    assert not root._lifecycle._owned
+
+
+async def test_failed_setup_and_disposal_share_once_only_finalization(
+    monkeypatch,
+) -> None:
+    calls = []
+    finalize = _Effect.finalize
+
+    def record(effect):
+        calls.append(effect)
+        finalize(effect)
+
+    monkeypatch.setattr(_Effect, "finalize", record)
+    ctx = Context()
+    failure = ValueError("setup failed")
+
+    async def setup():
+        await asyncio.sleep(0)
+        raise failure
+
+    registration = ctx.effect(setup)
+    effect = next(reversed(ctx._lifecycle._owned))
+    with pytest.raises(BaseExceptionGroup) as caught:
+        await await_result(ctx.dispose())
+    assert caught.value.exceptions == (failure,)
+    with pytest.raises(ValueError) as setup_error:
+        await await_result(registration)
+    assert setup_error.value is failure
+    effect.finalize()
+    assert calls.count(effect) == 1
+    assert not ctx._lifecycle._owned
+
+
+def test_effect_finalization_failure_is_retained_without_retry(monkeypatch) -> None:
+    calls = []
+    finalize = _Effect.finalize
+    failure = ValueError("finalize")
+    ctx = Context()
+
+    def fail(effect):
+        calls.append(effect)
+        finalize(effect)
+        raise failure
+
+    monkeypatch.setattr(_Effect, "finalize", fail)
+    cleanup_calls = []
+    dispose = ctx.effect(lambda: lambda: cleanup_calls.append("cleanup"))
+    effect = next(reversed(ctx._lifecycle._owned))
+    for _ in range(2):
+        with pytest.raises(ValueError) as caught:
+            dispose()
+        assert caught.value is failure
+        with pytest.raises(ValueError) as finalized:
+            effect.finalize()
+        assert finalized.value is failure
+    assert calls == [effect]
+    assert cleanup_calls == ["cleanup"]
+    ctx.dispose()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_completed_setup_does_not_retain_its_callback(asynchronous) -> None:
+    cleanup_calls = []
+
+    def cleanup():
+        cleanup_calls.append("cleanup")
+
+    class Setup:
+        def __call__(self):
+            if asynchronous:
+                return self.finish()
+            return cleanup
+
+        async def finish(self):
+            await asyncio.sleep(0)
+            return cleanup
+
+    ctx = Context()
+    setup = Setup()
+    reference = weakref.ref(setup)
+    registration = ctx.effect(setup)
+    dispose = await await_result(registration)
+    del setup
+    gc.collect()
+    assert reference() is None
+    assert not cleanup_calls
+    await await_result(dispose())
+    await await_result(ctx.dispose())
+    assert cleanup_calls == ["cleanup"]
+
+
+def test_scope_viewer_requires_one_release_per_acquisition() -> None:
+    store = ContextStore(Schema())
+    scope = Scope()
+    viewer = object()
+    for _ in range(2):
+        store.acquire_scope(viewer, scope)
+        store.release_scope(viewer, scope)
+        with pytest.raises(KeyError):
+            store.release_scope(viewer, scope)
+    store.dispose()
 
 
 async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
@@ -166,8 +299,8 @@ async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
     events = []
 
     class TrackedContext(Context):
-        def _release(self):
-            super()._release()
+        def _finalize(self):
+            super()._finalize()
             events.append("finalize")
 
     ctx = TrackedContext()
@@ -201,8 +334,8 @@ async def test_disposers_execute_once_per_lifetime_and_per_effect(asynchronous) 
     events = []
 
     class TrackedContext(Context):
-        def _release(self):
-            super()._release()
+        def _finalize(self):
+            super()._finalize()
             events.append(
                 "left:finalize" if self._lifecycle is left else "right:finalize"
             )
@@ -250,8 +383,8 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
     started, release, finalized = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     class TrackedContext(Context):
-        def _release(self):
-            super()._release()
+        def _finalize(self):
+            super()._finalize()
             finalized.set()
 
     lifetime = TrackedContext(dispose_mode=dispose_mode)._lifecycle
@@ -302,8 +435,8 @@ async def test_background_failure_reaches_asyncio_diagnostics_unless_observed(
     finalized = asyncio.Event()
 
     class TrackedContext(Context):
-        def _release(self):
-            super()._release()
+        def _finalize(self):
+            super()._finalize()
             finalized.set()
 
     lifetime = TrackedContext()._lifecycle
