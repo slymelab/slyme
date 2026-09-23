@@ -8,7 +8,7 @@ import pytest
 
 from slyme.context import Context
 from slyme.node import Auto, create_node, create_wrapper, node, wrapper
-from slyme.utils.execution import continuation
+from slyme.utils.execution import await_result, continuation
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])
@@ -131,7 +131,7 @@ async def test_decorated_generators_compose_as_nodes_and_wrappers(
     source.set("value", 4)
     graph = add(child=source).add_wrappers(around())
     ctx = Context()
-    assert await graph.acall(ctx) == 5
-    assert await graph.acall(ctx) == 5
+    assert await await_result(graph(ctx)) == 5
+    assert await await_result(graph(ctx)) == 5
     assert events == ["before", "after"] * 2
-    await ctx.adispose()
+    await await_result(ctx.dispose())

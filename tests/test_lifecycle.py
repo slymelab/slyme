@@ -87,12 +87,12 @@ async def test_parent_keeps_child_until_its_cancelled_waiter_cleanup_finishes(
             raise failure
 
     child.effect(lambda: cleanup)
-    early = asyncio.create_task(child.adispose())
+    early = asyncio.create_task(await_result(child.dispose()))
     await started.wait()
     early.cancel()
     with pytest.raises(asyncio.CancelledError):
         await early
-    disposing = asyncio.create_task(root.adispose())
+    disposing = asyncio.create_task(await_result(root.dispose()))
     await asyncio.sleep(0)
     assert root.children == (child,)
     assert root._children[child] in root._lifecycle._owned
@@ -179,7 +179,7 @@ async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
         events.append("cleanup")
 
     lifetime.effect(lambda: cleanup)
-    first = asyncio.create_task(lifetime.adispose())
+    first = asyncio.create_task(await_result(lifetime.dispose()))
     await started.wait()
     lifetime.assert_readable()
     with pytest.raises(RuntimeError, match="disposed"):
@@ -189,11 +189,11 @@ async def test_lifecycle_waiters_share_cleanup_and_finalize_after_it() -> None:
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first
-    second = asyncio.create_task(lifetime.adispose())
+    second = asyncio.create_task(await_result(lifetime.dispose()))
     finish.set()
     await second
     assert events == ["cleanup", "finalize"]
-    await lifetime.adispose()
+    await await_result(lifetime.dispose())
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -224,10 +224,10 @@ async def test_disposers_execute_once_per_lifetime_and_per_effect(asynchronous) 
     right.effect(lambda: lambda: cleanup("right"))
     await await_result(first())
     await await_result(first())
-    await right.adispose()
-    await left.adispose()
-    await right.adispose()
-    await left.adispose()
+    await await_result(right.dispose())
+    await await_result(left.dispose())
+    await await_result(right.dispose())
+    await await_result(left.dispose())
     assert events == [
         "left:first",
         "right",
@@ -270,14 +270,14 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
         await first_waiter
 
     if rewait_before_cleanup_finishes:
-        repeated = asyncio.create_task(lifetime.adispose())
+        repeated = asyncio.create_task(await_result(lifetime.dispose()))
         await asyncio.sleep(0)
         assert not repeated.done()
         release.set()
     else:
         release.set()
         await finalized.wait()
-        repeated = asyncio.create_task(lifetime.adispose())
+        repeated = asyncio.create_task(await_result(lifetime.dispose()))
 
     with pytest.raises(BaseExceptionGroup) as caught:
         await repeated
@@ -285,54 +285,8 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
     assert str(caught.value.exceptions[0]) == "late cleanup failure"
     assert lifetime.dispose() is completion
     with pytest.raises(BaseExceptionGroup) as replayed:
-        await lifetime.adispose()
+        await await_result(lifetime.dispose())
     assert replayed.value is caught.value
-
-
-@pytest.mark.parametrize("owner_disposal", [False, True])
-@pytest.mark.parametrize("delegated", [False, True])
-@pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
-async def test_cleanup_cannot_wait_on_a_saved_disposal_completion(
-    owner_disposal,
-    delegated,
-    dispose_mode,
-) -> None:
-    lifetime = Context(dispose_mode=dispose_mode)._lifecycle
-
-    async def cleanup() -> None:
-        if delegated:
-            await asyncio.create_task(await_result(completion))
-        else:
-            await completion
-
-    dispose_effect = lifetime.effect(lambda: cleanup)
-    completion = lifetime.dispose() if owner_disposal else dispose_effect()
-    if owner_disposal:
-        with pytest.raises(BaseExceptionGroup) as caught:
-            await asyncio.wait_for(completion, timeout=1)
-        error = caught.value.exceptions[0]
-        assert isinstance(error, RuntimeError)
-        assert "cannot be re-entered" in str(error)
-    else:
-        with pytest.raises(RuntimeError, match="cannot await its own"):
-            await asyncio.wait_for(completion, timeout=1)
-        await lifetime.adispose()
-    assert not lifetime._owned
-
-
-async def test_async_setup_cannot_wait_on_its_saved_completion() -> None:
-    lifetime = Context()._lifecycle
-    initial_owned = tuple(lifetime._owned)
-
-    async def setup():
-        await asyncio.create_task(await_result(completion))
-        return lambda: None
-
-    completion = lifetime.effect(setup)
-    with pytest.raises(RuntimeError, match="cannot await its own"):
-        await asyncio.wait_for(completion, timeout=1)
-    assert tuple(lifetime._owned) == initial_owned
-    lifetime.dispose()
 
 
 @pytest.mark.parametrize("phase", ["setup", "dispose"])
@@ -514,7 +468,7 @@ async def test_closing_context_does_not_freeze_shared_data_or_block_revocation()
         assert view.get("value") == "new"
 
     owner.effect(lambda: cleanup)
-    task = asyncio.create_task(owner.adispose())
+    task = asyncio.create_task(await_result(owner.dispose()))
     await started.wait()
     with pytest.raises(RuntimeError, match="disposed"):
         owner.set("group.value", "forbidden")

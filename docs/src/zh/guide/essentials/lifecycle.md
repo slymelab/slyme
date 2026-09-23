@@ -50,7 +50,7 @@ Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare(
 
 `dispose()` 调用时立即标记释放中并运行同步部分，异步部分需要等待后才调度。提前清理的登记项在完成前仍由 Context 持有，owner 释放会加入同一次清理；移除它不会改变其余登记项的释放顺序。
 
-串行清理等待每项结束后才调用下一项；批量清理先调用所有 disposer，再一起等待异步结果。两种模式均按登记逆序访问各项，同步操作直接执行，无需事件循环。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 按登记逆序汇总失败，不依赖完成顺序；后续释放调用观察同一个最终结果，不重复执行 cleanup。Lifecycle 使用 `once` 和 `SharedAwaitable` 共享执行及结果。调用和等待都会检查生命周期重入，包括通过先前取得的完成句柄进行等待。
+串行清理等待每项结束后才调用下一项；批量清理先调用所有 disposer，再一起等待异步结果。两种模式均按登记逆序访问各项，同步操作直接执行，无需事件循环。某项失败或自身取消不会跳过其余归属项或 Scope 释放。Context 按登记逆序汇总失败，不依赖完成顺序；后续释放调用观察同一个最终结果，不重复执行 cleanup。每个 effect 的 disposer 会先等待自己的 setup 再清理。Lifecycle 使用 `once` 和 `SharedAwaitable` 共享执行及结果。setup 和 cleanup 不得重入释放自身、owner 或祖先，也不得等待包含自身的释放；Lifecycle 不检测这些不受支持的调用或等待环。
 
 取消 setup 或释放的等待者不会取消共享操作，调用方仍须等待完成并处理失败。Slyme 不会仅为抑制 asyncio 的未观察异常诊断而提取后台异常；这些诊断不能替代应用的错误处理。
 
@@ -99,4 +99,4 @@ Auto child 返回的值不得依赖其子 Context 拥有的资源，因为这些
 
 直接等待 `await await_result(ctx.dispose())` 的调用者取消时，已调度的清理不会取消，但该调用者可能先退出。应用退出前应再次等待同一次释放，观察保留的结果。父 Context 只能等待仍由它持有的子 Context 的清理。Auto 不返回临时子 Context；求值取消后，后台清理失败可能既不会传给调用者，也不会传给之后才开始的父 Context 释放。
 
-Context 创建、外部输入校验和输出提取由应用代码负责。使用 `node(ctx)` 执行图，或者通过 `await node.acall(ctx)` 获得始终可等待的结果。`await ctx.adispose()` 同样只适配释放的返回值，不改变执行与所有权规则。
+Context 创建、外部输入校验和输出提取由应用代码负责。使用 `node(ctx)` 执行图，使用 `ctx.dispose()` 释放。通过 `await await_result(...)` 处理普通值或 awaitable，或在 `@continuation` 函数中 yield 这些调用；两个辅助接口都位于 `slyme.utils.execution`。

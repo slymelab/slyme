@@ -10,6 +10,7 @@ from slyme.context import Context, Schema
 from slyme.context.default import NODE_TREE_REF
 from slyme.node import Auto, Node, node, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
+from slyme.utils.execution import await_result
 from slyme.utils.tree import TreeEngine
 
 
@@ -248,12 +249,12 @@ async def test_async_calls_snapshot_overrides_without_changing_saved_bindings() 
 
     instance = value(value=2).add_wrappers(pause())
     ctx = Context()
-    first = instance.acall(ctx)
-    second = instance.acall(ctx, value=3)
+    first = await_result(instance(ctx))
+    second = await_result(instance(ctx, value=3))
     instance.set("value", 4)
     assert await asyncio.gather(first, second) == [2, 3]
-    assert await instance.acall(ctx) == 4
-    await ctx.adispose()
+    assert await await_result(instance(ctx)) == 4
+    await await_result(ctx.dispose())
 
 
 def test_inspection_follows_explicit_bindings_and_auto_trees() -> None:

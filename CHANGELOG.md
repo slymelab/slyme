@@ -37,8 +37,6 @@ breaking changes when they are documented here.
 - Added `slyme.utils.execution.run(generator)` to drive ordinary generator
   control flow, returning synchronously until a yielded awaitable requires an
   asynchronous remainder. Awaited errors are thrown at the suspended yield.
-- Added `Node.acall()` and `Context.adispose()` as always-awaitable adapters
-  that preserve immediate synchronous execution and the unified completion rules.
 - Added `slyme.utils.execution.await_result()` to await an immediate or asynchronous
   result without starting a loop or offloading synchronous work.
 - Unified Node, Auto, and Wrapper execution around actual returned values;
@@ -80,8 +78,11 @@ breaking changes when they are documented here.
 ### Fixed
 
 - Lifecycle and effect disposal share execution through `once` and
-  `SharedAwaitable`, retaining LIFO cleanup and call-time and wait-time reentry
-  checks. Background failures are not retrieved just to suppress asyncio's
+  `SharedAwaitable`. Each effect waits for its own setup before cleanup;
+  independent tasks can dispose an owner while setup or cleanup is pending.
+  Setup and cleanup must not reenter or await disposal containing themselves;
+  Lifecycle does not detect these unsupported calls or wait cycles.
+  Background failures are not retrieved just to suppress asyncio's
   unobserved-exception diagnostics.
 - Aligned Node and Wrapper deletion documentation and tests with idempotent
   removal of absent bindings. Context regression tests cover explicit Scope

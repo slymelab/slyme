@@ -55,18 +55,21 @@ Context 创建、外部输入处理和输出提取均由调用方负责。Node �
 Node 的返回类型是 `T | Awaitable[T]`，取决于实际执行的 Auto、Wrapper、用户函数及临时 Context 清理。纯同步调用直接返回；普通 `def` 也可以返回 awaitable，不需要声明执行模式。同步父函数可以等待异步 Auto 注入后再运行。
 
 ```python
+from slyme.utils.execution import await_result
+
+
 async def execute(ctx):
     try:
-        return await task.acall(ctx)
+        return await await_result(task(ctx))
     finally:
-        await ctx.adispose()
+        await await_result(ctx.dispose())
 ```
 
-`task.acall(ctx)` 和 `ctx.adispose()` 始终返回 awaitable。它们通过 `slyme.utils.execution` 的 `await_result()` 委托给普通调用与释放方法；同步工作和同步错误仍在调用时立即发生。它们不会创建 task 或调度异步工作。
+`await_result()` 接受普通值或 awaitable。普通调用在结果传给适配函数前发生，所以同步工作和错误仍会立即执行或抛出。适配函数不会创建 task 或调度异步工作。
 
 `await_result()` 只等待外层执行结果，不递归等待容器中的数据。异步 continuation 在被等待或调度前不会执行；同步前缀可能已运行。同步应用可以在应用入口使用 `asyncio.run(await_result(task(ctx)))`，已有事件循环内应 await，不创建嵌套事件循环。框架不会把阻塞函数自动放入线程。
 
-用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。可以使用 `async def` 和 `await child.acall(ctx)`，或驱动下面的生成器。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
+用户函数内部的调用仍需显式处理返回值：同步代码不能把未知的 `child(ctx)` 结果直接用于计算。可以使用 `async def` 和 `await await_result(child(ctx))`，或驱动下面的生成器。直接返回的 awaitable 表示执行；若要将其作为数据传递，应装入普通容器。
 
 ### 生成器组合
 
@@ -129,7 +132,7 @@ assert root(Context()) == 11
 assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
 ```
 
-使用 `get(name)` 读取绑定，使用 `set(name, value)` 保存任意绑定，使用 `delete(name)` 删除绑定。删除不存在的绑定不做任何操作。读取不存在的 key 会抛出 `KeyError`，除非通过 `get(name, default)` 提供回退值；回退值可以是包括 `None` 在内的任意值。返回回退值不会新增绑定，已有值（包括 `None`）始终优先。这些操作不会读取函数默认值。实时、只读的 `params` mapping 只包含已保存的绑定。`node(ctx, **kwargs)` 和 `node.acall(ctx, **kwargs)` 在 Auto 求值前，为本次调用浅覆盖绑定，不修改 `params`，也不合并嵌套容器。参数名可以与框架属性重合，因为参数不会投影为对象属性。
+使用 `get(name)` 读取绑定，使用 `set(name, value)` 保存任意绑定，使用 `delete(name)` 删除绑定。删除不存在的绑定不做任何操作。读取不存在的 key 会抛出 `KeyError`，除非通过 `get(name, default)` 提供回退值；回退值可以是包括 `None` 在内的任意值。返回回退值不会新增绑定，已有值（包括 `None`）始终优先。这些操作不会读取函数默认值。实时、只读的 `params` mapping 只包含已保存的绑定。`node(ctx, **kwargs)` 在 Auto 求值前，为本次调用浅覆盖绑定，不修改 `params`，也不合并嵌套容器。参数名可以与框架属性重合，因为参数不会投影为对象属性。
 
 工厂和可变绑定接受动态关键字名称与值，包括部分绑定和 Auto 树。类型声明保留执行结果类型，但不会根据底层函数参数逐项静态检查绑定。
 

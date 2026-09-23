@@ -68,10 +68,10 @@ async def test_node_and_wrapper_preserve_control_and_framework_exceptions(
     ctx = Context()
     try:
         with pytest.raises(type(failure)) as caught:
-            await graph.acall(ctx)
+            await await_result(graph(ctx))
         assert caught.value is failure
     finally:
-        await ctx.adispose()
+        await await_result(ctx.dispose())
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -99,11 +99,11 @@ async def test_node_and_wrapper_record_exception_groups_as_cause(
     ctx = Context()
     try:
         with pytest.raises(expected) as caught:
-            await graph.acall(ctx)
+            await await_result(graph(ctx))
         assert caught.value.__cause__ is failure
         assert caught.value.exception_node is (graph if origin == "node" else around)
     finally:
-        await ctx.adispose()
+        await await_result(ctx.dispose())
 
 
 def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
@@ -234,7 +234,7 @@ async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
 
     graph = target(value=Auto(parameter())).add_wrappers(around())
     try:
-        result = await graph.acall(ctx)
+        result = await await_result(graph(ctx))
         if short_circuit:
             assert result == "stopped"
             assert events == []
@@ -242,4 +242,4 @@ async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
             assert result == (2, 1)
             assert events == [("auto", 2), ("target", 2), ("auto", 1), ("target", 1)]
     finally:
-        await ctx.adispose()
+        await await_result(ctx.dispose())

@@ -51,7 +51,7 @@ R = Schema(
 )
 
 
-async def test_acall_runs_sync_work_immediately_and_preserves_result_identity() -> None:
+async def test_await_result_preserves_immediate_node_execution_and_identity() -> None:
     events: list[str] = []
     value = object()
 
@@ -62,14 +62,14 @@ async def test_acall_runs_sync_work_immediately_and_preserves_result_identity() 
 
     ctx = Context()
     tasks = asyncio.all_tasks()
-    result = immediate().acall(ctx)
+    result = await_result(immediate()(ctx))
     assert events == ["called"]
     assert asyncio.all_tasks() == tasks
     assert await result is value
     ctx.dispose()
 
 
-def test_acall_preserves_immediate_node_errors() -> None:
+def test_await_result_preserves_immediate_node_errors() -> None:
     failure = ValueError("immediate failure")
 
     @node
@@ -79,14 +79,16 @@ def test_acall_preserves_immediate_node_errors() -> None:
     ctx = Context()
     instance = failing()
     with pytest.raises(NodeExceptionRecord) as caught:
-        instance.acall(ctx)
+        await_result(instance(ctx))
     assert caught.value.__cause__ is failure
     assert caught.value.exception_node is instance
     ctx.dispose()
 
 
 @pytest.mark.parametrize("fails", [False, True])
-async def test_acall_awaits_async_results_and_preserves_errors(fails: bool) -> None:
+async def test_await_result_awaits_async_results_and_preserves_errors(
+    fails: bool,
+) -> None:
     events: list[str] = []
     failure = ValueError("asynchronous failure")
 
@@ -100,7 +102,7 @@ async def test_acall_awaits_async_results_and_preserves_errors(fails: bool) -> N
 
     ctx = Context()
     instance = delayed()
-    result = instance.acall(ctx)
+    result = await_result(instance(ctx))
     assert not events
     if fails:
         with pytest.raises(NodeExceptionRecord) as caught:
@@ -113,7 +115,7 @@ async def test_acall_awaits_async_results_and_preserves_errors(fails: bool) -> N
     ctx.dispose()
 
 
-async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
+async def test_await_result_composes_async_auto_and_wrapper_with_sync_parent() -> None:
     events: list[str] = []
 
     @node
@@ -137,7 +139,7 @@ async def test_acall_composes_async_auto_and_wrapper_with_sync_parent() -> None:
     ctx = Context()
     initial_owned = tuple(ctx._lifecycle._owned)
     graph = parent(value=Auto(child())).add_wrappers(increment())
-    assert await graph.acall(ctx) == 13
+    assert await await_result(graph(ctx)) == 13
     assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
 
@@ -822,7 +824,7 @@ async def test_cancelled_auto_leaves_sibling_cleanup_owned_without_aggregating_e
     finally:
         release_cleanup.set()
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
-            await children[0].adispose()
+            await await_result(children[0].dispose())
     assert cleanup_result.value.exceptions[0] is cleanup_failure
     assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
@@ -866,7 +868,7 @@ async def test_repeated_auto_cancellation_leaves_child_cleanup_running(
         assert ctx._lifecycle._owned
     finally:
         release_cleanup.set()
-        await ctx.adispose()
+        await await_result(ctx.dispose())
     assert cleanup_finished.is_set()
     assert not ctx._lifecycle._owned
 
@@ -907,7 +909,7 @@ async def test_cancelled_auto_leaves_cleanup_failure_on_child_context() -> None:
     finally:
         release_cleanup.set()
         with pytest.raises(BaseExceptionGroup) as cleanup_result:
-            await children[0].adispose()
+            await await_result(children[0].dispose())
     assert cleanup_result.value.exceptions[0] is cleanup_failure
     assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()

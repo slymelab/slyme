@@ -131,7 +131,7 @@ Typed APIs rely on their annotations for argument and callback types, including 
 
 `@node` / `@node()` and `@wrapper` / `@wrapper()` return ordinary keyword-only factory functions. Use `create_node(func, params=None, *, wrappers=None)` or `create_wrapper(func, params=None)` from `slyme.node` to create an instance directly. Business bindings live in `params`, separately from assembly configuration. Each instance shallow-copies its bindings and wrapper list, retaining the referenced values and Wrapper objects. Attach wrappers during assembly with `create_node(..., wrappers=[...])` or `task.add_wrappers(...)`, not on `@node`.
 
-Use `await task.acall(ctx)` and `await ctx.adispose()` when execution or cleanup may be asynchronous. These always-awaitable adapters preserve immediate synchronous work and errors, and do not schedule tasks. Purely synchronous applications can call `task(ctx)` and `ctx.dispose()` directly.
+When execution or cleanup may be asynchronous, use `await await_result(task(ctx))` and `await await_result(ctx.dispose())`, importing `await_result` from `slyme.utils.execution`. To compose both modes in one function, use `@continuation` from the same module and yield those calls. Purely synchronous applications can call `task(ctx)` and `ctx.dispose()` directly.
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` builds an outermost-first callable chain without running it. Wrapper order is snapshotted; their parameters remain live. Each wrapper controls calls to the next layer and may return an immediate or asynchronous result.
 

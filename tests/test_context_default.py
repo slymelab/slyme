@@ -251,7 +251,7 @@ async def test_inflight_evaluation_uses_captured_rules_until_reconstruction() ->
     assert await pending == Box(2)
     tree = Box(1)
     assert eval_tree(ctx, tree) is tree
-    await ctx.adispose()
+    await await_result(ctx.dispose())
 
 
 def test_node_assembly_stays_independent_of_the_execution_context() -> None:

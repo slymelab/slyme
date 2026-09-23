@@ -23,7 +23,7 @@ from typing import Any, Generic, Protocol, TypeVar, overload
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.execution import await_result, continuation
+from slyme.utils.execution import continuation
 from slyme.utils.tree import (
     AttributeKey,
     TreeAux,
@@ -170,14 +170,6 @@ class Node(NodeElement, Generic[_R]):
             raise
         except Exception as error:
             raise NodeExceptionRecord(exception_node=self) from error
-
-    def acall(self, ctx: Context, /, **kwargs: Any) -> Awaitable[_R]:
-        """Call with an always-awaitable result, preserving immediate execution.
-
-        Synchronous work and errors occur during this call. Await the result
-        to finish any asynchronous work; this method does not schedule it.
-        """
-        return await_result(self(ctx, **kwargs))
 
 
 class Wrapper(NodeElement, Generic[_R]):

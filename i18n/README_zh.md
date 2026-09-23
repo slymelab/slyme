@@ -119,7 +119,7 @@ if __name__ == "__main__":
 
 类型化 API 通过类型注解约束参数和回调类型，包括同步／异步回调及 `Literal` 选项；请使用静态类型检查器检查这些调用。Slyme 在运行时检查动态 Schema 声明、结构冲突和生命周期约束。可复用的 Node 图通过普通 Python 函数组装。
 
-执行或清理可能异步时，使用 `await task.acall(ctx)` 和 `await ctx.adispose()`。这两个适配方法始终返回 awaitable，保留立即执行的同步操作和错误，不调度任务。纯同步应用仍可直接调用 `task(ctx)` 和 `ctx.dispose()`。
+执行或清理可能异步时，从 `slyme.utils.execution` 导入 `await_result`，使用 `await await_result(task(ctx))` 和 `await await_result(ctx.dispose())`。需要在同一个函数中组合两种模式时，使用同模块的 `@continuation` 并 yield 这些调用。纯同步应用仍可直接调用 `task(ctx)` 和 `ctx.dispose()`。
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 构建从外到内的 callable 链，不执行它。Wrapper 顺序采用快照，参数仍实时读取；每个 wrapper 控制对下一层的调用，并可返回同步或异步结果。
 
@@ -137,7 +137,7 @@ Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递�
 
 `Schema.leaf()` 默认使用 `mode="assign"`，允许 `set()`/`delete()`；声明 `mode="register"` 后，改用 `ctx.register(ref, value)` 及其 disposer 撤销。两种模式互不允许对方的写入操作。删除 container（包括 `ctx.delete("")`）时，任何 `register` 后代都会使操作在修改数据前报错。模式约束的是绑定，而不是所存对象是否可变。
 
-Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 leaf 局部 identity。`Compose.derive(parents=..., binding=...)` 和静态 `Compose.derive_many(parents=..., bindings=...)` 创建配置好的 Scope，后者将多个 Compose 配置在同一个 Scope 上，两者都不管理生命周期。所有 derive 绑定值接受 ScopeBinding 或 Identity，不接受 None；直接传 Identity 等价于 ScopeBinding(identity=identity)。ScopeBinding 和 Identity 默认均不阻断，阻断需显式设置 blocked=True。`ctx.derive(label=..., parents=..., bindings=...)` 则创建子 Context 和一个新 Scope，配置指定字段与 Compose，并接管数据生命周期；省略 parents 时继承当前 Scope，显式 parents 可以是一个 Scope 或 tuple，`()` 表示无父级。Scope 构造与 derive 接口均为 keyword-only，Scope 存储的 parents 始终为 tuple。`effect()` 管理同步或异步 setup 和 cleanup，`register()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await ctx.adispose()`。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
+Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 leaf 局部 identity。`Compose.derive(parents=..., binding=...)` 和静态 `Compose.derive_many(parents=..., bindings=...)` 创建配置好的 Scope，后者将多个 Compose 配置在同一个 Scope 上，两者都不管理生命周期。所有 derive 绑定值接受 ScopeBinding 或 Identity，不接受 None；直接传 Identity 等价于 ScopeBinding(identity=identity)。ScopeBinding 和 Identity 默认均不阻断，阻断需显式设置 blocked=True。`ctx.derive(label=..., parents=..., bindings=...)` 则创建子 Context 和一个新 Scope，配置指定字段与 Compose，并接管数据生命周期；省略 parents 时继承当前 Scope，显式 parents 可以是一个 Scope 或 tuple，`()` 表示无父级。Scope 构造与 derive 接口均为 keyword-only，Scope 存储的 parents 始终为 tuple。`effect()` 管理同步或异步 setup 和 cleanup，`register()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.utils.execution` 导入。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
 
 ```python
 from slyme.context import Compose, Context, Schema

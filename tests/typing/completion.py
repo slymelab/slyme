@@ -91,7 +91,7 @@ async def check_types(ctx: Context) -> None:
     assert_type(parameterized(), Node[int])
     assert_type(parameterized(value=Auto(mixed())), Node[int])
     assert_type(parameterized()(ctx, value=1), int | Awaitable[int])
-    assert_type(parameterized().acall(ctx, value=1), Awaitable[int])
+    assert_type(await await_result(parameterized()(ctx, value=1)), int)
     assert_type(decorated_async(value=1), Node[int])
     assert_type(
         Wrapper.compose([mixed_wrapper()], wrapped=immediate(), call_next=immediate()),
@@ -101,12 +101,6 @@ async def check_types(ctx: Context) -> None:
     assert_type(await await_result(immediate()(ctx)), int)
     assert_type(await await_result(asynchronous()(ctx)), int)
     assert_type(await await_result(mixed()(ctx)), int)
-    assert_type(immediate().acall(ctx), Awaitable[int])
-    assert_type(asynchronous().acall(ctx), Awaitable[int])
-    assert_type(mixed().acall(ctx), Awaitable[int])
-    assert_type(await immediate().acall(ctx), int)
-    assert_type(await asynchronous().acall(ctx), int)
-    assert_type(await mixed().acall(ctx), int)
 
     def setup() -> Callable[[], None]:
         return lambda: None
@@ -120,5 +114,4 @@ async def check_types(ctx: Context) -> None:
         Callable[[], None | Awaitable[None]],
     )
     assert_type(ctx.dispose(), None | Awaitable[None])
-    assert_type(ctx.adispose(), Awaitable[None])
-    assert_type(await ctx.adispose(), None)
+    assert_type(await await_result(ctx.dispose()), None)

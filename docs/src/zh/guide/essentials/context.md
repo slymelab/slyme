@@ -368,9 +368,7 @@ parent 会强引用并拥有子 Context。每个 Context 按登记逆序调用�
 
 `dispose()` 会在执行任何 cleanup 前，同步禁止整棵所属 Context 子树的修改，包括新增 effect 和子 Context。修改检查只读取接收调用的 Context 自身状态，不受生命周期深度影响。每个 Context 在自身释放完成前仍可读取。尚未轮到清理的子 Context 仍可提前 dispose；已经开始的清理保留原来的共享完成结果。所属子树之外的 Context 即使共享或继承其 Scope，仍可修改。这不会取消正在运行的 Node task，也不会冻结 Context 值中存储的对象。
 
-`await ctx.adispose()` 是 `await await_result(ctx.dispose())` 的始终可等待的替代写法。调用 `adispose()` 会立即执行相同的同步清理，也可能在返回前抛出同步错误。等待返回值即可完成释放；取消隔离和失败结果重放的语义不变。
-
-effect cleanup 执行期间不得 dispose 其 owner Context、ancestor 或自身。这类重入操作可能让 cleanup 仍在使用的资源提前失效，或者依赖自身完成，因此 Slyme 会抛出 `RuntimeError`。
+setup 和 cleanup 不得重入释放自身、所属 Context 或其祖先，也不得等待包含自身的释放操作。这些调用不受支持，Lifecycle 不检测此类重入或等待环。应通知外部协调者执行释放。独立任务可以在 setup 或 cleanup 尚未结束时释放 owner：释放会等待该操作，而该操作不能反过来等待释放。释放期间，尚未完成的 setup 可以完成资源获取并返回 cleanup，但不能新增 Context 修改或注册。
 
 dispose Context 后，它会从 `ctx.scope.mro` 中每个 Scope 的 viewer 集合移除，但不会解除或销毁 `ctx.scope`。通过 `set()` 安装的值，只要同一应用根内仍有活跃 Context 能看到对应的 Context-binding identity，就会继续存储；通过 `register()` 安装的值还会在 owner Context 或其精确 disposer 执行时移除。Compose entry 同样保留到各自的精确 disposer 执行。数据仍然可见并不保证值中的外部资源仍处于打开状态：拥有该资源的 effect 可能已经关闭它。资源所有权应覆盖每个可能使用它的 Context，并且调用方应确定性地 dispose 子 Context，而不是依赖垃圾回收。
 

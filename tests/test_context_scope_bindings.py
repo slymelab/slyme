@@ -8,6 +8,7 @@ import pytest
 from slyme.context import Context, Identity, Schema, Scope, ScopeBinding
 from slyme.context.store import ContextStore, _ContextBinding
 from slyme.utils.exception import BaseExceptionGroup
+from slyme.utils.execution import await_result
 
 
 def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
@@ -583,7 +584,7 @@ async def test_failed_root_cleanup_removes_schema_registration(
 
     root.effect(lambda: async_cleanup if asynchronous else cleanup)
     with pytest.raises(BaseExceptionGroup) as raised:
-        await root.adispose()
+        await await_result(root.dispose())
     assert raised.value.exceptions == (failure,)
     assert not schema._stores
 

@@ -127,7 +127,7 @@ async def test_batch_children_keep_local_lifo_and_parent_declarations() -> None:
     try:
         await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)), 5)
         finish[0].set()
-        await children[0].adispose()
+        await await_result(children[0].dispose())
         assert plugins.children == (children[1],)
         assert root.children == (plugins,)
         assert not waiter.done()
@@ -177,7 +177,7 @@ async def test_batch_cleanup_collects_sync_async_and_cancellation_failures_in_or
     group.effect(lambda: slow)
     group.effect(lambda: cancel)
     group.effect(lambda: lambda: fail(new_error))
-    waiter = asyncio.create_task(group.adispose())
+    waiter = asyncio.create_task(await_result(group.dispose()))
     try:
         await asyncio.wait_for(asyncio.gather(started.wait(), cancelled.wait()), 5)
         assert root.children == (group,)
@@ -192,7 +192,7 @@ async def test_batch_cleanup_collects_sync_async_and_cancellation_failures_in_or
     assert isinstance(errors[1], asyncio.CancelledError)
     assert errors[2:] == (slow_error, old_error)
     with pytest.raises(BaseExceptionGroup) as repeated:
-        await group.adispose()
+        await await_result(group.dispose())
     assert repeated.value is caught.value
     assert calls == [new_error, old_error, slow_error]
     assert not root.children
@@ -217,7 +217,7 @@ async def test_batch_disposal_waits_for_pending_setups_despite_failure() -> None
 
     group.effect(lambda: setup(0))
     successful_setup = group.effect(lambda: setup(1))
-    waiter = asyncio.create_task(group.adispose())
+    waiter = asyncio.create_task(await_result(group.dispose()))
     try:
         await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)), 5)
         assert not waiter.done()
@@ -264,7 +264,7 @@ async def test_branches_share_one_cleanup_without_delaying_independent_successor
     predecessors.effect(lambda: a)
     predecessors.effect(lambda: dispose_b)
 
-    waiter = asyncio.create_task(group.adispose())
+    waiter = asyncio.create_task(await_result(group.dispose()))
     try:
         await asyncio.wait_for(asyncio.gather(a_started.wait(), b_started.wait()), 5)
         finish_b.set()

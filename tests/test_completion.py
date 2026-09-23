@@ -11,7 +11,7 @@ from slyme.context.default import EVALUATORS_REF
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result
+from slyme.utils.execution import await_result, continuation
 
 
 async def test_await_result_preserves_values_and_only_awaits_outer_completion() -> None:
@@ -298,23 +298,142 @@ async def test_owner_disposal_joins_inflight_setup_after_waiter_cancelled() -> N
     assert not ctx._lifecycle._owned
 
 
+@pytest.mark.parametrize("phase", ["setup", "cleanup"])
 @pytest.mark.parametrize("ancestor", [False, True])
-async def test_async_setup_cannot_dispose_owner_or_ancestor(ancestor: bool) -> None:
-    root = Context()
-    ctx = root.fork()
+@pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
+async def test_independent_disposer_created_inside_effect_can_wait_for_it(
+    phase, ancestor, dispose_mode
+) -> None:
+    root = Context(dispose_mode=dispose_mode)
+    ctx = root.fork(dispose_mode=dispose_mode)
     target = root if ancestor else ctx
-    events: list[str] = []
+    started, finish, requested, disposing = (asyncio.Event() for _ in range(4))
+    events = []
+    disposals = []
+
+    async def dispose_when_requested():
+        await requested.wait()
+        completion = target.dispose()
+        disposing.set()
+        await await_result(completion)
+
+    async def pause():
+        disposals.append(asyncio.create_task(dispose_when_requested()))
+        started.set()
+        await finish.wait()
+
+    async def cleanup():
+        if phase == "cleanup":
+            await pause()
+        events.append("cleanup")
 
     async def setup():
+        await pause()
+        events.append("setup")
+        return cleanup
+
+    if phase == "setup":
+        completion = ctx.effect(setup)
+    else:
+        completion = ctx.effect(lambda: cleanup)()
+    waiter = asyncio.create_task(await_result(completion))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        requested.set()
+        await asyncio.wait_for(disposing.wait(), 1)
+        assert not disposals[0].done()
+        assert not waiter.done()
+        ctx._lifecycle.assert_readable()
+    finally:
+        requested.set()
+        finish.set()
+        await asyncio.wait_for(asyncio.gather(waiter, *disposals), 1)
+        await await_result(root.dispose())
+
+    assert events == (["setup", "cleanup"] if phase == "setup" else ["cleanup"])
+    assert not ctx._lifecycle._owned
+    assert not root._children
+
+
+async def test_multiple_setup_waiters_receive_the_same_disposer() -> None:
+    ctx = Context()
+    events = []
+
+    async def cleanup():
         await asyncio.sleep(0)
-        with pytest.raises(RuntimeError, match="setup or cleanup"):
-            await await_result(target.dispose())
+        events.append("cleanup")
+
+    async def setup():
+        events.append("setup")
+        await asyncio.sleep(0)
+        return cleanup
+
+    registration = ctx.effect(setup)
+    left, right = await asyncio.gather(
+        await_result(registration), await_result(registration)
+    )
+    assert left is right
+    await asyncio.gather(await_result(left()), await_result(right()))
+    await await_result(ctx.dispose())
+    assert events == ["setup", "cleanup"]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_continuation_composes_node_setup_and_disposal(asynchronous) -> None:
+    events = []
+
+    async def finish(value):
+        await asyncio.sleep(0)
+        return value
+
+    def cleanup():
+        events.append("cleanup")
+        return finish(None) if asynchronous else None
+
+    def setup():
+        events.append("setup")
+        return finish(cleanup) if asynchronous else cleanup
+
+    @node
+    def value(ctx: Context, /):
+        events.append("node")
+        return finish(5) if asynchronous else 5
+
+    ctx = Context()
+
+    @continuation
+    def execute():
+        try:
+            dispose = yield ctx.effect(setup)
+            result = yield value()(ctx)
+            yield dispose()
+            return result
+        finally:
+            yield ctx.dispose()
+
+    result = execute()
+    assert inspect.isawaitable(result) is asynchronous
+    assert await await_result(result) == 5
+    assert events == ["setup", "node", "cleanup"]
+    assert not ctx._lifecycle._owned
+
+
+def test_setup_can_request_disposal_after_registration_returns() -> None:
+    ctx = Context()
+    requested = False
+    events = []
+
+    def setup():
+        nonlocal requested
+        requested = True
+        events.append("setup")
         return lambda: events.append("cleanup")
 
-    release = await await_result(ctx.effect(setup))
-    await await_result(release())
-    assert events == ["cleanup"]
-    root.dispose()
+    ctx.effect(setup)
+    assert events == ["setup"]
+    if requested:
+        ctx.dispose()
+    assert events == ["setup", "cleanup"]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -466,22 +585,6 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
     assert child_errors.__cause__ is None
     assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
-
-
-async def test_cleanup_cannot_await_saved_owner_completion() -> None:
-    ctx = Context()
-    completion = None
-
-    async def cleanup() -> None:
-        await await_result(completion)
-
-    ctx.effect(lambda: cleanup)
-    completion = ctx.dispose()
-    with pytest.raises(BaseExceptionGroup) as caught:
-        await asyncio.wait_for(await_result(completion), 1)
-    assert isinstance(caught.value.exceptions[0], RuntimeError)
-    assert "setup or cleanup" in str(caught.value.exceptions[0])
-    assert not ctx._lifecycle._owned
 
 
 async def test_disposal_preserves_sync_failure_while_finishing_async_cleanup() -> None:

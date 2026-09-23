@@ -55,18 +55,21 @@ There is no Def/Exec conversion or `prepare()` step. Each call binds and resolve
 A Node returns `T | Awaitable[T]` according to the actual Auto, Wrapper, user-function, and temporary Context cleanup results. Purely synchronous calls return directly. A regular `def` can return an awaitable without declaring a mode; a synchronous parent can consume async Auto inputs after they complete.
 
 ```python
+from slyme.utils.execution import await_result
+
+
 async def execute(ctx):
     try:
-        return await task.acall(ctx)
+        return await await_result(task(ctx))
     finally:
-        await ctx.adispose()
+        await await_result(ctx.dispose())
 ```
 
-`task.acall(ctx)` and `ctx.adispose()` always return awaitables. They delegate to the ordinary call and disposal methods through `await_result()` from `slyme.utils.execution`; synchronous work and errors still occur immediately when called. They do not create tasks or schedule asynchronous work.
+`await_result()` accepts either an immediate value or an awaitable. The ordinary call happens before its result is passed to the adapter, so synchronous work and errors still occur immediately. The adapter does not create tasks or schedule asynchronous work.
 
 `await_result()` awaits only the outer execution result, not values inside containers. Async continuations run when awaited or scheduled, although their synchronous prefix may already have run. Synchronous applications can use `asyncio.run(await_result(task(ctx)))` at their entry point; await within an existing loop instead of nesting loops. Slyme never automatically offloads blocking functions to threads.
 
-Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await child.acall(ctx)`, or drive a generator as below. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
+Calls inside user functions still need explicit handling: synchronous code cannot compute with an unknown `child(ctx)` result. Use `async def` and `await await_result(child(ctx))`, or drive a generator as below. A directly returned awaitable denotes execution; wrap it in an ordinary container to pass it as data.
 
 ### Generator-based composition
 
@@ -129,7 +132,7 @@ assert root(Context()) == 11
 assert root(Context(), child=20) == 21  # Does not execute the bound child.
 ```
 
-Use `get(name)` to read a binding, `set(name, value)` to store any binding, and `delete(name)` to remove one. Deleting an absent binding is a no-op. Reading a missing key raises `KeyError` unless `get(name, default)` supplies a fallback, which may be any value including `None`. The fallback is returned without saving a binding; an existing value, including `None`, takes precedence. These operations never read function defaults. The live, read-only `params` mapping contains only saved bindings. `node(ctx, **kwargs)` and `node.acall(ctx, **kwargs)` shallowly override those bindings for one call before Auto evaluation, without updating `params` or merging nested containers. Parameter names may overlap framework attributes because parameters are not projected as object attributes.
+Use `get(name)` to read a binding, `set(name, value)` to store any binding, and `delete(name)` to remove one. Deleting an absent binding is a no-op. Reading a missing key raises `KeyError` unless `get(name, default)` supplies a fallback, which may be any value including `None`. The fallback is returned without saving a binding; an existing value, including `None`, takes precedence. These operations never read function defaults. The live, read-only `params` mapping contains only saved bindings. `node(ctx, **kwargs)` shallowly overrides those bindings for one call before Auto evaluation, without updating `params` or merging nested containers. Parameter names may overlap framework attributes because parameters are not projected as object attributes.
 
 Factories and mutable bindings accept dynamic keyword names and values, including partial bindings and Auto trees. Their typing preserves execution result types but does not statically validate each binding against the underlying function's parameters.
 

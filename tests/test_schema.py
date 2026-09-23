@@ -23,6 +23,7 @@ from slyme.context import (
     ScopeBinding,
 )
 from slyme.context.schema import _SCHEMA_RULES, _Declaration
+from slyme.utils.execution import await_result
 from slyme.utils.tree import TreeEngine
 
 
@@ -325,8 +326,8 @@ async def test_context_owned_cleanup_does_not_read_config(
 
     with monkeypatch.context() as patch:
         patch.setattr(RefEntry, "config", property(unexpected_config_read))
-        await root.adispose()
-        await root.adispose()
+        await await_result(root.dispose())
+        await await_result(root.dispose())
     assert_indexes(root._schema, set())
     assert not root._store._data
     assert all(not usage.viewers for usage in root._store._scope_usages.values())

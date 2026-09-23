@@ -97,7 +97,7 @@ class Context:
                 store.dispose()
             raise
         if parent is not None:
-            parent._children[self] = parent._lifecycle._own(self.dispose)
+            parent._children[self] = parent._lifecycle._own(lambda: self.dispose)
         else:
             try:
                 _install(self)
@@ -165,7 +165,12 @@ class Context:
     def effect(
         self, setup: Callable[[], _Cleanup | Awaitable[_Cleanup]]
     ) -> _Disposer | Awaitable[_Disposer]:
-        """Own setup and cleanup; await asynchronous setup before using its result."""
+        """Own setup and cleanup; await asynchronous setup before using its result.
+
+        Setup and cleanup must not dispose themselves, their owner, or an
+        ancestor, or wait for disposal containing themselves. These reentrant
+        calls and wait cycles are unsupported and are not checked.
+        """
         return self._lifecycle.effect(setup)
 
     def dispose(self) -> None | Awaitable[None]:
@@ -176,10 +181,6 @@ class Context:
         Await unfinished cleanup. Repeated calls share the same completion and error.
         """
         return self._lifecycle.dispose()
-
-    def adispose(self) -> Awaitable[None]:
-        """Always return an awaitable for disposal, retaining immediate sync cleanup."""
-        return self._lifecycle.adispose()
 
     def fork(
         self,

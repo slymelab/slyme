@@ -38,9 +38,9 @@ def test_same_evaluator_batches_leaves_registered_under_multiple_types(
     ctx.dispose()
 
 
-@pytest.mark.parametrize("acall", [False, True])
+@pytest.mark.parametrize("adapt", [False, True])
 def test_auto_async_result_can_be_created_before_starting_event_loop(
-    acall: bool,
+    adapt: bool,
 ) -> None:
     events = []
 
@@ -62,7 +62,7 @@ def test_auto_async_result_can_be_created_before_starting_event_loop(
     ctx = Context()
     initial_owned = tuple(ctx._lifecycle._owned)
     graph = parent(value=Auto(child()))
-    pending = graph.acall(ctx) if acall else graph(ctx)
+    pending = await_result(graph(ctx)) if adapt else graph(ctx)
     assert not events
     assert asyncio.run(await_result(pending)) == 7
     assert events == ["child", "cleanup", "parent"]
@@ -482,10 +482,10 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
         release.set()
         if cleanup_fails:
             with pytest.raises(BaseExceptionGroup) as caught:
-                await children[0].adispose()
+                await await_result(children[0].dispose())
             assert caught.value.exceptions == (cleanup_failure,)
         else:
-            await children[0].adispose()
+            await await_result(children[0].dispose())
     assert events == ["cleanup started", "cleanup finished"]
     assert tuple(ctx._lifecycle._owned) == initial_owned
     ctx.dispose()
@@ -610,11 +610,15 @@ async def test_auto_and_non_auto_parameters_have_binding_driven_identity(
     marker = object()
     payload = [marker]
     factory = async_identity if asynchronous else identity
-    evaluated, raw = await factory(evaluated=Auto(payload), raw=payload).acall(ctx)
+    evaluated, raw = await await_result(
+        factory(evaluated=Auto(payload), raw=payload)(ctx)
+    )
     assert evaluated is not payload
     assert evaluated[0] is marker
     assert raw is payload
-    evaluated, raw = await factory(evaluated=Auto(marker), raw=marker).acall(ctx)
+    evaluated, raw = await await_result(
+        factory(evaluated=Auto(marker), raw=marker)(ctx)
+    )
     assert evaluated is raw is marker
     ctx.dispose()
 
