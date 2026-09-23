@@ -220,6 +220,8 @@ class Lifecycle:
         Disposers are called in reverse registration order. Sequential mode
         waits between calls; batch mode joins all asynchronous results.
         Failures are grouped in call order, not completion order.
+        A finalization failure propagates with any cleanup failure as its
+        implicit exception context; disposal state is finalized either way.
         Mutations in the entire ownership subtree are forbidden before the
         first cleanup; each Lifecycle remains readable until its own release.
         Failures are not retrieved merely to suppress asyncio diagnostics.
@@ -229,21 +231,11 @@ class Lifecycle:
         effects = tuple(reversed(self._effects))
         execute_effects = _sequential if self.dispose_mode == "sequential" else _batch
 
-        error: BaseException | None = None
         try:
             yield execute_effects(effects)
-        except BaseException as caught:
-            error = caught
         finally:
             self._effects.clear()
             try:
                 self.ctx._finalize()
-            except BaseException as finalize_error:
-                if error is None:
-                    error = finalize_error
-                else:
-                    error.__cause__ = finalize_error
             finally:
                 self._set_state(_LifecycleState.DISPOSED)
-        if error is not None:
-            raise error

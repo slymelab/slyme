@@ -6,6 +6,8 @@ Effect 的 `setup`、`dispose`、`finalize`，Lifecycle 的 `dispose`，以及 C
 
 Lifecycle 状态依次为 `ACTIVE → DISPOSE_PENDING → DISPOSING → DISPOSED`。`DISPOSE_PENDING` 在该 Context 自身清理开始前就禁止修改，包括祖先正在清理的阶段。准备过程只遍历 active 分支：pending 分支已完成准备，正在释放的分支保持当前状态。
 
+即使 effect 清理失败，仍会执行收尾。如果收尾也失败，则抛出收尾异常，清理异常组保留在其 `__context__` 中，遵循 Python 的 `finally` 语义，不改写 `__cause__`。失败时 Lifecycle 仍进入 `DISPOSED`；重复释放会观察到同一个最终异常。
+
 `ctx.children` 按创建顺序返回直接子级的 tuple 快照。子级在异步清理期间仍然挂靠父级，释放结束后才移除，失败时也会移除。已释放的 Context 没有子级，但保留原来的 `parent` 引用。Scope 继承与这棵归属树相互独立。
 
 构造过程先登记子级归属，再获取 Scope 可见性。获取时先登记整个 MRO 的 viewer，再恢复 binding 数据。恢复或默认配置安装失败时，统一通过 Context dispose 回滚，Store acquire 不自行回滚。每次 viewer 登记必须恰好释放一次；Context dispose 和 finalize 的重复调用由各实例的 `once` 包装处理。

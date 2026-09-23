@@ -183,6 +183,50 @@ def test_lifecycle_finalize_failure_is_retained_without_repeating_cleanup() -> N
         lifetime.assert_readable()
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("dispose_mode", ["sequential", "batch"])
+async def test_finalize_failure_preserves_cleanup_error_context(
+    asynchronous, dispose_mode
+) -> None:
+    events = []
+    cleanup_failure = ValueError("cleanup")
+    finalize_failure = RuntimeError("finalize")
+
+    class FailingContext(Context):
+        def _finalize(self):
+            super()._finalize()
+            events.append("finalize")
+            raise finalize_failure
+
+    ctx = FailingContext(dispose_mode=dispose_mode)
+
+    def fail_cleanup():
+        events.append("cleanup")
+        raise cleanup_failure
+
+    async def pending_cleanup():
+        await asyncio.sleep(0)
+        fail_cleanup()
+
+    ctx.effect(lambda: lambda: events.append("other cleanup"))
+    ctx.effect(lambda: pending_cleanup if asynchronous else fail_cleanup)
+    for _ in range(2):
+        with pytest.raises(RuntimeError) as caught:
+            await await_result(ctx.dispose())
+        assert caught.value is finalize_failure
+        assert caught.value.__cause__ is None
+        cleanup_error = caught.value.__context__
+        assert isinstance(cleanup_error, BaseExceptionGroup)
+        assert cleanup_error.exceptions == (cleanup_failure,)
+        assert cleanup_error.__cause__ is None
+    assert events.count("cleanup") == events.count("other cleanup") == 1
+    assert events[-1] == "finalize"
+    assert events.count("finalize") == 1
+    assert not ctx._lifecycle._effects
+    assert not ctx._schema._stores
+    assert ctx._lifecycle._state is _LifecycleState.DISPOSED
+
+
 def test_child_and_parent_share_once_only_finalization(monkeypatch) -> None:
     effects, viewers = [], []
     finalize = _Effect.finalize

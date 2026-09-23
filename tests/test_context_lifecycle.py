@@ -532,11 +532,11 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
                 else:
                     child.dispose()
             if effect_failure:
-                assert raised.value.exceptions == (primary,)
-                release_error = raised.value.__cause__
-            else:
-                release_error = raised.value
-            assert isinstance(release_error, BaseExceptionGroup)
+                cleanup_error = raised.value.__context__
+                assert isinstance(cleanup_error, BaseExceptionGroup)
+                assert cleanup_error.exceptions == (primary,)
+            release_error = raised.value
+            assert release_error.__cause__ is None
             assert release_error.message == "Failed to release expired Scopes"
             assert release_error.exceptions == tuple(failures)
             if previous is not None:

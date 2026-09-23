@@ -80,6 +80,9 @@ breaking changes when they are documented here.
 - Context construction owns children before Scope restoration and uses disposal
   for restoration or default-installation failures. Internal finalization shares
   its first result or failure through per-instance `once` wrappers.
+- Lifecycle disposal follows Python's `finally` semantics: a finalization failure
+  propagates with any cleanup failure retained as its implicit exception context,
+  without rewriting exception causes.
 - Lifecycle and effect disposal share execution through `once` and
   `SharedAwaitable`. Each effect waits for its own setup before cleanup;
   independent tasks can dispose an owner while setup or cleanup is pending.

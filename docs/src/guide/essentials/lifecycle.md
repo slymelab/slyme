@@ -6,6 +6,8 @@ Effect `setup`, `dispose`, and `finalize`, Lifecycle `dispose`, and Context `_fi
 
 Lifecycle state progresses through `ACTIVE → DISPOSE_PENDING → DISPOSING → DISPOSED`. `DISPOSE_PENDING` forbids mutations before that Context's cleanup starts, including while ancestor cleanup is running. Preparation visits only active branches: pending branches are already prepared, and branches being disposed retain their current state.
 
+Finalization runs even when effect cleanup fails. If finalization also fails, its exception propagates with the cleanup exception group retained as its `__context__`, following Python's `finally` semantics without rewriting `__cause__`. Lifecycle reaches `DISPOSED` even on failure; repeated disposal observes the same terminal exception.
+
 `ctx.children` returns a tuple snapshot of direct children in creation order. A child remains attached during asynchronous cleanup and is removed when release finishes, even on failure. Disposed Contexts have no children but retain their original `parent` reference. Scope inheritance is independent of this ownership tree.
 
 Construction registers child ownership before acquiring Scope visibility. Acquisition registers every MRO viewer before restoring binding data. Restoration and default-installation failures use Context disposal for rollback; Store acquisition does not roll itself back. Each viewer registration must be released exactly once, with repeated Context disposal and finalization handled by their instance-local `once` wrappers.
