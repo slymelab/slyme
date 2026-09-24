@@ -24,7 +24,9 @@ from slyme.utils.tree import (
     LeafDef,
     MappingKey,
     SequenceKey,
+    TraverseAux,
     TreeAux,
+    TreeDef,
     TreeEngine,
     TreeHandler,
     TreeKey,
@@ -36,6 +38,38 @@ from slyme.utils.tree.common import (
     unflatten_mapping_proxy,
 )
 from slyme.utils.warning import warning_once
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        TreeKey(),
+        SequenceKey(0),
+        MappingKey("a"),
+        AttributeKey("value"),
+        TreeAux(),
+        DATA_RULES.handlers[list],
+        TraverseAux(parent=None, key_path=()),
+        DATA_RULES,
+        TreeDef(),
+        LeafDef(),
+        ContainerDef(list, TreeAux(), (), DATA_RULES.handlers[list].unflatten),
+    ],
+)
+def test_tree_records_use_slots(value: object) -> None:
+    assert not hasattr(value, "__dict__")
+
+
+@pytest.mark.parametrize("slots", [False, True])
+def test_tree_key_subclasses_choose_their_instance_storage(slots: bool) -> None:
+    @dataclass(frozen=True, slots=slots)
+    class LabeledKey(SequenceKey):
+        label: str
+
+    key = LabeledKey(0, "first")
+    assert hasattr(key, "__dict__") is not slots
+    assert key.label == "first"
+    assert key.resolve([42]) == 42
 
 
 def test_tree_keys_resolve_and_codify() -> None:

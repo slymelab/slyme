@@ -30,7 +30,7 @@ from typing import (
 _EMPTY_MAPPING: Mapping[str, Any] = types.MappingProxyType({})
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TreeKey:
     """Base class for path elements."""
 
@@ -54,7 +54,7 @@ class TreeKey:
         raise NotImplementedError(f"{type(self).__name__} does not implement codify.")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SequenceKey(TreeKey):
     """Represents an index in a sequence (list, tuple)."""
 
@@ -67,7 +67,7 @@ class SequenceKey(TreeKey):
         return f"{parent_expr}[{self.index}]"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MappingKey(TreeKey):
     """Represents a key in a mapping (dict)."""
 
@@ -80,7 +80,7 @@ class MappingKey(TreeKey):
         return f"{parent_expr}[{repr(self.key)}]"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AttributeKey(TreeKey):
     """Represents an attribute name (object)."""
 
@@ -97,7 +97,7 @@ class AttributeKey(TreeKey):
 KeyPath = tuple[TreeKey, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TreeAux:
     """
     Auxiliary data required to reconstruct a container and track paths.
@@ -138,7 +138,7 @@ class UnflattenFunc(Protocol):
     def __call__(self, children: Iterable[Any], tree_aux: TreeAux, /) -> Any: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TreeHandler:
     """Container expansion and optional reconstruction functions."""
 
@@ -146,7 +146,7 @@ class TreeHandler:
     unflatten: UnflattenFunc | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TraverseAux:
     """
     Auxiliary data during traversal.
@@ -175,7 +175,7 @@ class TreeResolver(Protocol):
     ) -> TreeHandler | None: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TreeRules:
     """A shallow immutable snapshot of exact-type handlers and ordered resolvers."""
 
@@ -208,7 +208,7 @@ class _LeafSinkFunc(Protocol):
     def __call__(self, leaf: Any, traverse_aux: TraverseAux, /) -> None: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TreeDef:
     """Base class for tree definitions."""
 
@@ -232,7 +232,7 @@ class TreeDef:
         raise NotImplementedError
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LeafDef(TreeDef):
     """Stateless leaf marker shared across traversal results."""
 
@@ -248,7 +248,7 @@ class LeafDef(TreeDef):
 _LEAF_DEF = LeafDef()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ContainerDef(TreeDef):
     cls: type
     tree_aux: TreeAux

@@ -10,6 +10,8 @@ A rule snapshot copies its handler mapping. `TreeRules.merge()` keeps the first 
 
 The `TreeAux` returned by a flatten handler is passed unchanged to its unflatten handler; an omitted `cls` remains `None`. `ContainerDef.cls` records the actual container type independently. Leaf definitions share an immutable, stateless marker; each occurrence still consumes its own leaf during reconstruction.
 
+Tree's built-in data classes use slots, without an instance dictionary or weak-reference support. Subclasses choose whether to define their own slots.
+
 For traversal without a Context, explicitly import `DATA_RULES` from `slyme.context.default` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not included in `__all__` or re-exported at package level. `_apply` and Schema's declaration rules remain private implementation details.
 
 ## Context-owned defaults
