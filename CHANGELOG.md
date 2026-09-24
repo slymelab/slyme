@@ -216,6 +216,9 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Postpone annotations consistently across source and tests, avoiding repeated
+  type-expression evaluation when creating `once` and execution callbacks.
+  Raw runtime annotations are strings; the minimum Python version remains 3.10.
 - Root Contexts require sequential disposal to keep framework defaults available
   throughout cleanup. Batch disposal remains available on child Contexts.
 - `Context.fork()` and `Context.derive()` create base Context instances;

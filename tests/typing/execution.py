@@ -1,5 +1,7 @@
 """Execution adapters preserve parameter types and synchronous return values."""
 
+from __future__ import annotations
+
 from collections.abc import Awaitable, Generator
 from typing import Any, TypeVar
 

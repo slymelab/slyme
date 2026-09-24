@@ -14,6 +14,8 @@
 
 """Mutable keyword partials with explicit Auto evaluation and Wrapper composition."""
 
+from __future__ import annotations
+
 from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial, wraps
@@ -126,7 +128,7 @@ class Node(NodeElement[_R]):
     __slots__ = ("wrappers",)
 
     @staticmethod
-    def _flatten(obj: "Node[Any]") -> tuple[Iterable[Any], TreeAux]:
+    def _flatten(obj: Node[Any]) -> tuple[Iterable[Any], TreeAux]:
         children = [obj.wrappers]
         keys: list[TreeKey] = [AttributeKey("wrappers")]
         for name, value in obj._params.items():
@@ -139,13 +141,13 @@ class Node(NodeElement[_R]):
         /,
         *,
         func: Callable[..., _R | Awaitable[_R]],
-        wrappers: Iterable["Wrapper[_R]"] | None = None,
+        wrappers: Iterable[Wrapper[_R]] | None = None,
         params: Mapping[str, Any],
     ):
         super().__init__(func=func, params=params)
         self.wrappers: list[Wrapper[_R]] = list(wrappers or ())
 
-    def add_wrappers(self, *wrappers: "Wrapper[_R]") -> Self:
+    def add_wrappers(self, *wrappers: Wrapper[_R]) -> Self:
         self.wrappers.extend(wrappers)
         return self
 
@@ -180,13 +182,13 @@ class Wrapper(NodeElement[_R]):
     __slots__ = ()
 
     @staticmethod
-    def _flatten(obj: "Wrapper[Any]") -> tuple[Iterable[Any], TreeAux]:
+    def _flatten(obj: Wrapper[Any]) -> tuple[Iterable[Any], TreeAux]:
         keys = tuple(_NodeParameterKey(name) for name in obj._params)
         return tuple(obj._params.values()), TreeAux(children_keys=keys, cls=Wrapper)
 
     @staticmethod
     def compose(
-        wrappers: Iterable["Wrapper[_R]"],
+        wrappers: Iterable[Wrapper[_R]],
         *,
         wrapped: Node[_R],
         call_next: Callable[[Context], _R | Awaitable[_R]],

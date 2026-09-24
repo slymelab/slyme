@@ -16,6 +16,8 @@
 slyme tree utility module.
 """
 
+from __future__ import annotations
+
 from .core import (
     AttributeKey,
     ContainerDef,

@@ -1,5 +1,7 @@
 """Static checks for the awaited result type of unified execution APIs."""
 
+from __future__ import annotations
+
 from collections.abc import Awaitable, Callable, Generator, Sequence
 from typing import Any, Literal
 

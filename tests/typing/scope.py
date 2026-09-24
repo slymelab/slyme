@@ -1,5 +1,7 @@
 """Scope lookup defaults determine whether a missing result can be None."""
 
+from __future__ import annotations
+
 from typing_extensions import assert_type
 
 from slyme.context import Scope

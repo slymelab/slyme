@@ -125,6 +125,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "ASYNC", "UP", "RUF100"]
 
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+
 [tool.ruff.lint.per-file-ignores]
 "src/**/*.py" = ["E402", "E741"]
 "tests/**/*.py" = ["B008", "B018"]

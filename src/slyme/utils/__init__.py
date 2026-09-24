@@ -13,3 +13,5 @@
 # limitations under the License.
 
 """``slyme`` util module."""
+
+from __future__ import annotations

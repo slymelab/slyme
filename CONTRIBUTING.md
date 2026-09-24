@@ -17,6 +17,12 @@ The second command installs both commit-time checks and the pre-push test hook.
 The repository supports Python 3.10 through 3.14; CI exercises the complete
 matrix.
 
+Use `from __future__ import annotations` in every Python module; Ruff enforces
+this convention. Annotations remain unevaluated strings, including on callbacks
+created at runtime. Revisit the import when the minimum Python version reaches
+3.14, checking runtime annotation introspection before adopting native deferred
+evaluation.
+
 ## Quality gates
 
 Run the same gates as CI before opening a pull request:

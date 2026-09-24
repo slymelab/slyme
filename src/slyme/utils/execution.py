@@ -14,6 +14,8 @@
 
 """Execute synchronous or asynchronous operations and share their results."""
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Awaitable, Callable, Generator
 from functools import wraps

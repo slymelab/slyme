@@ -1,5 +1,7 @@
 """Compose preserves each layer's registration signature and query result types."""
 
+from __future__ import annotations
+
 from collections.abc import Callable, Iterable
 from typing import Literal
 

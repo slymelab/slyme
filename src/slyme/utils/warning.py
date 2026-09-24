@@ -14,6 +14,8 @@
 
 """Warning utilities with deduplication."""
 
+from __future__ import annotations
+
 import warnings
 from functools import cache
 from typing import Any

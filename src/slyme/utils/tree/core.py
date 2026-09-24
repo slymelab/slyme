@@ -18,6 +18,8 @@ Tree structure utilities for slyme.
 Traversal algorithms consume explicit, immutable rules.
 """
 
+from __future__ import annotations
+
 import types
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -186,7 +188,7 @@ class TreeRules:
         )
 
     @staticmethod
-    def merge(values: tuple["TreeRules", ...]) -> "TreeRules":
+    def merge(values: tuple[TreeRules, ...]) -> TreeRules:
         """Keep the first handler for each type."""
         handlers: dict[type, TreeHandler] = {}
         for rules in values:
@@ -272,7 +274,7 @@ class TreeEngine:
         *,
         rules: TreeRules,
         resolver: TreeResolver | None = None,
-    ) -> tuple[list[Any], "TreeDef"]:
+    ) -> tuple[list[Any], TreeDef]:
         """
         Flatten a tree into a list of leaves and a structure definition.
         """
@@ -297,7 +299,7 @@ class TreeEngine:
         *,
         rules: TreeRules,
         resolver: TreeResolver | None = None,
-    ) -> tuple[list[tuple[KeyPath, Any]], "TreeDef"]:
+    ) -> tuple[list[tuple[KeyPath, Any]], TreeDef]:
         """
         Flatten a tree into a list of (key_path, leaf) tuples and a structure definition.
         """
@@ -464,7 +466,7 @@ class TreeEngine:
                 yield element
 
     @staticmethod
-    def unflatten(treedef: "TreeDef", leaves: Iterable[Any]) -> Any:
+    def unflatten(treedef: TreeDef, leaves: Iterable[Any]) -> Any:
         """
         Reconstruct the tree from a structure definition and a list of leaves.
         """
