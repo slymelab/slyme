@@ -8,6 +8,8 @@ Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 l
 
 规则快照复制 handler 映射。`TreeRules.merge()` 对同一类型保留首个 handler，分别拼接两个阶段的 resolver。`TreeDef` 保存 flatten 时选定的重建函数，因此重建时不查询当前规则。
 
+flatten handler 返回的 `TreeAux` 会原样传给其 unflatten handler；未指定的 `cls` 保持 `None`。`ContainerDef.cls` 独立记录实际容器类型。Leaf 定义共享不可变、无状态的标记对象；重建时每次出现的位置仍分别消费一个 leaf。
+
 不依赖 Context 的遍历可以显式导入 `slyme.context.default.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不加入 `__all__`，也不在包顶层重导出。`_apply` 和 Schema 的声明规则仍是私有实现细节。
 
 ## Context 持有的默认配置

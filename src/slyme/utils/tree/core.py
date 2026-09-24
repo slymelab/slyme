@@ -20,7 +20,7 @@ Traversal algorithms consume explicit, immutable rules.
 
 import types
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from itertools import count
 from typing import (
     Any,
@@ -105,6 +105,7 @@ class TreeAux:
     Attributes:
         metadata: Custom data needed for unflattening (e.g., specific flags).
         children_keys: Optional tuple of keys corresponding to the children.
+        cls: Optional handler-provided type, preserved unchanged.
     """
 
     metadata: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAPPING)
@@ -233,6 +234,8 @@ class TreeDef:
 
 @dataclass(frozen=True)
 class LeafDef(TreeDef):
+    """Stateless leaf marker shared across traversal results."""
+
     def _build(self, leaves_iter: Iterator[Any]) -> Any:
         try:
             return next(leaves_iter)
@@ -240,6 +243,9 @@ class LeafDef(TreeDef):
             raise ValueError(
                 "Too few leaves provided for this tree structure."
             ) from None
+
+
+_LEAF_DEF = LeafDef()
 
 
 @dataclass(frozen=True)
@@ -374,9 +380,6 @@ class TreeEngine:
             return None
         children_iter, tree_aux = handler.flatten(element)
 
-        if tree_aux.cls is None:
-            tree_aux = replace(tree_aux, cls=type(element))
-
         if tree_aux.children_keys is not None:
             keys_iter = iter(tree_aux.children_keys)
         else:
@@ -426,7 +429,7 @@ class TreeEngine:
         else:
             # Leaf.
             leaf_sink(element, traverse_aux)
-            return LeafDef()
+            return _LEAF_DEF
 
     @staticmethod
     def _traverse_iter(

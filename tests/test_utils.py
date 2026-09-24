@@ -20,6 +20,8 @@ from slyme.utils.exception import (
 )
 from slyme.utils.tree import (
     AttributeKey,
+    ContainerDef,
+    LeafDef,
     MappingKey,
     SequenceKey,
     TreeAux,
@@ -94,6 +96,41 @@ def test_tree_paths_iteration_and_leaf_override() -> None:
         tree, rules=DATA_RULES, is_leaf=lambda value, _: isinstance(value, list)
     )
     assert leaves == [[10, 20], 30]
+
+
+def test_tree_leaf_marker_is_shared_without_sharing_leaf_values() -> None:
+    leaves, definition = TreeEngine.flatten([1, 2], rules=DATA_RULES)
+    _, marker = TreeEngine.flatten(3, rules=DATA_RULES)
+
+    assert isinstance(definition, ContainerDef)
+    assert isinstance(marker, LeafDef)
+    assert all(child is marker for child in definition.children_defs)
+    assert leaves == [1, 2]
+    assert TreeEngine.unflatten(definition, [10, 20]) == [10, 20]
+    assert TreeEngine.unflatten(definition, [30, 40]) == [30, 40]
+
+
+@pytest.mark.parametrize("cls", [None, tuple])
+def test_tree_preserves_handler_aux_for_reconstruction(cls: type | None) -> None:
+    @dataclass
+    class Box:
+        value: int
+
+    aux = TreeAux(cls=cls)
+
+    def rebuild(children, received_aux):
+        assert received_aux is aux
+        assert received_aux.cls is cls
+        return Box(next(iter(children)))
+
+    rules = TreeRules({Box: TreeHandler(lambda box: ((box.value,), aux), rebuild)})
+    leaves, definition = TreeEngine.flatten(Box(1), rules=rules)
+
+    assert isinstance(definition, ContainerDef)
+    assert definition.cls is Box
+    assert definition.tree_aux is aux
+    assert leaves == [1]
+    assert TreeEngine.unflatten(definition, [2]) == Box(2)
 
 
 def test_explicit_leaf_bypasses_resolvers_in_both_traversal_paths() -> None:
