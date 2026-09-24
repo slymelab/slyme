@@ -10,6 +10,10 @@ breaking changes when they are documented here.
 
 ### Added
 
+- `Context.install(name, func)` registers lifecycle-owned extension methods under
+  `$.methods`. Dynamic attribute access binds the accessing Context, follows Scope
+  visibility, and preserves synchronous or asynchronous results. Native members
+  remain reserved; each installation withdraws its value before its declaration.
 - Generic `Context[A]` facets, created by an optional synchronous `facet_factory`
   on Context construction, `fork()`, or `derive()`. Facets are per-Context,
   remain available after disposal, and are not inherited or automatically

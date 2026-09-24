@@ -131,6 +131,8 @@ Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递�
 
 ## Context 生命周期、Scope 可见性与 Compose
 
+`ctx.install("provide", provide)` 在 `$.methods.provide` 安装由生命周期管理的扩展方法。调用 `ctx.provide(...)` 会将访问方 Context 作为函数的第一个参数；`ctx.get("$.methods.provide")` 返回原始函数。方法遵循 Scope 可见性，不能替换原生成员，install 返回精确撤销本次安装的 disposer。参见[扩展方法](../docs/src/zh/guide/essentials/context.md#methods)。
+
 使用 `schema.resolve_entry(path)` 查询单个字段，通过 `schema.entries` tuple 枚举 root、container 和 leaf entry。公开的 `RefEntry` 提供 `ref`、`config` 和 `alive`；metadata 通过 `entry.config.metadata` 读取。配置采用 `slyme.context` 导出的公开类型 `RefConfig`、`RefLeafConfig` 和 `RefContainerConfig`。
 
 `set` 和 `delete` 修改单个本地路径。`update` 和 `drop` 会在应用修改前校验整个批次；预检失败时 binding 保持不变，实际应用修改时发生的失败不会触发回滚。

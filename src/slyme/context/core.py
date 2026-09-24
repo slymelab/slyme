@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import Enum
-from typing import Any, Generic, Literal, overload
+from functools import partial
+from inspect import getattr_static
+from typing import Any, Concatenate, Generic, Literal, ParamSpec, overload
 
 from typing_extensions import TypeVar
 
@@ -43,6 +45,7 @@ from .store import ContextStore
 _T = TypeVar("_T")
 _T2 = TypeVar("_T2")
 _A = TypeVar("_A", default=Any, covariant=True)
+_P = ParamSpec("_P")
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
@@ -127,9 +130,9 @@ class Context(Generic[_A]):
         )
         object.__setattr__(self, "_finalize", once(self._finalize))
         if parent is not None:
-            parent._children[self] = parent._lifecycle._register_effect(
-                lambda: self.dispose
-            )
+            effect = parent._lifecycle._register_effect(lambda: self.dispose)
+            parent._children[self] = effect
+            effect.setup()
         try:
             store.acquire_scope(self, bound_scope)
             if parent is None:
@@ -442,6 +445,45 @@ class Context(Generic[_A]):
                 self.scope, self._schema.resolve_entry(ref, role="leaf"), value
             )
         )
+
+    def install(
+        self,
+        name: str,
+        func: Callable[Concatenate[Context, _P], _T],
+    ) -> _Disposer:
+        """Register an extension method at $.methods.<name> with owned cleanup.
+
+        Attribute access binds the accessing Context as the first argument.
+        Names follow Schema path rules and cannot collide with native members.
+        A new Scope may shadow an inherited method;
+        registering twice in the same identity is an error.
+        The returned disposer withdraws the value before its declaration.
+        """
+        if (
+            any(field.name == name for field in fields(self))
+            or getattr_static(self, name, _MISSING) is not _MISSING
+        ):
+            raise ValueError(f"Context member {name!r} already exists.")
+        owner = self.fork()
+        try:
+            owner.declare({"$": {"methods": {name: Schema.leaf(mode="register")}}})
+            owner.register(f"$.methods.{name}", func)
+        except BaseException:
+            owner.dispose()
+            raise
+        return owner.dispose
+
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        """Bind a visible extension to this Context, without caching or executing it.
+
+        Missing methods raise AttributeError; lifecycle errors propagate.
+        Previously obtained bound functions are not invalidated by withdrawal.
+        """
+        try:
+            func = self.get(f"$.methods.{name}")
+        except ContextPathError as error:
+            raise AttributeError(f"Context has no attribute {name!r}.") from error
+        return partial(func, self)
 
     def update_tree(self, ref_tree: Any, value_tree: Any) -> None:
         """Assign values from a matching tree after validating paths and modes."""

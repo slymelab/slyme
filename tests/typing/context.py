@@ -1,7 +1,8 @@
-"""Context facets infer independently of parent types and default to Any."""
+"""Context facet inference and extension callback signatures."""
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from typing_extensions import assert_type
@@ -58,3 +59,19 @@ def check_types(ctx: Context) -> None:
     Context(dispose_mode="batch")  # type: ignore[call-overload]
     Context(parent=None, dispose_mode="batch")  # type: ignore[call-overload]
     Context(scope=Scope(), dispose_mode="batch")  # type: ignore[call-overload]
+
+
+def check_installed_methods(ctx: Context) -> None:
+    def describe(current: Context, /, value: int, *, suffix: str = "") -> str:
+        return str(value) + suffix
+
+    async def identify(current: Context, /) -> Context:
+        return current
+
+    def wrong_receiver(current: str, /) -> str:
+        return current
+
+    assert_type(ctx.install("describe", describe), Callable[[], None | Awaitable[None]])
+    assert_type(ctx.install("identify", identify), Callable[[], None | Awaitable[None]])
+    assert_type(ctx.describe(1, suffix="!"), Any)
+    ctx.install("wrong", wrong_receiver)  # type: ignore[arg-type]

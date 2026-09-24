@@ -362,6 +362,34 @@ finally:
 
 Context 强持有 binding 表。注册 disposer 捕获 Binding、Scope 和安装 token，不持有 Store 或内部值记录。调用时，其闭包在 `finally` 中释放 Binding 引用，即使清理失败也会释放；异常 traceback 可能另外持有方法栈帧。尚未调用时，它会保留 Binding 及其中剩余的 identity 数据。最终撤销 Schema 声明会清空整个 Binding，最后一个 viewer 退出时 Scope 释放会清空对应 identity 数据，这些操作不受外部 disposer 持有的影响。
 
+## 扩展方法 {#methods}
+
+`ctx.install(name, func)` 在 `$.methods.<name>` 声明 register 模式字段并注册原始函数。访问 `ctx.name` 时，按照访问方 Context 的 Scope 查找，并将该 Context 绑定为第一个参数。普通属性和方法保持原有行为。返回的 disposer 先撤销方法注册，再撤销声明；安装由共享安装者 Scope 的 sequential 子 Context 管理，即使安装者采用 batch 清理也是如此。安装失败会释放该子 Context。
+
+```python
+from slyme.context import Context
+
+
+def identify(ctx: Context, /) -> Context:
+    return ctx
+
+
+root = Context()
+remove = root.install("identify", identify)
+child = root.derive()
+assert child.identify() is child
+assert child.get("$.methods.identify") is identify
+remove()
+assert not hasattr(child, "identify")
+root.dispose()
+```
+
+名称遵循 Schema 的单路径段规则，不要求是 Python 标识符：`install("class", func)` 可以通过 `getattr(ctx, "class")` 或 `ctx.get("$.methods.class")(ctx, ...)` 使用。原生成员不能被替换，包括已声明但尚未初始化的 dataclass 字段。其他名称（包括私有及协议名称）不额外保留，安装者自行负责这些名称对语言协议的影响。
+
+独立的子 Scope 可以覆盖继承的方法，撤销后重新显示继承的方法；共享同一本地 identity 的 Context 不能安装相互竞争的方法。每次属性访问重新解析，但已经获取的绑定函数不会被撤销。方法缺失抛出 `AttributeError`，生命周期错误正常传播。调用保留同步结果、awaitable 和函数异常，不调度任务或包装执行。
+
+插件扩展可以使用 `ctx.install("provide", provide)`，然后调用 `ctx.provide(...)`；函数收到的是调用方 Context，不是安装者。核心安装不添加依赖通知，也不改变 `register()` 的语义。按字符串安装方法不会生成静态方法签名，需要时由应用提供类型声明。
+
 ## Effect 与 dispose
 
 `ctx.effect(setup)` 管理一次 setup 及其 cleanup。同步 setup 立即运行，并返回提前 disposer；如果 setup 返回 awaitable，`effect()` 则返回一个解析为 disposer 的 awaitable。两种情况统一使用 `await await_result(ctx.effect(setup))`。异步 setup 在启动前就已登记归属：即使调用者没有等待注册，owner 释放时也会等待 setup，再执行其 cleanup。使用取得的资源前必须等待 setup；如果 setup 在返回 cleanup 前失败，部分资源的回滚仍由 setup 自己负责。

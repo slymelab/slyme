@@ -143,6 +143,8 @@ Auto owns its independent all-settled evaluation policy; Context owns nested cle
 
 ## Context lifetimes, Scope visibility, and Compose
 
+`ctx.install("provide", provide)` installs an owned extension at `$.methods.provide` and returns an exact installation disposer. Calling `ctx.provide(...)` passes the accessing Context as the function's first argument; `ctx.get("$.methods.provide")` returns the original function. Methods follow Scope visibility and cannot replace native members. See [extension methods](docs/src/guide/essentials/context.md#methods).
+
 Use `schema.resolve_entry(path)` to inspect one field and the `schema.entries` tuple to enumerate root, container, and leaf entries. Each public `RefEntry` exposes `ref`, `config`, and `alive`; read metadata through `entry.config.metadata`. Configs use the public `RefConfig`, `RefLeafConfig`, and `RefContainerConfig` types exported by `slyme.context`.
 
 `Schema.leaf()` and `Schema.container()` accept `metadata={"namespace.key": item}`. Items derive from the frozen `Metadata` dataclass exported by `slyme.context`: its default merge accepts the same instance, while subclasses can override `merge()` for immutable content-based composition. Distinct keys coexist, matching keys merge in declaration order, and withdrawal invalidates the merged config for lazy rebuilding. See [Schema metadata](docs/src/guide/essentials/context.md#metadata).

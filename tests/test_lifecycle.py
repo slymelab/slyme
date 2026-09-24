@@ -75,6 +75,23 @@ def test_context_children_snapshot_tracks_ownership_not_scope_ancestry() -> None
     assert root.children == ()
 
 
+def test_child_ownership_effect_is_ready_before_facet_factory() -> None:
+    root = Context()
+    cleanup = []
+
+    def create(child: Context) -> None:
+        effect = root._children[child]
+        assert effect._cleanup == child.dispose
+        assert effect.setup() is effect.dispose
+        child.effect(lambda: lambda: cleanup.append(child))
+
+    child = root.fork(facet_factory=create)
+    assert not cleanup
+    root.dispose()
+    assert cleanup == [child]
+    assert not root.children
+
+
 def test_early_child_disposal_releases_parent_references() -> None:
     root = Context()
     initial_effects = tuple(root._lifecycle._effects)

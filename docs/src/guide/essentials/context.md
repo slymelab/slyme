@@ -374,6 +374,34 @@ An inherited value can be shadowed by a registration in a child Scope. Contexts 
 
 Context strongly owns its binding table. A registration disposer captures its Binding, Scope, and installation token, not the Store or an internal value record. Its closure drops the Binding reference in `finally` when called, even if cleanup fails; an exception traceback may separately retain method frames. Until called, it retains the Binding and its remaining identity data. Final Schema withdrawal clears the entire Binding, and Scope release clears identity data when its final viewer leaves, regardless of retained disposers.
 
+## Extension methods {#methods}
+
+`ctx.install(name, func)` declares and registers the original function at `$.methods.<name>` in register mode. Accessing `ctx.name` binds the accessing Context as its first argument, following that Context's Scope lookup. Ordinary attributes and methods retain their normal behavior. The returned disposer removes the method registration before withdrawing its declaration; installation is owned by a sequential child Context sharing the installer's Scope, even when the installer uses batch disposal. Failed installation releases that child.
+
+```python
+from slyme.context import Context
+
+
+def identify(ctx: Context, /) -> Context:
+    return ctx
+
+
+root = Context()
+remove = root.install("identify", identify)
+child = root.derive()
+assert child.identify() is child
+assert child.get("$.methods.identify") is identify
+remove()
+assert not hasattr(child, "identify")
+root.dispose()
+```
+
+Names follow Schema's single-segment rules, not Python identifier rules: `install("class", func)` works through `getattr(ctx, "class")` or `ctx.get("$.methods.class")(ctx, ...)`. Native members, including declared but uninitialized dataclass fields, cannot be replaced. Other names, including private and protocol-like names, are not reserved; installers are responsible for their effects on language protocols.
+
+An independent child Scope may shadow an inherited method; withdrawal reveals the inherited method again. Contexts sharing the same local identity cannot install competing methods. Each attribute access resolves anew, but already retrieved bound functions are not revoked. Missing methods raise `AttributeError`; lifecycle errors propagate. Calls preserve synchronous results, awaitables, and function exceptions without scheduling or wrapping execution.
+
+Plugin extensions can use `ctx.install("provide", provide)` and then `ctx.provide(...)`; the function receives the calling Context, not the installer. Core installation does not add dependency notifications or change `register()` semantics. String-based installation does not generate static method signatures; applications supply their own typing declarations when needed.
+
 ## Effects and disposal
 
 `ctx.effect(setup)` owns one setup and its cleanup. A synchronous setup runs immediately and returns an early disposer. If setup returns an awaitable, `effect()` returns an awaitable resolving to that disposer; use `await await_result(ctx.effect(setup))` when either form is possible. Async setup is owned before it starts: owner disposal waits for it and then runs its cleanup, even if its caller never awaited registration. Await setup before using the resource it acquires. Setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
