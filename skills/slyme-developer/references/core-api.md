@@ -61,6 +61,7 @@ class ValueLayer(dict):
 
         return dispose
 
+
 root_ctx = Context()
 root_ctx.declare(R)
 agent_scope = root_ctx.scope.fork(label="agent")

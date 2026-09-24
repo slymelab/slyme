@@ -110,9 +110,27 @@ jobs:
 
           schema = Schema({"value": Schema.leaf()})
           ref = schema.resolve("value")
-          ctx = Context({ref: 1}, schema=schema)
-          assert ctx.flatten() == {ref: 1}
-          assert Compose.collect().resolve(ctx.scope) == ()
+          ctx = Context()
+          ctx.declare(schema)
+          ctx.set(ref, 1)
+          assert ctx.flatten()[ref] == 1
+
+          class ValueLayer(dict):
+              def register(self, token, /, value):
+                  self[token] = value
+                  return lambda: self.pop(token)
+
+          values = Compose(
+              factory=ValueLayer,
+              query=lambda layers: tuple(
+                  value for layer in layers for value in layer.values()
+              ),
+          )
+          assert values.resolve(ctx.scope) == ()
+          remove = ctx.effect(lambda: values.register(ctx.scope, "value"))
+          assert values.resolve(ctx.scope) == ("value",)
+          remove()
+          assert values.resolve(ctx.scope) == ()
 
           @node
           async def value(ctx):

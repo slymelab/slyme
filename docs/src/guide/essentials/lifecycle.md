@@ -36,10 +36,10 @@ class Plugin:
 
 root = Context()
 instance = root.fork(facet_factory=Plugin)  # Context[Plugin]
-plugin = instance.facet                   # Plugin, not Plugin | None
-plugin.active_ctx = instance.fork()       # No inherited facet
-plugin.unload()                           # This example has synchronous cleanup
-plugin.active_ctx = instance.fork()       # A fresh activation
+plugin = instance.facet  # Plugin, not Plugin | None
+plugin.active_ctx = instance.fork()  # No inherited facet
+plugin.unload()  # This example has synchronous cleanup
+plugin.active_ctx = instance.fork()  # A fresh activation
 root.dispose()
 ```
 

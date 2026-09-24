@@ -36,10 +36,10 @@ class Plugin:
 
 root = Context()
 instance = root.fork(facet_factory=Plugin)  # Context[Plugin]
-plugin = instance.facet                   # Plugin，而不是 Plugin | None
-plugin.active_ctx = instance.fork()       # 不继承 facet
-plugin.unload()                           # 本例只有同步清理
-plugin.active_ctx = instance.fork()       # 新的一次激活
+plugin = instance.facet  # Plugin，而不是 Plugin | None
+plugin.active_ctx = instance.fork()  # 不继承 facet
+plugin.unload()  # 本例只有同步清理
+plugin.active_ctx = instance.fork()  # 新的一次激活
 root.dispose()
 ```
 

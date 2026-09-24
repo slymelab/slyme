@@ -152,8 +152,12 @@ class Labels(Metadata):
         return Labels(self.values + other.values)
 
 
-schema = Schema({"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("core",))})})
-remove = schema.declare({"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("plugin",))})})
+schema = Schema(
+    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("core",))})}
+)
+remove = schema.declare(
+    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("plugin",))})}
+)
 remove()
 ```
 
@@ -423,6 +427,7 @@ Scope viewer 和 binding identity 直接使用集合记录持有者。Context di
 ```python
 from slyme.context import Compose, Context, Schema
 
+
 class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
@@ -432,13 +437,12 @@ class ValueLayer(dict):
 
         return dispose
 
+
 root = Context()
 root.declare({"tools": Schema.leaf(mode="register")})
 tools = Compose(
     factory=ValueLayer,
-    query=lambda layers: tuple(
-        value for layer in layers for value in layer.values()
-    ),
+    query=lambda layers: tuple(value for layer in layers for value in layer.values()),
 )
 root.register("tools", tools)
 root.effect(lambda: tools.register(root.scope, "read"))
@@ -449,9 +453,9 @@ remove_agent = agent.effect(
 )
 assert tools.resolve(agent.scope) == ("shell", "read")
 assert tools.resolve(agent.scope, local=True) == ("shell",)
-assert tools.resolve(
-    agent.scope, lambda layers: sum(len(layer) for layer in layers)
-) == 2
+assert (
+    tools.resolve(agent.scope, lambda layers: sum(len(layer) for layer in layers)) == 2
+)
 
 remove_agent()
 agent.dispose()
@@ -495,7 +499,9 @@ assert mapping_leaf.flatten() == {
     **mapping_leaf.get("$").flatten(),
     leaf_schema.resolve("settings"): {"theme": "dark"},
 }
-assert nested_path.get("settings").flatten() == {tree_schema.resolve("settings.theme"): "dark"}
+assert nested_path.get("settings").flatten() == {
+    tree_schema.resolve("settings.theme"): "dark"
+}
 ```
 
 两者默认解析绑定 Scope 的 C3 有效视图，也都接受 `local=True`。`ContextView` 只接受相对字符串路径；空字符串表示 View 自身，也是 `keys()` 和 `to_dict()` 的默认路径。绝对 Ref 直接交给 Context 查询。View 的 `flatten()` 仍返回以 Schema 绝对 Ref 为键的字典。两种方法都不会复制 leaf value。

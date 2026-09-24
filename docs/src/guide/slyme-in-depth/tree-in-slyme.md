@@ -54,18 +54,22 @@ from dataclasses import dataclass
 from slyme.context import DATA_TREE_REF, Context
 from slyme.utils.tree import TreeAux, TreeEngine, TreeHandler, TreeRules
 
+
 @dataclass
 class Box:
     value: object
 
+
 ctx = Context()
 plugin = ctx.fork()
-rules = TreeRules({
-    Box: TreeHandler(
-        lambda box: ((box.value,), TreeAux()),
-        lambda items, _: Box(next(iter(items))),
-    ),
-})
+rules = TreeRules(
+    {
+        Box: TreeHandler(
+            lambda box: ((box.value,), TreeAux()),
+            lambda items, _: Box(next(iter(items))),
+        ),
+    }
+)
 plugin.effect(lambda: ctx.get(DATA_TREE_REF).register(plugin.scope, rules))
 
 effective = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
@@ -90,10 +94,13 @@ from slyme.context.default import TreeLayer
 
 ctx = Context()
 child = ctx.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})
-child.register(DATA_TREE_REF, Compose(
-    factory=TreeLayer,
-    query=TreeLayer.merge,
-))
+child.register(
+    DATA_TREE_REF,
+    Compose(
+        factory=TreeLayer,
+        query=TreeLayer.merge,
+    ),
+)
 assert not child.get(DATA_TREE_REF).resolve(child.scope).handlers
 ctx.dispose()
 ```

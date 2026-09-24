@@ -96,9 +96,11 @@ def timing(
 def build_pipeline() -> Node[None]:
     return llm_api(
         responses=R.resolve("output.responses"),
-        prompts=Auto(format_prompts(
-            articles=Auto(R.resolve("input.articles")),
-        )),
+        prompts=Auto(
+            format_prompts(
+                articles=Auto(R.resolve("input.articles")),
+            )
+        ),
     ).add_wrappers(timing(prefix="LLM API Call"))
 
 
@@ -144,6 +146,7 @@ Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命�
 ```python
 from slyme.context import Compose, Context, Schema
 
+
 class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
@@ -152,6 +155,7 @@ class ValueLayer(dict):
             del self[token]
 
         return dispose
+
 
 R = Schema({"hooks": Schema.leaf(mode="register")})
 root = Context()

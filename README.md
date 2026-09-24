@@ -172,6 +172,7 @@ A Context root holds a live `Schema` reference and owns an application data stor
 ```python
 from slyme.context import Compose, Context, Schema
 
+
 class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
@@ -180,6 +181,7 @@ class ValueLayer(dict):
             del self[token]
 
         return dispose
+
 
 R = Schema({"hooks": Schema.leaf(mode="register")})
 root = Context()

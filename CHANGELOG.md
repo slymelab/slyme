@@ -90,6 +90,10 @@ breaking changes when they are documented here.
 
 ### Fixed
 
+- Lifecycle diagnostic tests wait for asyncio's exception handler without
+  depending on version-specific shield reporting timing or message text.
+- The built-wheel CI smoke test uses current Context initialization and
+  Compose layer registration APIs.
 - Context construction owns children before Scope restoration and uses disposal
   for restoration or default-installation failures. Internal finalization shares
   its first result or failure through per-instance `once` wrappers.

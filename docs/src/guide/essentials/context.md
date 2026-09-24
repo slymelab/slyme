@@ -163,8 +163,12 @@ class Labels(Metadata):
         return Labels(self.values + other.values)
 
 
-schema = Schema({"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("core",))})})
-remove = schema.declare({"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("plugin",))})})
+schema = Schema(
+    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("core",))})}
+)
+remove = schema.declare(
+    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("plugin",))})}
+)
 remove()
 ```
 
@@ -435,6 +439,7 @@ The public `ComposeLayer` protocol requires one synchronous method: `register(to
 ```python
 from slyme.context import Compose, Context, Schema
 
+
 class ValueLayer(dict):
     def register(self, token, /, value):
         self[token] = value
@@ -444,13 +449,12 @@ class ValueLayer(dict):
 
         return dispose
 
+
 root = Context()
 root.declare({"tools": Schema.leaf(mode="register")})
 tools = Compose(
     factory=ValueLayer,
-    query=lambda layers: tuple(
-        value for layer in layers for value in layer.values()
-    ),
+    query=lambda layers: tuple(value for layer in layers for value in layer.values()),
 )
 root.register("tools", tools)
 root.effect(lambda: tools.register(root.scope, "read"))
@@ -461,9 +465,9 @@ remove_agent = agent.effect(
 )
 assert tools.resolve(agent.scope) == ("shell", "read")
 assert tools.resolve(agent.scope, local=True) == ("shell",)
-assert tools.resolve(
-    agent.scope, lambda layers: sum(len(layer) for layer in layers)
-) == 2
+assert (
+    tools.resolve(agent.scope, lambda layers: sum(len(layer) for layer in layers)) == 2
+)
 
 remove_agent()
 agent.dispose()
@@ -507,7 +511,9 @@ assert mapping_leaf.flatten() == {
     **mapping_leaf.get("$").flatten(),
     leaf_schema.resolve("settings"): {"theme": "dark"},
 }
-assert nested_path.get("settings").flatten() == {tree_schema.resolve("settings.theme"): "dark"}
+assert nested_path.get("settings").flatten() == {
+    tree_schema.resolve("settings.theme"): "dark"
+}
 ```
 
 Both methods resolve the bound Scope's effective C3 view by default and accept `local=True`. A `ContextView` accepts only relative string paths for subtree access; the empty string addresses the view itself and is the default for `keys()` and `to_dict()`. Use Context directly for absolute Ref lookups. The view’s `flatten()` result still contains absolute Schema refs. Neither method copies leaf values. To materialize values into a new root, create it, declare all copied paths, then call `snapshot.update(ctx.flatten("app"))`. Select an application subtree such as `app`; all copied fields must use `assign` mode. Root flattening also includes the register-mode framework configuration. `register` fields require explicit `register()` calls on the new owner; a snapshot does not transfer ownership. A new root receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.

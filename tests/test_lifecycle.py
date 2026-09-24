@@ -513,16 +513,21 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
 
 
 @pytest.mark.parametrize("phase", ["setup", "dispose"])
-@pytest.mark.parametrize("observed", [False, True])
-async def test_background_failure_reaches_asyncio_diagnostics_unless_observed(
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_lifecycle_failures_follow_asyncio_diagnostics(
     phase,
-    observed,
+    cancel_waiter,
 ) -> None:
     loop = asyncio.get_running_loop()
     previous_handler = loop.get_exception_handler()
     reports = []
     started, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
     finalized = asyncio.Event()
+    reported = asyncio.Event()
+
+    def record_failure(_, report):
+        reports.append(report)
+        reported.set()
 
     class TrackedContext(Context):
         def _finalize(self):
@@ -544,30 +549,32 @@ async def test_background_failure_reaches_asyncio_diagnostics_unless_observed(
     else:
         lifetime.effect(lambda: fail)
         completion = lifetime.dispose()
-    loop.set_exception_handler(lambda _, report: reports.append(report))
+    loop.set_exception_handler(record_failure)
     try:
         waiter = asyncio.create_task(await_result(completion))
         await started.wait()
-        waiter.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await waiter
+        if cancel_waiter:
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
         release.set()
+        if not cancel_waiter:
+            expected = ValueError if phase == "setup" else BaseExceptionGroup
+            with pytest.raises(expected):
+                await waiter
         await finished.wait()
         if phase == "setup":
             lifetime.dispose()
         await finalized.wait()
-        if observed:
-            expected = ValueError if phase == "setup" else BaseExceptionGroup
-            with pytest.raises(expected):
-                await completion
         del waiter, completion, lifetime
         gc.collect()
 
-        if observed:
+        if not cancel_waiter:
             assert not reports
             return
+        # asyncio may report at collection or via a shield completion callback.
+        await asyncio.wait_for(reported.wait(), 5)
         assert len(reports) == 1
-        assert reports[0]["message"] == "Task exception was never retrieved"
         error = reports[0]["exception"]
         if phase == "dispose":
             assert isinstance(error, BaseExceptionGroup)
