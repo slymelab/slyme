@@ -134,13 +134,14 @@ def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
 # --- Evaluator Implementations ---
 # Ref
 def ref_evaluator(
-    ctx: Context, refs: Sequence[Ref]
+    ctx: Context, refs: Sequence[Ref[Any]]
 ) -> Sequence[Any] | Awaitable[Sequence[Any]]:
+    """Read and await stored values, which may change the Ref's value type."""
     return _batch(refs, ctx.get)
 
 
 @continuation
-def _evaluate_node(ctx: Context, node: Node) -> Generator[Any, Any, Any]:
+def _evaluate_node(ctx: Context, node: Node[_T]) -> Generator[Any, Any, _T]:
     child = ctx.derive()
     try:
         return (yield node(child))
@@ -149,7 +150,7 @@ def _evaluate_node(ctx: Context, node: Node) -> Generator[Any, Any, Any]:
 
 
 def node_evaluator(
-    ctx: Context, nodes: Sequence[Node]
+    ctx: Context, nodes: Sequence[Node[Any]]
 ) -> Sequence[Any] | Awaitable[Sequence[Any]]:
     """Evaluate every sibling and report failures after all children settle.
 

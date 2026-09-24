@@ -172,17 +172,17 @@ async def test_compose_preserves_context_replacement_and_multiple_next_calls(
     def twice(ctx: Context, wrapped: Node, call_next: Callable, /):
         first = yield call_next(ctx)
         second = yield call_next(child)
-        return first, second
+        return first + second
 
     graph = avalue() if asynchronous else value()
     chain = Wrapper.compose([twice()], wrapped=graph, call_next=graph)
-    assert await await_result(chain(ctx)) == (1, 2)
+    assert await await_result(chain(ctx)) == 3
     ctx.dispose()
 
 
 def test_compose_wrapper_can_short_circuit_without_calling_the_target() -> None:
     @node
-    def target(ctx: Context, /) -> None:
+    def target(ctx: Context, /) -> str:
         raise AssertionError("target must not run")
 
     @wrapper
@@ -219,7 +219,7 @@ async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
         return value
 
     @node
-    def target(ctx: Context, /, *, value):
+    def target(ctx: Context, /, *, value: int) -> int:
         events.append(("target", value))
         return value
 
@@ -227,19 +227,19 @@ async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
     @continuation
     def around(ctx: Context, wrapped: Node, call_next: Callable, /):
         if short_circuit:
-            return "stopped"
+            return -1
         first = yield call_next(child)
         second = yield call_next(ctx)
-        return first, second
+        return first + second
 
     graph = target(value=Auto(parameter())).add_wrappers(around())
     try:
         result = await await_result(graph(ctx))
         if short_circuit:
-            assert result == "stopped"
+            assert result == -1
             assert events == []
         else:
-            assert result == (2, 1)
+            assert result == 3
             assert events == [("auto", 2), ("target", 2), ("auto", 1), ("target", 1)]
     finally:
         await await_result(ctx.dispose())

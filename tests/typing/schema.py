@@ -1,7 +1,7 @@
 """Schema declarations use dict trees or another Schema, not arbitrary mappings."""
 
 from collections.abc import Hashable, Iterable, Mapping
-from typing import Any
+from typing import Any, TypeVar
 
 from tests.compose_helpers import ValueLayer, collect_values
 from typing_extensions import assert_type
@@ -21,7 +21,33 @@ from slyme.context import (
     ScopeBinding,
 )
 from slyme.context.core import ContextView
-from slyme.context.schema import _Declaration
+from slyme.context.schema import ContextKey, _Declaration
+
+_T = TypeVar("_T")
+
+
+def check_ref_types(ctx: Context, schema: Schema, ref: Ref[_T], value: _T) -> None:
+    assert_type(schema.resolve(ref), Ref[_T])
+    assert_type(schema.resolve_entry(ref), RefEntry[_T])
+    assert_type(ctx.resolve(ref), Ref[_T])
+    assert_type(ctx.resolve_entry(ref), RefEntry[_T])
+    assert_type(ctx.get(ref), _T)
+    assert_type(ctx.get(ref, None, local=True), _T | None)
+    ctx.set(ref, value)
+    ctx.register(ref, value)
+
+    number: ContextKey[int] = Ref[int]("number")
+    assert_type(ctx.get(number), int)
+    assert_type(ctx.get(number, "missing"), int | str)
+    assert_type(ctx.get(number, 0), int)
+    assert_type(ctx.get("number"), Any)
+    assert_type(ctx.get(Ref[ContextView]("group")), ContextView)
+    ctx.set(number, 1)
+    ctx.register(number, 1)
+    ctx.set(number, "wrong")  # type: ignore[misc]
+    ctx.register(number, "wrong")  # type: ignore[misc]
+    ctx.set("number", "dynamic")
+    ctx.register("number", "dynamic")
 
 
 def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> None:
@@ -92,6 +118,9 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     assert_type(schema.resolve_entry(Ref("value"), role=None), RefEntry[Any])
     assert_type(schema.resolve_entry("value").config.metadata, Mapping[str, Metadata])
     assert_type(Schema.leaf(int), RefLeafConfig[int])
+    assert_type(Schema.leaf(), RefLeafConfig[Any])
+    assert_type(Schema.leaf(None), RefLeafConfig[None])
+    assert_type(Schema.leaf(type(None)), RefLeafConfig[None])
     assert_type(Schema.container(), RefContainerConfig)
     marker = Metadata()
     annotated = Schema.leaf(int, metadata={"app.marker": marker})

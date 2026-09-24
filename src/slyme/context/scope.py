@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, overload
+from typing import overload
 
 __all__ = ["Identity", "Scope", "ScopeBinding"]
 
@@ -55,14 +55,14 @@ class ScopeBinding:
 class Scope:
     """One immutable C3 position with direct parents normalized to a tuple."""
 
-    label: Any | None = None
+    label: object = None
     parents: tuple[Scope, ...] = ()
     _mro: tuple[Scope, ...] = field(init=False)
 
     def __init__(
         self,
         *,
-        label: Any | None = None,
+        label: object = None,
         parents: Scope | tuple[Scope, ...] = (),
     ) -> None:
         direct_parents = (parents,) if isinstance(parents, Scope) else parents
@@ -113,17 +113,17 @@ class Scope:
     def fork(
         self,
         *,
-        label: Any | None = None,
+        label: object = None,
     ) -> Scope:
         """Create a base Scope with this Scope as its only direct parent."""
         return Scope(label=label, parents=self)
 
     @overload
-    def find(self, label: Any, default: Scope | _Missing = _MISSING) -> Scope: ...
+    def find(self, label: object, default: Scope | _Missing = _MISSING) -> Scope: ...
     @overload
-    def find(self, label: Any, default: Scope | None) -> Scope | None: ...
+    def find(self, label: object, default: Scope | None) -> Scope | None: ...
     def find(
-        self, label: Any, default: Scope | None | _Missing = _MISSING
+        self, label: object, default: Scope | None | _Missing = _MISSING
     ) -> Scope | None:
         """Return the first label match in C3 order, or the explicit default.
 
@@ -136,6 +136,6 @@ class Scope:
             raise LookupError(f"No visible Scope has label {label!r}.")
         return default
 
-    def find_all(self, label: Any) -> tuple[Scope, ...]:
+    def find_all(self, label: object) -> tuple[Scope, ...]:
         """Return all label matches in C3 order, or an empty tuple."""
         return tuple(scope for scope in self.mro if scope.label == label)

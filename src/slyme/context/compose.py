@@ -92,7 +92,7 @@ class Compose(Generic[_L, _R]):
     def derive(
         self,
         *,
-        label: Any | None = None,
+        label: object = None,
         parents: Scope | tuple[Scope, ...],
         binding: ScopeBinding | Identity,
     ) -> Scope:
@@ -102,7 +102,7 @@ class Compose(Generic[_L, _R]):
     @staticmethod
     def derive_many(
         *,
-        label: Any | None = None,
+        label: object = None,
         parents: Scope | tuple[Scope, ...],
         bindings: Mapping[Compose[Any, Any], ScopeBinding | Identity],
     ) -> Scope:

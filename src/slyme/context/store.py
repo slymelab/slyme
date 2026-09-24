@@ -247,7 +247,9 @@ class ContextStore:
                 usage.entries.discard(entry)
         binding.clear()
 
-    def get(self, scope: Scope, entry: RefEntry[Any], *, local: bool = False) -> Any:
+    def get(
+        self, scope: Scope, entry: RefEntry[_T], *, local: bool = False
+    ) -> _T | _Missing:
         """Return a resolved leaf's visible value, or _MISSING if absent."""
         binding = self._data.get(entry)
         if binding is None:
@@ -306,7 +308,7 @@ class ContextStore:
         if binding is not None:
             binding.delete(scope)
 
-    def set(self, scope: Scope, entry: RefEntry[Any], value: _T) -> None:
+    def set(self, scope: Scope, entry: RefEntry[_T], value: _T) -> None:
         """Set one local assignment value; registration paths reject assignment."""
         self._validate_mode(entry, "assign")
         self._writable_binding(scope, entry).set(scope, value)
@@ -356,7 +358,7 @@ class ContextStore:
             self._delete_leaf(scope, leaf)
 
     def register(
-        self, scope: Scope, entry: RefEntry[Any], value: _T
+        self, scope: Scope, entry: RefEntry[_T], value: _T
     ) -> Callable[[], None]:
         """Install a registration at this Scope with an empty local identity.
 

@@ -19,9 +19,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import InitVar, dataclass, field, replace
+from enum import Enum
 from functools import reduce
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
+
+from typing_extensions import TypeVar
 
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import once
@@ -43,7 +46,9 @@ __all__ = [
     "Schema",
 ]
 
-_T = TypeVar("_T")
+_T = TypeVar("_T", default=Any)
+_Missing = Enum("_Missing", ["MARK"])
+_MISSING = _Missing.MARK
 
 _SCHEMA_RULES = TreeRules(handlers={dict: TreeHandler(flatten_dict, unflatten_dict)})
 
@@ -68,7 +73,7 @@ class Ref(Generic[_T]):
         object.__setattr__(self, "parts", self._split_path(self.path))
 
 
-ContextKey = str | Ref[Any]
+ContextKey = str | Ref[_T]
 
 
 class ContextPathError(KeyError):
@@ -116,15 +121,24 @@ class RefConfig(ABC, Generic[_T]):
 class RefLeafConfig(RefConfig[_T]):
     """Behavior of one leaf declared in a Schema."""
 
-    value_type: type[_T] | None = None
+    value_type: type[_T] | _Missing = _MISSING
     mode: Literal["assign", "register"] = "assign"
 
     def merge(self, other: RefConfig[_T]) -> RefLeafConfig[_T]:
         if not isinstance(other, RefLeafConfig):
             raise ValueError(f"Conflicting Ref configurations: {self!r} and {other!r}.")
-        if self.value_type != other.value_type or self.mode != other.mode:
+        if self.mode != other.mode or (
+            self.value_type is not _MISSING
+            and other.value_type is not _MISSING
+            and self.value_type != other.value_type
+        ):
             raise ValueError(f"Conflicting Ref configurations: {self!r} and {other!r}.")
-        return replace(self, metadata=self._merge_metadata(other))
+        value_type = (
+            other.value_type if self.value_type is _MISSING else self.value_type
+        )
+        return replace(
+            self, value_type=value_type, metadata=self._merge_metadata(other)
+        )
 
 
 @dataclass(frozen=True)
@@ -223,15 +237,31 @@ class Schema:
         self._stores.discard(store)
 
     @staticmethod
+    @overload
     def leaf(
-        value_type: type[_T] | None = None,
+        value_type: None,
         *,
         mode: Literal["assign", "register"] = "assign",
         metadata: Mapping[str, Metadata] | None = None,
-    ) -> RefLeafConfig[_T]:
-        """Describe mutable assignments or an owner-managed registration leaf."""
+    ) -> RefLeafConfig[None]: ...
+    @staticmethod
+    @overload
+    def leaf(
+        value_type: type[_T] | _Missing = _MISSING,
+        *,
+        mode: Literal["assign", "register"] = "assign",
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> RefLeafConfig[_T]: ...
+    @staticmethod
+    def leaf(
+        value_type: type[Any] | None | _Missing = _MISSING,
+        *,
+        mode: Literal["assign", "register"] = "assign",
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> RefLeafConfig[Any]:
+        """Describe a leaf; omit its type for no constraint, use None for NoneType."""
         return RefLeafConfig(
-            value_type,
+            type(None) if value_type is None else value_type,
             mode,
             metadata={} if metadata is None else metadata,
         )
@@ -350,10 +380,10 @@ class Schema:
 
     def resolve_entry(
         self,
-        key: ContextKey,
+        key: ContextKey[_T],
         *,
         role: Literal["leaf", "container"] | None = None,
-    ) -> RefEntry[Any]:
+    ) -> RefEntry[_T]:
         """Resolve a declared path; reject missing paths or a required role mismatch.
 
         Strings and Refs resolve by path. Without a required role, resolution
@@ -376,10 +406,10 @@ class Schema:
 
     def resolve(
         self,
-        key: ContextKey,
+        key: ContextKey[_T],
         *,
         role: Literal["leaf", "container"] | None = None,
-    ) -> Ref[Any]:
+    ) -> Ref[_T]:
         """Return the declared Ref; an empty path resolves the root container."""
         return self.resolve_entry(key, role=role).ref
 

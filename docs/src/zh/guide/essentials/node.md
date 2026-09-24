@@ -167,7 +167,9 @@ task.add_wrappers(trace(name="add"))
 
 Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例等待同步或异步调用完成，无论成功还是失败都会执行 `finally`。仅转发结果的 Wrapper 可以直接返回 `call_next(ctx)`，不需要 `@continuation`；`async def` Wrapper 也可以使用 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
-`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 的 callable。Wrapper 参数保持实时读取；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context，以及返回值类型。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
+`Node[R]` 接受 `Wrapper[R]`：Wrapper 应保持最终结果类型，短路时也一样，但可以引入异步操作。这是静态类型约束，不进行运行时值类型检查。需要改变结果类型时，使用另一个 Node 组合原 Node。
+
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 且保持最终结果类型的 callable。Wrapper 参数保持实时读取；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
 
 ## 组合结构
 

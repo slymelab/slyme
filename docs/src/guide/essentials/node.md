@@ -167,7 +167,9 @@ task.add_wrappers(trace(name="add"))
 
 Wrappers use onion ordering and read their live parameters when invoked. The example waits for synchronous or asynchronous completion and runs its `finally` block on success or failure. A forwarding wrapper may return `call_next(ctx)` unchanged without `@continuation`. An `async def` wrapper can instead use `await await_result(call_next(ctx))`. Slyme does not rewrite a wrapper's `try/finally`.
 
-`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context. Wrapper parameters remain live. Each wrapper controls whether and how often it invokes the next layer, which Context it passes, and the result type. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
+`Node[R]` accepts `Wrapper[R]`: wrappers preserve the resolved result type, including when short-circuiting, but may introduce asynchronous work. This is a static typing requirement, not a runtime value check. Express a change of result type through another Node that composes the original.
+
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context with the same resolved result type. Wrapper parameters remain live. Each wrapper controls whether and how often it invokes the next layer and which Context it passes. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
 
 ## Composition structure
 

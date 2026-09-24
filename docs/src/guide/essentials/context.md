@@ -40,6 +40,8 @@ path against its application's Schema, which remains the source of path roles, d
 value types, and write modes. A Ref itself contains only its path and
 cached path parts.
 
+`Ref[T]` preserves `T` through `resolve()`, `resolve_entry()`, and `Context.get()`, and constrains values passed to `set()` or `register()` in static checks. A `get()` default adds its type to the result. String paths remain dynamically typed; a container Ref describes a `ContextView`, not a dict. These annotations do not validate the Ref's type against the runtime Schema.
+
 `Ref("")` identifies the root container and has `parts == ()`; `schema.resolve("")` returns its canonical Ref. The root is permanently declared by Schema itself. Empty segments inside other paths, such as `".user"`, `"user."`, or `"user..name"`, remain invalid.
 
 For an application, describe its available paths with `Schema`:
@@ -70,6 +72,8 @@ A Schema strongly retains each application Store; Store viewer registrations ret
 
 Schema validates path declarations and rejects conflicting declared value types
 or write modes. It does not validate the runtime type of stored values.
+
+Omitting `value_type` stores an internal `_MISSING` marker and imposes no type constraint; it can merge with any concrete type. `Schema.leaf(None)` explicitly declares `type(None)`. Two specified types must match. Withdrawing the last typed declaration restores the unspecified type if untyped declarations remain, without changing stored values.
 
 The path remains a stable semantic name independent of the physical Node graph.
 

@@ -1,12 +1,14 @@
 """Static checks for the awaited result type of unified execution APIs."""
 
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from typing import Any, Literal
 
 from typing_extensions import assert_type
 
-from slyme.context import Context
+from slyme.context import Context, Ref
 from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
+from slyme.node.eval import node_evaluator, ref_evaluator
+from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.execution import await_result, continuation
 
 
@@ -79,6 +81,8 @@ async def check_types(ctx: Context) -> None:
     assert_type(create_node(direct_async), Node[int])
     assert_type(create_node(direct_mixed, {"value": 1}), Node[int])
     assert_type(create_node(direct, wrappers=[composed_wrapper()]), Node[int])
+    assert_type(create_node(direct_async, wrappers=[composed_wrapper()]), Node[int])
+    assert_type(create_node(direct_mixed, wrappers=[composed_wrapper()]), Node[int])
     assert_type(create_wrapper(direct), Wrapper[int])
     assert_type(create_wrapper(direct_async), Wrapper[int])
     assert_type(create_wrapper(direct_mixed), Wrapper[int])
@@ -88,6 +92,21 @@ async def check_types(ctx: Context) -> None:
     assert_type(asynchronous(), Node[int])
     assert_type(mixed(), Node[int])
     assert_type(mixed_wrapper(), Wrapper[int])
+    assert_type(immediate().func, Callable[..., int | Awaitable[int]])
+    assert_type(asynchronous().func, Callable[..., int | Awaitable[int]])
+    assert_type(mixed_wrapper().func, Callable[..., int | Awaitable[int]])
+    assert_type(
+        ref_evaluator(ctx, [Ref[int]("value")]),
+        Sequence[Any] | Awaitable[Sequence[Any]],
+    )
+    assert_type(
+        node_evaluator(ctx, [immediate(), asynchronous()]),
+        Sequence[Any] | Awaitable[Sequence[Any]],
+    )
+    assert_type(NodeExceptionRecord(immediate()).exception_node, Node[Any])
+    error = WrapperExceptionRecord(mixed_wrapper(), immediate())
+    assert_type(error.exception_node, Wrapper[Any])
+    assert_type(error.wrapped_node, Node[Any])
     assert_type(parameterized(), Node[int])
     assert_type(parameterized(value=Auto(mixed())), Node[int])
     assert_type(parameterized()(ctx, value=1), int | Awaitable[int])
@@ -95,7 +114,7 @@ async def check_types(ctx: Context) -> None:
     assert_type(decorated_async(value=1), Node[int])
     assert_type(
         Wrapper.compose([mixed_wrapper()], wrapped=immediate(), call_next=immediate()),
-        Callable[[Context], Any],
+        Callable[[Context], int | Awaitable[int]],
     )
     assert_type(immediate()(ctx), int | Awaitable[int])
     assert_type(await await_result(immediate()(ctx)), int)
@@ -115,3 +134,35 @@ async def check_types(ctx: Context) -> None:
     )
     assert_type(ctx.dispose(), None | Awaitable[None])
     assert_type(await await_result(ctx.dispose()), None)
+
+
+def check_wrapper_result_types(
+    ctx: Context,
+    integer: Node[int],
+    text: Node[str],
+    mapping: Node[dict[str, int]],
+    integer_wrapper: Wrapper[int],
+    text_wrapper: Wrapper[str],
+) -> None:
+    assert_type(
+        node_evaluator(ctx, (integer, text, mapping)),
+        Sequence[Any] | Awaitable[Sequence[Any]],
+    )
+    assert_type(
+        node_evaluator(ctx, [integer, text, mapping]),
+        Sequence[Any] | Awaitable[Sequence[Any]],
+    )
+    assert_type(integer.wrappers, list[Wrapper[int]])
+    assert_type(integer.add_wrappers(integer_wrapper), Node[int])
+    assert_type(integer_wrapper(ctx, integer, integer), int | Awaitable[int])
+    assert_type(
+        Wrapper.compose([integer_wrapper], wrapped=integer, call_next=integer),
+        Callable[[Context], int | Awaitable[int]],
+    )
+    integer.add_wrappers(text_wrapper)  # type: ignore[arg-type]
+    integer.wrappers.append(text_wrapper)  # type: ignore[arg-type]
+    integer.wrappers = [text_wrapper]  # type: ignore[list-item]
+    create_node(direct, wrappers=[text_wrapper])  # type: ignore[arg-type]
+    Node(func=direct, params={}, wrappers=[text_wrapper])  # type: ignore[arg-type]
+    Wrapper.compose([text_wrapper], wrapped=integer, call_next=integer)  # type: ignore[misc]
+    integer_wrapper(ctx, text, text)  # type: ignore[arg-type]

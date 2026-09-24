@@ -38,6 +38,8 @@ assert Ref("user.name") == name
 路径角色、声明的 value type 和写入模式仍由该 Schema 决定。Ref 自身只包含路径和
 缓存的路径分段。
 
+`Ref[T]` 通过 `resolve()`、`resolve_entry()` 和 `Context.get()` 保留 `T`，并在静态检查中约束 `set()`、`register()` 的传入值类型。`get()` 的 default 类型会加入返回值类型。字符串路径仍是动态类型；container 的 Ref 应描述 `ContextView`，而不是 dict。这些注解不检查 Ref 的类型是否匹配运行时 Schema。
+
 `Ref("")` 表示根 container，其 `parts == ()`；`schema.resolve("")` 返回对应的规范 Ref。根由 Schema 自身永久声明。其他路径内部仍不允许空分段，例如 `".user"`、`"user."` 和 `"user..name"`。
 
 应用应使用 `Schema` 描述可用路径：
@@ -66,6 +68,8 @@ Schema 是按身份比较、支持弱引用的冻结 dataclass。它的属性绑
 Schema 强引用每个应用 Store，Store 的 viewer 登记持有活跃 Context。子 Context 共享 root 的 Store。根释放 viewer 后会注销 Store，清理失败也会注销；根构造失败同样会注销。只要 Schema 仍可达，丢弃 Context 的最后一个外部引用不会释放应用；应显式调用 `dispose()`，并等待可能的异步清理。撤销字段会清除所有已登记 Store 中的对应 binding，但不 dispose 这些 Context。不同 Store 之间的字段清理顺序不作保证。
 
 Schema 校验路径声明，并拒绝互相冲突的 value type 或写入模式，但不校验所存值的运行时类型。
+
+省略 `value_type` 时存储内部 `_MISSING` 标记，不施加类型约束，可以与任意具体类型合并。`Schema.leaf(None)` 则明确声明 `type(None)`。两个已指定的类型必须一致。撤销最后一份有类型的声明后，若仍有未指定类型的声明，配置恢复为未指定，但不改变已存储的值。
 
 该路径是稳定的语义名称，不依赖物理 Node 图的位置。
 

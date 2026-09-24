@@ -42,7 +42,7 @@ from .scope import Identity, Scope, ScopeBinding
 from .store import _MISSING as _STORE_MISSING
 from .store import ContextStore
 
-_T = TypeVar("_T")
+_T = TypeVar("_T", default=Any)
 _T2 = TypeVar("_T2")
 _A = TypeVar("_A", default=Any, covariant=True)
 _P = ParamSpec("_P")
@@ -179,20 +179,20 @@ class Context(Generic[_A]):
 
     def resolve(
         self,
-        key: ContextKey,
+        key: ContextKey[_T],
         *,
         role: Literal["leaf", "container"] | None = None,
-    ) -> Ref[Any]:
+    ) -> Ref[_T]:
         """Return the declared Ref, independently of whether a value is installed."""
         self._lifecycle.assert_readable()
         return self._schema.resolve(key, role=role)
 
     def resolve_entry(
         self,
-        key: ContextKey,
+        key: ContextKey[_T],
         *,
         role: Literal["leaf", "container"] | None = None,
-    ) -> RefEntry[Any]:
+    ) -> RefEntry[_T]:
         """Return the live declaration and metadata at a path."""
         self._lifecycle.assert_readable()
         return self._schema.resolve_entry(key, role=role)
@@ -264,7 +264,7 @@ class Context(Generic[_A]):
     def derive(
         self,
         *,
-        label: Any | None = None,
+        label: object = None,
         parents: Scope | tuple[Scope, ...] | None = None,
         bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
         | None = None,
@@ -275,7 +275,7 @@ class Context(Generic[_A]):
     def derive(
         self,
         *,
-        label: Any | None = None,
+        label: object = None,
         parents: Scope | tuple[Scope, ...] | None = None,
         bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
         | None = None,
@@ -285,7 +285,7 @@ class Context(Generic[_A]):
     def derive(
         self,
         *,
-        label: Any | None = None,
+        label: object = None,
         parents: Scope | tuple[Scope, ...] | None = None,
         bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
         | None = None,
@@ -351,6 +351,12 @@ class Context(Generic[_A]):
             raise ContextPathError(entry.ref.path)
         return default
 
+    @overload
+    def get(self, ref: ContextKey[_T], *, local: bool = False) -> _T: ...
+    @overload
+    def get(
+        self, ref: ContextKey[_T], default: _T2, *, local: bool = False
+    ) -> _T | _T2: ...
     def get(
         self,
         ref: ContextKey,
@@ -410,7 +416,7 @@ class Context(Generic[_A]):
         values = [self._entry_value(entry, local=local) for entry in entries]
         return TreeEngine.unflatten(treedef, values)
 
-    def set(self, ref: ContextKey, value: _T) -> None:
+    def set(self, ref: ContextKey[_T], value: _T) -> None:
         """Assign one local value at an assign-mode leaf."""
         self._lifecycle.assert_active()
         entry = self._schema.resolve_entry(ref, role="leaf")
@@ -438,7 +444,7 @@ class Context(Generic[_A]):
         self._lifecycle.assert_active()
         self._store.drop(self.scope, (self._schema.resolve_entry(ref) for ref in refs))
 
-    def register(self, ref: ContextKey, value: _T) -> Callable[[], None]:
+    def register(self, ref: ContextKey[_T], value: _T) -> Callable[[], None]:
         """Install an owned register-mode value and return its exact early disposer."""
         return self._lifecycle.effect(
             lambda: self._store.register(

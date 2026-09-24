@@ -64,12 +64,14 @@ class Auto:
     value: Any
 
 
-class NodeElement:
+class NodeElement(Generic[_R]):
     """A function with mutable, explicitly bound keyword parameters."""
 
     __slots__ = ("_func", "_params")
 
-    def __init__(self, *, func: Callable, params: Mapping[str, Any]) -> None:
+    def __init__(
+        self, *, func: Callable[..., _R | Awaitable[_R]], params: Mapping[str, Any]
+    ) -> None:
         self._func = func
         self._params: dict[str, Any] = dict(params)
 
@@ -88,7 +90,7 @@ class NodeElement:
         return raw_params, eval_params
 
     @property
-    def func(self) -> Callable:
+    def func(self) -> Callable[..., _R | Awaitable[_R]]:
         return self._func
 
     @property
@@ -114,7 +116,7 @@ class NodeElement:
         self._params.pop(name, None)
 
 
-class Node(NodeElement, Generic[_R]):
+class Node(NodeElement[_R]):
     """A mutable keyword partial with Auto evaluation and Wrapper composition.
 
     Calls shallowly override saved bindings without modifying them. Python
@@ -137,13 +139,13 @@ class Node(NodeElement, Generic[_R]):
         /,
         *,
         func: Callable[..., _R | Awaitable[_R]],
-        wrappers: Iterable["Wrapper[Any]"] | None = None,
+        wrappers: Iterable["Wrapper[_R]"] | None = None,
         params: Mapping[str, Any],
     ):
         super().__init__(func=func, params=params)
-        self.wrappers: list[Wrapper[Any]] = list(wrappers or ())
+        self.wrappers: list[Wrapper[_R]] = list(wrappers or ())
 
-    def add_wrappers(self, *wrappers: "Wrapper[Any]") -> Self:
+    def add_wrappers(self, *wrappers: "Wrapper[_R]") -> Self:
         self.wrappers.extend(wrappers)
         return self
 
@@ -172,8 +174,8 @@ class Node(NodeElement, Generic[_R]):
             raise NodeExceptionRecord(exception_node=self) from error
 
 
-class Wrapper(NodeElement, Generic[_R]):
-    """Wrap a Node call; await its completion before result-dependent work."""
+class Wrapper(NodeElement[_R]):
+    """Preserve a Node's result type; await completion before result-dependent work."""
 
     __slots__ = ()
 
@@ -184,16 +186,16 @@ class Wrapper(NodeElement, Generic[_R]):
 
     @staticmethod
     def compose(
-        wrappers: Iterable["Wrapper[Any]"],
+        wrappers: Iterable["Wrapper[_R]"],
         *,
-        wrapped: Node[Any],
-        call_next: Callable[[Context], Any],
-    ) -> Callable[[Context], Any]:
+        wrapped: Node[_R],
+        call_next: Callable[[Context], _R | Awaitable[_R]],
+    ) -> Callable[[Context], _R | Awaitable[_R]]:
         """Assemble outermost-first wrappers without invoking them.
 
         Snapshot wrapper order; each invocation reads the wrappers' live
         parameters. Wrappers control whether and how often to call the next
-        layer, its Context, and its result type, including awaitable results.
+        layer and its Context. Results preserve the Node's type and may be awaitable.
         """
         for wrapper_obj in reversed(tuple(wrappers)):
             invoke = lambda ctx, current=wrapper_obj, next_call=call_next: current(  # noqa: E731
@@ -215,8 +217,8 @@ class Wrapper(NodeElement, Generic[_R]):
     def __call__(
         self,
         ctx: Context,
-        wrapped: Node[Any],
-        call_next: Callable[[Context], Any | Awaitable[Any]],
+        wrapped: Node[_R],
+        call_next: Callable[[Context], _R | Awaitable[_R]],
         /,
         **kwargs: Any,
     ) -> Generator[Any, Any, _R]:
@@ -241,7 +243,7 @@ def create_node(
     /,
     params: Mapping[str, Any] | None = None,
     *,
-    wrappers: Iterable[Wrapper[Any]] | None = None,
+    wrappers: Iterable[Wrapper[_R]] | None = None,
 ) -> Node[_R]: ...
 @overload
 def create_node(
@@ -249,14 +251,14 @@ def create_node(
     /,
     params: Mapping[str, Any] | None = None,
     *,
-    wrappers: Iterable[Wrapper[Any]] | None = None,
+    wrappers: Iterable[Wrapper[_R]] | None = None,
 ) -> Node[_R]: ...
 def create_node(
     func: Callable[..., _R | Awaitable[_R]],
     /,
     params: Mapping[str, Any] | None = None,
     *,
-    wrappers: Iterable[Wrapper[Any]] | None = None,
+    wrappers: Iterable[Wrapper[_R]] | None = None,
 ) -> Node[_R]:
     """Create a Node with shallow-copied bindings and assembly-time wrappers.
 

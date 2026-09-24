@@ -365,7 +365,7 @@ class TreeEngine:
         traverse_aux: TraverseAux,
         is_leaf: IsLeafFunc | None,
         rules: TreeRules,
-    ) -> tuple[TreeHandler, Iterable[Any], Iterator[Any], TreeAux] | None:
+    ) -> tuple[TreeHandler, Iterable[Any], Iterator[TreeKey], TreeAux] | None:
         """Return container traversal data, or None for a leaf."""
         if is_leaf is not None and is_leaf(element, traverse_aux):
             return None

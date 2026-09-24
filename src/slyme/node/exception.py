@@ -13,6 +13,14 @@
 # limitations under the License.
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .core import Node, Wrapper
+
+
 class NodeException(Exception):
     """Base exception class for all exceptions of ``Node``."""
 
@@ -23,11 +31,11 @@ class NodeException(Exception):
 class NodeExceptionRecord(NodeException):
     """Used to record the node exception info."""
 
-    def __init__(self, exception_node) -> None:
+    def __init__(self, exception_node: Node[Any]) -> None:
         super().__init__(exception_node)
 
     @property
-    def exception_node(self):
+    def exception_node(self) -> Node[Any]:
         return self.args[0]
 
     def __str__(self) -> str:
@@ -37,15 +45,15 @@ class NodeExceptionRecord(NodeException):
 class WrapperExceptionRecord(NodeException):
     """Used to record the exception info raised by a ``Wrapper``."""
 
-    def __init__(self, exception_node, wrapped_node) -> None:
+    def __init__(self, exception_node: Wrapper[Any], wrapped_node: Node[Any]) -> None:
         super().__init__(exception_node, wrapped_node)
 
     @property
-    def exception_node(self):
+    def exception_node(self) -> Wrapper[Any]:
         return self.args[0]
 
     @property
-    def wrapped_node(self):
+    def wrapped_node(self) -> Node[Any]:
         return self.args[1]
 
     def __str__(self) -> str:

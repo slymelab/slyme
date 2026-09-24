@@ -22,7 +22,7 @@ from slyme.context import (
     Schema,
     ScopeBinding,
 )
-from slyme.context.schema import _SCHEMA_RULES, _Declaration
+from slyme.context.schema import _MISSING, _SCHEMA_RULES, _Declaration
 from slyme.utils.execution import await_result
 from slyme.utils.tree import TreeEngine
 
@@ -83,7 +83,8 @@ def test_config_merge_returns_a_new_equal_config(config: RefConfig[Any]) -> None
         (Schema.leaf(), Schema.container()),
         (Schema.container(), Schema.leaf()),
         (Schema.leaf(int), Schema.leaf(str)),
-        (Schema.leaf(int), Schema.leaf()),
+        (Schema.leaf(int), Schema.leaf(None)),
+        (Schema.leaf(None), Schema.leaf(int)),
         (Schema.leaf(mode="register"), Schema.leaf()),
     ],
 )
@@ -92,6 +93,50 @@ def test_config_merge_rejects_incompatible_definitions(
 ) -> None:
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
         left.merge(right)
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        (Schema.leaf(), Schema.leaf(), _MISSING),
+        (Schema.leaf(), Schema.leaf(int), int),
+        (Schema.leaf(int), Schema.leaf(), int),
+        (Schema.leaf(int), Schema.leaf(int), int),
+        (Schema.leaf(), Schema.leaf(None), type(None)),
+        (Schema.leaf(None), Schema.leaf(), type(None)),
+        (Schema.leaf(None), Schema.leaf(type(None)), type(None)),
+    ],
+)
+def test_unspecified_value_type_accepts_concrete_declarations(left, right, expected):
+    assert left.merge(right).value_type is expected
+
+
+def test_leaf_type_default_is_distinct_from_explicit_none() -> None:
+    assert Schema.leaf().value_type is _MISSING
+    assert RefLeafConfig().value_type is _MISSING
+    assert Schema.leaf(None) == Schema.leaf(type(None))
+
+
+def test_withdrawing_typed_declaration_restores_unspecified_type_without_changing_data():
+    ctx = Context()
+    marker = Metadata()
+    ctx.declare({"value": Schema.leaf(metadata={"app.marker": marker})})
+    ctx.set("value", 1)
+    entry = ctx.resolve_entry("value")
+    remove = ctx.declare({"value": Schema.leaf(int)})
+    assert entry.config.value_type is int
+    assert entry.config.metadata["app.marker"] is marker
+    with pytest.raises(ValueError, match="Conflicting Ref configurations"):
+        ctx.declare({"value": Schema.leaf(str)})
+    assert entry.config.value_type is int
+
+    remove()
+    assert entry.config.value_type is _MISSING
+    assert ctx.get("value") == 1
+    ctx.declare({"value": Schema.leaf(str)})
+    assert entry.config.value_type is str
+    assert ctx.get("value") == 1
+    ctx.dispose()
 
 
 def test_public_entries_expose_root_container_and_leaf_metadata() -> None:
