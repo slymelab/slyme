@@ -632,7 +632,9 @@ def assert_indexes(schema: Schema, paths: set[str]) -> None:
             "$",
             "$.tree",
             "$.tree.data",
+            "$.tree.data.rules",
             "$.tree.node",
+            "$.tree.node.rules",
             "$.eval",
             "$.eval.handlers",
         }

@@ -102,8 +102,8 @@ class EvaluatorLayer:
         return result
 
 
-DATA_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.data")
-NODE_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.node")
+DATA_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.data.rules")
+NODE_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.node.rules")
 EVALUATORS_REF = Ref[Compose[EvaluatorLayer, dict[type, "BatchEvaluatorFunc"]]](
     "$.eval.handlers"
 )
@@ -133,8 +133,8 @@ def _apply(ctx: Context) -> None:
         {
             "$": {
                 "tree": {
-                    "data": Schema.leaf(mode="register"),
-                    "node": Schema.leaf(mode="register"),
+                    "data": {"rules": Schema.leaf(mode="register")},
+                    "node": {"rules": Schema.leaf(mode="register")},
                 },
                 "eval": {"handlers": Schema.leaf(mode="register")},
             }

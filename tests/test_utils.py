@@ -30,6 +30,7 @@ from slyme.utils.tree import (
     TreeEngine,
     TreeHandler,
     TreeKey,
+    TreeResolver,
     TreeRules,
 )
 from slyme.utils.tree.common import (
@@ -50,6 +51,7 @@ from slyme.utils.warning import warning_once
         TreeAux(),
         DATA_RULES.handlers[list],
         TraverseAux(parent=None, key_path=()),
+        TreeResolver(lambda value: False),
         DATA_RULES,
         TreeDef(),
         LeafDef(),
@@ -127,7 +129,9 @@ def test_tree_paths_iteration_and_leaf_override() -> None:
     assert TreeEngine.codify_key_path(paths_and_leaves[1][0], "tree") == "tree['a'][1]"
     assert TreeEngine.unflatten(definition, [1, 2, 3]) == {"a": [1, 2], "b": (3,)}
     leaves, _ = TreeEngine.flatten(
-        tree, rules=DATA_RULES, is_leaf=lambda value, _: isinstance(value, list)
+        tree,
+        rules=DATA_RULES,
+        resolver=TreeResolver(lambda value: isinstance(value, list)),
     )
     assert leaves == [[10, 20], 30]
 
@@ -167,25 +171,23 @@ def test_tree_preserves_handler_aux_for_reconstruction(cls: type | None) -> None
     assert TreeEngine.unflatten(definition, [2]) == Box(2)
 
 
-def test_explicit_leaf_bypasses_resolvers_in_both_traversal_paths() -> None:
+def test_resolver_leaf_bypasses_registered_handler_in_both_traversal_paths() -> None:
     value = [1, 2]
 
-    def resolver(element, aux):
-        pytest.fail("An explicit leaf must not resolve a container handler.")
+    def flatten(element):
+        pytest.fail("An explicit leaf must not call its container handler.")
 
-    rules = TreeRules(DATA_RULES.handlers, pre_resolvers=(resolver,))
+    rules = TreeRules({list: TreeHandler(flatten, None)})
+    resolver = TreeResolver(lambda element: element is value)
 
-    def is_leaf(element, aux):
-        return element is value
-
-    leaves, definition = TreeEngine.flatten(value, rules=rules, is_leaf=is_leaf)
+    leaves, definition = TreeEngine.flatten(value, rules=rules, resolver=resolver)
     assert len(leaves) == 1 and leaves[0] is value
     assert TreeEngine.unflatten(definition, leaves) is value
-    assert list(TreeEngine.iter(value, rules=rules, is_leaf=is_leaf)) == leaves
-    paths, _ = TreeEngine.flatten_with_key_path(value, rules=rules, is_leaf=is_leaf)
+    assert list(TreeEngine.iter(value, rules=rules, resolver=resolver)) == leaves
+    paths, _ = TreeEngine.flatten_with_key_path(value, rules=rules, resolver=resolver)
     assert paths == [((), value)]
     assert (
-        list(TreeEngine.iter_with_key_path(value, rules=rules, is_leaf=is_leaf))
+        list(TreeEngine.iter_with_key_path(value, rules=rules, resolver=resolver))
         == paths
     )
 
@@ -225,19 +227,93 @@ def test_tree_custom_handlers_and_explicit_resolver_priority() -> None:
         lambda box: ([box.value + 1], TreeAux()),
         lambda children, _: Box(next(iter(children)) - 1),
     )
-    pre = TreeRules(
-        exact.handlers,
-        pre_resolvers=(lambda value, _: override if isinstance(value, Box) else None,),
+    resolver = TreeResolver(lambda value: override if isinstance(value, Box) else False)
+    fallback = TreeResolver(
+        lambda value: (
+            override
+            if type(value) not in exact.handlers and isinstance(value, Box)
+            else False
+        )
     )
-    post = TreeRules(
-        exact.handlers,
-        post_resolvers=(lambda value, _: override if isinstance(value, Box) else None,),
-    )
-    assert TreeEngine.flatten(Box(3), rules=pre)[0] == [4]
-    assert TreeEngine.flatten(Box(3), rules=post)[0] == [3]
-    assert TreeEngine.flatten(ChildBox(1), rules=post)[0] == [2]
-    assert TreeEngine.flatten(1, rules=post)[0] == [1]
-    assert TreeEngine.flatten(Box(3), rules=pre, is_leaf=lambda *_: True)[0] == [Box(3)]
+    assert TreeEngine.flatten(Box(3), rules=exact, resolver=resolver)[0] == [4]
+    assert list(TreeEngine.iter(Box(3), rules=exact, resolver=resolver)) == [4]
+    assert TreeEngine.flatten(Box(3), rules=exact, resolver=fallback)[0] == [3]
+    assert TreeEngine.flatten(ChildBox(1), rules=exact, resolver=fallback)[0] == [2]
+    assert TreeEngine.flatten(1, rules=exact, resolver=fallback)[0] == [1]
+    assert TreeEngine.map(
+        lambda value: value * 2, Box(3), rules=exact, resolver=resolver
+    ) == Box(7)
+
+
+@pytest.mark.parametrize("resolver", [None, TreeResolver(lambda value: False)])
+def test_plain_traversal_does_not_construct_path_objects(monkeypatch, resolver) -> None:
+    def unexpected(*args, **kwargs):
+        pytest.fail("Value-only traversal must not construct path objects.")
+
+    monkeypatch.setattr(TraverseAux, "__init__", unexpected)
+    monkeypatch.setattr(SequenceKey, "__init__", unexpected)
+    value = [1, {"a": [2, 3]}]
+    leaves, definition = TreeEngine.flatten(value, rules=DATA_RULES, resolver=resolver)
+    assert leaves == [1, 2, 3]
+    assert TreeEngine.unflatten(definition, leaves) == value
+    assert list(TreeEngine.iter(value, rules=DATA_RULES, resolver=resolver)) == leaves
+    assert TreeEngine.map(
+        lambda leaf: leaf + 1, value, rules=DATA_RULES, resolver=resolver
+    ) == [2, {"a": [3, 4]}]
+
+
+@pytest.mark.parametrize(
+    "operation", ["flatten", "flatten_with_key_path", "iter", "iter_with_key_path"]
+)
+def test_resolver_aux_distinguishes_occurrences_by_parent_and_path(operation) -> None:
+    shared = [1, 2]
+    tree = {"opaque": shared, "expanded": shared}
+    seen: list[TraverseAux] = []
+
+    def resolve(value: Any, aux: TraverseAux) -> bool:
+        seen.append(aux)
+        return aux.key_path == (MappingKey("opaque"),)
+
+    resolver = TreeResolver(resolve, takes_aux=True)
+    result = getattr(TreeEngine, operation)(tree, rules=DATA_RULES, resolver=resolver)
+    if operation.startswith("flatten"):
+        result, definition = result
+        assert TreeEngine.unflatten(definition, [shared, 1, 2]) == tree
+    else:
+        result = list(result)
+    if "key_path" in operation:
+        assert [path for path, value in result] == [
+            (MappingKey("opaque"),),
+            (MappingKey("expanded"), SequenceKey(0)),
+            (MappingKey("expanded"), SequenceKey(1)),
+        ]
+        result = [value for path, value in result]
+    assert result == [shared, 1, 2]
+    assert result[0] is shared
+    assert [aux.key_path for aux in seen] == [
+        (),
+        (MappingKey("opaque"),),
+        (MappingKey("expanded"),),
+        (MappingKey("expanded"), SequenceKey(0)),
+        (MappingKey("expanded"), SequenceKey(1)),
+    ]
+    assert seen[0].parent is None
+    assert seen[1].parent is seen[2].parent is tree
+    assert seen[3].parent is seen[4].parent is shared
+
+
+@pytest.mark.parametrize("takes_aux", [False, True])
+def test_resolver_errors_propagate_without_reinterpretation(takes_aux: bool) -> None:
+    error = LookupError("resolver failure")
+
+    def fail(value, aux=None):
+        raise error
+
+    resolver = TreeResolver(fail, takes_aux=takes_aux)
+    for operation in (TreeEngine.flatten, TreeEngine.iter):
+        with pytest.raises(LookupError) as caught:
+            list(operation([1], rules=DATA_RULES, resolver=resolver))
+        assert caught.value is error
 
 
 def test_tree_handler_can_support_traversal_without_reconstruction() -> None:

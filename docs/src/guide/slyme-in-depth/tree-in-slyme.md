@@ -4,9 +4,25 @@ A tree is a nested structure whose containers define topology and whose unregist
 
 ## Rules and dispatch
 
-`TreeRules` contains an exact-type handler mapping plus ordered `pre_resolvers` and `post_resolvers`. `TreeHandler(flatten, unflatten)` describes one container; `unflatten=None` permits traversal but rejects reconstruction. Dispatch checks an explicit `is_leaf` predicate, pre-resolvers, the exact type, then post-resolvers. Subclasses remain opaque unless explicitly handled; Python MRO lookup is not implicit.
+`TreeRules` contains an exact-type handler mapping. `TreeHandler(flatten, unflatten)` describes one container; `unflatten=None` permits traversal but rejects reconstruction. Subclasses remain opaque unless explicitly handled; Python MRO lookup is not implicit.
 
-A rule snapshot copies its handler mapping. `TreeRules.merge()` keeps the first handler for each type and concatenates each resolver phase independently. A `TreeDef` retains the reconstruction functions used during flattening, so rebuilding does not look up current rules.
+A rule snapshot copies its handler mapping. `TreeRules.merge()` keeps the first handler for each type. A `TreeDef` retains the reconstruction functions used during flattening, so rebuilding does not look up current rules.
+
+Every traversal accepts an optional `resolver=TreeResolver(func, takes_aux=False)`. Before type lookup, `func(element)` returns `True` to treat that occurrence as a leaf, `False` to use the exact-type rules, or a `TreeHandler` to override them. `False` with no registered handler leaves the element opaque. With `takes_aux=True`, the callback receives `(element, aux)`; `aux.parent` is the direct parent and `aux.key_path` is the full path, with `None` and `()` at the root. Callback arity depends only on `takes_aux`, including for path-returning operations.
+
+```python
+from slyme.context.default import DATA_RULES
+from slyme.utils.tree import TreeEngine, TreeResolver
+
+leaves, definition = TreeEngine.flatten(
+    {"items": [1, 2]},
+    rules=DATA_RULES,
+    resolver=TreeResolver(lambda value: isinstance(value, list)),
+)
+assert leaves == [[1, 2]]
+```
+
+Ordinary `flatten`, `iter`, and `map` construct no traversal context or sequence path keys unless the resolver requests auxiliary data. Path-returning operations always track paths. Handler-provided reconstruction metadata, including dictionary keys, is preserved in either case.
 
 The `TreeAux` returned by a flatten handler is passed unchanged to its unflatten handler; an omitted `cls` remains `None`. `ContainerDef.cls` records the actual container type independently. Leaf definitions share an immutable, stateless marker; each occurrence still consumes its own leaf during reconstruction.
 
@@ -20,15 +36,17 @@ Root `Context()` installs three register-mode fields from `slyme.context.default
 
 | Ref constant | Path | Contributions |
 | --- | --- | --- |
-| `DATA_TREE_REF` | `$.tree.data` | `TreeRules` for Auto, `extract`, and `update_tree` |
-| `NODE_TREE_REF` | `$.tree.node` | `TreeRules` for explicit Node graph inspection |
+| `DATA_TREE_REF` | `$.tree.data.rules` | `TreeRules` for Auto, `extract`, and `update_tree` |
+| `NODE_TREE_REF` | `$.tree.node.rules` | `TreeRules` for explicit Node graph inspection |
 | `EVALUATORS_REF` | `$.eval.handlers` | Exact-type evaluator mappings |
 
 These constants are also exported by `slyme.context`. Data rules expand list, tuple, dict, and MappingProxyType. Node rules additionally traverse Node and Wrapper bindings and Auto payloads. Node, Wrapper, and Auto are traversal-only containers, with no reconstruction function.
 
+The `$.tree.data` and `$.tree.node` containers currently contain only `rules`; no resolver fields are declared or read by Context operations.
+
 Each operation resolves its rule and evaluator mappings once, before traversal or asynchronous suspension. Contributions added or removed afterward affect subsequent operations, not that operation's dispatch or reconstruction. Capturing a callable does not extend the lifetime of resources managed by its owner.
 
-The default compositions use `TreeLayer` and `EvaluatorLayer` from `slyme.context.default`. Each layer rejects a second registration of the same exact class, even for the same handler or through a different Scope sharing its Identity. A conflicting batch installs none of its classes. Withdrawal allows those classes to be registered again. Across layers, queries keep the first handler in Scope C3 order; register into a child layer to override an inherited contribution. Tree resolver sequences retain their registration order. Dispose a contribution to reveal the next applicable definition:
+The default compositions use `TreeLayer` and `EvaluatorLayer` from `slyme.context.default`. Each layer rejects a second registration of the same exact class, even for the same handler or through a different Scope sharing its Identity. A conflicting batch installs none of its classes. Withdrawal allows those classes to be registered again. Across layers, queries keep the first handler in Scope C3 order; register into a child layer to override an inherited contribution. Dispose a contribution to reveal the next applicable definition:
 
 ```python
 from dataclasses import dataclass

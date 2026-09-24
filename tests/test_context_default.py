@@ -177,30 +177,17 @@ def test_tree_rules_snapshot_handlers_and_preserve_reconstruction() -> None:
     assert list(TreeEngine.iter(box, rules=empty)) == [box]
 
 
-def test_resolver_phases_keep_their_composition_order() -> None:
-    seen = []
-
-    def pre_one(value, aux):
-        seen.append("pre-one")
-
-    def pre_two(value, aux):
-        seen.append("pre-two")
-
-    def post_one(value, aux):
-        seen.append("post-one")
-
-    def post_two(value, aux):
-        seen.append("post-two")
-        return BOX_HANDLER if type(value) is Box else None
-
-    rules = TreeRules.merge(
-        (
-            TreeRules(pre_resolvers=(pre_one,), post_resolvers=(post_one,)),
-            TreeRules(pre_resolvers=(pre_two,), post_resolvers=(post_two,)),
-        )
-    )
-    assert list(TreeEngine.iter(Box(1), rules=rules)) == [1]
-    assert seen == ["pre-one", "pre-two", "post-one", "post-two"] * 2
+def test_tree_configuration_namespaces_contain_only_rules() -> None:
+    ctx = Context()
+    for namespace, ref in (("data", DATA_TREE_REF), ("node", NODE_TREE_REF)):
+        path = f"$.tree.{namespace}"
+        assert ref.path == f"{path}.rules"
+        view = ctx.get(path)
+        assert tuple(view.keys()) == ("rules",)
+        assert view.get("rules") is ctx.get(ref)
+        with pytest.raises(ContextPathError):
+            ctx.resolve(f"{path}.resolver")
+    ctx.dispose()
 
 
 def test_evaluation_snapshots_evaluators_before_container_callbacks() -> None:
@@ -412,32 +399,14 @@ def test_evaluator_layer_keeps_registration_keys_after_source_mapping_changes() 
     ctx.dispose()
 
 
-def test_tree_layer_resolver_only_registrations_keep_order_and_exact_disposal() -> None:
+def test_tree_layer_empty_registrations_can_be_disposed_independently() -> None:
     ctx = Context()
     compose = ctx.get(DATA_TREE_REF)
-
-    def first(value, aux):
-        return None
-
-    def second(value, aux):
-        return None
-
-    remove = ctx.effect(
-        lambda: compose.register(
-            ctx.scope, TreeRules(pre_resolvers=(first,), post_resolvers=(second,))
-        )
-    )
-    ctx.effect(
-        lambda: compose.register(
-            ctx.scope, TreeRules(pre_resolvers=(second,), post_resolvers=(first,))
-        )
-    )
-    effective = compose.resolve(ctx.scope)
-    assert effective.pre_resolvers == (first, second)
-    assert effective.post_resolvers == (second, first)
+    remove = ctx.effect(lambda: compose.register(ctx.scope, TreeRules()))
+    other = ctx.effect(lambda: compose.register(ctx.scope, TreeRules()))
+    assert compose.resolve(ctx.scope).handlers == DATA_RULES.handlers
     remove()
-    effective = compose.resolve(ctx.scope)
-    assert effective.pre_resolvers == (second,)
-    assert effective.post_resolvers == (first,)
-    assert effective.handlers == DATA_RULES.handlers
+    assert compose.resolve(ctx.scope).handlers == DATA_RULES.handlers
+    other()
+    assert compose.resolve(ctx.scope).handlers == DATA_RULES.handlers
     ctx.dispose()

@@ -25,12 +25,16 @@ breaking changes when they are documented here.
   registration order. Nested Contexts and shared early disposers compose cleanup
   dependencies without an additional Effect grouping API.
 - Context-owned Tree rules and Auto evaluators, installed by `context/default.py`
-  in independent Composes at `$.tree.data`, `$.tree.node`, and `$.eval.handlers`.
+  in independent Composes at `$.tree.data.rules`, `$.tree.node.rules`, and `$.eval.handlers`.
   Defaults follow normal Scope visibility with no root fallback and are released
   with their root Context. Public Ref constants expose these configuration paths.
 - Stateless `TreeEngine` traversal with explicit immutable `TreeRules` and public
   `TreeHandler`. Each Context operation captures effective rules once; Schema
   declaration retains separate immutable dict-only rules.
+- Per-call `TreeResolver(func, takes_aux=False)` replaces `is_leaf` and the
+  pre/post resolver lists. It can force a leaf, select a handler, or defer to
+  exact-type lookup. Traversal constructs paths only for path output or a
+  resolver requiring `TraverseAux`; Context does not install resolver fields.
 
 - Exposed `RefEntry`, `RefConfig`, `RefLeafConfig`, and `RefContainerConfig`,
   plus `Schema.resolve_entry()` and the `Schema.entries` tuple property for

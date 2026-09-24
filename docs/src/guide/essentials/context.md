@@ -238,7 +238,7 @@ The `declaration` argument of `Schema(...)`, `Schema.declare(...)`, and `Context
 
 ### Framework configuration
 
-`context/default.py` installs three register-mode Composes at the root: `$.tree.data`, `$.tree.node`, and `$.eval.handlers`. Access them through `DATA_TREE_REF`, `NODE_TREE_REF`, and `EVALUATORS_REF`, exported by `slyme.context`. Root lifetime owns these values and their default contributions; there is no mutable process-global registry.
+`context/default.py` installs three register-mode Composes at the root: `$.tree.data.rules`, `$.tree.node.rules`, and `$.eval.handlers`. Access them through `DATA_TREE_REF`, `NODE_TREE_REF`, and `EVALUATORS_REF`, exported by `slyme.context`. Root lifetime owns these values and their default contributions; there is no mutable process-global registry.
 
 These paths follow ordinary Context/Scope rules. Child Scopes inherit them; unrelated Scopes must explicitly acquire configuration, with no implicit fallback to root. Contribute rules through Compose, or call `ctx.derive(bindings={ref: ScopeBinding(blocked=True)})` and register an independent Compose in the returned child. See [Tree rules](../slyme-in-depth/tree-in-slyme.md).
 

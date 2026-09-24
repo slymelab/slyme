@@ -688,7 +688,9 @@ def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
         "$",
         "$.tree",
         "$.tree.data",
+        "$.tree.data.rules",
         "$.tree.node",
+        "$.tree.node.rules",
         "$.eval",
         "$.eval.handlers",
     ]

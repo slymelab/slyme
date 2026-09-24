@@ -20,7 +20,6 @@ from .core import (
     AttributeKey,
     ContainerDef,
     FlattenFunc,
-    IsLeafFunc,
     KeyPath,
     LeafDef,
     MappingKey,
@@ -53,5 +52,4 @@ __all__ = [
     "TreeResolver",
     "FlattenFunc",
     "UnflattenFunc",
-    "IsLeafFunc",
 ]

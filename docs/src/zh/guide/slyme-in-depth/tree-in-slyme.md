@@ -4,9 +4,25 @@ Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 l
 
 ## 规则与分派
 
-`TreeRules` 包含精确类型 handler 映射，以及有序的 `pre_resolvers` 和 `post_resolvers`。`TreeHandler(flatten, unflatten)` 描述一种 container；`unflatten=None` 允许遍历，但拒绝重建。分派顺序是显式的 `is_leaf` 判断、pre-resolver、精确类型、post-resolver。子类不会自动匹配父类，不隐式查找 Python MRO。
+`TreeRules` 包含精确类型 handler 映射。`TreeHandler(flatten, unflatten)` 描述一种 container；`unflatten=None` 允许遍历，但拒绝重建。子类不会自动匹配父类，不隐式查找 Python MRO。
 
-规则快照复制 handler 映射。`TreeRules.merge()` 对同一类型保留首个 handler，分别拼接两个阶段的 resolver。`TreeDef` 保存 flatten 时选定的重建函数，因此重建时不查询当前规则。
+规则快照复制 handler 映射。`TreeRules.merge()` 对同一类型保留首个 handler。`TreeDef` 保存 flatten 时选定的重建函数，因此重建时不查询当前规则。
+
+每个遍历接口可传入 `resolver=TreeResolver(func, takes_aux=False)`。类型查找前先调用 `func(element)`：返回 `True` 将当前位置视为 leaf，返回 `False` 按精确类型查找，返回 `TreeHandler` 则覆盖默认分派。返回 `False` 且没有对应 handler 时，对象仍是 leaf。设置 `takes_aux=True` 后，回调接收 `(element, aux)`；`aux.parent` 是直接父容器，`aux.key_path` 是完整路径，根处分别为 `None` 和 `()`。回调参数数量只由 `takes_aux` 决定，返回路径的遍历也不例外。
+
+```python
+from slyme.context.default import DATA_RULES
+from slyme.utils.tree import TreeEngine, TreeResolver
+
+leaves, definition = TreeEngine.flatten(
+    {"items": [1, 2]},
+    rules=DATA_RULES,
+    resolver=TreeResolver(lambda value: isinstance(value, list)),
+)
+assert leaves == [[1, 2]]
+```
+
+普通 `flatten`、`iter` 和 `map` 仅在 resolver 请求辅助数据时创建遍历上下文和序列路径 key；返回路径的接口始终记录路径。无论哪种情况，handler 提供的重建信息都会保留，包括字典的 key。
 
 flatten handler 返回的 `TreeAux` 会原样传给其 unflatten handler；未指定的 `cls` 保持 `None`。`ContainerDef.cls` 独立记录实际容器类型。Leaf 定义共享不可变、无状态的标记对象；重建时每次出现的位置仍分别消费一个 leaf。
 
@@ -20,15 +36,17 @@ Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。
 
 | Ref 常量 | 路径 | contribution |
 | --- | --- | --- |
-| `DATA_TREE_REF` | `$.tree.data` | 用于 Auto、`extract` 和 `update_tree` 的 `TreeRules` |
-| `NODE_TREE_REF` | `$.tree.node` | 用于显式 Node 图遍历的 `TreeRules` |
+| `DATA_TREE_REF` | `$.tree.data.rules` | 用于 Auto、`extract` 和 `update_tree` 的 `TreeRules` |
+| `NODE_TREE_REF` | `$.tree.node.rules` | 用于显式 Node 图遍历的 `TreeRules` |
 | `EVALUATORS_REF` | `$.eval.handlers` | 精确类型 evaluator 映射 |
 
 这些常量也由 `slyme.context` 导出。Data 规则展开 list、tuple、dict 和 MappingProxyType；Node 规则额外遍历 Node/Wrapper 参数绑定和 Auto payload。Node、Wrapper 和 Auto 仅用于遍历，没有重建函数。
 
+`$.tree.data` 和 `$.tree.node` 容器目前只有 `rules`；Context 操作不声明也不读取 resolver 字段。
+
 每次操作在遍历或异步暂停前，只解析一次有效规则与 evaluator 映射。之后新增或撤销 contribution 影响后续操作，不改变本次分派和重建。保留 callable 并不延长其 owner 管理的资源生命周期。
 
-默认组合使用 `slyme.context.default` 中的 `TreeLayer` 和 `EvaluatorLayer`。每层拒绝重复登记相同的精确 class，即使 handler 相同，或登记来自共享该 Identity 的另一个 Scope。批次中存在冲突时，不会安装其中任何 class。撤销后可以重新登记这些 class。跨层查询按 Scope C3 顺序保留首个 handler；向子层登记以覆盖继承的贡献。Tree resolver 序列保持登记顺序。撤销后重新显露下一条适用定义：
+默认组合使用 `slyme.context.default` 中的 `TreeLayer` 和 `EvaluatorLayer`。每层拒绝重复登记相同的精确 class，即使 handler 相同，或登记来自共享该 Identity 的另一个 Scope。批次中存在冲突时，不会安装其中任何 class。撤销后可以重新登记这些 class。跨层查询按 Scope C3 顺序保留首个 handler；向子层登记以覆盖继承的贡献。撤销后重新显露下一条适用定义：
 
 ```python
 from dataclasses import dataclass
