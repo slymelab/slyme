@@ -63,7 +63,7 @@ name = R.resolve("user.name")
 `Schema()` 初始只声明根 container，也可以接收初始声明 dict 或另一个 Schema。Slyme 不导出全局
 `R` 对象。组合代码可以把当前应用的 Schema 简写为局部变量 `R`。`ctx.resolve()` 和 `ctx.resolve_entry()` 查询应用完整的实时声明，包括其他插件声明的路径。
 
-Schema 是按身份比较、支持弱引用的冻结 dataclass。它的属性绑定不能重新赋值或删除，但 `declare()` 和声明的 disposer 仍可修改其内容。初始声明仅作为初始化输入。声明 dict 会被复制，不改变原始输入；导入另一个 Schema 时复制定义，不共享声明所有者。每个 Schema 拥有独立的声明索引和已登记的应用 Store 集合。
+Schema 是按身份比较、支持弱引用的冻结 dataclass。它的属性绑定不能重新赋值或删除，但 `declare()` 和声明的 disposer 仍可修改其内容。初始声明仅作为初始化输入。声明 dict 经校验后转为平铺的路径／配置记录，不改变原始输入；导入另一个 Schema 时按 `entries` 登记顺序复制定义，不共享声明所有者。每个 Schema 拥有独立的声明索引和已登记的应用 Store 集合。
 
 Schema 强引用每个应用 Store，Store 的 viewer 登记持有活跃 Context。子 Context 共享 root 的 Store。根释放 viewer 后会注销 Store，清理失败也会注销；根构造失败同样会注销。只要 Schema 仍可达，丢弃 Context 的最后一个外部引用不会释放应用；应显式调用 `dispose()`，并等待可能的异步清理。撤销字段会清除所有已登记 Store 中的对应 binding，但不 dispose 这些 Context。不同 Store 之间的字段清理顺序不作保证。
 
@@ -476,7 +476,7 @@ root.dispose()
 
 ## 结构化操作与投影
 
-Context 接受 Ref Tree 进行批量读写。`extract` 会将输入展开一次、校验全部 Ref、读取对应值，再重建一次请求结构；叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
+Context 接受 Ref Tree 进行批量读写。`extract` 会将输入展开一次，按遍历顺序逐个解析 Ref 并读取值，再重建一次请求结构；遇到第一个未声明路径或缺少可见值的路径即停止，不再解析后续 Ref。叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
 
 `ContextView` 只提供 `get/exists/keys/to_dict/flatten`，用于读取和自省子树。它仅保存 Context 与路径前缀并转发读取，不独立管理数据、Scope 或生命周期操作。树形提取使用 `ctx.extract(...)`，传入绝对路径或 Ref；View 不提供 `extract()`，也不依赖 Tree 配置。
 

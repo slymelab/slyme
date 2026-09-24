@@ -26,7 +26,7 @@ from slyme.context.default import DATA_RULES
 from slyme.context.schema import Ref as PathRef
 from slyme.context.schema import Schema as PathSchema
 from slyme.utils.exception import exception_group
-from slyme.utils.tree import TreeEngine
+from slyme.utils.tree import flatten
 
 
 def test_schema_module_preserves_public_ref_and_context_interoperation() -> None:
@@ -851,8 +851,8 @@ def test_update_tree_and_structured_extract() -> None:
     )
 )
 def test_context_eval_engine_flatten_round_trip(tree: Any) -> None:
-    leaves, definition = TreeEngine.flatten(tree, rules=DATA_RULES)
-    assert TreeEngine.unflatten(definition, leaves) == tree
+    leaves, definition = flatten(tree, rules=DATA_RULES)
+    assert definition.unflatten(leaves) == tree
 
 
 def test_context_is_an_opaque_tree_leaf() -> None:
@@ -860,8 +860,8 @@ def test_context_is_an_opaque_tree_leaf() -> None:
     ctx.declare(R)
     ctx.update({R.resolve("a.b.c"): 1, R.resolve("c"): 2})
 
-    leaves, definition = TreeEngine.flatten(ctx, rules=DATA_RULES)
-    rebuilt = TreeEngine.unflatten(definition, leaves)
+    leaves, definition = flatten(ctx, rules=DATA_RULES)
+    rebuilt = definition.unflatten(leaves)
     assert rebuilt is ctx
 
 

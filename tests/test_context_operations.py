@@ -408,12 +408,16 @@ def test_extract_traverses_custom_containers_once_and_reconstructs_only_final_va
     ctx.dispose()
 
 
-def test_extract_validates_all_refs_before_reading_values() -> None:
+def test_extract_resolves_and_reads_each_ref_in_traversal_order() -> None:
     schema = Schema({"empty": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    with pytest.raises(ContextPathError, match="undeclared"):
+    with pytest.raises(ContextPathError) as caught:
         ctx.extract([schema.resolve("empty"), Ref("undeclared")])
+    assert caught.value.args[0] == "Context path 'empty' has no visible value."
+    with pytest.raises(ContextPathError) as caught:
+        ctx.extract([Ref("undeclared"), schema.resolve("empty")])
+    assert caught.value.args[0] == "Context path 'undeclared' is not declared."
     with pytest.raises(BaseExceptionGroup) as caught:
         ref_evaluator(ctx, [schema.resolve("empty"), Ref("undeclared")])
     assert len(caught.value.exceptions) == 2

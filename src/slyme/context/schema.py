@@ -28,8 +28,6 @@ from typing_extensions import TypeVar
 
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import once
-from slyme.utils.tree import MappingKey, TreeEngine, TreeHandler, TreeRules
-from slyme.utils.tree.common import flatten_dict, unflatten_dict
 
 if TYPE_CHECKING:
     from .store import ContextStore
@@ -49,8 +47,6 @@ __all__ = [
 _T = TypeVar("_T", default=Any)
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
-
-_SCHEMA_RULES = TreeRules(handlers={dict: TreeHandler(flatten_dict, unflatten_dict)})
 
 
 @dataclass(frozen=True)
@@ -274,15 +270,17 @@ class Schema:
         return RefContainerConfig(metadata={} if metadata is None else metadata)
 
     @staticmethod
-    def _normalize_declaration(tree: _Declaration, path: str = "") -> _Declaration:
-        """Copy and validate a declaration tree with explicit container configs."""
+    def _normalize_declaration(
+        tree: _Declaration, path: str = ""
+    ) -> list[tuple[str, RefConfig[Any]]]:
+        """Validate a declaration tree and flatten its configs in tree order."""
         config = tree.get(_CONTAINER_ENTRY_KEY, RefContainerConfig())
         if not isinstance(config, RefContainerConfig):
             raise TypeError(
                 f"Invalid current-entry declaration at {path!r}: "
                 "the empty key must contain Schema.container()."
             )
-        result: _Declaration = {_CONTAINER_ENTRY_KEY: config}
+        result: list[tuple[str, RefConfig[Any]]] = [(path, config)]
         for name, value in tree.items():
             if name == _CONTAINER_ENTRY_KEY:
                 continue
@@ -293,14 +291,14 @@ class Schema:
                 )
             child_path = f"{path}.{name}" if path else name
             if isinstance(value, dict):
-                result[name] = Schema._normalize_declaration(value, child_path)
+                result.extend(Schema._normalize_declaration(value, child_path))
             elif not isinstance(value, RefLeafConfig):
                 raise TypeError(
                     f"Invalid Schema declaration at {child_path!r}: expected a "
                     f"dict or Schema.leaf(), got {type(value).__name__}."
                 )
             else:
-                result[name] = value
+                result.append((child_path, value))
         return result
 
     def _merge_declaration(
@@ -310,19 +308,11 @@ class Schema:
         entries: list[RefEntry[Any]],
     ) -> None:
         """Merge paths, recording successful registrations for undo."""
-        importing = isinstance(declaration, Schema)
-        source = (
-            declaration._element_at(())
-            if isinstance(declaration, Schema)
-            else self._normalize_declaration(declaration)
-        )
-        for key_path, value in TreeEngine.iter_with_key_path(
-            source, rules=_SCHEMA_RULES
-        ):
-            parts = tuple(cast(str, cast(MappingKey, key).key) for key in key_path)
-            is_container = parts[-1] == _CONTAINER_ENTRY_KEY
-            path = ".".join(parts[:-1] if is_container else parts)
-            config = cast(RefEntry[Any], value).config if importing else value
+        if isinstance(declaration, Schema):
+            configs = [(entry.ref.path, entry.config) for entry in declaration.entries]
+        else:
+            configs = self._normalize_declaration(declaration)
+        for path, config in configs:
             entry = self._entries.get(path)
             if entry is None:
                 entry = RefEntry(Ref(path))

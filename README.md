@@ -224,7 +224,7 @@ new Scopes do not require that scan.
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to Tree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Context-owned Tree Rules:** `TreeEngine` is stateless and receives `TreeRules` explicitly. Configure runtime traversal and evaluation through `DATA_TREE_REF`, `NODE_TREE_REF`, and `EVALUATORS_REF` from `slyme.context`; contributions follow Scope visibility and Context-owned disposal. See the [Tree guide](docs/src/guide/slyme-in-depth/tree-in-slyme.md).
+**Context-owned Tree Rules:** Module functions such as `from slyme.utils.tree import flatten` receive `TreeRules` explicitly. Configure runtime traversal and evaluation through `DATA_TREE_REF`, `NODE_TREE_REF`, and `EVALUATORS_REF` from `slyme.context`; contributions follow Scope visibility and Context-owned disposal. See the [Tree guide](docs/src/guide/slyme-in-depth/tree-in-slyme.md).
 
 **Explicit Lifetime and Visibility:** Context provides single-parent lifetime ownership, while Scope provides independent C3 visibility. Every Context path, structural role, and write mode is declared by a shared Schema; `flatten()` exposes the visible Ref-to-value mapping, and `Compose` provides ordered, reversible values across Scope hierarchies.
 

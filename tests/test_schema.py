@@ -22,9 +22,8 @@ from slyme.context import (
     Schema,
     ScopeBinding,
 )
-from slyme.context.schema import _MISSING, _SCHEMA_RULES, _Declaration
+from slyme.context.schema import _MISSING, _Declaration
 from slyme.utils.execution import await_result
-from slyme.utils.tree import TreeEngine
 
 
 @pytest.mark.parametrize("method", ["resolve", "resolve_entry"])
@@ -584,18 +583,84 @@ def test_schema_normalizes_dicts_without_changing_input() -> None:
     assert_indexes(schema, set())
 
 
-def test_schema_tree_only_traverses_dicts() -> None:
-    values = [Schema.leaf()]
-    pair = (Schema.container(),)
-    tree = {"nested": {"list": values, "tuple": pair}}
-    leaves, structure = TreeEngine.flatten(tree, rules=_SCHEMA_RULES)
-    assert leaves == [values, pair]
-    rebuilt = structure.unflatten(leaves)
-    assert rebuilt == tree
-    assert rebuilt is not tree
-    assert rebuilt["nested"] is not tree["nested"]
-    assert rebuilt["nested"]["list"] is values
-    assert rebuilt["nested"]["tuple"] is pair
+def test_schema_validates_the_entire_declaration_before_registering(monkeypatch):
+    schema = Schema({"stable": Schema.leaf()})
+    original = RefEntry._declare
+    registered = []
+
+    def declare(self, declaration_id, config):
+        registered.append(self.ref.path)
+        original(self, declaration_id, config)
+
+    monkeypatch.setattr(RefEntry, "_declare", declare)
+    with pytest.raises(ValueError, match="Invalid Schema key"):
+        schema.declare(
+            {"new": Schema.leaf(), "nested": {"invalid.path": Schema.leaf()}}
+        )
+    assert registered == []
+    assert_indexes(schema, {"stable"})
+
+
+def test_schema_declares_containers_before_children_and_releases_in_reverse(
+    monkeypatch,
+) -> None:
+    schema = Schema()
+    released = []
+    original = RefEntry._undeclare
+
+    def undeclare(self, declaration_id):
+        released.append(self.ref.path)
+        original(self, declaration_id)
+
+    monkeypatch.setattr(RefEntry, "_undeclare", undeclare)
+    remove = schema.declare(
+        {
+            "group": {"value": Schema.leaf(), "empty": {}, "": Schema.container()},
+            "last": Schema.leaf(),
+            "": Schema.container(),
+        }
+    )
+    paths = ("", "group", "group.value", "group.empty", "last")
+    assert tuple(entry.ref.path for entry in schema.entries) == paths
+    remove()
+    assert released == list(reversed(paths))
+    assert_indexes(schema, set())
+
+
+def test_schema_import_preserves_entry_order_across_separate_declarations(
+    monkeypatch,
+) -> None:
+    source = Schema({"left": {"first": Schema.leaf()}})
+    source.declare({"right": {"value": Schema.leaf()}})
+    source.declare({"left": {"last": Schema.leaf(), "empty": {}}})
+    target = Schema()
+    remove = target.declare(source)
+    paths = (
+        "",
+        "left",
+        "left.first",
+        "right",
+        "right.value",
+        "left.last",
+        "left.empty",
+    )
+    assert tuple(entry.ref.path for entry in source.entries) == paths
+    assert tuple(entry.ref.path for entry in target.entries) == paths
+    assert target._child_names(()) == ("left", "right")
+    assert target._child_names(("left",)) == ("first", "last", "empty")
+
+    released = []
+    original = RefEntry._undeclare
+
+    def undeclare(self, declaration_id):
+        released.append(self.ref.path)
+        original(self, declaration_id)
+
+    monkeypatch.setattr(RefEntry, "_undeclare", undeclare)
+    remove()
+    assert released == list(reversed(paths))
+    assert_indexes(target, set())
+    assert_indexes(source, set(paths) - {""})
 
 
 def test_schema_constructor_imports_entries_without_their_owners() -> None:
@@ -698,12 +763,13 @@ def test_setting_nested_container_does_not_declare_ancestors() -> None:
 
 
 def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> None:
-    original = TreeEngine.iter_with_key_path
+    original = Schema._normalize_declaration
 
-    def child_first(tree, *, rules):
-        return reversed(tuple(original(tree, rules=rules)))
+    def child_first(tree, path=""):
+        configs = original(tree, path)
+        return list(reversed(configs)) if not path else configs
 
-    monkeypatch.setattr(TreeEngine, "iter_with_key_path", staticmethod(child_first))
+    monkeypatch.setattr(Schema, "_normalize_declaration", staticmethod(child_first))
     ctx = Context()
     schema = ctx._schema
     remove = schema.declare({"group": {"0": Schema.leaf(int), "empty": {}}})
@@ -739,14 +805,15 @@ def test_child_first_conflict_rolls_back_unconfigured_ancestor_dicts(
     ctx = Context()
     ctx.declare(schema)
     ctx.update({"blocked": 1})
-    original = TreeEngine.iter_with_key_path
+    original = Schema._normalize_declaration
     entries = dict(schema._entries)
     owners = {path: dict(entry._declarations) for path, entry in entries.items()}
 
-    def child_first(tree, *, rules):
-        return reversed(tuple(original(tree, rules=rules)))
+    def child_first(tree, path=""):
+        configs = original(tree, path)
+        return list(reversed(configs)) if not path else configs
 
-    monkeypatch.setattr(TreeEngine, "iter_with_key_path", staticmethod(child_first))
+    monkeypatch.setattr(Schema, "_normalize_declaration", staticmethod(child_first))
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
         schema.declare(
             {
@@ -802,12 +869,17 @@ def test_schema_redeclaration_does_not_retain_old_index_entries() -> None:
     assert all(entry() is None for entry in old_entries)
 
 
-def test_schema_index_and_tree_stay_unchanged_after_conflict() -> None:
+@pytest.mark.parametrize("importing", [False, True])
+def test_schema_index_and_tree_stay_unchanged_after_conflict(importing: bool) -> None:
     schema = Schema({"group": {"value": Schema.leaf(int)}})
     original = schema.resolve_entry("group.value")
     claims = original._declarations.copy()
+    declaration: _Declaration = {
+        "added": Schema.leaf(),
+        "group": {"value": Schema.leaf(str)},
+    }
     with pytest.raises(ValueError, match="Conflicting"):
-        schema.declare({"added": Schema.leaf(), "group": {"value": Schema.leaf(str)}})
+        schema.declare(Schema(declaration) if importing else declaration)
     assert_indexes(schema, {"group", "group.value"})
     assert original._declarations == claims
 

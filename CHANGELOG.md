@@ -28,9 +28,11 @@ breaking changes when they are documented here.
   in independent Composes at `$.tree.data.rules`, `$.tree.node.rules`, and `$.eval.handlers`.
   Defaults follow normal Scope visibility with no root fallback and are released
   with their root Context. Public Ref constants expose these configuration paths.
-- Stateless `TreeEngine` traversal with explicit immutable `TreeRules` and public
-  `TreeHandler`. Each Context operation captures effective rules once; Schema
-  declaration retains separate immutable dict-only rules.
+- Stateless module functions in `slyme.utils.tree`, including `flatten`, with
+  explicit immutable `TreeRules` and public `TreeHandler`. Reconstruction uses
+  `TreeDef.unflatten()` directly.
+  Each Context operation captures effective rules once; Schema normalizes
+  declarations independently of runtime Tree rules.
 - Per-call `TreeResolver(func, takes_aux=False)` replaces `is_leaf` and the
   pre/post resolver lists. It can force a leaf, select a handler, or defer to
   exact-type lookup. Traversal constructs paths only for path output or a

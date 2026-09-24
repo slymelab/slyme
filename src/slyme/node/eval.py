@@ -24,7 +24,7 @@ from slyme.context import Context, Ref
 from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
 from slyme.utils.exception import exception_group
 from slyme.utils.execution import continuation
-from slyme.utils.tree import TreeEngine
+from slyme.utils.tree import flatten
 
 from .core import Node
 
@@ -118,7 +118,7 @@ def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
     """
     rules = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
     evaluators = ctx.get(EVALUATORS_REF).resolve(ctx.scope)
-    leaves, tree_def = TreeEngine.flatten(tree, rules=rules)
+    leaves, tree_def = flatten(tree, rules=rules)
     eval_groups: dict[BatchEvaluatorFunc, tuple[list[int], list[Any]]] = {}
     for i, leaf in enumerate(leaves):
         if (evaluator := evaluators.get(type(leaf))) is not None:
@@ -130,7 +130,7 @@ def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
     batches = list(eval_groups.items())
 
     yield _batch(batches, partial(_evaluate_group, ctx, leaves))
-    return TreeEngine.unflatten(tree_def, leaves)
+    return tree_def.unflatten(leaves)
 
 
 # --- Evaluator Implementations ---

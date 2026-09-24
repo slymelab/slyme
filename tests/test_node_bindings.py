@@ -11,7 +11,8 @@ from slyme.context.default import NODE_TREE_REF
 from slyme.node import Auto, Node, node, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.execution import await_result
-from slyme.utils.tree import TreeEngine
+from slyme.utils.tree import get_element, iter_with_key_path
+from slyme.utils.tree import iter as iter_leaves
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])
@@ -267,12 +268,12 @@ def test_inspection_follows_explicit_bindings_and_auto_trees() -> None:
     instance = value(dynamic=Auto({"value": ref}), extra="raw")
     ctx = Context()
     rules = ctx.get(NODE_TREE_REF).resolve(ctx.scope)
-    paths_and_leaves = list(TreeEngine.iter_with_key_path(instance, rules=rules))
+    paths_and_leaves = list(iter_with_key_path(instance, rules=rules))
     assert [leaf for _, leaf in paths_and_leaves] == [ref, "raw"]
-    assert [TreeEngine.get_element(instance, path) for path, _ in paths_and_leaves] == [
+    assert [get_element(instance, path) for path, _ in paths_and_leaves] == [
         ref,
         "raw",
     ]
     instance.delete("extra")
-    assert list(TreeEngine.iter(instance, rules=rules)) == [ref]
+    assert list(iter_leaves(instance, rules=rules)) == [ref]
     ctx.dispose()

@@ -27,11 +27,23 @@ from slyme.utils.tree import (
     TraverseAux,
     TreeAux,
     TreeDef,
-    TreeEngine,
     TreeHandler,
     TreeKey,
     TreeResolver,
     TreeRules,
+    codify_key_path,
+    flatten_with_key_path,
+    get_element,
+    iter_with_key_path,
+)
+from slyme.utils.tree import (
+    flatten as tree_flatten,
+)
+from slyme.utils.tree import (
+    iter as iter_leaves,
+)
+from slyme.utils.tree import (
+    map as map_leaves,
 )
 from slyme.utils.tree.common import (
     flatten_mapping_proxy,
@@ -104,31 +116,27 @@ def test_tree_keys_resolve_and_codify() -> None:
     )
 )
 def test_default_tree_round_trip_and_map(tree: Any) -> None:
-    leaves, definition = TreeEngine.flatten(tree, rules=DATA_RULES)
-    assert TreeEngine.unflatten(definition, leaves) == tree
-    assert list(TreeEngine.iter(tree, rules=DATA_RULES)) == leaves
-    assert TreeEngine.map(
+    leaves, definition = tree_flatten(tree, rules=DATA_RULES)
+    assert definition.unflatten(leaves) == tree
+    assert list(iter_leaves(tree, rules=DATA_RULES)) == leaves
+    assert map_leaves(
         lambda value: (value, value), tree, rules=DATA_RULES
-    ) == TreeEngine.unflatten(definition, [(value, value) for value in leaves])
+    ) == definition.unflatten([(value, value) for value in leaves])
 
 
 def test_tree_paths_iteration_and_leaf_override() -> None:
     tree = {"a": [10, 20], "b": (30,)}
-    paths_and_leaves, definition = TreeEngine.flatten_with_key_path(
-        tree, rules=DATA_RULES
-    )
+    paths_and_leaves, definition = flatten_with_key_path(tree, rules=DATA_RULES)
     assert [leaf for _, leaf in paths_and_leaves] == [10, 20, 30]
-    assert (
-        list(TreeEngine.iter_with_key_path(tree, rules=DATA_RULES)) == paths_and_leaves
-    )
-    assert [TreeEngine.get_element(tree, path) for path, _ in paths_and_leaves] == [
+    assert list(iter_with_key_path(tree, rules=DATA_RULES)) == paths_and_leaves
+    assert [get_element(tree, path) for path, _ in paths_and_leaves] == [
         10,
         20,
         30,
     ]
-    assert TreeEngine.codify_key_path(paths_and_leaves[1][0], "tree") == "tree['a'][1]"
-    assert TreeEngine.unflatten(definition, [1, 2, 3]) == {"a": [1, 2], "b": (3,)}
-    leaves, _ = TreeEngine.flatten(
+    assert codify_key_path(paths_and_leaves[1][0], "tree") == "tree['a'][1]"
+    assert definition.unflatten([1, 2, 3]) == {"a": [1, 2], "b": (3,)}
+    leaves, _ = tree_flatten(
         tree,
         rules=DATA_RULES,
         resolver=TreeResolver(lambda value: isinstance(value, list)),
@@ -137,15 +145,15 @@ def test_tree_paths_iteration_and_leaf_override() -> None:
 
 
 def test_tree_leaf_marker_is_shared_without_sharing_leaf_values() -> None:
-    leaves, definition = TreeEngine.flatten([1, 2], rules=DATA_RULES)
-    _, marker = TreeEngine.flatten(3, rules=DATA_RULES)
+    leaves, definition = tree_flatten([1, 2], rules=DATA_RULES)
+    _, marker = tree_flatten(3, rules=DATA_RULES)
 
     assert isinstance(definition, ContainerDef)
     assert isinstance(marker, LeafDef)
     assert all(child is marker for child in definition.children_defs)
     assert leaves == [1, 2]
-    assert TreeEngine.unflatten(definition, [10, 20]) == [10, 20]
-    assert TreeEngine.unflatten(definition, [30, 40]) == [30, 40]
+    assert definition.unflatten([10, 20]) == [10, 20]
+    assert definition.unflatten([30, 40]) == [30, 40]
 
 
 @pytest.mark.parametrize("cls", [None, tuple])
@@ -162,13 +170,13 @@ def test_tree_preserves_handler_aux_for_reconstruction(cls: type | None) -> None
         return Box(next(iter(children)))
 
     rules = TreeRules({Box: TreeHandler(lambda box: ((box.value,), aux), rebuild)})
-    leaves, definition = TreeEngine.flatten(Box(1), rules=rules)
+    leaves, definition = tree_flatten(Box(1), rules=rules)
 
     assert isinstance(definition, ContainerDef)
     assert definition.cls is Box
     assert definition.tree_aux is aux
     assert leaves == [1]
-    assert TreeEngine.unflatten(definition, [2]) == Box(2)
+    assert definition.unflatten([2]) == Box(2)
 
 
 def test_resolver_leaf_bypasses_registered_handler_in_both_traversal_paths() -> None:
@@ -180,29 +188,26 @@ def test_resolver_leaf_bypasses_registered_handler_in_both_traversal_paths() -> 
     rules = TreeRules({list: TreeHandler(flatten, None)})
     resolver = TreeResolver(lambda element: element is value)
 
-    leaves, definition = TreeEngine.flatten(value, rules=rules, resolver=resolver)
+    leaves, definition = tree_flatten(value, rules=rules, resolver=resolver)
     assert len(leaves) == 1 and leaves[0] is value
-    assert TreeEngine.unflatten(definition, leaves) is value
-    assert list(TreeEngine.iter(value, rules=rules, resolver=resolver)) == leaves
-    paths, _ = TreeEngine.flatten_with_key_path(value, rules=rules, resolver=resolver)
+    assert definition.unflatten(leaves) is value
+    assert list(iter_leaves(value, rules=rules, resolver=resolver)) == leaves
+    paths, _ = flatten_with_key_path(value, rules=rules, resolver=resolver)
     assert paths == [((), value)]
-    assert (
-        list(TreeEngine.iter_with_key_path(value, rules=rules, resolver=resolver))
-        == paths
-    )
+    assert list(iter_with_key_path(value, rules=rules, resolver=resolver)) == paths
 
 
 @pytest.mark.parametrize("value", [[], (), {}])
 def test_empty_containers_keep_their_structure_without_yielding_leaves(value) -> None:
-    leaves, definition = TreeEngine.flatten(value, rules=DATA_RULES)
+    leaves, definition = tree_flatten(value, rules=DATA_RULES)
     assert leaves == []
-    rebuilt = TreeEngine.unflatten(definition, leaves)
+    rebuilt = definition.unflatten(leaves)
     assert type(rebuilt) is type(value)
     assert rebuilt == value
-    assert list(TreeEngine.iter(value, rules=DATA_RULES)) == []
-    paths, _ = TreeEngine.flatten_with_key_path(value, rules=DATA_RULES)
+    assert list(iter_leaves(value, rules=DATA_RULES)) == []
+    paths, _ = flatten_with_key_path(value, rules=DATA_RULES)
     assert paths == []
-    assert list(TreeEngine.iter_with_key_path(value, rules=DATA_RULES)) == []
+    assert list(iter_with_key_path(value, rules=DATA_RULES)) == []
 
 
 def test_tree_custom_handlers_and_explicit_resolver_priority() -> None:
@@ -218,10 +223,10 @@ def test_tree_custom_handlers_and_explicit_resolver_priority() -> None:
         lambda children, _: Box(next(iter(children))),
     )
     exact = TreeRules({Box: handler})
-    leaves, definition = TreeEngine.flatten(Box(3), rules=exact)
+    leaves, definition = tree_flatten(Box(3), rules=exact)
     assert leaves == [3]
-    assert TreeEngine.unflatten(definition, [5]) == Box(5)
-    assert TreeEngine.flatten(ChildBox(1), rules=exact)[0] == [ChildBox(1)]
+    assert definition.unflatten([5]) == Box(5)
+    assert tree_flatten(ChildBox(1), rules=exact)[0] == [ChildBox(1)]
 
     override = TreeHandler(
         lambda box: ([box.value + 1], TreeAux()),
@@ -235,12 +240,12 @@ def test_tree_custom_handlers_and_explicit_resolver_priority() -> None:
             else False
         )
     )
-    assert TreeEngine.flatten(Box(3), rules=exact, resolver=resolver)[0] == [4]
-    assert list(TreeEngine.iter(Box(3), rules=exact, resolver=resolver)) == [4]
-    assert TreeEngine.flatten(Box(3), rules=exact, resolver=fallback)[0] == [3]
-    assert TreeEngine.flatten(ChildBox(1), rules=exact, resolver=fallback)[0] == [2]
-    assert TreeEngine.flatten(1, rules=exact, resolver=fallback)[0] == [1]
-    assert TreeEngine.map(
+    assert tree_flatten(Box(3), rules=exact, resolver=resolver)[0] == [4]
+    assert list(iter_leaves(Box(3), rules=exact, resolver=resolver)) == [4]
+    assert tree_flatten(Box(3), rules=exact, resolver=fallback)[0] == [3]
+    assert tree_flatten(ChildBox(1), rules=exact, resolver=fallback)[0] == [2]
+    assert tree_flatten(1, rules=exact, resolver=fallback)[0] == [1]
+    assert map_leaves(
         lambda value: value * 2, Box(3), rules=exact, resolver=resolver
     ) == Box(7)
 
@@ -253,17 +258,17 @@ def test_plain_traversal_does_not_construct_path_objects(monkeypatch, resolver) 
     monkeypatch.setattr(TraverseAux, "__init__", unexpected)
     monkeypatch.setattr(SequenceKey, "__init__", unexpected)
     value = [1, {"a": [2, 3]}]
-    leaves, definition = TreeEngine.flatten(value, rules=DATA_RULES, resolver=resolver)
+    leaves, definition = tree_flatten(value, rules=DATA_RULES, resolver=resolver)
     assert leaves == [1, 2, 3]
-    assert TreeEngine.unflatten(definition, leaves) == value
-    assert list(TreeEngine.iter(value, rules=DATA_RULES, resolver=resolver)) == leaves
-    assert TreeEngine.map(
+    assert definition.unflatten(leaves) == value
+    assert list(iter_leaves(value, rules=DATA_RULES, resolver=resolver)) == leaves
+    assert map_leaves(
         lambda leaf: leaf + 1, value, rules=DATA_RULES, resolver=resolver
     ) == [2, {"a": [3, 4]}]
 
 
 @pytest.mark.parametrize(
-    "operation", ["flatten", "flatten_with_key_path", "iter", "iter_with_key_path"]
+    "operation", [tree_flatten, flatten_with_key_path, iter_leaves, iter_with_key_path]
 )
 def test_resolver_aux_distinguishes_occurrences_by_parent_and_path(operation) -> None:
     shared = [1, 2]
@@ -275,13 +280,13 @@ def test_resolver_aux_distinguishes_occurrences_by_parent_and_path(operation) ->
         return aux.key_path == (MappingKey("opaque"),)
 
     resolver = TreeResolver(resolve, takes_aux=True)
-    result = getattr(TreeEngine, operation)(tree, rules=DATA_RULES, resolver=resolver)
-    if operation.startswith("flatten"):
+    result = operation(tree, rules=DATA_RULES, resolver=resolver)
+    if operation in (tree_flatten, flatten_with_key_path):
         result, definition = result
-        assert TreeEngine.unflatten(definition, [shared, 1, 2]) == tree
+        assert definition.unflatten([shared, 1, 2]) == tree
     else:
         result = list(result)
-    if "key_path" in operation:
+    if operation in (flatten_with_key_path, iter_with_key_path):
         assert [path for path, value in result] == [
             (MappingKey("opaque"),),
             (MappingKey("expanded"), SequenceKey(0)),
@@ -310,7 +315,7 @@ def test_resolver_errors_propagate_without_reinterpretation(takes_aux: bool) -> 
         raise error
 
     resolver = TreeResolver(fail, takes_aux=takes_aux)
-    for operation in (TreeEngine.flatten, TreeEngine.iter):
+    for operation in (tree_flatten, iter_leaves):
         with pytest.raises(LookupError) as caught:
             list(operation([1], rules=DATA_RULES, resolver=resolver))
         assert caught.value is error
@@ -338,16 +343,16 @@ def test_tree_handler_can_support_traversal_without_reconstruction() -> None:
         )
     )
     tree = {"box": Box(3)}
-    leaves, definition = TreeEngine.flatten(tree, rules=rules)
+    leaves, definition = tree_flatten(tree, rules=rules)
     assert leaves == [3]
-    assert list(TreeEngine.iter(tree, rules=rules)) == [3]
-    paths_and_leaves = list(TreeEngine.iter_with_key_path(tree, rules=rules))
+    assert list(iter_leaves(tree, rules=rules)) == [3]
+    paths_and_leaves = list(iter_with_key_path(tree, rules=rules))
     assert paths_and_leaves == [((MappingKey("box"), AttributeKey("value")), 3)]
-    assert TreeEngine.get_element(tree, paths_and_leaves[0][0]) == 3
+    assert get_element(tree, paths_and_leaves[0][0]) == 3
     with pytest.raises(TypeError, match="Box is registered for traversal only"):
-        TreeEngine.unflatten(definition, leaves)
+        definition.unflatten(leaves)
     with pytest.raises(TypeError, match="Box is registered for traversal only"):
-        TreeEngine.map(lambda value: value + 1, tree, rules=rules)
+        map_leaves(lambda value: value + 1, tree, rules=rules)
 
 
 def test_tree_subclasses_can_define_their_own_reconstruction() -> None:
@@ -368,9 +373,9 @@ def test_tree_subclasses_can_define_their_own_reconstruction() -> None:
         }
     )
     value = ChildBox(1, "child")
-    leaves, definition = TreeEngine.flatten(value, rules=rules)
+    leaves, definition = tree_flatten(value, rules=rules)
     assert len(leaves) == 1 and leaves[0] is value
-    assert TreeEngine.unflatten(definition, leaves) is value
+    assert definition.unflatten(leaves) is value
     extended = TreeRules.merge(
         (
             TreeRules(
@@ -389,9 +394,9 @@ def test_tree_subclasses_can_define_their_own_reconstruction() -> None:
             rules,
         )
     )
-    leaves, definition = TreeEngine.flatten(value, rules=extended)
+    leaves, definition = tree_flatten(value, rules=extended)
     assert leaves == [1]
-    rebuilt = TreeEngine.unflatten(definition, [2])
+    rebuilt = definition.unflatten([2])
     assert type(rebuilt) is ChildBox
     assert rebuilt == ChildBox(2, "child")
 
@@ -404,17 +409,17 @@ def test_builtin_container_subclasses_remain_opaque(base: type, payload: Any) ->
         pass
 
     value = CustomContainer(payload)
-    leaves, definition = TreeEngine.flatten(value, rules=DATA_RULES)
+    leaves, definition = tree_flatten(value, rules=DATA_RULES)
     assert len(leaves) == 1 and leaves[0] is value
-    assert TreeEngine.unflatten(definition, leaves) is value
+    assert definition.unflatten(leaves) is value
 
 
 def test_tree_definition_rejects_wrong_leaf_counts_and_keys() -> None:
-    _, definition = TreeEngine.flatten([1, 2], rules=DATA_RULES)
+    _, definition = tree_flatten([1, 2], rules=DATA_RULES)
     with pytest.raises(ValueError, match="Too few"):
-        TreeEngine.unflatten(definition, [1])
+        definition.unflatten([1])
     with pytest.raises(ValueError, match="Too many"):
-        TreeEngine.unflatten(definition, [1, 2, 3])
+        definition.unflatten([1, 2, 3])
 
     class Broken:
         pass
@@ -428,9 +433,9 @@ def test_tree_definition_rejects_wrong_leaf_counts_and_keys() -> None:
         }
     )
     with pytest.raises(ValueError, match="Not enough keys"):
-        TreeEngine.flatten(Broken(), rules=broken)
+        tree_flatten(Broken(), rules=broken)
     with pytest.raises(ValueError, match="Not enough keys"):
-        list(TreeEngine.iter(Broken(), rules=broken))
+        list(iter_leaves(Broken(), rules=broken))
 
 
 def test_mapping_proxy_helpers_and_aux_immutability() -> None:

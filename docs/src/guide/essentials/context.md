@@ -66,7 +66,7 @@ name = R.resolve("user.name")
 not export a global `R` object. Composition code may use `R` as a short local
 name for its application Schema. `ctx.resolve()` and `ctx.resolve_entry()` query the application's complete live declarations, including paths declared by other plugins.
 
-Schema is a frozen dataclass with identity equality and weak-reference support. Its attribute bindings cannot be reassigned or deleted, but `declare()` and declaration disposers still mutate its contents. Initial declarations are an initialization-only input. Declaration dicts are copied without changing the input; importing another Schema copies its definitions without sharing declaration owners. Every Schema has its own declaration indexes and registered application stores.
+Schema is a frozen dataclass with identity equality and weak-reference support. Its attribute bindings cannot be reassigned or deleted, but `declare()` and declaration disposers still mutate its contents. Initial declarations are an initialization-only input. Declaration dicts are validated and flattened into path/config records without changing the input; importing another Schema copies its definitions in `entries` registration order without sharing declaration owners. Every Schema has its own declaration indexes and registered application stores.
 
 A Schema strongly retains each application Store; Store viewer registrations retain its active Contexts. Child Contexts share their root's Store. Root disposal detaches the Store after releasing viewers, even if cleanup fails; failed root construction also detaches it. Dropping the last external Context reference does not release an application while its Schema remains reachable; explicitly call `dispose()` and await any asynchronous cleanup. Withdrawing a field removes its bindings from all registered stores without disposing those Contexts. The order of field cleanup between stores is unspecified.
 
@@ -488,7 +488,7 @@ Each successful registration keeps a unique token and its contributing Scope ali
 
 ## Structured operations and projections
 
-Context accepts Ref Trees for batch reads and writes. `extract` flattens the input once, validates all Refs, reads their values, and reconstructs the requested structure once. Leaf values retain their identities. `update_tree` assigns values from a matching tree using `update`'s preflight checks.
+Context accepts Ref Trees for batch reads and writes. `extract` flattens the input once, resolves and reads each Ref in traversal order, and reconstructs the requested structure once. It stops at the first unresolved path or missing visible value, without resolving later Refs. Leaf values retain their identities. `update_tree` assigns values from a matching tree using `update`'s preflight checks.
 
 `ContextView` provides only `get/exists/keys/to_dict/flatten` for reading and inspecting a subtree. It keeps a Context and a path prefix, forwards reads, and does not own data, Scope, or lifecycle operations. For tree-shaped extraction, use `ctx.extract(...)` with absolute paths or Refs; views do not provide `extract()` or require Tree configuration.
 

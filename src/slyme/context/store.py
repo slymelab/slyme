@@ -289,7 +289,9 @@ class ContextStore:
             return items
         first = next(items, None)
         if first is None:
-            raise ContextPathError(entry.ref.path)
+            raise ContextPathError(
+                f"Context path {entry.ref.path!r} has no visible value."
+            )
         return chain((first,), items)
 
     @staticmethod

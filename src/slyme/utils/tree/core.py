@@ -15,15 +15,17 @@
 """
 Tree structure utilities for slyme.
 
-Traversal algorithms consume explicit, immutable rules.
+Traversal functions consume explicit, immutable rules. Type handlers match
+exactly; unregistered objects remain leaves unless a resolver supplies a handler.
+Traversal context is created only for path output or a resolver with takes_aux=True.
 """
 
 from __future__ import annotations
 
+import builtins
 import types
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from itertools import count
 from typing import (
     Any,
     Protocol,
@@ -211,7 +213,7 @@ class TreeDef:
         """
         Public API: Reconstruct the object from this structure and leaves.
         """
-        leaves_iter = iter(leaves)
+        leaves_iter = builtins.iter(leaves)
         element = self._build(leaves_iter)
 
         try:
@@ -260,247 +262,208 @@ class ContainerDef(TreeDef):
         return self.unflatten_func(children, self.tree_aux)
 
 
-class TreeEngine:
-    """Stateless traversal and reconstruction using caller-supplied rules.
-
-    Type handlers match exactly. Unregistered objects remain leaves unless
-    a per-call resolver supplies a handler. Traversal context is created only
-    for path output or a resolver with takes_aux=True.
+def flatten(
+    tree: Any,
+    *,
+    rules: TreeRules,
+    resolver: TreeResolver | None = None,
+) -> tuple[list[Any], TreeDef]:
     """
+    Flatten a tree into a list of leaves and a structure definition.
+    """
+    leaves: list[Any] = []
 
-    @staticmethod
-    def flatten(
-        tree: Any,
-        *,
-        rules: TreeRules,
-        resolver: TreeResolver | None = None,
-    ) -> tuple[list[Any], TreeDef]:
-        """
-        Flatten a tree into a list of leaves and a structure definition.
-        """
-        leaves: list[Any] = []
+    def _sink(leaf: Any, traverse_aux: TraverseAux | None) -> None:
+        leaves.append(leaf)
 
-        def _sink(leaf: Any, traverse_aux: TraverseAux | None) -> None:
-            leaves.append(leaf)
+    initial_traverse_aux = (
+        TraverseAux(parent=None, key_path=())
+        if resolver is not None and resolver.takes_aux
+        else None
+    )
+    treedef = _traverse(tree, initial_traverse_aux, _sink, resolver, rules)
+    return leaves, treedef
 
-        initial_traverse_aux = (
-            TraverseAux(parent=None, key_path=())
-            if resolver is not None and resolver.takes_aux
-            else None
-        )
-        treedef = TreeEngine._traverse(
-            tree, initial_traverse_aux, _sink, resolver, rules
-        )
-        return leaves, treedef
 
-    @staticmethod
-    def flatten_with_key_path(
-        tree: Any,
-        *,
-        rules: TreeRules,
-        resolver: TreeResolver | None = None,
-    ) -> tuple[list[tuple[KeyPath, Any]], TreeDef]:
-        """
-        Flatten a tree into a list of (key_path, leaf) tuples and a structure definition.
-        """
-        leaves_with_path: list[tuple[KeyPath, Any]] = []
+def flatten_with_key_path(
+    tree: Any,
+    *,
+    rules: TreeRules,
+    resolver: TreeResolver | None = None,
+) -> tuple[list[tuple[KeyPath, Any]], TreeDef]:
+    """
+    Flatten a tree into a list of (key_path, leaf) tuples and a structure definition.
+    """
+    leaves_with_path: list[tuple[KeyPath, Any]] = []
 
-        def _sink(leaf: Any, traverse_aux: TraverseAux | None) -> None:
-            leaves_with_path.append((cast(TraverseAux, traverse_aux).key_path, leaf))
+    def _sink(leaf: Any, traverse_aux: TraverseAux | None) -> None:
+        leaves_with_path.append((cast(TraverseAux, traverse_aux).key_path, leaf))
 
-        initial_traverse_aux = TraverseAux(parent=None, key_path=())
-        treedef = TreeEngine._traverse(
-            tree, initial_traverse_aux, _sink, resolver, rules
-        )
-        return leaves_with_path, treedef
+    initial_traverse_aux = TraverseAux(parent=None, key_path=())
+    treedef = _traverse(tree, initial_traverse_aux, _sink, resolver, rules)
+    return leaves_with_path, treedef
 
-    @staticmethod
-    def iter(
-        tree: Any,
-        *,
-        rules: TreeRules,
-        resolver: TreeResolver | None = None,
-    ) -> Iterator[Any]:
-        """
-        Iterate over leaves of a tree without creating a TreeDef.
-        """
-        initial_traverse_aux = (
-            TraverseAux(parent=None, key_path=())
-            if resolver is not None and resolver.takes_aux
-            else None
-        )
-        yield from TreeEngine._traverse_iter(
-            tree, initial_traverse_aux, resolver, rules, with_key_path=False
-        )
 
-    @staticmethod
-    def iter_with_key_path(
-        tree: Any,
-        *,
-        rules: TreeRules,
-        resolver: TreeResolver | None = None,
-    ) -> Iterator[tuple[KeyPath, Any]]:
-        """
-        Iterate over (key_path, leaf) tuples of a tree without creating a TreeDef.
-        """
-        initial_traverse_aux = TraverseAux(parent=None, key_path=())
-        yield from TreeEngine._traverse_iter(
-            tree, initial_traverse_aux, resolver, rules, with_key_path=True
-        )
+def iter(
+    tree: Any,
+    *,
+    rules: TreeRules,
+    resolver: TreeResolver | None = None,
+) -> Iterator[Any]:
+    """
+    Iterate over leaves of a tree without creating a TreeDef.
+    """
+    initial_traverse_aux = (
+        TraverseAux(parent=None, key_path=())
+        if resolver is not None and resolver.takes_aux
+        else None
+    )
+    yield from _traverse_iter(
+        tree, initial_traverse_aux, resolver, rules, with_key_path=False
+    )
 
-    @staticmethod
-    def _prepare_element(
-        element: Any,
-        traverse_aux: TraverseAux | None,
-        resolver: TreeResolver | None,
-        rules: TreeRules,
-    ) -> tuple[TreeHandler, Iterable[Any], Iterator[TreeKey] | None, TreeAux] | None:
-        """Return container traversal data, or None for a leaf."""
-        decision: TreeHandler | bool = False
-        if resolver is not None:
-            if resolver.takes_aux:
-                decision = cast(_AuxResolverFunc, resolver.func)(
-                    element, cast(TraverseAux, traverse_aux)
-                )
-            else:
-                decision = cast(_ResolverFunc, resolver.func)(element)
-        if decision is True:
-            return None
-        handler = rules.handlers.get(type(element)) if decision is False else decision
-        if handler is None:
-            return None
-        children_iter, tree_aux = handler.flatten(element)
 
-        keys_iter: Iterator[TreeKey] | None
-        if tree_aux.children_keys is not None:
-            keys_iter = iter(tree_aux.children_keys)
-        elif traverse_aux is not None:
-            keys_iter = (SequenceKey(i) for i in count())
-        else:
-            keys_iter = None
+def iter_with_key_path(
+    tree: Any,
+    *,
+    rules: TreeRules,
+    resolver: TreeResolver | None = None,
+) -> Iterator[tuple[KeyPath, Any]]:
+    """
+    Iterate over (key_path, leaf) tuples of a tree without creating a TreeDef.
+    """
+    initial_traverse_aux = TraverseAux(parent=None, key_path=())
+    yield from _traverse_iter(
+        tree, initial_traverse_aux, resolver, rules, with_key_path=True
+    )
 
-        return handler, children_iter, keys_iter, tree_aux
 
-    @staticmethod
-    def _traverse(
-        element: Any,
-        traverse_aux: TraverseAux | None,
-        leaf_sink: _LeafSinkFunc,
-        resolver: TreeResolver | None,
-        rules: TreeRules,
-    ) -> TreeDef:
-        """Recursive core for traversal."""
-        prepared = TreeEngine._prepare_element(element, traverse_aux, resolver, rules)
-
-        if prepared is not None:
-            handler, children_iter, keys_iter, tree_aux = prepared
-            child_defs = []
-            for child in children_iter:
-                if keys_iter is not None:
-                    try:
-                        key = next(keys_iter)
-                    except StopIteration:
-                        raise ValueError(
-                            f"Not enough keys provided in TreeAux for container {type(element)}"
-                        ) from None
-
-                child_traverse_aux = (
-                    TraverseAux(parent=element, key_path=traverse_aux.key_path + (key,))
-                    if traverse_aux is not None
-                    else None
-                )
-                child_def = TreeEngine._traverse(
-                    child,
-                    child_traverse_aux,
-                    leaf_sink,
-                    resolver,
-                    rules,
-                )
-                child_defs.append(child_def)
-
-            return ContainerDef(
-                type(element), tree_aux, tuple(child_defs), handler.unflatten
+def _prepare_element(
+    element: Any,
+    traverse_aux: TraverseAux | None,
+    resolver: TreeResolver | None,
+    rules: TreeRules,
+) -> tuple[TreeHandler, Iterable[Any], TreeAux] | None:
+    """Return container traversal data, or None for a leaf."""
+    decision: TreeHandler | bool = False
+    if resolver is not None:
+        if resolver.takes_aux:
+            decision = cast(_AuxResolverFunc, resolver.func)(
+                element, cast(TraverseAux, traverse_aux)
             )
         else:
-            leaf_sink(element, traverse_aux)
-            return _LEAF_DEF
+            decision = cast(_ResolverFunc, resolver.func)(element)
+    if decision is True:
+        return None
+    handler = rules.handlers.get(type(element)) if decision is False else decision
+    if handler is None:
+        return None
+    children_iter, tree_aux = handler.flatten(element)
 
-    @staticmethod
-    def _traverse_iter(
-        element: Any,
-        traverse_aux: TraverseAux | None,
-        resolver: TreeResolver | None,
-        rules: TreeRules,
-        with_key_path: bool,
-    ) -> Iterator[Any]:
-        """Recursive core for iterator traversal."""
-        prepared = TreeEngine._prepare_element(element, traverse_aux, resolver, rules)
+    return handler, children_iter, tree_aux
 
-        if prepared is not None:
-            _, children_iter, keys_iter, _ = prepared
-            for child in children_iter:
-                if keys_iter is not None:
-                    try:
-                        key = next(keys_iter)
-                    except StopIteration:
-                        raise ValueError(
-                            f"Not enough keys provided in TreeAux for container {type(element)}"
-                        ) from None
 
-                child_traverse_aux = (
-                    TraverseAux(parent=element, key_path=traverse_aux.key_path + (key,))
-                    if traverse_aux is not None
-                    else None
-                )
-                yield from TreeEngine._traverse_iter(
-                    child,
-                    child_traverse_aux,
-                    resolver,
-                    rules,
-                    with_key_path,
-                )
+def _child_aux(
+    parent: Any,
+    aux: TraverseAux | None,
+    data: TreeAux,
+    index: int,
+) -> TraverseAux | None:
+    keys = data.children_keys
+    if keys is not None and index >= len(keys):
+        raise ValueError("Not enough keys provided in TreeAux for container.")
+    if aux is None:
+        return None
+    key = SequenceKey(index) if keys is None else keys[index]
+    return TraverseAux(parent=parent, key_path=aux.key_path + (key,))
+
+
+def _traverse(
+    element: Any,
+    traverse_aux: TraverseAux | None,
+    leaf_sink: _LeafSinkFunc,
+    resolver: TreeResolver | None,
+    rules: TreeRules,
+) -> TreeDef:
+    """Recursive core for traversal."""
+    prepared = _prepare_element(element, traverse_aux, resolver, rules)
+
+    if prepared is not None:
+        handler, children_iter, tree_aux = prepared
+        child_defs = []
+        for index, child in enumerate(children_iter):
+            child_def = _traverse(
+                child,
+                _child_aux(element, traverse_aux, tree_aux, index),
+                leaf_sink,
+                resolver,
+                rules,
+            )
+            child_defs.append(child_def)
+
+        return ContainerDef(
+            type(element), tree_aux, tuple(child_defs), handler.unflatten
+        )
+    else:
+        leaf_sink(element, traverse_aux)
+        return _LEAF_DEF
+
+
+def _traverse_iter(
+    element: Any,
+    traverse_aux: TraverseAux | None,
+    resolver: TreeResolver | None,
+    rules: TreeRules,
+    with_key_path: bool,
+) -> Iterator[Any]:
+    """Recursive core for iterator traversal."""
+    prepared = _prepare_element(element, traverse_aux, resolver, rules)
+
+    if prepared is not None:
+        _, children_iter, tree_aux = prepared
+        for index, child in enumerate(children_iter):
+            yield from _traverse_iter(
+                child,
+                _child_aux(element, traverse_aux, tree_aux, index),
+                resolver,
+                rules,
+                with_key_path,
+            )
+    else:
+        if with_key_path:
+            yield (cast(TraverseAux, traverse_aux).key_path, element)
         else:
-            if with_key_path:
-                yield (cast(TraverseAux, traverse_aux).key_path, element)
-            else:
-                yield element
+            yield element
 
-    @staticmethod
-    def unflatten(treedef: TreeDef, leaves: Iterable[Any]) -> Any:
-        """
-        Reconstruct the tree from a structure definition and a list of leaves.
-        """
-        return treedef.unflatten(leaves)
 
-    @staticmethod
-    def map(
-        func: Callable[..., Any],
-        tree: Any,
-        *,
-        rules: TreeRules,
-        resolver: TreeResolver | None = None,
-    ) -> Any:
-        """Apply func to every leaf in the tree."""
-        leaves, treedef = TreeEngine.flatten(tree, rules=rules, resolver=resolver)
-        new_leaves = [func(leaf) for leaf in leaves]
-        return TreeEngine.unflatten(treedef, new_leaves)
+def map(
+    func: Callable[..., Any],
+    tree: Any,
+    *,
+    rules: TreeRules,
+    resolver: TreeResolver | None = None,
+) -> Any:
+    """Apply func to every leaf in the tree."""
+    leaves, treedef = flatten(tree, rules=rules, resolver=resolver)
+    new_leaves = [func(leaf) for leaf in leaves]
+    return treedef.unflatten(new_leaves)
 
-    @staticmethod
-    def get_element(tree: Any, key_path: KeyPath) -> Any:
-        """
-        Retrieve an element from the tree using a specific key_path (Runtime KeyPath Resolution).
-        """
-        current = tree
-        for key in key_path:
-            current = key.resolve(current)
-        return current
 
-    @staticmethod
-    def codify_key_path(key_path: KeyPath, root_name: str = "$") -> str:
-        """
-        Generate the Python code string corresponding to the key_path.
-        """
-        expr = root_name
-        for key in key_path:
-            expr = key.codify(expr)
-        return expr
+def get_element(tree: Any, key_path: KeyPath) -> Any:
+    """
+    Retrieve an element from the tree using a specific key_path (Runtime KeyPath Resolution).
+    """
+    current = tree
+    for key in key_path:
+        current = key.resolve(current)
+    return current
+
+
+def codify_key_path(key_path: KeyPath, root_name: str = "$") -> str:
+    """
+    Generate the Python code string corresponding to the key_path.
+    """
+    expr = root_name
+    for key in key_path:
+        expr = key.codify(expr)
+    return expr

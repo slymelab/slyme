@@ -26,7 +26,8 @@ from slyme.node.exception import (
 )
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result
-from slyme.utils.tree import TreeEngine
+from slyme.utils.tree import flatten
+from slyme.utils.tree import iter as iter_leaves
 
 R = Schema(
     {
@@ -1075,12 +1076,12 @@ def test_node_and_wrapper_trees_support_traversal_without_reconstruction() -> No
 
     ctx = Context()
     rules = ctx.get(NODE_TREE_REF).resolve(ctx.scope)
-    assert TreeEngine.flatten(child(), rules=rules)[0] == []
+    assert flatten(child(), rules=rules)[0] == []
     graph = parent(nested=Auto(child(value=1))).add_wrappers(trace())
     for value, expected_leaves in ((graph, [1]), (trace(), [])):
-        leaves, definition = TreeEngine.flatten(value, rules=rules)
+        leaves, definition = flatten(value, rules=rules)
         assert leaves == expected_leaves
-        assert list(TreeEngine.iter(value, rules=rules)) == expected_leaves
+        assert list(iter_leaves(value, rules=rules)) == expected_leaves
         with pytest.raises(TypeError, match="registered for traversal only"):
-            TreeEngine.unflatten(definition, leaves)
+            definition.unflatten(leaves)
     ctx.dispose()

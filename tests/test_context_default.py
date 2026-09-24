@@ -27,7 +27,9 @@ from slyme.node import Auto, node
 from slyme.node.core import NODE_RULES
 from slyme.node.eval import eval_tree
 from slyme.utils.execution import await_result
-from slyme.utils.tree import AttributeKey, TreeAux, TreeEngine, TreeHandler, TreeRules
+from slyme.utils.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
+from slyme.utils.tree import flatten as tree_flatten
+from slyme.utils.tree import iter as iter_leaves
 
 
 @dataclass
@@ -48,8 +50,8 @@ def test_rule_definitions_support_inspection_without_a_context() -> None:
 
     graph = echo(value=42)
     rules = TreeRules.merge((NODE_RULES, DATA_RULES))
-    assert list(TreeEngine.iter([graph], rules=rules)) == [42]
-    assert list(TreeEngine.iter([graph], rules=DATA_RULES)) == [graph]
+    assert list(iter_leaves([graph], rules=rules)) == [42]
+    assert list(iter_leaves([graph], rules=DATA_RULES)) == [graph]
 
 
 def test_defaults_are_root_owned_and_forks_do_not_install_again() -> None:
@@ -167,14 +169,14 @@ def test_tree_rules_snapshot_handlers_and_preserve_reconstruction() -> None:
     source = {Box: BOX_HANDLER}
     rules = TreeRules(source)
     source.clear()
-    leaves, definition = TreeEngine.flatten(Box(1), rules=rules)
+    leaves, definition = tree_flatten(Box(1), rules=rules)
     assert leaves == [1]
-    assert TreeEngine.unflatten(definition, [2]) == Box(2)
+    assert definition.unflatten([2]) == Box(2)
     with pytest.raises(TypeError):
         rules.handlers[Box] = BOX_HANDLER
     empty = TreeRules()
     box = Box(1)
-    assert list(TreeEngine.iter(box, rules=empty)) == [box]
+    assert list(iter_leaves(box, rules=empty)) == [box]
 
 
 def test_tree_configuration_namespaces_contain_only_rules() -> None:
@@ -261,7 +263,7 @@ def test_node_assembly_stays_independent_of_the_execution_context() -> None:
     assert graph(left) == Box(6)
     assert graph(right) == Box(3)
     rules = left.get(NODE_TREE_REF).resolve(left.scope)
-    assert list(TreeEngine.iter(graph, rules=rules)) == [graph.get("value").value]
+    assert list(iter_leaves(graph, rules=rules)) == [graph.get("value").value]
     left.dispose()
     right.dispose()
 

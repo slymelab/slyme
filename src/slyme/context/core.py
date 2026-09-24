@@ -24,7 +24,7 @@ from typing import Any, Concatenate, Generic, Literal, ParamSpec, overload
 from typing_extensions import TypeVar
 
 from slyme.utils.execution import once
-from slyme.utils.tree import TreeEngine
+from slyme.utils.tree import flatten, get_element, iter_with_key_path
 
 from .compose import Compose
 from .default import DATA_TREE_REF, _apply
@@ -348,7 +348,9 @@ class Context(Generic[_A]):
         elif self._store.exists(self.scope, entry, local=local):
             return ContextView(self, entry.ref.parts)
         if default is _MISSING:
-            raise ContextPathError(entry.ref.path)
+            raise ContextPathError(
+                f"Context path {entry.ref.path!r} has no visible value."
+            )
         return default
 
     @overload
@@ -409,12 +411,15 @@ class Context(Generic[_A]):
         return dict(self._store.items(self.scope, entry, local=local))
 
     def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
+        """Resolve and read each Ref in traversal order, stopping at the first failure."""
         self._lifecycle.assert_readable()
         rules = self.get(DATA_TREE_REF).resolve(self.scope)
-        refs, treedef = TreeEngine.flatten(ref_tree, rules=rules)
-        entries = [self._schema.resolve_entry(ref) for ref in refs]
-        values = [self._entry_value(entry, local=local) for entry in entries]
-        return TreeEngine.unflatten(treedef, values)
+        refs, treedef = flatten(ref_tree, rules=rules)
+        values = [
+            self._entry_value(self._schema.resolve_entry(ref), local=local)
+            for ref in refs
+        ]
+        return treedef.unflatten(values)
 
     def set(self, ref: ContextKey[_T], value: _T) -> None:
         """Assign one local value at an assign-mode leaf."""
@@ -498,9 +503,9 @@ class Context(Generic[_A]):
         updates = (
             (
                 self._schema.resolve_entry(ref, role="leaf"),
-                TreeEngine.get_element(value_tree, path),
+                get_element(value_tree, path),
             )
-            for path, ref in TreeEngine.iter_with_key_path(ref_tree, rules=rules)
+            for path, ref in iter_with_key_path(ref_tree, rules=rules)
         )
         self._store.update(self.scope, updates)
 

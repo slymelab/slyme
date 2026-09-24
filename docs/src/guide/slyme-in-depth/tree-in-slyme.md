@@ -1,6 +1,6 @@
 # Trees in Slyme
 
-A tree is a nested structure whose containers define topology and whose unregistered objects are leaves. `slyme.utils.tree` provides stateless `TreeEngine` algorithms and immutable `TreeRules`. Every traversal receives `rules=` explicitly; the engine owns no registrations or Context.
+A tree is a nested structure whose containers define topology and whose unregistered objects are leaves. `slyme.utils.tree` provides stateless module functions such as `flatten` and immutable `TreeRules`. Every traversal receives `rules=` explicitly; the functions own no registrations or Context.
 
 ## Rules and dispatch
 
@@ -12,9 +12,9 @@ Every traversal accepts an optional `resolver=TreeResolver(func, takes_aux=False
 
 ```python
 from slyme.context.default import DATA_RULES
-from slyme.utils.tree import TreeEngine, TreeResolver
+from slyme.utils.tree import TreeResolver, flatten
 
-leaves, definition = TreeEngine.flatten(
+leaves, definition = flatten(
     {"items": [1, 2]},
     rules=DATA_RULES,
     resolver=TreeResolver(lambda value: isinstance(value, list)),
@@ -28,7 +28,7 @@ The `TreeAux` returned by a flatten handler is passed unchanged to its unflatten
 
 Tree's built-in data classes use slots, without an instance dictionary or weak-reference support. Subclasses choose whether to define their own slots.
 
-For traversal without a Context, explicitly import `DATA_RULES` from `slyme.context.default` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not included in `__all__` or re-exported at package level. `_apply` and Schema's declaration rules remain private implementation details.
+For traversal without a Context, explicitly import `DATA_RULES` from `slyme.context.default` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not included in `__all__` or re-exported at package level. `_apply` remains a private implementation detail.
 
 ## Context-owned defaults
 
@@ -52,7 +52,7 @@ The default compositions use `TreeLayer` and `EvaluatorLayer` from `slyme.contex
 from dataclasses import dataclass
 
 from slyme.context import DATA_TREE_REF, Context
-from slyme.utils.tree import TreeAux, TreeEngine, TreeHandler, TreeRules
+from slyme.utils.tree import TreeAux, TreeHandler, TreeRules, flatten
 
 
 @dataclass
@@ -73,9 +73,9 @@ rules = TreeRules(
 plugin.effect(lambda: ctx.get(DATA_TREE_REF).register(plugin.scope, rules))
 
 effective = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
-leaves, definition = TreeEngine.flatten(Box(1), rules=effective)
+leaves, definition = flatten(Box(1), rules=effective)
 assert leaves == [1]
-assert TreeEngine.unflatten(definition, [2]) == Box(2)
+assert definition.unflatten([2]) == Box(2)
 
 plugin.dispose()
 assert Box not in ctx.get(DATA_TREE_REF).resolve(ctx.scope).handlers
@@ -105,12 +105,12 @@ assert not child.get(DATA_TREE_REF).resolve(child.scope).handlers
 ctx.dispose()
 ```
 
-An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves NODE_TREE_REF and passes those rules to TreeEngine.
+An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves NODE_TREE_REF and passes those rules to the traversal functions.
 
-Schema declaration uses private, immutable dict-only rules and does not read runtime configuration. Configuring a data tree cannot change how Schema interprets declarations.
+Schema declaration normalizes nested dicts directly and does not read runtime tree configuration. Configuring a data tree cannot change how Schema interprets declarations.
 
 ## Identity and evaluation
 
-Tree traversal treats each occurrence independently. Reconstruction does not preserve shared container aliases and does not support cycles. Ordinary leaves and evaluator results retain their identities. Context is opaque to TreeEngine; `Context.flatten()` exposes its visible Ref-to-value mapping, including `$` when visible.
+Tree traversal treats each occurrence independently. Reconstruction does not preserve shared container aliases and does not support cycles. Ordinary leaves and evaluator results retain their identities. Context is an opaque leaf during traversal; `Context.flatten()` exposes its visible Ref-to-value mapping, including `$` when visible.
 
 Auto uses data rules to find leaves. Ref and Node evaluators match exact types; subclasses need separate contributions to `EVALUATORS_REF`. A Ref reads the current Context. Each child Node runs in an owned child Context with a distinct child Scope, which is disposed before the parent receives its result. All traversed containers are reconstructed, even without evaluatable leaves; evaluator results are not traversed again.

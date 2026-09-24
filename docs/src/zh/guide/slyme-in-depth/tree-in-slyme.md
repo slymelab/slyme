@@ -1,6 +1,6 @@
 # Slyme 中的 Tree
 
-Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 leaf。`slyme.utils.tree` 提供无状态的 `TreeEngine` 算法和不可变的 `TreeRules`。每次遍历显式传入 `rules=`；engine 不持有注册表或 Context。
+Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 leaf。`slyme.utils.tree` 提供 `flatten` 等无状态模块函数和不可变的 `TreeRules`。每次遍历显式传入 `rules=`；这些函数不持有注册表或 Context。
 
 ## 规则与分派
 
@@ -12,9 +12,9 @@ Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 l
 
 ```python
 from slyme.context.default import DATA_RULES
-from slyme.utils.tree import TreeEngine, TreeResolver
+from slyme.utils.tree import TreeResolver, flatten
 
-leaves, definition = TreeEngine.flatten(
+leaves, definition = flatten(
     {"items": [1, 2]},
     rules=DATA_RULES,
     resolver=TreeResolver(lambda value: isinstance(value, list)),
@@ -28,7 +28,7 @@ flatten handler 返回的 `TreeAux` 会原样传给其 unflatten handler；未�
 
 Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。子类自行选择是否声明 slots。
 
-不依赖 Context 的遍历可以显式导入 `slyme.context.default.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不加入 `__all__`，也不在包顶层重导出。`_apply` 和 Schema 的声明规则仍是私有实现细节。
+不依赖 Context 的遍历可以显式导入 `slyme.context.default.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不加入 `__all__`，也不在包顶层重导出。`_apply` 仍是私有实现细节。
 
 ## Context 持有的默认配置
 
@@ -52,7 +52,7 @@ Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。
 from dataclasses import dataclass
 
 from slyme.context import DATA_TREE_REF, Context
-from slyme.utils.tree import TreeAux, TreeEngine, TreeHandler, TreeRules
+from slyme.utils.tree import TreeAux, TreeHandler, TreeRules, flatten
 
 
 @dataclass
@@ -73,9 +73,9 @@ rules = TreeRules(
 plugin.effect(lambda: ctx.get(DATA_TREE_REF).register(plugin.scope, rules))
 
 effective = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
-leaves, definition = TreeEngine.flatten(Box(1), rules=effective)
+leaves, definition = flatten(Box(1), rules=effective)
 assert leaves == [1]
-assert TreeEngine.unflatten(definition, [2]) == Box(2)
+assert definition.unflatten([2]) == Box(2)
 
 plugin.dispose()
 assert Box not in ctx.get(DATA_TREE_REF).resolve(ctx.scope).handlers
@@ -105,12 +105,12 @@ assert not child.get(DATA_TREE_REF).resolve(child.scope).handlers
 ctx.dispose()
 ```
 
-空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历显式解析 NODE_TREE_REF，再将规则传给 TreeEngine。
+空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历显式解析 NODE_TREE_REF，再将规则传给遍历函数。
 
-Schema 声明使用私有、不可变、仅处理 dict 的规则，不读取运行时配置。修改 data tree 规则不会改变 Schema 对声明的解释方式。
+Schema 声明直接归一化嵌套 dict，不读取运行时 Tree 配置。修改 data tree 规则不会改变 Schema 对声明的解释方式。
 
 ## 对象身份与求值
 
-Tree 按每次出现的位置分别遍历，不保持重建后容器的共享引用，也不支持环。普通 leaf 和 evaluator 返回值保持对象身份。Context 对 TreeEngine 是不透明 leaf；`Context.flatten()` 返回其可见 Ref 到值的映射，包含可见的 `$`。
+Tree 按每次出现的位置分别遍历，不保持重建后容器的共享引用，也不支持环。普通 leaf 和 evaluator 返回值保持对象身份。Context 在遍历中是不透明 leaf；`Context.flatten()` 返回其可见 Ref 到值的映射，包含可见的 `$`。
 
 Auto 使用 data 规则寻找 leaf。Ref 和 Node evaluator 仅匹配精确类型；子类需要向 `EVALUATORS_REF` 单独贡献。Ref 读取当前 Context；每个子 Node 在独立 child Scope、由父级管理的 child Context 内运行，并在父级收到结果前释放。所有被遍历的 container 都会重建，即使其中没有可求值 leaf；evaluator 的返回结果不会再次遍历。
