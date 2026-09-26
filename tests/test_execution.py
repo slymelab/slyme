@@ -8,7 +8,6 @@ import pytest
 
 from slyme.utils.execution import (
     Continuation,
-    FlatResult,
     Flatten,
     SharedAwaitable,
     await_result,
@@ -86,63 +85,132 @@ def test_bound_flat_calls_preserve_arguments_and_create_fresh_generators() -> No
             results.append((yield request))
         return results
 
-    assert execute(first_requests) == [31, FlatResult(22, state="done"), 24]
-    assert execute(second_requests) == [31, FlatResult(22, state="done"), 24]
+    assert execute(first_requests) == [31, 22, 24]
+    assert execute(second_requests) == [31, 22, 24]
     assert first.method(3) == 16
     assert Example.method(first, 4) == 18
     assert events == [10, 20, 20, 10, 20, 20, 10, 10]
 
 
+def test_flatten_accepts_explicit_generic_parameters() -> None:
+    def child():
+        yield None
+        return 7
+
+    def parent():
+        return (yield Flatten[int](child()))
+
+    assert run(parent()) == 7
+
+
+def test_generate_is_lazy_and_preserves_bound_arguments() -> None:
+    events = []
+
+    class Example:
+        @continuation
+        def method(self, value, /, *, scale):
+            events.append(self)
+            yield value
+            return value * scale
+
+    instance = Example()
+    first = instance.method.generate(3, scale=2)
+    second = instance.method.generate(5, scale=2)
+    assert first is not second
+    assert events == []
+    assert run(first) == 6
+    assert run(second) == 10
+    assert events == [instance, instance]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("mode", ["run", "call", "start"])
+@pytest.mark.parametrize("kind", ["awaitable", "request"])
+async def test_raw_generators_return_values_without_interpretation(
+    asynchronous, mode, kind
+) -> None:
+    def unconsumed():
+        pytest.fail("Raw generator return values must not be interpreted")
+        yield
+
+    generator = unconsumed()
+    future = asyncio.get_running_loop().create_future()
+    future.set_result(7)
+    value = future if kind == "awaitable" else Flatten(generator)
+
+    def child():
+        if asynchronous:
+            yield asyncio.sleep(0)
+        return value
+
+    def parent():
+        return (yield Flatten(child(), mode=mode))
+
+    try:
+        result = run(child() if mode == "run" else parent())
+        if asynchronous:
+            result = await result
+        assert result is value
+    finally:
+        generator.close()
+
+
 @pytest.mark.parametrize(
-    "mode", ["direct", "run", "call", "start", "raw_call", "raw_start"]
+    "mode", ["direct", "run", "nested", "call", "start", "raw_call", "raw_start"]
 )
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("return_depth", [0, 1, 2])
-async def test_flatten_and_continuation_preserve_return_values(
-    mode, asynchronous, return_depth
-) -> None:
-    expected = object()
+async def test_all_entries_await_return_values_once(mode, asynchronous, return_depth):
+    values = [object()]
     for _ in range(return_depth):
         future = asyncio.get_running_loop().create_future()
-        future.set_result(expected)
-        expected = future
+        future.set_result(values[-1])
+        values.append(future)
+    returned = values[-1]
+    expected = values[-2] if return_depth else returned
+    suspends = asynchronous or return_depth > 0
 
     def generate():
         if asynchronous:
             yield asyncio.sleep(0)
-        return expected
+        return returned
 
     child = continuation(generate)
 
     @continuation
     def parent():
-        if mode == "call":
-            return (yield child.flat_call())
-        if mode == "raw_call":
-            return (yield Flatten(generate()))
-        result = yield (
-            child.flat_start() if mode == "start" else Flatten(generate(), mode="start")
-        )
-        assert isinstance(result, FlatResult)
-        assert not isawaitable(result)
-        assert result.state == ("pending" if asynchronous else "done")
-        if result.state == "pending":
-            result = yield result.value
-            assert result.state == "done"
-        return result.value
+        if mode == "nested":
+            value = yield child()
+        elif mode == "call":
+            value = yield child.flat_call()
+        elif mode == "raw_call":
+            value = yield Flatten(child.generate())
+        else:
+            started = yield (
+                child.flat_start()
+                if mode == "start"
+                else Flatten(child.generate(), mode="start")
+            )
+            assert isawaitable(started) == suspends
+            value = yield started
+        # Keep a nested awaitable as data instead of awaiting it at another return.
+        return [value]
 
     if mode == "direct":
         result = child()
     elif mode == "run":
-        result = run(generate())
+        result = run(child.generate())
     else:
         result = parent()
-    if asynchronous:
+    assert isawaitable(result) == suspends
+    if suspends:
         result = await result
+    if mode not in ("direct", "run"):
+        result = result[0]
     assert result is expected
 
 
-async def test_generators_and_returned_requests_remain_data() -> None:
+async def test_returns_use_yield_rules_without_reinterpreting_yield_results() -> None:
     events = []
 
     def data():
@@ -156,12 +224,11 @@ async def test_generators_and_returned_requests_remain_data() -> None:
         return (yield value)
 
     request = child.flat_call()
-    flat_result = FlatResult(request, state="done")
 
     @continuation
     def return_request():
         yield None
-        return request
+        return child.flat_call()
 
     async def await_request():
         return request
@@ -171,11 +238,9 @@ async def test_generators_and_returned_requests_remain_data() -> None:
         assert (yield value) is value
         assert (yield child.flat_call()) is value
         started = yield child.flat_start()
-        assert started.state == "done"
-        assert started.value is value
-        assert (yield return_request.flat_call()) is request
+        assert started is value
+        assert (yield return_request.flat_call()) is value
         assert (yield await_request()) is request
-        assert (yield flat_result) is flat_result
         assert (yield request) is value
 
     await await_result(parent())
@@ -184,7 +249,51 @@ async def test_generators_and_returned_requests_remain_data() -> None:
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("kind", ["awaitable", "generator", "request", "result"])
+@pytest.mark.parametrize("mode", ["call", "start"])
+async def test_returned_requests_follow_their_flatten_mode(asynchronous, mode) -> None:
+    events = []
+
+    @continuation
+    def child():
+        events.append("child")
+        if asynchronous:
+            yield asyncio.sleep(0)
+        return 7
+
+    @continuation
+    def forward():
+        try:
+            yield None
+            return child.flat_call() if mode == "call" else child.flat_start()
+        finally:
+            events.append("finally")
+
+    @continuation
+    def parent():
+        result = yield forward.flat_call()
+        assert isawaitable(result) == (asynchronous and mode == "start")
+        return result
+
+    pending = parent()
+    assert events == ["finally", "child"]
+    assert await await_result(pending) == 7
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_deep_returned_requests_use_an_explicit_stack(asynchronous) -> None:
+    @continuation
+    def descend(depth):
+        if depth:
+            return descend.flat_call(depth - 1)
+        if asynchronous:
+            yield asyncio.sleep(0)
+        return 7
+
+    assert await await_result(descend(5000)) == 7
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("kind", ["container", "generator", "request"])
 async def test_deep_forwarding_preserves_business_data(asynchronous, kind) -> None:
     def unconsumed():
         pytest.fail("Returned generators and requests must remain data")
@@ -194,10 +303,9 @@ async def test_deep_forwarding_preserves_business_data(asynchronous, kind) -> No
     awaitable = asyncio.get_running_loop().create_future()
     awaitable.set_result("awaited")
     value = {
-        "awaitable": awaitable,
+        "container": [awaitable],
         "generator": generator,
-        "request": Flatten(generator),
-        "result": FlatResult(awaitable, state="done"),
+        "request": [Flatten(generator)],
     }[kind]
 
     @continuation
@@ -211,11 +319,8 @@ async def test_deep_forwarding_preserves_business_data(asynchronous, kind) -> No
     @continuation
     def parent():
         started = yield forward.flat_start(3000)
-        assert started.state == ("pending" if asynchronous else "done")
-        if started.state == "pending":
-            started = yield started.value
-            assert started.state == "done"
-        return started.value
+        assert isawaitable(started) == asynchronous
+        return started
 
     try:
         result = parent()
@@ -228,20 +333,26 @@ async def test_deep_forwarding_preserves_business_data(asynchronous, kind) -> No
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("raw", [False, True])
-async def test_deep_calls_use_an_explicit_stack(asynchronous, raw) -> None:
+@pytest.mark.parametrize("await_return", [False, True])
+async def test_deep_calls_use_an_explicit_stack(
+    asynchronous, raw, await_return
+) -> None:
     def descend(depth):
         if depth:
             request = (
-                Flatten(descend(depth - 1)) if raw else wrapped.flat_call(depth - 1)
+                Flatten(wrapped.generate(depth - 1))
+                if raw
+                else wrapped.flat_call(depth - 1)
             )
-            return 1 + (yield request)
+            result = 1 + (yield request)
+            return asyncio.sleep(0, result=result) if await_return else result
         if asynchronous:
             yield asyncio.sleep(0)
         return 0
 
     wrapped = continuation(descend)
-    result = run(descend(5000)) if raw else wrapped(5000)
-    assert isawaitable(result) == asynchronous
+    result = run(wrapped.generate(5000)) if raw else wrapped(5000)
+    assert isawaitable(result) == (asynchronous or await_return)
     assert await await_result(result) == 5000
 
 
@@ -253,10 +364,10 @@ async def test_deep_starts_detach_only_the_nearest_branch(asynchronous) -> None:
     def descend(depth):
         if depth:
             result = yield descend.flat_start(depth - 1)
-            if result.state == "pending":
-                pending.append(result.value)
+            if isawaitable(result):
+                pending.append(result)
                 return 1
-            return result.value + 1
+            return result + 1
         if asynchronous:
             yield asyncio.sleep(0)
         return 0
@@ -266,7 +377,7 @@ async def test_deep_starts_detach_only_the_nearest_branch(asynchronous) -> None:
     assert descend(5000) == 5000
     assert len(pending) == int(asynchronous)
     if pending:
-        assert await pending[0] == FlatResult(0, state="done")
+        assert await pending[0] == 0
 
 
 async def test_start_runs_sync_prefixes_and_leaves_batch_scheduling_to_caller() -> None:
@@ -296,13 +407,11 @@ async def test_start_runs_sync_prefixes_and_leaves_batch_scheduling_to_caller() 
         pending = []
         for value in range(3):
             result = yield branch.flat_start(value)
-            if result.state == "pending":
-                pending.append(result.value)
+            if isawaitable(result):
+                pending.append(result)
             else:
-                assert result.value == 0
-        results = yield join(pending)
-        assert all(result.state == "done" for result in results)
-        return [result.value for result in results]
+                assert result == 0
+        return (yield join(pending))
 
     tasks = asyncio.all_tasks()
     pending = batch()
@@ -328,18 +437,16 @@ async def test_nested_starts_restore_parent_stacks_across_multiple_awaits() -> N
         pending = yield leaf.flat_start()
         events.append("middle")
         yield asyncio.sleep(0)
-        result = yield pending.value
-        assert result.state == "done"
-        return 3 + result.value
+        result = yield pending
+        return 3 + result
 
     @continuation
     def parent():
         pending = yield middle.flat_start()
         events.append("parent")
         value = yield leaf.flat_call()
-        result = yield pending.value
-        assert result.state == "done"
-        return value + result.value
+        result = yield pending
+        return value + result
 
     pending = parent()
     assert events == ["leaf", "middle", "parent", "leaf"]
@@ -348,7 +455,9 @@ async def test_nested_starts_restore_parent_stacks_across_multiple_awaits() -> N
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_nested_starts_preserve_explicitly_returned_states(asynchronous) -> None:
+async def test_nested_starts_return_the_final_value_without_envelopes(
+    asynchronous,
+) -> None:
     returned = []
 
     @continuation
@@ -367,16 +476,10 @@ async def test_nested_starts_preserve_explicitly_returned_states(asynchronous) -
     def parent():
         return (yield middle.flat_start())
 
-    # Middle finishes synchronously with a state object as its business value,
-    # even when that object refers to a still-pending child execution.
     result = parent()
-    assert result.state == "done"
-    assert result.value is returned[0]
-    child = result.value
-    assert child.state == ("pending" if asynchronous else "done")
-    if child.state == "pending":
-        child = await child.value
-    assert child == FlatResult(7, state="done")
+    assert isawaitable(result) == asynchronous
+    assert isawaitable(returned[0]) == asynchronous
+    assert await await_result(result) == 7
 
 
 async def test_deep_call_failures_unwind_through_async_cleanup() -> None:
@@ -423,7 +526,7 @@ async def test_start_failures_are_raised_at_start_or_when_awaited(asynchronous) 
         try:
             pending = yield child.flat_start()
             events.append("started")
-            yield pending.value
+            yield pending
         except ValueError as error:
             assert error is failure
             events.append("caught")
@@ -434,7 +537,9 @@ async def test_start_failures_are_raised_at_start_or_when_awaited(asynchronous) 
 
 
 @pytest.mark.parametrize("mode", ["call", "start"])
-async def test_returned_awaitable_is_only_awaited_explicitly(mode) -> None:
+async def test_returned_awaitable_failure_reaches_parent_after_child_finally(
+    mode,
+) -> None:
     events = []
     failure = LookupError("returned")
 
@@ -448,7 +553,7 @@ async def test_returned_awaitable_is_only_awaited_explicitly(mode) -> None:
             yield None
             return fail()
         except LookupError:
-            pytest.fail("The child's returned awaitable is data")
+            pytest.fail("The child is already closed when its returned awaitable runs")
         finally:
             events.append("finally")
 
@@ -456,21 +561,22 @@ async def test_returned_awaitable_is_only_awaited_explicitly(mode) -> None:
     def parent():
         try:
             if mode == "call":
-                value = yield child.flat_call()
+                yield child.flat_call()
             else:
                 result = yield child.flat_start()
-                assert result.state == "done"
-                value = result.value
-            events.append("returned")
-            yield value
+                assert isawaitable(result)
+                events.append("started")
+                yield result
+            pytest.fail("The returned awaitable must fail before the child completes")
         except LookupError as error:
             assert error is failure
             events.append("caught")
 
     pending = parent()
-    assert events == ["finally", "returned"]
+    prefix = ["finally", "started"] if mode == "start" else ["finally"]
+    assert events == prefix
     await await_result(pending)
-    assert events == ["finally", "returned", "await", "caught"]
+    assert events == prefix + ["await", "caught"]
 
 
 @pytest.mark.parametrize("mode", ["call", "start"])
@@ -497,7 +603,7 @@ async def test_cancelling_managed_calls_runs_child_and_parent_cleanup(mode) -> N
                 yield child.flat_call()
             else:
                 pending = yield child.flat_start()
-                yield pending.value
+                yield pending
         finally:
             yield asyncio.sleep(0)
             events.append("parent")
@@ -645,27 +751,24 @@ async def test_yielded_containers_and_nested_awaitables_are_not_unwrapped() -> N
     assert await await_result(run(execute())) == 3
 
 
-async def test_final_return_value_is_not_implicitly_awaited() -> None:
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_final_return_is_awaited_after_sync_or_async_yields(asynchronous):
+    events = []
+
     async def value():
+        events.append("awaited")
         return 4
 
-    pending = value()
-
+    @continuation
     def execute():
-        yield 1
-        return pending
+        if asynchronous:
+            yield asyncio.sleep(0)
+        return value()
 
-    assert run(execute()) is pending
+    pending = execute()
+    assert events == []
     assert await pending == 4
-
-    pending = value()
-
-    def asynchronous():
-        yield asyncio.sleep(0)
-        return pending
-
-    assert await await_result(run(asynchronous())) is pending
-    assert await pending == 4
+    assert events == ["awaited"]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -955,10 +1058,12 @@ async def test_once_shares_lazy_async_result_and_failure(fail) -> None:
         return 42
 
     result = operation()
-    assert isinstance(result, SharedAwaitable)
+    assert isinstance(operation, Continuation)
+    assert isawaitable(result)
     assert calls == []
-    for _ in range(2):
-        assert operation() is result
+    results = [result, operation()]
+    assert results[0] is not results[1]
+    for result in results:
         if fail:
             with pytest.raises(ValueError) as caught:
                 await result
@@ -966,6 +1071,175 @@ async def test_once_shares_lazy_async_result_and_failure(fail) -> None:
         else:
             assert await result == 42
     assert calls == [1]
+
+
+@pytest.mark.parametrize("mode", ["direct", "call", "start"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("decorated", [False, True])
+async def test_once_shares_execution_across_entries(
+    mode, asynchronous, fail, decorated
+) -> None:
+    calls, waits = [], []
+    failure = ValueError("shared failure")
+
+    async def finish(value):
+        waits.append(value)
+        await asyncio.sleep(0)
+        if fail:
+            raise failure
+        return value
+
+    def callback(value, /, *, scale=1):
+        calls.append((value, scale))
+        if asynchronous:
+            return finish(value * scale)
+        if fail:
+            raise failure
+        return value * scale
+
+    @continuation
+    def adapted(*args, **kwargs):
+        yield None
+        return callback(*args, **kwargs)
+
+    operation = once(adapted if decorated else callback)
+    assert isinstance(operation, Continuation)
+
+    @continuation
+    def invoke(entry, value):
+        if entry == "direct":
+            return operation(value, scale=2)
+        if entry == "call":
+            return (yield operation.flat_call(value, scale=2))
+        started = yield operation.flat_start(value, scale=2)
+        assert isawaitable(started) == asynchronous
+        return started
+
+    for index, entry in enumerate([mode, "direct", "call", "start"]):
+        if fail:
+            with pytest.raises(ValueError) as caught:
+                await await_result(invoke(entry, 5 if index == 0 else 100))
+            assert caught.value is failure
+        else:
+            assert await await_result(invoke(entry, 5 if index == 0 else 100)) == 10
+    assert calls == [(5, 2)]
+    assert waits == ([10] if asynchronous else [])
+
+
+async def test_once_continuation_keeps_shared_work_after_one_waiter_is_cancelled():
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    @once
+    @continuation
+    def operation():
+        calls.append("started")
+        entered.set()
+        yield release.wait()
+        calls.append("finished")
+        return 42
+
+    tasks = asyncio.all_tasks()
+    first, second = operation(), operation()
+    assert asyncio.all_tasks() == tasks
+    assert first is not second
+    waiters = [asyncio.ensure_future(first), asyncio.ensure_future(second)]
+    await entered.wait()
+    await asyncio.sleep(0)
+    waiters[0].cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiters[0]
+    release.set()
+    assert await waiters[1] == 42
+    assert await operation() == 42
+    assert calls == ["started", "finished"]
+
+
+def test_once_continuation_preserves_binding_and_first_arguments() -> None:
+    calls = []
+
+    class Example:
+        @once
+        @continuation
+        def operation(self, value):
+            calls.append((self, value))
+            yield None
+            return value
+
+    instance = Example()
+
+    @continuation
+    def execute():
+        assert (yield instance.operation.flat_call(7)) == 7
+        started = yield Example.operation.flat_start(instance, 9)
+        assert started == 7
+
+    execute()
+    assert instance.operation(10) == 7
+    assert calls == [(instance, 7)]
+
+
+def test_once_continuation_reentry_is_detected_before_the_first_return() -> None:
+    @once
+    @continuation
+    def operation():
+        with pytest.raises(RuntimeError, match="re-enter"):
+            yield operation.flat_call()
+        return 42
+
+    assert operation() == operation() == 42
+
+
+async def test_once_continuation_shared_work_cannot_wait_for_itself() -> None:
+    @once
+    @continuation
+    def operation():
+        yield asyncio.sleep(0)
+        return (yield operation.flat_call())
+
+    with pytest.raises(RuntimeError, match="own completion"):
+        await asyncio.wait_for(operation(), 1)
+
+
+def test_once_continuation_releases_callback_after_sync_success() -> None:
+    @continuation
+    def callback():
+        yield None
+        return 42
+
+    reference = weakref.ref(callback)
+    operation = once(callback)
+    del callback
+    assert operation() == 42
+    assert reference() is None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_deep_once_continuations_share_the_callers_stack(asynchronous) -> None:
+    calls = []
+
+    def wrap(child):
+        @once
+        @continuation
+        def operation():
+            calls.append(1)
+            return 1 + (yield child.flat_call())
+
+        return operation
+
+    @continuation
+    def leaf():
+        if asynchronous:
+            yield asyncio.sleep(0)
+        return 0
+
+    operation = leaf
+    for _ in range(5000):
+        operation = wrap(operation)
+    assert await await_result(operation()) == 5000
+    assert await await_result(operation()) == 5000
+    assert len(calls) == 5000
 
 
 async def test_shared_waiter_cancellation_does_not_cancel_operation() -> None:

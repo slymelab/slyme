@@ -11,7 +11,7 @@ from slyme.context.default import EVALUATORS_REF
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result, continuation
+from slyme.utils.execution import SharedAwaitable, await_result, continuation
 
 
 async def test_await_result_preserves_values_and_only_awaits_outer_completion() -> None:
@@ -253,7 +253,7 @@ async def test_context_owns_async_setup_before_caller_waits(await_setup: bool) -
 
         return cleanup
 
-    registration = ctx.effect(setup)
+    registration = SharedAwaitable(ctx.effect(setup))
     assert events == []
     if await_setup:
         early = await await_result(registration)
@@ -369,7 +369,7 @@ async def test_multiple_setup_waiters_receive_the_same_disposer() -> None:
         await asyncio.sleep(0)
         return cleanup
 
-    registration = ctx.effect(setup)
+    registration = SharedAwaitable(ctx.effect(setup))
     left, right = await asyncio.gather(
         await_result(registration), await_result(registration)
     )

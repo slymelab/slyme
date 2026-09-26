@@ -28,6 +28,7 @@ from typing import (
     Generic,
     Literal,
     ParamSpec,
+    Protocol,
     TypeVar,
     cast,
     overload,
@@ -36,7 +37,6 @@ from typing import (
 __all__ = [
     "Continuation",
     "Flatten",
-    "FlatResult",
     "continuation",
     "run",
     "await_result",
@@ -96,19 +96,22 @@ class SharedAwaitable(Generic[_T]):
         return self._wait().__await__()
 
 
+# Preserve the known call signature of ordinary callbacks and the flat entry
+# points of continuations. Both use the same continuation wrapper at runtime.
 @overload
-def once(
-    callback: Callable[_P, Awaitable[_T]], /
-) -> Callable[_P, SharedAwaitable[_T]]: ...
+def once(callback: Continuation[_P, _T], /) -> Continuation[_P, _T]: ...  # type: ignore[overload-overlap]
+@overload
+def once(callback: Callable[_P, Awaitable[_T]], /) -> Callable[_P, Awaitable[_T]]: ...
 @overload
 def once(callback: Callable[_P, _T], /) -> Callable[_P, _T]: ...
 def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
     """Invoke a callback once and share its result, including failure.
 
     The first call supplies the arguments. Synchronous results and exceptions
-    are replayed on subsequent calls. An asynchronous result always returns the
-    same SharedAwaitable, scheduled only when first awaited; its failure stays
-    asynchronous even after completion. Failed operations are not retried.
+    are replayed on subsequent calls. All callbacks use one continuation wrapper.
+    Asynchronous calls return fresh remainders that wait for one SharedAwaitable.
+    Scheduling starts on the first wait; failures stay asynchronous
+    even after completion. Failed operations are not retried.
 
     Reentry before the first call returns raises RuntimeError. The callback is
     consumed before invocation and is not retained through function metadata.
@@ -119,7 +122,8 @@ def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
     failure: BaseException | None = None
     running = False
 
-    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> object:
+    @continuation
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> Generator[Any, Any, object]:
         nonlocal pending, result, failure, running
         if pending is None:
             if running:
@@ -130,7 +134,11 @@ def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
         current, pending, running = pending, None, True
 
         try:
-            value = current(*args, **kwargs)
+            value = (
+                (yield current.flat_start(*args, **kwargs))
+                if isinstance(current, Continuation)
+                else current(*args, **kwargs)
+            )
             result = SharedAwaitable(value) if isawaitable(value) else value
         except BaseException as error:
             failure = error
@@ -142,7 +150,7 @@ def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
     return wrapped
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Flatten(Generic[_Return]):
     """Request one generator execution on the yielding caller's driver.
 
@@ -150,48 +158,39 @@ class Flatten(Generic[_Return]):
     created, but construction does not advance it. Hand its exclusive driving
     to the interpreter; create a fresh generator for another execution.
 
-    Call mode returns the generator's final value unchanged. Start mode returns
-    a FlatResult at completion or at the first asynchronous suspension.
+    Call mode waits for completion and returns the generator's result. Start
+    mode returns that result or an unscheduled asynchronous remainder at the
+    first awaitable yield. The caller owns and must await that remainder.
     """
 
     generator: Generator[Any, Any, _Return]
     mode: Literal["call", "start"] = "call"
 
 
-@dataclass(frozen=True, slots=True)
-class FlatResult(Generic[_Return]):
-    """A flat start's outcome, distinct from the generator's business result.
-
-    With state='done', value is the final result, even if it is awaitable.
-    With state='pending', value is an unscheduled awaitable that completes the
-    execution and returns a FlatResult with state='done'. Keeping that envelope
-    across the asynchronous boundary also prevents JavaScript Promise adoption
-    from consuming an awaitable business value when this protocol is ported.
-    The caller owns the remainder. This object is not awaitable and holds no
-    failures: synchronous failures are thrown at the start, asynchronous ones
-    on waiting.
-
-    Returning a FlatResult from a generator returns it as business data; it
-    does not delegate execution or implicitly unwrap nested results.
-    """
-
-    value: _Return | Awaitable[FlatResult[_Return]]
-    state: Literal["done", "pending"]
-
-
 class Continuation(Generic[_P, _Return]):
     """A generator function with direct, flat-call and flat-start entry points.
 
-    Each invocation has independent execution state. Yielded awaitables are
-    awaited once; all return values are data and are passed through unchanged.
+    Each invocation has independent execution state. The return value is
+    interpreted as one final yield. Awaitables are awaited once, without
+    recursively awaiting their results; Flatten requests are expanded.
     Use flat_call/flat_start to compose continuations without nested drivers.
     """
 
-    __wrapped__: Callable[_P, Generator[Any, Any, _Return]]
+    __wrapped__: Callable[_P, Generator[Any, Any, _Return | Awaitable[_Return]]]
     __name__: str
     __qualname__: str
 
-    def __init__(self, func: Callable[_P, Generator[Any, Any, _Return]], /) -> None:
+    @overload
+    def __init__(
+        self, func: Callable[_P, Generator[Any, Any, Awaitable[_Return]]], /
+    ) -> None: ...
+    @overload
+    def __init__(
+        self, func: Callable[_P, Generator[Any, Any, _Return | Awaitable[_Return]]], /
+    ) -> None: ...
+    def __init__(
+        self, func: Callable[_P, Generator[Any, Any, _Return | Awaitable[_Return]]], /
+    ) -> None:
         self._func = func
         update_wrapper(self, func, updated=())
 
@@ -199,19 +198,26 @@ class Continuation(Generic[_P, _Return]):
         self, /, *args: _P.args, **kwargs: _P.kwargs
     ) -> _Return | Awaitable[_Return]:
         """Run immediately, returning a value or an unscheduled remainder."""
-        return run(self._func(*args, **kwargs))
+        return run(self.generate(*args, **kwargs))
+
+    def generate(
+        self, /, *args: _P.args, **kwargs: _P.kwargs
+    ) -> Generator[Any, Any, _Return]:
+        """Create a fresh generator that yields the function's return value once."""
+        result = yield from self._func(*args, **kwargs)
+        return (yield result)
 
     def flat_call(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
         """Request execution on the yielding caller's stack until completion."""
-        return Flatten(self._func(*args, **kwargs), mode="call")
+        return Flatten(self.generate(*args, **kwargs), mode="call")
 
     def flat_start(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
-        """Request a FlatResult at completion or the first awaitable yield.
+        """Request a value or remainder at the first awaitable suspension.
 
         Creating the request creates the generator without advancing it.
         Yielding it runs the synchronous prefix without scheduling tasks.
         """
-        return Flatten(self._func(*args, **kwargs), mode="start")
+        return Flatten(self.generate(*args, **kwargs), mode="start")
 
     @overload
     def __get__(
@@ -231,31 +237,42 @@ class Continuation(Generic[_P, _Return]):
         return Continuation(MethodType(self._func, instance))
 
 
+class _ContinuationDecorator(Protocol):
+    @overload
+    def __call__(
+        self, func: Callable[_P, Generator[Any, Any, Awaitable[_T]]], /
+    ) -> Continuation[_P, _T]: ...
+    @overload
+    def __call__(
+        self, func: Callable[_P, Generator[Any, Any, _T | Awaitable[_T]]], /
+    ) -> Continuation[_P, _T]: ...
+
+
 @overload
 def continuation(
-    func: Callable[_P, Generator[Any, Any, _T]], /
+    func: Callable[_P, Generator[Any, Any, Awaitable[_T]]], /
 ) -> Continuation[_P, _T]: ...
 @overload
 def continuation(
-    func: None = None, /
-) -> Callable[[Callable[_P, Generator[Any, Any, _T]]], Continuation[_P, _T]]: ...
+    func: Callable[_P, Generator[Any, Any, _T | Awaitable[_T]]], /
+) -> Continuation[_P, _T]: ...
+@overload
+def continuation(func: None = None, /) -> _ContinuationDecorator: ...
 def continuation(
-    func: Callable[_P, Generator[Any, Any, _T]] | None = None, /
-) -> (
-    Continuation[_P, _T]
-    | Callable[[Callable[_P, Generator[Any, Any, _T]]], Continuation[_P, _T]]
-):
+    func: Callable[_P, Generator[Any, Any, _T | Awaitable[_T]]] | None = None, /
+) -> Continuation[_P, _T] | _ContinuationDecorator:
     """Decorate a generator function, with or without parentheses.
 
     Direct calls immediately drive a fresh execution. Yield .flat_call() to
-    share the caller's driver, or .flat_start() to receive a FlatResult without
+    share the caller's driver, or .flat_start() to receive a value or remainder without
     waiting for asynchronous completion. None of these entry points schedules
     tasks. Both methods construct Flatten requests holding fresh generators.
 
-    Return values are unchanged, including awaitables and Flatten requests.
-    Use an explicit yield to await an operation. Compose continuations through
-    flat_call/flat_start: directly calling and yielding a returned awaitable
-    cannot distinguish asynchronous execution from awaitable business data.
+    generate() yields the function's return value once: returned awaitables
+    are awaited and returned Flatten requests are expanded, just like yields.
+    Other values remain data. Use an explicit yield to catch
+    asynchronous failure inside the generator or finish waiting before finally.
+    Flat calls share the driver's stack; ordinary nested calls use Python's stack.
     """
     if func is None:
         return continuation
@@ -276,8 +293,6 @@ def _advance_generator(
         if not stack:
             if parents:
                 stack = parents.pop()
-                if method == "send":
-                    argument = FlatResult(argument, state="done")
             elif method == "throw":
                 raise argument
             else:
@@ -311,14 +326,14 @@ def _advance_generator(
         if isawaitable(value):
             if not parents:
                 return False, value
-            value = FlatResult(_resume_generator(value, stack), state="pending")
+            value = _resume_generator(value, stack)
             stack = parents.pop()
         method, argument = "send", value
 
 
 async def _resume_generator(
     pending: Awaitable[Any], stack: list[Generator[Any, Any, Any]]
-) -> FlatResult[Any]:
+) -> Any:
     while True:
         try:
             value = await pending
@@ -327,28 +342,21 @@ async def _resume_generator(
         else:
             done, value = _advance_generator(stack, "send", value)
         if done:
-            return FlatResult(value, state="done")
+            return value
         pending = value
-
-
-async def _resume(
-    pending: Awaitable[Any], stack: list[Generator[Any, Any, Any]]
-) -> object:
-    result = await _resume_generator(pending, stack)
-    return result.value
 
 
 def run(generator: Generator[Any, Any, _T]) -> _T | Awaitable[_T]:
     """Advance a generator immediately until completion or an awaitable yield.
 
     Yielded Flatten requests use explicit stacks. Call mode returns the child's
-    final value; start mode returns a FlatResult. Other yielded values, including
-    ordinary generators and FlatResult objects, are sent back unchanged unless
-    awaitable. An awaitable yield returns an unscheduled coroutine that awaits
-    it once and resumes execution.
+    completed result; start mode returns its result or an asynchronous remainder.
+    Other yielded values, including ordinary generators, are sent back
+    unchanged unless awaitable. An awaitable yield returns an unscheduled
+    coroutine that awaits it once and resumes execution.
     Awaited failures, including cancellation, are thrown at the suspended yield.
-    All return values and awaited results are passed through unchanged, without
-    interpreting them again. Continuation uses this same execution protocol.
+    Raw generator return values pass through unchanged. Continuation.generate()
+    adds the final yield that interprets a decorated function's return value.
 
     The caller hands over exclusive driving of the generator and must await any
     asynchronous remainder. No tasks, error aggregation, cancellation shielding,
@@ -357,5 +365,5 @@ def run(generator: Generator[Any, Any, _T]) -> _T | Awaitable[_T]:
     stack = [generator]
     done, value = _advance_generator(stack, "send", None)
     if done:
-        return cast(_T, value)
-    return cast(Awaitable[_T], _resume(value, stack))
+        return value
+    return _resume_generator(value, stack)

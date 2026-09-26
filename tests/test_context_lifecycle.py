@@ -221,7 +221,7 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
         await asyncio.sleep(0)
         return cleanup
 
-    child.effect(setup if async_setup else lambda: cleanup)
+    registration = child.effect(setup if async_setup else lambda: cleanup)
     root.effect(lambda: lambda: events.append("last"))
     pending = root.dispose()
     assert events == ["last"]
@@ -231,7 +231,6 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
-    assert root.dispose() is pending
     assert events == ["last", "child:start"]
     finish.set()
     for _ in range(2):
@@ -243,6 +242,7 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
             assert child_error.exceptions == (failure,)
         else:
             await await_result(root.dispose())
+    await await_result(registration)
     assert events == ["last", "child:start", "child:finish", "first"]
     assert not root._lifecycle._effects and not child._lifecycle._effects
 
@@ -1154,7 +1154,6 @@ def test_dispose_returns_async_completion_without_starting_a_loop() -> None:
     child.effect(lambda: cleanup)
     pending = ctx.dispose()
     assert events == []
-    assert ctx.dispose() is pending
 
     asyncio.run(await_result(pending))
     assert events == ["async", "sync"]
@@ -1191,7 +1190,6 @@ async def test_dispose_marks_context_before_scheduling_cleanup() -> None:
         ctx.fork()
     task = asyncio.create_task(await_result(pending))
     await started.wait()
-    assert ctx.dispose() is pending
     release.set()
     await task
 
@@ -1355,7 +1353,6 @@ async def test_dispose_pending_child_can_dispose_while_parent_cleanup_waits() ->
     waiter = asyncio.create_task(await_result(pending))
     await started.wait()
     child.dispose()
-    assert root.dispose() is pending
     with pytest.raises(RuntimeError, match="disposed"):
         grandchild.get("value")
     finish.set()
@@ -1388,8 +1385,6 @@ async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -
     child_waiter = asyncio.create_task(await_result(child_pending))
     await started.wait()
     root_pending = root.dispose()
-    assert child.dispose() is child_pending
-    assert root.dispose() is root_pending
     assert grandchild.get("value") == 1
     with pytest.raises(RuntimeError, match="being disposed"):
         grandchild.set("value", 2)

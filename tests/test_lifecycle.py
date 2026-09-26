@@ -505,7 +505,6 @@ async def test_cancelled_dispose_waiter_can_reobserve_late_cleanup_failure(
         await repeated
     assert isinstance(caught.value.exceptions[0], ValueError)
     assert str(caught.value.exceptions[0]) == "late cleanup failure"
-    assert lifetime.dispose() is completion
     with pytest.raises(BaseExceptionGroup) as replayed:
         await await_result(lifetime.dispose())
     assert replayed.value is caught.value

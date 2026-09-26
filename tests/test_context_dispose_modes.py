@@ -236,7 +236,7 @@ async def test_batch_disposal_waits_for_pending_setups_despite_failure() -> None
             raise failure
         return lambda: calls.append("cleanup")
 
-    group.effect(lambda: setup(0))
+    failed_setup = group.effect(lambda: setup(0))
     successful_setup = group.effect(lambda: setup(1))
     waiter = asyncio.create_task(await_result(group.dispose()))
     try:
@@ -250,8 +250,11 @@ async def test_batch_disposal_waits_for_pending_setups_despite_failure() -> None
     assert caught.value.exceptions == (failure,)
     assert sorted(calls[:2]) == [0, 1]
     assert calls[2:] == ["cleanup"]
+    with pytest.raises(ValueError) as repeated:
+        await failed_setup
+    assert repeated.value is failure
     release = await successful_setup
-    assert await successful_setup is release
+    assert await await_result(release()) is None
     assert await await_result(release()) is None
     assert not root.children
     root.dispose()

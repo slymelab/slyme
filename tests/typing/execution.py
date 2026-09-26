@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Coroutine, Generator
-from typing import Any, Literal, TypeVar
+from typing import Any, TypeVar
 
 from typing_extensions import assert_type
 
 from slyme.utils.execution import (
     Continuation,
-    FlatResult,
     Flatten,
-    SharedAwaitable,
     await_result,
     continuation,
     once,
@@ -28,9 +26,9 @@ def decorated(value: int, /, *, label: str = "") -> Generator[Any, Any, str]:
 
 
 @continuation()
-def identity(value: _T) -> Generator[Any, Any, _T]:
+def boxed(value: _T) -> Generator[Any, Any, list[_T]]:
     yield None
-    return value
+    return [value]
 
 
 class Example:
@@ -98,22 +96,24 @@ def mixed() -> Generator[int | Awaitable[int], int, str]:
 
 async def check_types() -> None:
     assert_type(decorated(1, label="value"), str | Awaitable[str])
-    assert_type(identity(1), int | Awaitable[int])
-    assert_type(identity("value"), str | Awaitable[str])
+    assert_type(boxed(1), list[int] | Awaitable[list[int]])
+    assert_type(boxed("value"), list[str] | Awaitable[list[str]])
     assert_type(Example().method(1), str | Awaitable[str])
     assert_type(Example.method(Example(), 1), str | Awaitable[str])
-    assert_type(returned_async(), Awaitable[int] | Awaitable[Awaitable[int]])
+    assert_type(returned_async(), int | Awaitable[int])
     assert_type(
         returned_coroutine(),
-        Coroutine[Any, Any, int] | Awaitable[Coroutine[Any, Any, int]],
+        int | Awaitable[int],
     )
-    assert_type(
-        returned_mixed(1), int | Awaitable[int] | Awaitable[int | Awaitable[int]]
-    )
+    assert_type(returned_mixed(1), int | Awaitable[int])
     assert_type(
         Continuation(returned_async.__wrapped__)(),
-        Awaitable[int] | Awaitable[Awaitable[int]],
+        int | Awaitable[int],
     )
+    assert_type(decorated.generate(1, label="value"), Generator[Any, Any, str])
+    assert_type(Example().method.generate(1), Generator[Any, Any, str])
+    assert_type(returned_async.generate(), Generator[Any, Any, int])
+    decorated.generate("value")  # type: ignore[arg-type]
     # All three entry points keep the same parameter checking, including
     # instance binding and keyword-only parameters.
     assert_type(decorated.flat_call(1, label="value"), Flatten[str])
@@ -138,7 +138,7 @@ async def check_types() -> None:
     assert_type(await await_result(run(immediate())), str)
     assert_type(await await_result(run(mixed())), str)
     assert_type(once_sync(1, scale=2), int)
-    assert_type(once_async(1), SharedAwaitable[int])
+    assert_type(once_async(1), Awaitable[int])
     assert_type(once_mixed(1), int | Awaitable[int])
     assert_type(await once_async(1), int)
 
@@ -146,18 +146,24 @@ async def check_types() -> None:
 def check_nested_return(value: Awaitable[Awaitable[int]]) -> None:
     assert_type(
         returned_nested(value),
-        Awaitable[Awaitable[int]] | Awaitable[Awaitable[Awaitable[int]]],
+        Awaitable[int] | Awaitable[Awaitable[int]],
     )
-    assert_type(returned_nested.flat_call(value), Flatten[Awaitable[Awaitable[int]]])
+    assert_type(returned_nested.flat_call(value), Flatten[Awaitable[int]])
     assert_type(
-        identity(value),
-        Awaitable[Awaitable[int]] | Awaitable[Awaitable[Awaitable[int]]],
+        boxed(value),
+        list[Awaitable[Awaitable[int]]] | Awaitable[list[Awaitable[Awaitable[int]]]],
     )
 
 
-def check_flat_result(pending: Awaitable[FlatResult[str]]) -> None:
-    completed = FlatResult("value", state="done")
-    assert_type(completed, FlatResult[str])
-    assert_type(completed.state, Literal["done", "pending"])
-    assert_type(completed.value, str | Awaitable[FlatResult[str]])
-    assert_type(FlatResult[str](pending, state="pending"), FlatResult[str])
+@once
+@continuation
+def once_continuation(value: int, /, *, scale: int = 1) -> Generator[Any, Any, int]:
+    return (yield value * scale)
+
+
+def check_once_continuation(value: Awaitable[Awaitable[int]]) -> None:
+    assert_type(once_continuation(1, scale=2), int | Awaitable[int])
+    assert_type(once_continuation.flat_call(1), Flatten[int])
+    assert_type(once_continuation.flat_start(1), Flatten[int])
+    assert_type(once(returned_nested).flat_call(value=value), Flatten[Awaitable[int]])
+    once_continuation.flat_call("value")  # type: ignore[arg-type]
