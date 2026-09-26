@@ -158,13 +158,42 @@ class Flatten(Generic[_Return]):
     created, but construction does not advance it. Hand its exclusive driving
     to the interpreter; create a fresh generator for another execution.
 
-    Call mode waits for completion and returns the generator's result. Start
-    mode returns that result or an unscheduled asynchronous remainder at the
-    first awaitable yield. The caller owns and must await that remainder.
+    The generator's return value is interpreted as one final yield: awaitables
+    are awaited once and Flatten requests are expanded. The interpreted result
+    is then returned without further interpretation.
+
+    Call mode waits for completion. Start mode returns the completed result or
+    an unscheduled remainder at the first awaitable yield, including one from
+    the return value. The caller owns and must await that remainder.
     """
 
-    generator: Generator[Any, Any, _Return]
+    generator: Generator[Any, Any, _Return | Awaitable[_Return]]
     mode: Literal["call", "start"] = "call"
+
+    @overload
+    def __init__(
+        self,
+        generator: Generator[Any, Any, Awaitable[_Return]],
+        mode: Literal["call", "start"] = "call",
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        generator: Generator[Any, Any, _Return | Awaitable[_Return]],
+        mode: Literal["call", "start"] = "call",
+    ) -> None: ...
+    def __init__(
+        self,
+        generator: Generator[Any, Any, _Return | Awaitable[_Return]],
+        mode: Literal["call", "start"] = "call",
+    ) -> None:
+        object.__setattr__(self, "generator", generator)
+        object.__setattr__(self, "mode", mode)
+
+    def generate(self) -> Generator[Any, Any, _Return]:
+        """Wrap the owned generator and interpret its return value once."""
+        result = yield from self.generator
+        return (yield result)
 
 
 class Continuation(Generic[_P, _Return]):
@@ -198,18 +227,11 @@ class Continuation(Generic[_P, _Return]):
         self, /, *args: _P.args, **kwargs: _P.kwargs
     ) -> _Return | Awaitable[_Return]:
         """Run immediately, returning a value or an unscheduled remainder."""
-        return run(self.generate(*args, **kwargs))
-
-    def generate(
-        self, /, *args: _P.args, **kwargs: _P.kwargs
-    ) -> Generator[Any, Any, _Return]:
-        """Create a fresh generator that yields the function's return value once."""
-        result = yield from self._func(*args, **kwargs)
-        return (yield result)
+        return run(self.flat_call(*args, **kwargs).generate())
 
     def flat_call(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
         """Request execution on the yielding caller's stack until completion."""
-        return Flatten(self.generate(*args, **kwargs), mode="call")
+        return Flatten(self._func(*args, **kwargs), mode="call")
 
     def flat_start(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
         """Request a value or remainder at the first awaitable suspension.
@@ -217,7 +239,7 @@ class Continuation(Generic[_P, _Return]):
         Creating the request creates the generator without advancing it.
         Yielding it runs the synchronous prefix without scheduling tasks.
         """
-        return Flatten(self.generate(*args, **kwargs), mode="start")
+        return Flatten(self._func(*args, **kwargs), mode="start")
 
     @overload
     def __get__(
@@ -264,12 +286,12 @@ def continuation(
     """Decorate a generator function, with or without parentheses.
 
     Direct calls immediately drive a fresh execution. Yield .flat_call() to
-    share the caller's driver, or .flat_start() to receive a value or remainder without
-    waiting for asynchronous completion. None of these entry points schedules
-    tasks. Both methods construct Flatten requests holding fresh generators.
+    share the caller's driver, or .flat_start() to receive a value or remainder
+    without waiting for asynchronous completion. None of these entry points
+    schedules tasks. Both methods construct Flatten requests holding fresh generators.
 
-    generate() yields the function's return value once: returned awaitables
-    are awaited and returned Flatten requests are expanded, just like yields.
+    All entry points use Flatten's final yield to interpret the return value:
+    returned awaitables are awaited and returned Flatten requests are expanded.
     Other values remain data. Use an explicit yield to catch
     asynchronous failure inside the generator or finish waiting before finally.
     Flat calls share the driver's stack; ordinary nested calls use Python's stack.
@@ -317,9 +339,9 @@ def _advance_generator(
         if isinstance(value, Flatten):
             if value.mode == "start":
                 parents.append(stack)
-                stack = [value.generator]
+                stack = [value.generate()]
             else:
-                stack.append(value.generator)
+                stack.append(value.generate())
             method, argument = "send", None
             continue
 
@@ -355,8 +377,8 @@ def run(generator: Generator[Any, Any, _T]) -> _T | Awaitable[_T]:
     unchanged unless awaitable. An awaitable yield returns an unscheduled
     coroutine that awaits it once and resumes execution.
     Awaited failures, including cancellation, are thrown at the suspended yield.
-    Raw generator return values pass through unchanged. Continuation.generate()
-    adds the final yield that interprets a decorated function's return value.
+    Raw generator return values pass through unchanged. Flatten.generate()
+    adds the final yield used by flattened calls and continuation entry points.
 
     The caller hands over exclusive driving of the generator and must await any
     asynchronous remainder. No tasks, error aggregation, cancellation shielding,

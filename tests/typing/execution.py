@@ -110,10 +110,11 @@ async def check_types() -> None:
         Continuation(returned_async.__wrapped__)(),
         int | Awaitable[int],
     )
-    assert_type(decorated.generate(1, label="value"), Generator[Any, Any, str])
-    assert_type(Example().method.generate(1), Generator[Any, Any, str])
-    assert_type(returned_async.generate(), Generator[Any, Any, int])
-    decorated.generate("value")  # type: ignore[arg-type]
+    assert_type(
+        decorated.flat_call(1, label="value").generate(), Generator[Any, Any, str]
+    )
+    assert_type(Example().method.flat_call(1).generate(), Generator[Any, Any, str])
+    assert_type(returned_async.flat_call().generate(), Generator[Any, Any, int])
     # All three entry points keep the same parameter checking, including
     # instance binding and keyword-only parameters.
     assert_type(decorated.flat_call(1, label="value"), Flatten[str])
@@ -127,6 +128,12 @@ async def check_types() -> None:
     Example().method.flat_call("value")  # type: ignore[arg-type]
     Example().method.flat_start()  # type: ignore[call-arg]
     assert_type(Flatten(immediate()), Flatten[str])
+    assert_type(Flatten(returned_async.__wrapped__()), Flatten[int])
+    assert_type(Flatten(returned_coroutine.__wrapped__()), Flatten[int])
+    assert_type(Flatten(returned_mixed.__wrapped__(1)), Flatten[int])
+    assert_type(
+        Flatten(returned_async.__wrapped__()).generate(), Generator[Any, Any, int]
+    )
     assert_type(Flatten(mixed(), mode="start"), Flatten[str])
     bound: Callable[[int], str | Awaitable[str]] = Example().method
     assert_type(await await_result(bound(1)), str)
@@ -144,11 +151,20 @@ async def check_types() -> None:
 
 
 def check_nested_return(value: Awaitable[Awaitable[int]]) -> None:
+    def generate() -> Generator[Any, Any, Awaitable[Awaitable[int]]]:
+        yield None
+        return value
+
     assert_type(
         returned_nested(value),
         Awaitable[int] | Awaitable[Awaitable[int]],
     )
     assert_type(returned_nested.flat_call(value), Flatten[Awaitable[int]])
+    assert_type(Flatten(generate()), Flatten[Awaitable[int]])
+    assert_type(
+        Flatten(generate()).generate(),
+        Generator[Any, Any, Awaitable[int]],
+    )
     assert_type(
         boxed(value),
         list[Awaitable[Awaitable[int]]] | Awaitable[list[Awaitable[Awaitable[int]]]],

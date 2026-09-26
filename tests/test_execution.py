@@ -103,7 +103,7 @@ def test_flatten_accepts_explicit_generic_parameters() -> None:
     assert run(parent()) == 7
 
 
-def test_generate_is_lazy_and_preserves_bound_arguments() -> None:
+def test_flatten_generate_is_lazy_and_preserves_bound_arguments() -> None:
     events = []
 
     class Example:
@@ -114,8 +114,8 @@ def test_generate_is_lazy_and_preserves_bound_arguments() -> None:
             return value * scale
 
     instance = Example()
-    first = instance.method.generate(3, scale=2)
-    second = instance.method.generate(5, scale=2)
+    first = instance.method.flat_call(3, scale=2).generate()
+    second = instance.method.flat_call(5, scale=2).generate()
     assert first is not second
     assert events == []
     assert run(first) == 6
@@ -124,11 +124,8 @@ def test_generate_is_lazy_and_preserves_bound_arguments() -> None:
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("mode", ["run", "call", "start"])
 @pytest.mark.parametrize("kind", ["awaitable", "request"])
-async def test_raw_generators_return_values_without_interpretation(
-    asynchronous, mode, kind
-) -> None:
+async def test_run_preserves_unflattened_generator_returns(asynchronous, kind) -> None:
     def unconsumed():
         pytest.fail("Raw generator return values must not be interpreted")
         yield
@@ -143,11 +140,8 @@ async def test_raw_generators_return_values_without_interpretation(
             yield asyncio.sleep(0)
         return value
 
-    def parent():
-        return (yield Flatten(child(), mode=mode))
-
     try:
-        result = run(child() if mode == "run" else parent())
+        result = run(child())
         if asynchronous:
             result = await result
         assert result is value
@@ -184,12 +178,12 @@ async def test_all_entries_await_return_values_once(mode, asynchronous, return_d
         elif mode == "call":
             value = yield child.flat_call()
         elif mode == "raw_call":
-            value = yield Flatten(child.generate())
+            value = yield Flatten(generate())
         else:
             started = yield (
                 child.flat_start()
                 if mode == "start"
-                else Flatten(child.generate(), mode="start")
+                else Flatten(generate(), mode="start")
             )
             assert isawaitable(started) == suspends
             value = yield started
@@ -199,7 +193,7 @@ async def test_all_entries_await_return_values_once(mode, asynchronous, return_d
     if mode == "direct":
         result = child()
     elif mode == "run":
-        result = run(child.generate())
+        result = run(Flatten(generate()).generate())
     else:
         result = parent()
     assert isawaitable(result) == suspends
@@ -250,7 +244,10 @@ async def test_returns_use_yield_rules_without_reinterpreting_yield_results() ->
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("mode", ["call", "start"])
-async def test_returned_requests_follow_their_flatten_mode(asynchronous, mode) -> None:
+@pytest.mark.parametrize("raw", [False, True])
+async def test_returned_requests_follow_their_flatten_mode(
+    asynchronous, mode, raw
+) -> None:
     events = []
 
     @continuation
@@ -270,7 +267,8 @@ async def test_returned_requests_follow_their_flatten_mode(asynchronous, mode) -
 
     @continuation
     def parent():
-        result = yield forward.flat_call()
+        request = Flatten(forward.__wrapped__()) if raw else forward.flat_call()
+        result = yield request
         assert isawaitable(result) == (asynchronous and mode == "start")
         return result
 
@@ -280,11 +278,16 @@ async def test_returned_requests_follow_their_flatten_mode(asynchronous, mode) -
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_deep_returned_requests_use_an_explicit_stack(asynchronous) -> None:
+@pytest.mark.parametrize("raw", [False, True])
+async def test_deep_returned_requests_use_an_explicit_stack(asynchronous, raw) -> None:
     @continuation
     def descend(depth):
         if depth:
-            return descend.flat_call(depth - 1)
+            return (
+                Flatten(descend.__wrapped__(depth - 1))
+                if raw
+                else descend.flat_call(depth - 1)
+            )
         if asynchronous:
             yield asyncio.sleep(0)
         return 7
@@ -340,9 +343,7 @@ async def test_deep_calls_use_an_explicit_stack(
     def descend(depth):
         if depth:
             request = (
-                Flatten(wrapped.generate(depth - 1))
-                if raw
-                else wrapped.flat_call(depth - 1)
+                Flatten(descend(depth - 1)) if raw else wrapped.flat_call(depth - 1)
             )
             result = 1 + (yield request)
             return asyncio.sleep(0, result=result) if await_return else result
@@ -351,7 +352,7 @@ async def test_deep_calls_use_an_explicit_stack(
         return 0
 
     wrapped = continuation(descend)
-    result = run(wrapped.generate(5000)) if raw else wrapped(5000)
+    result = run(Flatten(descend(5000)).generate()) if raw else wrapped(5000)
     assert isawaitable(result) == (asynchronous or await_return)
     assert await await_result(result) == 5000
 
@@ -537,8 +538,10 @@ async def test_start_failures_are_raised_at_start_or_when_awaited(asynchronous) 
 
 
 @pytest.mark.parametrize("mode", ["call", "start"])
+@pytest.mark.parametrize("raw", [False, True])
 async def test_returned_awaitable_failure_reaches_parent_after_child_finally(
     mode,
+    raw,
 ) -> None:
     events = []
     failure = LookupError("returned")
@@ -561,9 +564,13 @@ async def test_returned_awaitable_failure_reaches_parent_after_child_finally(
     def parent():
         try:
             if mode == "call":
-                yield child.flat_call()
+                yield (Flatten(child.__wrapped__()) if raw else child.flat_call())
             else:
-                result = yield child.flat_start()
+                result = yield (
+                    Flatten(child.__wrapped__(), mode="start")
+                    if raw
+                    else child.flat_start()
+                )
                 assert isawaitable(result)
                 events.append("started")
                 yield result
