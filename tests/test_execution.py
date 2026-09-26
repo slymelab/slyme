@@ -511,6 +511,36 @@ async def test_deep_call_failures_unwind_through_async_cleanup() -> None:
     assert cleaned == list(range(3001))
 
 
+async def test_flat_async_failure_keeps_each_generators_exception_context() -> None:
+    original = ValueError("awaited failure")
+    translated = LookupError("translated")
+    final = RuntimeError("finally")
+
+    async def fail():
+        raise original
+
+    @continuation
+    def child():
+        try:
+            yield fail()
+        except ValueError:
+            raise translated  # noqa: B904 - Exercise implicit exception chaining.
+
+    @continuation
+    def parent():
+        try:
+            yield child.flat_call()
+        finally:
+            raise final
+
+    with pytest.raises(RuntimeError) as caught:
+        await parent()
+    assert caught.value is final
+    assert final.__context__ is translated
+    assert translated.__context__ is original
+    assert final.__cause__ is translated.__cause__ is None
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_start_failures_are_raised_at_start_or_when_awaited(asynchronous) -> None:
     failure = ValueError("branch")

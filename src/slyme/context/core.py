@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from functools import partial
@@ -23,7 +23,7 @@ from typing import Any, Concatenate, Generic, Literal, ParamSpec, overload
 
 from typing_extensions import TypeVar
 
-from slyme.utils.execution import once
+from slyme.utils.execution import Continuation, continuation, once
 from slyme.utils.tree import flatten, get_element, iter_with_key_path
 
 from .compose import Compose
@@ -220,14 +220,15 @@ class Context(Generic[_A]):
         """
         return self._lifecycle.effect(setup)
 
-    def dispose(self) -> None | Awaitable[None]:
+    @continuation
+    def dispose(self) -> Generator[Any, Any, None]:
         """Close the subtree, finish cleanup in dispose_mode, then release data.
 
         Contexts remain readable until their own release, but cannot be mutated.
         Sequential cleanup waits in LIFO order; batch cleanup joins all items.
         Await unfinished cleanup. Repeated calls share the same completion and error.
         """
-        return self._lifecycle.dispose()
+        yield self._lifecycle.dispose.flat_call()
 
     @overload
     def fork(
@@ -494,6 +495,8 @@ class Context(Generic[_A]):
             func = self.get(f"$.methods.{name}")
         except ContextPathError as error:
             raise AttributeError(f"Context has no attribute {name!r}.") from error
+        if isinstance(func, Continuation):
+            return func.__get__(self)
         return partial(func, self)
 
     def update_tree(self, ref_tree: Any, value_tree: Any) -> None:

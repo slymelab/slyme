@@ -22,7 +22,7 @@ from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import continuation, once
+from slyme.utils.execution import Continuation, Flatten, continuation, once
 
 if TYPE_CHECKING:
     from .core import Context
@@ -56,7 +56,10 @@ class _Effect:
     @continuation
     def setup(self) -> Generator[Any, Any, _Disposer]:
         try:
-            self._cleanup = yield self._setup_callback()
+            setup = self._setup_callback
+            self._cleanup = yield (
+                setup.flat_call() if isinstance(setup, Continuation) else setup()
+            )
             return self.dispose
         except BaseException:
             self.finalize()
@@ -67,41 +70,42 @@ class _Effect:
     @continuation
     def dispose(self) -> Generator[Any, Any, None]:
         try:
-            yield self.setup()
+            yield self.setup.flat_call()
             cleanup, self._cleanup = self._cleanup, None
             if cleanup is not None:
-                yield cleanup()
+                yield (
+                    cleanup.flat_call()
+                    if isinstance(cleanup, Continuation)
+                    else cleanup()
+                )
         finally:
             self._cleanup = None
             self.finalize()
 
 
-@continuation
 def _sequential(effects: Sequence[_Effect]) -> Generator[Any, Any, None]:
     errors = []
     for effect in effects:
         try:
-            yield effect.dispose()
+            yield effect.dispose.flat_call()
         except BaseException as error:
             errors.append(error)
     if errors:
         raise exception_group("Lifecycle dispose failed", errors)
 
 
-@continuation
 def _batch(effects: Sequence[_Effect]) -> Generator[Any, Any, None]:
     errors: list[tuple[int, BaseException]] = []
     pending: list[Awaitable[None]] = []
 
-    @continuation
     def dispose(index: int, effect: _Effect) -> Generator[Any, Any, None]:
         try:
-            yield effect.dispose()
+            yield effect.dispose.flat_call()
         except BaseException as error:
             errors.append((index, error))
 
     for index, effect in enumerate(effects):
-        result = dispose(index, effect)
+        result = yield Flatten(dispose(index, effect), mode="start")
         if isawaitable(result):
             pending.append(result)
 
@@ -232,7 +236,7 @@ class Lifecycle:
         execute_effects = _sequential if self.dispose_mode == "sequential" else _batch
 
         try:
-            yield execute_effects(effects)
+            yield Flatten(execute_effects(effects))
         finally:
             self._effects.clear()
             try:

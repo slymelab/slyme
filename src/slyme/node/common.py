@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Generator, Iterable, Sequence
+from collections.abc import Generator, Iterable
 from typing import Any
 
 from slyme.context import Context
@@ -29,10 +29,7 @@ __all__ = ["sequential_exec", "sequential"]
 def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> Generator[Any, Any, None]:
     """Execute nodes in order."""
     for item in nodes:
-        yield item(ctx)
+        yield item.__call__.flat_call(ctx)
 
 
-@node
-def sequential(ctx: Context, /, *, nodes: Sequence[Node]) -> None | Awaitable[None]:
-    """Execute nodes in order against the same mutable Context."""
-    return sequential_exec(ctx, nodes)
+sequential = node(sequential_exec)

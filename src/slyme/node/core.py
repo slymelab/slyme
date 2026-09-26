@@ -18,14 +18,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
-from functools import partial, wraps
+from functools import wraps
 from types import MappingProxyType
 from typing import Any, Generic, Protocol, TypeVar, overload
 
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.execution import continuation
+from slyme.utils.execution import Continuation, continuation
 from slyme.utils.tree import (
     AttributeKey,
     TreeAux,
@@ -155,21 +155,29 @@ class Node(NodeElement[_R]):
     def __call__(self, ctx: Context, /, **kwargs: Any) -> Generator[Any, Any, _R]:
         """Snapshot bindings and wrappers; evaluate Auto when call_next delegates."""
         try:
+            func = self._func
             wrappers = tuple(self.wrappers)
             kwargs = {**self._params, **kwargs}
             raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
-            if not eval_kwargs:
-                chain: Callable[[Context], _R | Awaitable[_R]] = partial(
-                    self._func, **raw_kwargs
+
+            @continuation
+            def chain(call_ctx: Context) -> Generator[Any, Any, _R]:
+                if eval_kwargs:
+                    evaluated = yield eval_tree.flat_call(call_ctx, eval_kwargs)
+                else:
+                    evaluated = {}
+                return (
+                    yield func.flat_call(call_ctx, **raw_kwargs, **evaluated)
+                    if isinstance(func, Continuation)
+                    else func(call_ctx, **raw_kwargs, **evaluated)
                 )
-            else:
 
-                @continuation
-                def chain(call_ctx: Context) -> Generator[Any, Any, _R]:
-                    evaluated = yield eval_tree(call_ctx, eval_kwargs)
-                    return (yield self._func(call_ctx, **raw_kwargs, **evaluated))
-
-            return (yield Wrapper.compose(wrappers, wrapped=self, call_next=chain)(ctx))
+            composed = Wrapper.compose(wrappers, wrapped=self, call_next=chain)
+            return (
+                yield composed.flat_call(ctx)
+                if isinstance(composed, Continuation)
+                else composed(ctx)
+            )
         except NodeException:
             raise
         except Exception as error:
@@ -229,8 +237,13 @@ class Wrapper(NodeElement[_R]):
             kwargs = {**self._params, **kwargs}
             raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
             if eval_kwargs:
-                raw_kwargs.update((yield eval_tree(ctx, eval_kwargs)))
-            return (yield self._func(ctx, wrapped, call_next, **raw_kwargs))
+                raw_kwargs.update((yield eval_tree.flat_call(ctx, eval_kwargs)))
+            func = self._func
+            return (
+                yield func.flat_call(ctx, wrapped, call_next, **raw_kwargs)
+                if isinstance(func, Continuation)
+                else func(ctx, wrapped, call_next, **raw_kwargs)
+            )
         except NodeException:
             raise
         except Exception as error:

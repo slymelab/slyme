@@ -357,12 +357,14 @@ async def _resume_generator(
     pending: Awaitable[Any], stack: list[Generator[Any, Any, Any]]
 ) -> Any:
     while True:
+        method: Literal["send", "throw"] = "send"
         try:
             value = await pending
         except BaseException as error:
-            done, value = _advance_generator(stack, "throw", error)
-        else:
-            done, value = _advance_generator(stack, "send", value)
+            method, value = "throw", error
+        # Resume outside the except block so a later exception keeps the
+        # generator's own exception context, rather than this pending failure.
+        done, value = _advance_generator(stack, method, value)
         if done:
             return value
         pending = value

@@ -83,7 +83,7 @@ def test_child_ownership_effect_is_ready_before_facet_factory() -> None:
 
     def create(child: Context) -> None:
         effect = root._children[child]
-        assert effect._cleanup == child.dispose
+        assert effect._cleanup.__wrapped__ == child.dispose.__wrapped__
         assert effect.setup() is effect.dispose
         child.effect(lambda: lambda: cleanup.append(child))
 

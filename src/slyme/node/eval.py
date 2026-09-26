@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Generator, Sequence
-from functools import partial
 from inspect import isawaitable
 from typing import Any, TypeVar, cast
 
 from slyme.context import Context, Ref
 from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import continuation
+from slyme.utils.execution import Continuation, Flatten, continuation
 from slyme.utils.tree import flatten
 
 from .core import Node
@@ -42,23 +41,23 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 
 
-@continuation
 def _evaluate_item(
-    call: Callable[[_T], _R | Awaitable[_R]],
+    call: Callable[[_T], _R | Awaitable[_R] | Flatten[_R]],
     results: list[_R | None],
     errors: list[tuple[int, BaseException]],
     index: int,
     value: _T,
 ) -> Generator[Any, Any, None]:
     try:
-        results[index] = yield call(value)
+        results[index] = yield (
+            call.flat_call(value) if isinstance(call, Continuation) else call(value)
+        )
     except BaseException as error:
         errors.append((index, error))
 
 
-@continuation
 def _batch(
-    values: Sequence[_T], call: Callable[[_T], _R | Awaitable[_R]]
+    values: Sequence[_T], call: Callable[[_T], _R | Awaitable[_R] | Flatten[_R]]
 ) -> Generator[Any, Any, list[_R]]:
     """Return ordered values, or group failures after every item settles.
 
@@ -73,7 +72,9 @@ def _batch(
     pending: list[Awaitable[None]] = []
 
     for index, value in enumerate(values):
-        result = _evaluate_item(call, results, errors, index, value)
+        result = yield Flatten(
+            _evaluate_item(call, results, errors, index, value), mode="start"
+        )
         if isawaitable(result):
             pending.append(result)
 
@@ -94,14 +95,17 @@ def _batch(
     return cast(list[_R], results)
 
 
-@continuation
 def _evaluate_group(
     ctx: Context,
     leaves: list[Any],
     batch: tuple[BatchEvaluatorFunc, tuple[list[int], list[Any]]],
 ) -> Generator[Any, Any, None]:
     evaluator, (indices, values) = batch
-    result = yield evaluator(ctx, values)
+    result = yield (
+        evaluator.flat_call(ctx, values)
+        if isinstance(evaluator, Continuation)
+        else evaluator(ctx, values)
+    )
     for index, value in zip(indices, result, strict=True):
         leaves[index] = value
 
@@ -129,31 +133,35 @@ def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
             values.append(leaf)
     batches = list(eval_groups.items())
 
-    yield _batch(batches, partial(_evaluate_group, ctx, leaves))
+    evaluation: Generator[Any, Any, list[None]] = _batch(
+        batches, lambda batch: Flatten(_evaluate_group(ctx, leaves, batch))
+    )
+    yield Flatten(evaluation)
     return tree_def.unflatten(leaves)
 
 
 # --- Evaluator Implementations ---
 # Ref
+@continuation
 def ref_evaluator(
     ctx: Context, refs: Sequence[Ref[Any]]
-) -> Sequence[Any] | Awaitable[Sequence[Any]]:
+) -> Generator[Any, Any, Sequence[Any]]:
     """Read and await stored values, which may change the Ref's value type."""
-    return _batch(refs, ctx.get)
+    return (yield Flatten(_batch(refs, ctx.get)))
 
 
-@continuation
 def _evaluate_node(ctx: Context, node: Node[_T]) -> Generator[Any, Any, _T]:
     child = ctx.derive()
     try:
-        return (yield node(child))
+        return (yield node.__call__.flat_call(child))
     finally:
-        yield child.dispose()
+        yield child.dispose.flat_call()
 
 
+@continuation
 def node_evaluator(
     ctx: Context, nodes: Sequence[Node[Any]]
-) -> Sequence[Any] | Awaitable[Sequence[Any]]:
+) -> Generator[Any, Any, Sequence[Any]]:
     """Evaluate every sibling and report failures after all children settle.
 
     Calls execute inline before their asynchronous results are scheduled.
@@ -163,4 +171,6 @@ def node_evaluator(
     may leave Context-owned cleanup running after the evaluator exits.
     """
 
-    return _batch(nodes, partial(_evaluate_node, ctx))
+    return (
+        yield Flatten(_batch(nodes, lambda node: Flatten(_evaluate_node(ctx, node))))
+    )
