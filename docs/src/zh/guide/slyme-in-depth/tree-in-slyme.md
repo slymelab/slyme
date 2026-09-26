@@ -11,8 +11,8 @@ Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 l
 每个遍历接口可传入 `resolver=TreeResolver(func, takes_aux=False)`。类型查找前先调用 `func(element)`：返回 `True` 将当前位置视为 leaf，返回 `False` 按精确类型查找，返回 `TreeHandler` 则覆盖默认分派。返回 `False` 且没有对应 handler 时，对象仍是 leaf。设置 `takes_aux=True` 后，回调接收 `(element, aux)`；`aux.parent` 是直接父容器，`aux.key_path` 是完整路径，根处分别为 `None` 和 `()`。回调参数数量只由 `takes_aux` 决定，返回路径的遍历也不例外。
 
 ```python
-from slyme.context.default import DATA_RULES
 from slyme.utils.tree import TreeResolver, flatten
+from slyme.utils.tree.common import DATA_RULES
 
 leaves, definition = flatten(
     {"items": [1, 2]},
@@ -22,13 +22,15 @@ leaves, definition = flatten(
 assert leaves == [[1, 2]]
 ```
 
-普通 `flatten`、`iter` 和 `map` 仅在 resolver 请求辅助数据时创建遍历上下文和序列路径 key；返回路径的接口始终记录路径。无论哪种情况，handler 提供的重建信息都会保留，包括字典的 key。
+普通 `flatten`、`iter` 和 `map` 仅在 resolver 请求辅助数据时创建遍历上下文；返回路径的接口始终记录路径。记录路径时，handler 必须为非空容器提供 `TreeAux.children_keys`；缺失或数量不足时抛出 `ValueError`，不自动补充序列索引。不记录路径时，遍历不检查子元素的 key，但重建 handler 仍可能需要它们。内置 list 和 tuple handler 显式提供 `SequenceKey`。无论哪种情况，handler 提供的重建信息都会保留，包括字典的 key。
 
-flatten handler 返回的 `TreeAux` 会原样传给其 unflatten handler；未指定的 `cls` 保持 `None`。`ContainerDef.cls` 独立记录实际容器类型。Leaf 定义共享不可变、无状态的标记对象；重建时每次出现的位置仍分别消费一个 leaf。
+flatten handler 返回的 `TreeAux` 会原样传给其 unflatten handler；未指定的 `cls` 保持 `None`。`TreeDef` 保存平铺、不可变的 leaf 标记与私有 container 记录，其中包括实际容器类型和子元素数量。重建按原顺序消费 leaf，使用局部栈组装容器，不倒序或复制输入的 leaf 序列。每次出现的位置分别消费一个 leaf，无需公开逐 leaf 或逐 container 的定义类。
+
+Flatten 递归遍历容器，仍受 Python 递归深度限制；重建采用后序迭代，先重建子元素，再重建其容器。遇到仅支持遍历的容器记录时才报错。Leaf 数量不匹配会抛出 `ValueError`。迭代器遍历不创建 `TreeDef`。
 
 Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。子类自行选择是否声明 slots。
 
-不依赖 Context 的遍历可以显式导入 `slyme.context.default.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不加入 `__all__`，也不在包顶层重导出。`_apply` 仍是私有实现细节。
+不依赖 Context 的遍历可以显式导入 `slyme.utils.tree.common.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不在包顶层重导出。`_apply` 仍是私有实现细节。
 
 ## Context 持有的默认配置
 

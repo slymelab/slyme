@@ -20,10 +20,8 @@ from __future__ import annotations
 
 from .core import (
     AttributeKey,
-    ContainerDef,
     FlattenFunc,
     KeyPath,
-    LeafDef,
     MappingKey,
     SequenceKey,
     TraverseAux,
@@ -51,8 +49,6 @@ __all__ = [
     "AttributeKey",
     "TreeAux",
     "TreeDef",
-    "LeafDef",
-    "ContainerDef",
     "TraverseAux",
     "TreeHandler",
     "TreeRules",

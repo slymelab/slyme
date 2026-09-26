@@ -22,16 +22,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from slyme.utils.tree import TreeAux, TreeHandler, TreeRules
-from slyme.utils.tree.common import (
-    flatten_dict,
-    flatten_mapping_proxy,
-    unflatten_dict,
-    unflatten_mapping_proxy,
-)
+from slyme.utils.tree import TreeRules
+from slyme.utils.tree.common import DATA_RULES
 
 from .compose import Compose
 from .schema import Ref, Schema
@@ -106,19 +100,6 @@ DATA_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.data.rules")
 NODE_TREE_REF = Ref[Compose[TreeLayer, TreeRules]]("$.tree.node.rules")
 EVALUATORS_REF = Ref[Compose[EvaluatorLayer, dict[type, "BatchEvaluatorFunc"]]](
     "$.eval.handlers"
-)
-
-DATA_RULES = TreeRules(
-    handlers={
-        tuple: TreeHandler(
-            lambda value: (iter(value), TreeAux()), lambda items, _: tuple(items)
-        ),
-        list: TreeHandler(
-            lambda value: (iter(value), TreeAux()), lambda items, _: list(items)
-        ),
-        dict: TreeHandler(flatten_dict, unflatten_dict),
-        MappingProxyType: TreeHandler(flatten_mapping_proxy, unflatten_mapping_proxy),
-    }
 )
 
 

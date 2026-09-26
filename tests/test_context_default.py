@@ -19,7 +19,6 @@ from slyme.context import (
 )
 from slyme.context.core import ContextPathError
 from slyme.context.default import (
-    DATA_RULES,
     EvaluatorLayer,
     TreeLayer,
 )
@@ -30,6 +29,7 @@ from slyme.utils.execution import await_result
 from slyme.utils.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
 from slyme.utils.tree import flatten as tree_flatten
 from slyme.utils.tree import iter as iter_leaves
+from slyme.utils.tree.common import DATA_RULES
 
 
 @dataclass

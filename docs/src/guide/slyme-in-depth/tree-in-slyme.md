@@ -11,8 +11,8 @@ A rule snapshot copies its handler mapping. `TreeRules.merge()` keeps the first 
 Every traversal accepts an optional `resolver=TreeResolver(func, takes_aux=False)`. Before type lookup, `func(element)` returns `True` to treat that occurrence as a leaf, `False` to use the exact-type rules, or a `TreeHandler` to override them. `False` with no registered handler leaves the element opaque. With `takes_aux=True`, the callback receives `(element, aux)`; `aux.parent` is the direct parent and `aux.key_path` is the full path, with `None` and `()` at the root. Callback arity depends only on `takes_aux`, including for path-returning operations.
 
 ```python
-from slyme.context.default import DATA_RULES
 from slyme.utils.tree import TreeResolver, flatten
+from slyme.utils.tree.common import DATA_RULES
 
 leaves, definition = flatten(
     {"items": [1, 2]},
@@ -22,13 +22,15 @@ leaves, definition = flatten(
 assert leaves == [[1, 2]]
 ```
 
-Ordinary `flatten`, `iter`, and `map` construct no traversal context or sequence path keys unless the resolver requests auxiliary data. Path-returning operations always track paths. Handler-provided reconstruction metadata, including dictionary keys, is preserved in either case.
+Ordinary `flatten`, `iter`, and `map` construct no traversal context unless the resolver requests auxiliary data. Path-returning operations always track paths. Handlers must supply `TreeAux.children_keys` for nonempty containers when tracking paths; missing or insufficient keys raise `ValueError`, with no inferred sequence indices. Without path tracking, traversal does not inspect child keys; reconstruction handlers may still require them. Built-in list and tuple handlers supply explicit `SequenceKey` values. Handler-provided reconstruction metadata, including dictionary keys, is preserved in either case.
 
-The `TreeAux` returned by a flatten handler is passed unchanged to its unflatten handler; an omitted `cls` remains `None`. `ContainerDef.cls` records the actual container type independently. Leaf definitions share an immutable, stateless marker; each occurrence still consumes its own leaf during reconstruction.
+The `TreeAux` returned by a flatten handler is passed unchanged to its unflatten handler; an omitted `cls` remains `None`. `TreeDef` stores a flat, immutable sequence of leaf markers and private container records, including actual container types and child counts. Reconstruction consumes leaves in their original order and uses a local stack to assemble containers; it does not reverse or copy the input leaves. Each occurrence consumes its own leaf. No public per-leaf or per-container definition classes are needed.
+
+Flattening recurses into containers and remains subject to Python's recursion limit. Reconstruction is iterative and follows postorder: children are reconstructed before their container. A traversal-only container raises when its record is reached. Leaf-count mismatches raise `ValueError`. Iterator traversal does not create a `TreeDef`.
 
 Tree's built-in data classes use slots, without an instance dictionary or weak-reference support. Subclasses choose whether to define their own slots.
 
-For traversal without a Context, explicitly import `DATA_RULES` from `slyme.context.default` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not included in `__all__` or re-exported at package level. `_apply` remains a private implementation detail.
+For traversal without a Context, explicitly import `DATA_RULES` from `slyme.utils.tree.common` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
 
 ## Context-owned defaults
 

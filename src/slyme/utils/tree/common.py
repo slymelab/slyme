@@ -18,11 +18,17 @@ Common utilities and shared logic for Tree operations.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from types import MappingProxyType
 from typing import Any, cast
 
-from .core import MappingKey, TreeAux
+from .core import MappingKey, SequenceKey, TreeAux, TreeHandler, TreeRules
+
+
+def flatten_sequence(data: Sequence[Any]) -> tuple[Iterable[Any], TreeAux]:
+    """Flatten a sequence with explicit index keys."""
+    keys = tuple(SequenceKey(index) for index in range(len(data)))
+    return iter(data), TreeAux(children_keys=keys)
 
 
 def flatten_mapping_proxy(data: MappingProxyType) -> tuple[Iterable[Any], TreeAux]:
@@ -58,3 +64,13 @@ def unflatten_dict(children: Iterable[Any], tree_aux: TreeAux) -> dict:
     # Unwrap DictKey to get raw keys.
     raw_keys = [k.key for k in cast("Iterable[MappingKey]", tree_aux.children_keys)]
     return dict(zip(raw_keys, children, strict=True))
+
+
+DATA_RULES = TreeRules(
+    handlers={
+        tuple: TreeHandler(flatten_sequence, lambda items, _: tuple(items)),
+        list: TreeHandler(flatten_sequence, lambda items, _: list(items)),
+        dict: TreeHandler(flatten_dict, unflatten_dict),
+        MappingProxyType: TreeHandler(flatten_mapping_proxy, unflatten_mapping_proxy),
+    }
+)
