@@ -7,7 +7,7 @@ import pytest
 
 from slyme.node.eval import _batch
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import Flatten, await_result, continuation
+from slyme.utils.execution import FlatExec, await_result, continuation
 
 _run_batch = continuation(_batch)
 
@@ -158,7 +158,7 @@ async def test_batch_keeps_exceptions_as_data_and_nested_error_indices() -> None
         raise data
 
     with pytest.raises(BaseExceptionGroup) as caught:
-        _run_batch([1], lambda value: Flatten(_batch([2], fail)))
+        _run_batch([1], lambda value: FlatExec(_batch([2], fail)))
     inner = caught.value.exceptions[0]
     assert isinstance(inner, BaseExceptionGroup)
     assert inner.exceptions == (data,)
@@ -171,7 +171,7 @@ def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
     @continuation
     def recover():
         try:
-            values = yield Flatten(_batch([1], fail))
+            values = yield FlatExec(_batch([1], fail))
         except BaseExceptionGroup as error:
             values = [len(error.exceptions)]
         return values[0] + 1
@@ -179,7 +179,7 @@ def test_caller_handles_batch_and_postprocessing_errors_with_except() -> None:
     @continuation
     def postprocess():
         try:
-            values = yield Flatten(_batch([], str))
+            values = yield FlatExec(_batch([], str))
             return values[0]
         except IndexError:
             return "index"

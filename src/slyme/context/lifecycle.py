@@ -22,7 +22,7 @@ from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import Continuation, Flatten, continuation, once
+from slyme.utils.execution import Continuation, FlatExec, continuation, once
 
 if TYPE_CHECKING:
     from .core import Context
@@ -105,7 +105,7 @@ def _batch(effects: Sequence[_Effect]) -> Generator[Any, Any, None]:
             errors.append((index, error))
 
     for index, effect in enumerate(effects):
-        result = yield Flatten(dispose(index, effect), mode="start")
+        result = yield FlatExec(dispose(index, effect), mode="start")
         if isawaitable(result):
             pending.append(result)
 
@@ -236,7 +236,7 @@ class Lifecycle:
         execute_effects = _sequential if self.dispose_mode == "sequential" else _batch
 
         try:
-            yield Flatten(execute_effects(effects))
+            yield FlatExec(execute_effects(effects))
         finally:
             self._effects.clear()
             try:

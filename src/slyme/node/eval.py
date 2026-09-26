@@ -22,7 +22,7 @@ from typing import Any, TypeVar, cast
 from slyme.context import Context, Ref
 from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import Continuation, Flatten, continuation
+from slyme.utils.execution import Continuation, FlatExec, continuation
 from slyme.utils.tree import flatten
 
 from .core import Node
@@ -42,7 +42,7 @@ _R = TypeVar("_R")
 
 
 def _evaluate_item(
-    call: Callable[[_T], _R | Awaitable[_R] | Flatten[_R]],
+    call: Callable[[_T], _R | Awaitable[_R] | FlatExec[_R]],
     results: list[_R | None],
     errors: list[tuple[int, BaseException]],
     index: int,
@@ -57,7 +57,7 @@ def _evaluate_item(
 
 
 def _batch(
-    values: Sequence[_T], call: Callable[[_T], _R | Awaitable[_R] | Flatten[_R]]
+    values: Sequence[_T], call: Callable[[_T], _R | Awaitable[_R] | FlatExec[_R]]
 ) -> Generator[Any, Any, list[_R]]:
     """Return ordered values, or group failures after every item settles.
 
@@ -72,7 +72,7 @@ def _batch(
     pending: list[Awaitable[None]] = []
 
     for index, value in enumerate(values):
-        result = yield Flatten(
+        result = yield FlatExec(
             _evaluate_item(call, results, errors, index, value), mode="start"
         )
         if isawaitable(result):
@@ -134,9 +134,9 @@ def eval_tree(ctx: Context, tree: Any) -> Generator[Any, Any, Any]:
     batches = list(eval_groups.items())
 
     evaluation: Generator[Any, Any, list[None]] = _batch(
-        batches, lambda batch: Flatten(_evaluate_group(ctx, leaves, batch))
+        batches, lambda batch: FlatExec(_evaluate_group(ctx, leaves, batch))
     )
-    yield Flatten(evaluation)
+    yield FlatExec(evaluation)
     return tree_def.unflatten(leaves)
 
 
@@ -147,7 +147,7 @@ def ref_evaluator(
     ctx: Context, refs: Sequence[Ref[Any]]
 ) -> Generator[Any, Any, Sequence[Any]]:
     """Read and await stored values, which may change the Ref's value type."""
-    return (yield Flatten(_batch(refs, ctx.get)))
+    return (yield FlatExec(_batch(refs, ctx.get)))
 
 
 def _evaluate_node(ctx: Context, node: Node[_T]) -> Generator[Any, Any, _T]:
@@ -172,5 +172,5 @@ def node_evaluator(
     """
 
     return (
-        yield Flatten(_batch(nodes, lambda node: Flatten(_evaluate_node(ctx, node))))
+        yield FlatExec(_batch(nodes, lambda node: FlatExec(_evaluate_node(ctx, node))))
     )

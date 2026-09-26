@@ -9,7 +9,7 @@ from typing_extensions import assert_type
 
 from slyme.utils.execution import (
     Continuation,
-    Flatten,
+    FlatExec,
     await_result,
     continuation,
     once,
@@ -117,24 +117,24 @@ async def check_types() -> None:
     assert_type(returned_async.flat_call().generate(), Generator[Any, Any, int])
     # All three entry points keep the same parameter checking, including
     # instance binding and keyword-only parameters.
-    assert_type(decorated.flat_call(1, label="value"), Flatten[str])
-    assert_type(decorated.flat_start(1, label="value"), Flatten[str])
-    assert_type(Example().method.flat_call(1), Flatten[str])
-    assert_type(Example().method.flat_start(1), Flatten[str])
-    assert_type(Example.method.flat_call(Example(), 1), Flatten[str])
-    assert_type(Example.method.flat_start(Example(), 1), Flatten[str])
+    assert_type(decorated.flat_call(1, label="value"), FlatExec[str])
+    assert_type(decorated.flat_start(1, label="value"), FlatExec[str])
+    assert_type(Example().method.flat_call(1), FlatExec[str])
+    assert_type(Example().method.flat_start(1), FlatExec[str])
+    assert_type(Example.method.flat_call(Example(), 1), FlatExec[str])
+    assert_type(Example.method.flat_start(Example(), 1), FlatExec[str])
     decorated.flat_call("value")  # type: ignore[arg-type]
     decorated.flat_start(1, label=2)  # type: ignore[arg-type]
     Example().method.flat_call("value")  # type: ignore[arg-type]
     Example().method.flat_start()  # type: ignore[call-arg]
-    assert_type(Flatten(immediate()), Flatten[str])
-    assert_type(Flatten(returned_async.__wrapped__()), Flatten[int])
-    assert_type(Flatten(returned_coroutine.__wrapped__()), Flatten[int])
-    assert_type(Flatten(returned_mixed.__wrapped__(1)), Flatten[int])
+    assert_type(FlatExec(immediate()), FlatExec[str])
+    assert_type(FlatExec(returned_async.__wrapped__()), FlatExec[int])
+    assert_type(FlatExec(returned_coroutine.__wrapped__()), FlatExec[int])
+    assert_type(FlatExec(returned_mixed.__wrapped__(1)), FlatExec[int])
     assert_type(
-        Flatten(returned_async.__wrapped__()).generate(), Generator[Any, Any, int]
+        FlatExec(returned_async.__wrapped__()).generate(), Generator[Any, Any, int]
     )
-    assert_type(Flatten(mixed(), mode="start"), Flatten[str])
+    assert_type(FlatExec(mixed(), mode="start"), FlatExec[str])
     bound: Callable[[int], str | Awaitable[str]] = Example().method
     assert_type(await await_result(bound(1)), str)
     assert_type(await await_result(decorated(1)), str)
@@ -159,10 +159,10 @@ def check_nested_return(value: Awaitable[Awaitable[int]]) -> None:
         returned_nested(value),
         Awaitable[int] | Awaitable[Awaitable[int]],
     )
-    assert_type(returned_nested.flat_call(value), Flatten[Awaitable[int]])
-    assert_type(Flatten(generate()), Flatten[Awaitable[int]])
+    assert_type(returned_nested.flat_call(value), FlatExec[Awaitable[int]])
+    assert_type(FlatExec(generate()), FlatExec[Awaitable[int]])
     assert_type(
-        Flatten(generate()).generate(),
+        FlatExec(generate()).generate(),
         Generator[Any, Any, Awaitable[int]],
     )
     assert_type(
@@ -179,7 +179,7 @@ def once_continuation(value: int, /, *, scale: int = 1) -> Generator[Any, Any, i
 
 def check_once_continuation(value: Awaitable[Awaitable[int]]) -> None:
     assert_type(once_continuation(1, scale=2), int | Awaitable[int])
-    assert_type(once_continuation.flat_call(1), Flatten[int])
-    assert_type(once_continuation.flat_start(1), Flatten[int])
-    assert_type(once(returned_nested).flat_call(value=value), Flatten[Awaitable[int]])
+    assert_type(once_continuation.flat_call(1), FlatExec[int])
+    assert_type(once_continuation.flat_start(1), FlatExec[int])
+    assert_type(once(returned_nested).flat_call(value=value), FlatExec[Awaitable[int]])
     once_continuation.flat_call("value")  # type: ignore[arg-type]

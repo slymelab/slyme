@@ -8,7 +8,7 @@ import pytest
 
 from slyme.utils.execution import (
     Continuation,
-    Flatten,
+    FlatExec,
     SharedAwaitable,
     await_result,
     continuation,
@@ -71,7 +71,7 @@ def test_bound_flat_calls_preserve_arguments_and_create_fresh_generators() -> No
         ]
 
     first_requests, second_requests = requests(), requests()
-    assert all(isinstance(request, Flatten) for request in first_requests)
+    assert all(isinstance(request, FlatExec) for request in first_requests)
     assert all(
         first.generator is not second.generator
         for first, second in zip(first_requests, second_requests, strict=True)
@@ -92,18 +92,18 @@ def test_bound_flat_calls_preserve_arguments_and_create_fresh_generators() -> No
     assert events == [10, 20, 20, 10, 20, 20, 10, 10]
 
 
-def test_flatten_accepts_explicit_generic_parameters() -> None:
+def test_flat_exec_accepts_explicit_generic_parameters() -> None:
     def child():
         yield None
         return 7
 
     def parent():
-        return (yield Flatten[int](child()))
+        return (yield FlatExec[int](child()))
 
     assert run(parent()) == 7
 
 
-def test_flatten_generate_is_lazy_and_preserves_bound_arguments() -> None:
+def test_flat_exec_generate_is_lazy_and_preserves_bound_arguments() -> None:
     events = []
 
     class Example:
@@ -133,7 +133,7 @@ async def test_run_preserves_unflattened_generator_returns(asynchronous, kind) -
     generator = unconsumed()
     future = asyncio.get_running_loop().create_future()
     future.set_result(7)
-    value = future if kind == "awaitable" else Flatten(generator)
+    value = future if kind == "awaitable" else FlatExec(generator)
 
     def child():
         if asynchronous:
@@ -178,12 +178,12 @@ async def test_all_entries_await_return_values_once(mode, asynchronous, return_d
         elif mode == "call":
             value = yield child.flat_call()
         elif mode == "raw_call":
-            value = yield Flatten(generate())
+            value = yield FlatExec(generate())
         else:
             started = yield (
                 child.flat_start()
                 if mode == "start"
-                else Flatten(generate(), mode="start")
+                else FlatExec(generate(), mode="start")
             )
             assert isawaitable(started) == suspends
             value = yield started
@@ -193,7 +193,7 @@ async def test_all_entries_await_return_values_once(mode, asynchronous, return_d
     if mode == "direct":
         result = child()
     elif mode == "run":
-        result = run(Flatten(generate()).generate())
+        result = run(FlatExec(generate()).generate())
     else:
         result = parent()
     assert isawaitable(result) == suspends
@@ -245,7 +245,7 @@ async def test_returns_use_yield_rules_without_reinterpreting_yield_results() ->
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("mode", ["call", "start"])
 @pytest.mark.parametrize("raw", [False, True])
-async def test_returned_requests_follow_their_flatten_mode(
+async def test_returned_requests_follow_their_flat_exec_mode(
     asynchronous, mode, raw
 ) -> None:
     events = []
@@ -267,7 +267,7 @@ async def test_returned_requests_follow_their_flatten_mode(
 
     @continuation
     def parent():
-        request = Flatten(forward.__wrapped__()) if raw else forward.flat_call()
+        request = FlatExec(forward.__wrapped__()) if raw else forward.flat_call()
         result = yield request
         assert isawaitable(result) == (asynchronous and mode == "start")
         return result
@@ -284,7 +284,7 @@ async def test_deep_returned_requests_use_an_explicit_stack(asynchronous, raw) -
     def descend(depth):
         if depth:
             return (
-                Flatten(descend.__wrapped__(depth - 1))
+                FlatExec(descend.__wrapped__(depth - 1))
                 if raw
                 else descend.flat_call(depth - 1)
             )
@@ -308,7 +308,7 @@ async def test_deep_forwarding_preserves_business_data(asynchronous, kind) -> No
     value = {
         "container": [awaitable],
         "generator": generator,
-        "request": [Flatten(generator)],
+        "request": [FlatExec(generator)],
     }[kind]
 
     @continuation
@@ -343,7 +343,7 @@ async def test_deep_calls_use_an_explicit_stack(
     def descend(depth):
         if depth:
             request = (
-                Flatten(descend(depth - 1)) if raw else wrapped.flat_call(depth - 1)
+                FlatExec(descend(depth - 1)) if raw else wrapped.flat_call(depth - 1)
             )
             result = 1 + (yield request)
             return asyncio.sleep(0, result=result) if await_return else result
@@ -352,7 +352,7 @@ async def test_deep_calls_use_an_explicit_stack(
         return 0
 
     wrapped = continuation(descend)
-    result = run(Flatten(descend(5000)).generate()) if raw else wrapped(5000)
+    result = run(FlatExec(descend(5000)).generate()) if raw else wrapped(5000)
     assert isawaitable(result) == (asynchronous or await_return)
     assert await await_result(result) == 5000
 
@@ -594,10 +594,10 @@ async def test_returned_awaitable_failure_reaches_parent_after_child_finally(
     def parent():
         try:
             if mode == "call":
-                yield (Flatten(child.__wrapped__()) if raw else child.flat_call())
+                yield (FlatExec(child.__wrapped__()) if raw else child.flat_call())
             else:
                 result = yield (
-                    Flatten(child.__wrapped__(), mode="start")
+                    FlatExec(child.__wrapped__(), mode="start")
                     if raw
                     else child.flat_start()
                 )

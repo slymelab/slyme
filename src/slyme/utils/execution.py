@@ -36,7 +36,7 @@ from typing import (
 
 __all__ = [
     "Continuation",
-    "Flatten",
+    "FlatExec",
     "continuation",
     "run",
     "await_result",
@@ -151,7 +151,7 @@ def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
 
 
 @dataclass(frozen=True)
-class Flatten(Generic[_Return]):
+class FlatExec(Generic[_Return]):
     """Request one generator execution on the yielding caller's driver.
 
     Only yielding this object expands its generator. The generator is already
@@ -159,7 +159,7 @@ class Flatten(Generic[_Return]):
     to the interpreter; create a fresh generator for another execution.
 
     The generator's return value is interpreted as one final yield: awaitables
-    are awaited once and Flatten requests are expanded. The interpreted result
+    are awaited once and FlatExec requests are expanded. The interpreted result
     is then returned without further interpretation.
 
     Call mode waits for completion. Start mode returns the completed result or
@@ -201,7 +201,7 @@ class Continuation(Generic[_P, _Return]):
 
     Each invocation has independent execution state. The return value is
     interpreted as one final yield. Awaitables are awaited once, without
-    recursively awaiting their results; Flatten requests are expanded.
+    recursively awaiting their results; FlatExec requests are expanded.
     Use flat_call/flat_start to compose continuations without nested drivers.
     """
 
@@ -229,17 +229,17 @@ class Continuation(Generic[_P, _Return]):
         """Run immediately, returning a value or an unscheduled remainder."""
         return run(self.flat_call(*args, **kwargs).generate())
 
-    def flat_call(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
+    def flat_call(self, /, *args: _P.args, **kwargs: _P.kwargs) -> FlatExec[_Return]:
         """Request execution on the yielding caller's stack until completion."""
-        return Flatten(self._func(*args, **kwargs), mode="call")
+        return FlatExec(self._func(*args, **kwargs), mode="call")
 
-    def flat_start(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
+    def flat_start(self, /, *args: _P.args, **kwargs: _P.kwargs) -> FlatExec[_Return]:
         """Request a value or remainder at the first awaitable suspension.
 
         Creating the request creates the generator without advancing it.
         Yielding it runs the synchronous prefix without scheduling tasks.
         """
-        return Flatten(self._func(*args, **kwargs), mode="start")
+        return FlatExec(self._func(*args, **kwargs), mode="start")
 
     @overload
     def __get__(
@@ -288,10 +288,10 @@ def continuation(
     Direct calls immediately drive a fresh execution. Yield .flat_call() to
     share the caller's driver, or .flat_start() to receive a value or remainder
     without waiting for asynchronous completion. None of these entry points
-    schedules tasks. Both methods construct Flatten requests holding fresh generators.
+    schedules tasks. Both methods construct FlatExec requests holding fresh generators.
 
-    All entry points use Flatten's final yield to interpret the return value:
-    returned awaitables are awaited and returned Flatten requests are expanded.
+    All entry points use FlatExec's final yield to interpret the return value:
+    returned awaitables are awaited and returned FlatExec requests are expanded.
     Other values remain data. Use an explicit yield to catch
     asynchronous failure inside the generator or finish waiting before finally.
     Flat calls share the driver's stack; ordinary nested calls use Python's stack.
@@ -336,7 +336,7 @@ def _advance_generator(
             method, argument = "throw", error
             continue
 
-        if isinstance(value, Flatten):
+        if isinstance(value, FlatExec):
             if value.mode == "start":
                 parents.append(stack)
                 stack = [value.generate()]
@@ -373,13 +373,13 @@ async def _resume_generator(
 def run(generator: Generator[Any, Any, _T]) -> _T | Awaitable[_T]:
     """Advance a generator immediately until completion or an awaitable yield.
 
-    Yielded Flatten requests use explicit stacks. Call mode returns the child's
+    Yielded FlatExec requests use explicit stacks. Call mode returns the child's
     completed result; start mode returns its result or an asynchronous remainder.
     Other yielded values, including ordinary generators, are sent back
     unchanged unless awaitable. An awaitable yield returns an unscheduled
     coroutine that awaits it once and resumes execution.
     Awaited failures, including cancellation, are thrown at the suspended yield.
-    Raw generator return values pass through unchanged. Flatten.generate()
+    Raw generator return values pass through unchanged. FlatExec.generate()
     adds the final yield used by flattened calls and continuation entry points.
 
     The caller hands over exclusive driving of the generator and must await any

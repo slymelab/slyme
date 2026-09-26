@@ -11,7 +11,7 @@ from slyme.context import Context, Ref
 from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
 from slyme.node.eval import node_evaluator, ref_evaluator
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.execution import Flatten, await_result, continuation
+from slyme.utils.execution import FlatExec, await_result, continuation
 
 
 def direct(*runtime: Any, **kwargs: Any) -> int:
@@ -135,12 +135,12 @@ async def check_types(ctx: Context) -> None:
         Callable[[], None | Awaitable[None]],
     )
     assert_type(ctx.dispose(), None | Awaitable[None])
-    assert_type(ctx.dispose.flat_call(), Flatten[None])
-    assert_type(ctx.dispose.flat_start(), Flatten[None])
-    assert_type(Context[object].dispose.flat_call(ctx), Flatten[None])
-    assert_type(immediate().__call__.flat_call(ctx), Flatten[int])
-    assert_type(ref_evaluator.flat_call(ctx, []), Flatten[Sequence[Any]])
-    assert_type(node_evaluator.flat_call(ctx, []), Flatten[Sequence[Any]])
+    assert_type(ctx.dispose.flat_call(), FlatExec[None])
+    assert_type(ctx.dispose.flat_start(), FlatExec[None])
+    assert_type(Context[object].dispose.flat_call(ctx), FlatExec[None])
+    assert_type(immediate().__call__.flat_call(ctx), FlatExec[int])
+    assert_type(ref_evaluator.flat_call(ctx, []), FlatExec[Sequence[Any]])
+    assert_type(node_evaluator.flat_call(ctx, []), FlatExec[Sequence[Any]])
 
     assert_type(await await_result(ctx.dispose()), None)
 
