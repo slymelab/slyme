@@ -18,48 +18,37 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Generator
-from functools import wraps
+from dataclasses import dataclass
+from functools import update_wrapper
 from inspect import isawaitable
-from typing import Any, Generic, ParamSpec, TypeVar, cast, overload
+from types import MethodType
+from typing import (
+    Any,
+    Concatenate,
+    Generic,
+    Literal,
+    ParamSpec,
+    TypeVar,
+    cast,
+    overload,
+)
 
-__all__ = ["continuation", "run", "await_result", "SharedAwaitable", "once"]
+__all__ = [
+    "Continuation",
+    "Flatten",
+    "FlatResult",
+    "continuation",
+    "run",
+    "await_result",
+    "SharedAwaitable",
+    "once",
+]
 
 _P = ParamSpec("_P")
+_BoundP = ParamSpec("_BoundP")
 _T = TypeVar("_T")
-
-
-@overload
-def continuation(
-    func: Callable[_P, Generator[Any, Any, _T]], /
-) -> Callable[_P, _T | Awaitable[_T]]: ...
-@overload
-def continuation(
-    func: None = None, /
-) -> Callable[
-    [Callable[_P, Generator[Any, Any, _T]]], Callable[_P, _T | Awaitable[_T]]
-]: ...
-def continuation(
-    func: Callable[_P, Generator[Any, Any, _T]] | None = None, /
-) -> (
-    Callable[_P, _T | Awaitable[_T]]
-    | Callable[
-        [Callable[_P, Generator[Any, Any, _T]]], Callable[_P, _T | Awaitable[_T]]
-    ]
-):
-    """Decorate a generator function, with or without parentheses.
-
-    Each call drives a fresh generator through run(), immediately returning its
-    result or an unscheduled asynchronous remainder. Arguments and function
-    metadata are preserved; calls do not share execution state.
-    """
-    if func is None:
-        return continuation
-
-    @wraps(func)
-    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _T | Awaitable[_T]:
-        return run(func(*args, **kwargs))
-
-    return wrapped
+_Return = TypeVar("_Return", covariant=True)
+_Instance = TypeVar("_Instance")
 
 
 @overload
@@ -153,48 +142,220 @@ def once(callback: Callable[_P, object], /) -> Callable[_P, object]:
     return wrapped
 
 
+@dataclass(frozen=True, slots=True)
+class Flatten(Generic[_Return]):
+    """Request one generator execution on the yielding caller's driver.
+
+    Only yielding this object expands its generator. The generator is already
+    created, but construction does not advance it. Hand its exclusive driving
+    to the interpreter; create a fresh generator for another execution.
+
+    Call mode returns the generator's final value unchanged. Start mode returns
+    a FlatResult at completion or at the first asynchronous suspension.
+    """
+
+    generator: Generator[Any, Any, _Return]
+    mode: Literal["call", "start"] = "call"
+
+
+@dataclass(frozen=True, slots=True)
+class FlatResult(Generic[_Return]):
+    """A flat start's outcome, distinct from the generator's business result.
+
+    With state='done', value is the final result, even if it is awaitable.
+    With state='pending', value is an unscheduled awaitable that completes the
+    execution and returns a FlatResult with state='done'. Keeping that envelope
+    across the asynchronous boundary also prevents JavaScript Promise adoption
+    from consuming an awaitable business value when this protocol is ported.
+    The caller owns the remainder. This object is not awaitable and holds no
+    failures: synchronous failures are thrown at the start, asynchronous ones
+    on waiting.
+
+    Returning a FlatResult from a generator returns it as business data; it
+    does not delegate execution or implicitly unwrap nested results.
+    """
+
+    value: _Return | Awaitable[FlatResult[_Return]]
+    state: Literal["done", "pending"]
+
+
+class Continuation(Generic[_P, _Return]):
+    """A generator function with direct, flat-call and flat-start entry points.
+
+    Each invocation has independent execution state. Yielded awaitables are
+    awaited once; all return values are data and are passed through unchanged.
+    Use flat_call/flat_start to compose continuations without nested drivers.
+    """
+
+    __wrapped__: Callable[_P, Generator[Any, Any, _Return]]
+    __name__: str
+    __qualname__: str
+
+    def __init__(self, func: Callable[_P, Generator[Any, Any, _Return]], /) -> None:
+        self._func = func
+        update_wrapper(self, func, updated=())
+
+    def __call__(
+        self, /, *args: _P.args, **kwargs: _P.kwargs
+    ) -> _Return | Awaitable[_Return]:
+        """Run immediately, returning a value or an unscheduled remainder."""
+        return run(self._func(*args, **kwargs))
+
+    def flat_call(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
+        """Request execution on the yielding caller's stack until completion."""
+        return Flatten(self._func(*args, **kwargs), mode="call")
+
+    def flat_start(self, /, *args: _P.args, **kwargs: _P.kwargs) -> Flatten[_Return]:
+        """Request a FlatResult at completion or the first awaitable yield.
+
+        Creating the request creates the generator without advancing it.
+        Yielding it runs the synchronous prefix without scheduling tasks.
+        """
+        return Flatten(self._func(*args, **kwargs), mode="start")
+
+    @overload
+    def __get__(
+        self, instance: None, owner: type[object] | None = None
+    ) -> Continuation[_P, _Return]: ...
+    @overload
+    def __get__(
+        self: Continuation[Concatenate[_Instance, _BoundP], _Return],
+        instance: _Instance,
+        owner: type[_Instance] | None = None,
+    ) -> Continuation[_BoundP, _Return]: ...
+    def __get__(
+        self, instance: object | None, owner: type[object] | None = None
+    ) -> Continuation[..., _Return]:
+        if instance is None:
+            return self
+        return Continuation(MethodType(self._func, instance))
+
+
+@overload
+def continuation(
+    func: Callable[_P, Generator[Any, Any, _T]], /
+) -> Continuation[_P, _T]: ...
+@overload
+def continuation(
+    func: None = None, /
+) -> Callable[[Callable[_P, Generator[Any, Any, _T]]], Continuation[_P, _T]]: ...
+def continuation(
+    func: Callable[_P, Generator[Any, Any, _T]] | None = None, /
+) -> (
+    Continuation[_P, _T]
+    | Callable[[Callable[_P, Generator[Any, Any, _T]]], Continuation[_P, _T]]
+):
+    """Decorate a generator function, with or without parentheses.
+
+    Direct calls immediately drive a fresh execution. Yield .flat_call() to
+    share the caller's driver, or .flat_start() to receive a FlatResult without
+    waiting for asynchronous completion. None of these entry points schedules
+    tasks. Both methods construct Flatten requests holding fresh generators.
+
+    Return values are unchanged, including awaitables and Flatten requests.
+    Use an explicit yield to await an operation. Compose continuations through
+    flat_call/flat_start: directly calling and yielding a returned awaitable
+    cannot distinguish asynchronous execution from awaitable business data.
+    """
+    if func is None:
+        return continuation
+
+    return Continuation(func)
+
+
 def _advance_generator(
-    generator: Generator[Any, Any, Any],
-    method: Callable[[Any], Any],
+    stack: list[Generator[Any, Any, Any]],
+    method: Literal["send", "throw"],
     argument: Any,
 ) -> tuple[bool, Any]:
     # Different yields may exchange unrelated types.
+    # Each start owns a separate stack. Its parent is restored in O(1), with
+    # no scans or copies of the surrounding frames at an async boundary.
+    parents: list[list[Generator[Any, Any, Any]]] = []
     while True:
+        if not stack:
+            if parents:
+                stack = parents.pop()
+                if method == "send":
+                    argument = FlatResult(argument, state="done")
+            elif method == "throw":
+                raise argument
+            else:
+                return True, argument
+
+        generator = stack[-1]
         try:
-            value = method(argument)
+            value = (
+                generator.send(argument)
+                if method == "send"
+                else generator.throw(argument)
+            )
         except StopIteration as finished:
-            return True, finished.value
+            stack.pop()
+            method, argument = "send", finished.value
+            continue
+        except BaseException as error:
+            stack.pop()
+            method, argument = "throw", error
+            continue
+
+        if isinstance(value, Flatten):
+            if value.mode == "start":
+                parents.append(stack)
+                stack = [value.generator]
+            else:
+                stack.append(value.generator)
+            method, argument = "send", None
+            continue
+
         if isawaitable(value):
-            return False, value
-        method, argument = generator.send, value
+            if not parents:
+                return False, value
+            value = FlatResult(_resume_generator(value, stack), state="pending")
+            stack = parents.pop()
+        method, argument = "send", value
 
 
 async def _resume_generator(
-    generator: Generator[Any, Any, _T], pending: Awaitable[Any]
-) -> _T:
+    pending: Awaitable[Any], stack: list[Generator[Any, Any, Any]]
+) -> FlatResult[Any]:
     while True:
         try:
             value = await pending
         except BaseException as error:
-            done, value = _advance_generator(generator, generator.throw, error)
+            done, value = _advance_generator(stack, "throw", error)
         else:
-            done, value = _advance_generator(generator, generator.send, value)
+            done, value = _advance_generator(stack, "send", value)
         if done:
-            return cast(_T, value)
+            return FlatResult(value, state="done")
         pending = value
+
+
+async def _resume(
+    pending: Awaitable[Any], stack: list[Generator[Any, Any, Any]]
+) -> object:
+    result = await _resume_generator(pending, stack)
+    return result.value
 
 
 def run(generator: Generator[Any, Any, _T]) -> _T | Awaitable[_T]:
     """Advance a generator immediately until completion or an awaitable yield.
 
-    Ordinary yielded values are sent back unchanged. An awaitable yield returns
-    an unscheduled coroutine that awaits it and resumes the same generator.
+    Yielded Flatten requests use explicit stacks. Call mode returns the child's
+    final value; start mode returns a FlatResult. Other yielded values, including
+    ordinary generators and FlatResult objects, are sent back unchanged unless
+    awaitable. An awaitable yield returns an unscheduled coroutine that awaits
+    it once and resumes execution.
     Awaited failures, including cancellation, are thrown at the suspended yield.
-    Only yielded values are awaited; the generator's return value is unchanged.
+    All return values and awaited results are passed through unchanged, without
+    interpreting them again. Continuation uses this same execution protocol.
 
     The caller hands over exclusive driving of the generator and must await any
     asynchronous remainder. No tasks, error aggregation, cancellation shielding,
     or result caching are provided. Generator reuse follows Python's protocol.
     """
-    done, value = _advance_generator(generator, generator.send, None)
-    return cast(_T, value) if done else _resume_generator(generator, value)
+    stack = [generator]
+    done, value = _advance_generator(stack, "send", None)
+    if done:
+        return cast(_T, value)
+    return cast(Awaitable[_T], _resume(value, stack))
