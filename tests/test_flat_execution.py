@@ -6,7 +6,7 @@ from inspect import isawaitable
 
 import pytest
 
-from slyme.context import Context, Schema
+from slyme.context import Context
 from slyme.node import Auto, create_node, sequential
 from slyme.utils.exception import BaseExceptionGroup
 from slyme.utils.execution import await_result, continuation
@@ -136,28 +136,3 @@ async def test_deep_sequential_nodes_flatten_the_existing_execution_body(asynchr
         assert calls == [1]
     finally:
         await await_result(ctx.dispose())
-
-
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_installed_continuation_preserves_binding_and_flat_entry(asynchronous):
-    root = Context()
-    root.declare({"value": Schema.leaf()})
-    root.set("value", 7)
-    child = root.derive()
-    child.set("value", 11)
-
-    @continuation
-    def recurse(ctx, depth):
-        if depth:
-            return 1 + (yield ctx.recurse.flat_call(depth - 1))
-        if asynchronous:
-            yield asyncio.sleep(0)
-        return ctx.get("value")
-
-    remove = root.install("recurse", recurse)
-    try:
-        assert await await_result(child.recurse(2000)) == 2011
-        assert await await_result(root.recurse(0)) == 7
-    finally:
-        await await_result(remove())
-        await await_result(root.dispose())

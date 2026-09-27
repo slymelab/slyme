@@ -10,10 +10,6 @@ breaking changes when they are documented here.
 
 ### Added
 
-- `Context.install(name, func)` registers lifecycle-owned extension methods under
-  `$.methods`. Dynamic attribute access binds the accessing Context, follows Scope
-  visibility, and preserves synchronous or asynchronous results. Native members
-  remain reserved; each installation withdraws its value before its declaration.
 - Generic `Context[A]` facets, created by an optional synchronous `facet_factory`
   on Context construction, `fork()`, or `derive()`. Facets are per-Context,
   remain available after disposal, and are not inherited or automatically
@@ -155,6 +151,10 @@ breaking changes when they are documented here.
   failures during application do not trigger rollback.
 
 ### Removed
+
+- `Context.install()` and dynamic method lookup through `$.methods`. Register
+  functions or Nodes in declared fields, retrieve them with `get()`, and pass
+  arguments explicitly. Context attribute access no longer consults scoped data.
 
 - Removed `Compose.one()`, `collect()`, `merge()`, and generic entry snapshots.
   Define layer storage and queries explicitly; inspect live layers with `layers()`.

@@ -50,6 +50,40 @@ def test_schema_module_preserves_public_ref_and_context_interoperation() -> None
     ctx.dispose()
 
 
+def test_registered_functions_remain_data_without_dynamic_attribute_binding() -> None:
+    root = Context()
+    root.declare(
+        {
+            "value": Schema.leaf(),
+            "$": {"methods": {"read_value": Schema.leaf(mode="register")}},
+        }
+    )
+    ref = root.resolve("$.methods.read_value")
+    value = root.resolve("value")
+    root.set(value, 1)
+    child = root.derive()
+    child.set(value, 2)
+
+    def read(caller, offset=0):
+        return caller.get(value) + offset
+
+    try:
+        remove = root.register(ref, read)
+        assert child.get(ref) is read
+        assert child.get(ref)(child, 10) == 12
+        assert root.get(ref)(root, 10) == 11
+        assert not hasattr(child, "read_value")
+        assert not hasattr(root, "install")
+        remove_shadow = child.register(ref, lambda caller: caller.get(value) * 5)
+        assert child.get(ref)(child) == 10
+        remove_shadow()
+        assert child.get(ref) is read
+        remove()
+        assert not child.exists(ref)
+    finally:
+        root.dispose()
+
+
 R = Schema(
     {
         "a": {
