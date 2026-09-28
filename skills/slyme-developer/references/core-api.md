@@ -10,7 +10,7 @@ from slyme.node import Auto, Node, node, sequential_exec, wrapper
 R = Schema(
     {
         "input": {
-            "value": Schema.leaf(float),
+            "value": Schema.leaf(),
         },
         "state": {"counter": Schema.leaf()},
         "output": {"result": Schema.leaf()},

@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import pytest
 
-from slyme.context import Context, Identity, Ref, Schema, Scope, ScopeBinding
+from slyme.context import Context, Identity, Metadata, Ref, Schema, Scope, ScopeBinding
 from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_TREE_REF
 from slyme.context.store import _MISSING
@@ -38,26 +38,38 @@ def test_undeclared_path_errors_are_the_same_for_strings_and_refs(
     ctx.dispose()
 
 
-def test_entry_resolution_without_a_role_does_not_materialize_config() -> None:
+def test_entry_resolution_does_not_materialize_metadata() -> None:
     ctx = Context()
     declaration = {"group": {"value": Schema.leaf()}}
-    withdraw = ctx.declare(declaration)
+    marker = Metadata()
+    withdraw = ctx.declare(
+        {
+            "": Schema.container(metadata={"docs": marker}),
+            "group": {
+                "": Schema.container(metadata={"docs": marker}),
+                "value": Schema.leaf(metadata={"docs": marker}),
+            },
+        }
+    )
     ctx.declare(declaration)
     entries = {path: ctx.resolve_entry(path) for path in ("", "group", "group.value")}
+    snapshots = {path: entry.metadata for path, entry in entries.items()}
+    assert all(view == {"docs": marker} for view in snapshots.values())
     withdraw()
+    assert all(view == {"docs": marker} for view in snapshots.values())
 
     for path, entry in entries.items():
-        assert entry._config is None
+        assert entry._metadata is None
         assert ctx.resolve_entry(path) is entry
         assert ctx.resolve_entry(Ref(path), role=None) is entry
         assert ctx.resolve(path) is entry.ref
         assert ctx.resolve(Ref(path), role=None) is entry.ref
-        assert entry._config is None
+        assert entry._metadata is None
 
     assert ctx.resolve_entry("group", role="container") is entries["group"]
-    assert entries["group"]._config is not None
     assert ctx.resolve(Ref("group.value"), role="leaf") is entries["group.value"].ref
-    assert entries["group.value"]._config is not None
+    assert all(entry._metadata is None for entry in entries.values())
+    assert all(entry.metadata == {} for entry in entries.values())
     ctx.dispose()
 
 

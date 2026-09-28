@@ -298,7 +298,7 @@ class ContextStore:
     def _validate_mode(
         entry: RefEntry[Any], mode: Literal["assign", "register"]
     ) -> None:
-        config = cast(RefLeafConfig[Any], entry.config)
+        config = cast(RefLeafConfig, entry.config)
         if config.mode != mode:
             raise ContextPathError(
                 f"Path {entry.ref.path!r} uses {config.mode!r} mode; "

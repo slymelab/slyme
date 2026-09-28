@@ -28,17 +28,17 @@ Schema 维护完整路径索引和结构化树，两者引用同一批条目。C
 ```python
 from slyme.context import Ref, Schema
 
-schema = Schema({"user": {"name": Schema.leaf(str)}})
+schema = Schema({"user": {"name": Schema.leaf()}})
 name = schema.resolve("user.name")
 assert name.path == "user.name"
 assert Ref("user.name") == name
 ```
 
 直接构造 `Ref` 不会修改 Schema。Context 操作会在应用的 Schema 中解析它的路径；
-路径角色、声明的 value type 和写入模式仍由该 Schema 决定。Ref 自身只包含路径和
+路径角色和写入模式仍由该 Schema 决定。Ref 自身只包含路径和
 缓存的路径分段。
 
-`Ref[T]` 通过 `resolve()`、`resolve_entry()` 和 `Context.get()` 保留 `T`，并在静态检查中约束 `set()`、`register()` 的传入值类型。`get()` 的 default 类型会加入返回值类型。字符串路径仍是动态类型；container 的 Ref 应描述 `ContextView`，而不是 dict。这些注解不检查 Ref 的类型是否匹配运行时 Schema。
+`Ref[T]` 通过 `resolve()`、`resolve_entry()` 和 `Context.get()` 保留 `T`，并在静态检查中约束 `set()`、`register()` 的传入值类型。`get()` 的 default 类型会加入返回值类型。字符串路径仍是动态类型；container 的 Ref 应描述 `ContextView`，而不是 dict。这些注解提供静态类型检查，不建立运行时类型约束。
 
 `Ref("")` 表示根 container，其 `parts == ()`；`schema.resolve("")` 返回对应的规范 Ref。根由 Schema 自身永久声明。其他路径内部仍不允许空分段，例如 `".user"`、`"user."` 和 `"user..name"`。
 
@@ -50,7 +50,7 @@ from slyme.context import Schema
 R = Schema(
     {
         "user": {
-            "name": Schema.leaf(str),
+            "name": Schema.leaf(),
             "age": Schema.leaf(),
         },
         "status": Schema.leaf(),
@@ -67,13 +67,11 @@ Schema 是按身份比较、支持弱引用的冻结 dataclass。它的属性绑
 
 Schema 强引用每个应用 Store，Store 的 viewer 登记持有活跃 Context。子 Context 共享 root 的 Store。根释放 viewer 后会注销 Store，清理失败也会注销；根构造失败同样会注销。只要 Schema 仍可达，丢弃 Context 的最后一个外部引用不会释放应用；应显式调用 `dispose()`，并等待可能的异步清理。撤销字段会清除所有已登记 Store 中的对应 binding，但不 dispose 这些 Context。不同 Store 之间的字段清理顺序不作保证。
 
-Schema 校验路径声明，并拒绝互相冲突的 value type 或写入模式，但不校验所存值的运行时类型。
-
-省略 `value_type` 时存储内部 `_MISSING` 标记，不施加类型约束，可以与任意具体类型合并。`Schema.leaf(None)` 则明确声明 `type(None)`。两个已指定的类型必须一致。撤销最后一份有类型的声明后，若仍有未指定类型的声明，配置恢复为未指定，但不改变已存储的值。
+Schema 校验路径角色、写入模式与 metadata 兼容性，不声明或校验所存值的运行时类型。使用 `Ref[T]` 约束读写的静态类型；独立创建的 Ref 的类型参数不会在运行时互相检查。
 
 该路径是稳定的语义名称，不依赖物理 Node 图的位置。
 
-`Schema.leaf()` 创建带有可选 value type 和写入 `mode` 的无路径 leaf 配置；默认
+`Schema.leaf()` 创建带有辅助 metadata 和写入 `mode` 的无路径 leaf 配置；默认
 `"assign"` 允许 `set()` 和 `delete()`，`"register"` 只允许 `register()` 及其 disposer。
 构造过程会将每项配置绑定到完整路径。声明树内不接受其他值。Schema 声明可以通过
 `declare()` 可撤销地扩展。
@@ -85,7 +83,7 @@ R = Schema(
     {
         "input": {
             "": Schema.container(),
-            "name": Schema.leaf(str),
+            "name": Schema.leaf(),
             "age": Schema.leaf(),
         },
         "output": {
@@ -104,7 +102,7 @@ R.resolve("input.naem")  # 抛出 KeyError
 Schema 使用默认 container 配置。Schema 只通过 `resolve()` 暴露已声明路径，因此应用路径
 不会与未来新增的 Schema 方法冲突。
 
-根 dict 遵循同样规则：`Schema({"": Schema.container()})` 显式提供根的 container 配置。声明 dict 必须构成有限的树；不支持环，循环结构由 Python 递归执行报错。声明结构归一化后，逐路径合并、登记，保留已有 entry。失败时逆序撤销本次成功登记的声明，删除新增路径，恢复原有所有者及有效配置。登记过程不对同步回调提供隔离；config merge 必须只依赖输入，不观察或修改 Schema。回滚不补偿外部副作用。
+根 dict 遵循同样规则：`Schema({"": Schema.container()})` 显式提供根的 container 配置。声明 dict 必须构成有限的树；不支持环，循环结构由 Python 递归执行报错。声明结构归一化后，逐路径校验、登记，保留已有 entry。失败时逆序撤销本次成功登记的声明，删除新增路径，恢复原有所有者及有效配置。登记过程不对同步回调提供隔离；metadata 比较必须只依赖输入，不观察或修改 Schema。回滚不补偿外部副作用。
 
 `declare()` 会扩展同一个 Schema 对象，失败时回滚，并返回撤销这次声明的幂等 disposer。
 多个兼容声明拥有相互独立的生命周期。如果已有 Ref 的行为配置或 metadata 不兼容，或者 leaf/container
@@ -122,20 +120,20 @@ remove_score()
 
 ### Metadata
 
-`Schema.resolve_entry(path)` 返回当前的 `RefEntry`；`Schema.entries` 属性返回包含全部已登记 root、container 和 leaf entry 的 tuple。该 tuple 只快照成员，不快照配置：每个 entry 提供不可变的 `ref`、当前合并后的 `config` 和 `alive` 状态。`slyme.context` 导出 `RefEntry`、`RefConfig`、`RefLeafConfig` 和 `RefContainerConfig`。声明仍优先使用 `Schema.leaf()` 和 `Schema.container()`；登记和撤销由 Schema 管理。
+`Schema.resolve_entry(path)` 返回当前的 `RefEntry`；`Schema.entries` 返回全部已登记 entry 的 tuple，只快照成员。每个 entry 提供 `ref`、当前 `config`、缓存的只读 `metadata` 快照 和 `alive`。`RefLeafConfig` 与 `RefContainerConfig` 只描述角色和写入模式，通过 `equals` 判断兼容；`RefConfig` 是两者的联合类型，不再是基类。`Schema.leaf()` 和 `Schema.container()` 返回分别携带 config 与 metadata 的 `RefDeclaration`。这些类型均由 `slyme.context` 导出。
 
 ```python
 entry = schema.resolve_entry("user.name")
-metadata = entry.config.metadata
+metadata = entry.metadata
 for entry in schema.entries:
-    print(entry.ref.path, entry.config.metadata)
+    print(entry.ref.path, entry.metadata)
 ```
 
-查询和枚举 entry 不会合并 config；读取 `entry.config` 时才按需重建失效缓存，已经取得的 config 保持为不可变快照。最后一个声明撤销后，旧 entry 的 `alive` 为 false，读取其 config 抛出 `LookupError`。查询不存在的路径抛出 `KeyError`；重新声明同一路径会创建新 entry，不会恢复旧 entry。
+`entry.config` 直接返回最早仍有效声明的原配置，不做合并。`entry.metadata` 按需生成并缓存当前代表对象的只读快照；仅所有权变化时复用缓存，可见 key 或代表对象身份变化时才使缓存失效。此前取得的快照保持不变。最后一个声明撤销后，旧 entry 的 `alive` 为 false，读取 config 或 metadata 抛出 `LookupError`；此前取得的 metadata 快照仍可读取且保持原样。查询不存在的路径抛出 `KeyError`，重新声明会创建新 entry。
 
-`Schema.leaf(metadata=...)` 和 `Schema.container(metadata=...)` 都接受字符串 key 到 `Metadata` 实例的 mapping。建议使用 `cli.option`、`docs.description` 等带应用命名空间的 key。Metadata 不改变路径的 leaf/container 角色、声明的值类型或写入模式。
+`Schema.leaf(metadata=...)` 和 `Schema.container(metadata=...)` 都接受字符串 key 到 `Metadata` 实例的 mapping。建议使用 `cli.option`、`docs.description` 等带应用命名空间的 key。Metadata 不改变路径的 leaf/container 角色、写入模式。
 
-`Metadata` 是 frozen dataclass，不是抽象基类。默认 `merge()` 只接受同一个实例；不同实例即使 dataclass 字段相等也会冲突。按内容判断兼容性或组合数据时，覆盖 `merge()`：
+`Metadata` 是 frozen dataclass，提供显式的 `equals(other) -> bool`。默认按对象身份判断；Schema 对同一对象直接接受，不调用比较。对同 key 的不同对象，只调用当前代表的 `equals(incoming)` 一次，不使用 Python `__eq__` 或 dataclass 自动生成的相等关系。可以覆盖 `equals` 接受内容等价的对象：
 
 ```python
 from dataclasses import dataclass
@@ -143,27 +141,36 @@ from slyme.context import Metadata, Schema
 
 
 @dataclass(frozen=True)
-class Labels(Metadata):
-    values: tuple[str, ...]
+class Description(Metadata):
+    text: str
 
-    def merge(self, other: Metadata) -> "Labels":
-        if not isinstance(other, Labels):
-            raise ValueError("Incompatible labels")
-        return Labels(self.values + other.values)
+    def equals(self, other: Metadata) -> bool:
+        return type(other) is Description and self.text == other.text
 
 
-schema = Schema(
-    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("core",))})}
+first = Description("Prompt text")
+second = Description("Prompt text")
+schema = Schema()
+remove_first = schema.declare(
+    {"prompt": Schema.leaf(metadata={"docs.description": first})}
 )
-remove = schema.declare(
-    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("plugin",))})}
+remove_second = schema.declare(
+    {"prompt": Schema.leaf(metadata={"docs.description": second})}
 )
-remove()
+entry = schema.resolve_entry("prompt")
+snapshot = entry.metadata
+assert snapshot["docs.description"] is first
+remove_first()
+assert entry.metadata["docs.description"] is second
+assert snapshot["docs.description"] is first
+remove_second()
 ```
 
-不同 metadata key 直接共存。同 key 调用已有 item 的 `merge(incoming)`，即使两者是同一个对象也会调用；框架不推断相等性，不递归合并 payload。每次 merge 必须同步、无副作用且只依赖输入 item。每个路径在登记时只合并一次新贡献；缓存失效时，可能需要先重新合并剩余声明。返回不可变且兼容的 item，或抛出冲突。已接受的贡献在任意撤销后，必须仍能按剩余声明的原始顺序合并；不要求交换律或幂等性。撤销和回滚只使 config 缓存失效，不调用 metadata merge。
+比较必须同步、纯粹、稳定，并满足自反性、对称性和传递性。等价对象对消费者必须可互换。比较只依赖不可变的输入数据，不读取或修改 Schema 及外部状态。框架信任这些约束，不做反向比较或全量两两比较。返回 false 表示声明冲突；抛出异常也会使登记失败。每个 entry 在一次遍历中逐项检查并登记 metadata；失败时撤销已登记的部分贡献，缓存可能失效，但此前取得的快照保持不变。后续路径失败时撤销本次声明已经登记的路径。
 
-metadata mapping 会复制并以只读形式暴露，item 保留原引用。Frozen dataclass 防止属性重新赋值，但不会冻结内部的 list 或 dict，payload 的不可变性由实现者保证。跨语言使用相同的字符串 key、声明顺序、默认对象身份比较和显式 merge 方法；JS 实现可用 `Map<string, Metadata>` 存储，不依赖对象属性名或 Python 的相等规则。
+不同 metadata key 共存。每个 key 保存有效声明提供的原始对象，并选择最早仍有效的声明作为代表。撤销代表时直接选取下一份原始对象，不比较、不 clone；同一对象重复登记也拥有独立的声明所有权。撤销、回滚和读取 config 均不调用 `equals`。登记和撤销只更新本次声明涉及的所有权记录，并按需使 metadata 缓存失效。对单个 entry，包含 k 个 key 的声明维护开销为 O(k)，另计新增时自定义 `equals` 的成本；失效后首次读取需要 O(m) 构建包含 m 个可见 key 的快照，缓存读取为 O(1)。整次 Schema 操作还涉及路径遍历和最终撤销的数据清理。导入 Schema 会复制当前 metadata mapping 并独立持有，不随源 Schema 后续变化。不同等价对象的代表身份可能随撤销改变；可用 `RefEntry` 与 metadata key 标识当前的标记位置。
+
+`RefDeclaration` 复制输入的 metadata mapping 并只读保存，item 保留原引用；entry 暴露的是单独缓存的只读快照。Frozen dataclass 防止属性重新赋值，但不会冻结内部 list 或 dict；实现者应保证 payload 不可变。Python 和 JS 使用相同的字符串 key、声明所有权、身份快捷判断和显式 `equals` 协议。leaf/container 配置采用固定的 `equals` 规则，不提供自定义 merge 入口；业务标记通过 Metadata 扩展。
 
 ## 读写
 
@@ -215,7 +222,7 @@ assert child.resolve("plugin.enabled").path == "plugin.enabled"
 
 ```python
 ready = ctx.resolve("core.ready")
-metadata = ctx.resolve_entry("core.ready").config.metadata
+metadata = ctx.resolve_entry("core.ready").metadata
 
 remove_plugin()
 remove_core()
@@ -224,7 +231,7 @@ remove_core()
 fragment 仍用于声明和导出该插件拥有的路径；`ctx.entries` 列出整个应用的声明并集。
 `Schema.declare()` 返回由调用方管理的 disposer。`ctx.declare()` 在应用的 Schema 中登记定义，并把清理作为 `ctx` 拥有的 effect，返回精确的提前 disposer。后续的 `declare()` 或 `update()` 失败不会销毁已经创建的 Context；调用方决定重试还是 dispose。
 
-`Schema(...)`、`Schema.declare(...)` 和 `Context.declare(...)` 的 `declaration` 参数表示一次登记的声明树，其中可以包含多个路径。每个声明的 leaf 及其祖先 container 都将声明者的唯一 ID 映射到原始 config，并缓存合并后的 config。Config 合并会拒绝不兼容的类型和配置项。新增声明会将其合入当前 config；撤销只使缓存失效，下次读取 config 时才按剩余声明的插入顺序重新合并。连续撤销且不读取 config 时，不会反复合并剩余声明。框架内部的撤销、回滚及 Context dispose 不读取 config；用户 cleanup 主动读取 config 时可以触发重算。每次 declare 返回一个 disposer，按登记的逆序释放，仅在最后一个声明者退出后删除定义。某项 cleanup 失败不会阻止其余条目的清理，全部失败以异常组抛出；后续调用重现同一个异常组，不重复清理。尚未调用的 disposer 会持有 Schema 及其条目；首次调用无论成功或失败都会释放这些引用，但失败的 traceback 仍可能保留清理现场。
+`Schema(...)`、`Schema.declare(...)` 和 `Context.declare(...)` 的 `declaration` 参数表示一次登记的声明树，其中可以包含多个路径。每个声明的 leaf 及其祖先 container 都记录声明者 ID 和各 metadata key 的原始贡献。先检查路径角色与写入模式，再检查 metadata 等价性。仅所有权变化不会使 metadata 缓存失效；可见 metadata 变化后，下次读取直接生成当前代表的快照，不重新比较。框架内部撤销、回滚及 Context dispose 不读取 config 或调用 `equals`。每次 declare 返回一个 disposer，按登记的逆序释放，仅在最后一个声明者退出后删除定义。某项 cleanup 失败不会阻止其余条目的清理，全部失败以异常组抛出；后续调用重现同一个异常组，不重复清理。尚未调用的 disposer 会持有 Schema 及其条目；首次调用无论成功或失败都会释放这些引用，但失败的 traceback 仍可能保留清理现场。
 
 `set` 和 `update` 只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `drop` 接受任一角色。删除 container 会移除其后代的本地值，不会删除 Schema 声明或继承值。
 

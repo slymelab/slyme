@@ -29,18 +29,17 @@ canonical Refs:
 ```python
 from slyme.context import Ref, Schema
 
-schema = Schema({"user": {"name": Schema.leaf(str)}})
+schema = Schema({"user": {"name": Schema.leaf()}})
 name = schema.resolve("user.name")
 assert name.path == "user.name"
 assert Ref("user.name") == name
 ```
 
 Constructing a `Ref` does not alter the Schema. Context operations resolve its
-path against its application's Schema, which remains the source of path roles, declared
-value types, and write modes. A Ref itself contains only its path and
-cached path parts.
+path against its application's Schema, which determines path roles and write
+modes. A Ref itself contains only its path and cached path parts.
 
-`Ref[T]` preserves `T` through `resolve()`, `resolve_entry()`, and `Context.get()`, and constrains values passed to `set()` or `register()` in static checks. A `get()` default adds its type to the result. String paths remain dynamically typed; a container Ref describes a `ContextView`, not a dict. These annotations do not validate the Ref's type against the runtime Schema.
+`Ref[T]` preserves `T` through `resolve()`, `resolve_entry()`, and `Context.get()`, and constrains values passed to `set()` or `register()` in static checks. A `get()` default adds its type to the result. String paths remain dynamically typed; a container Ref describes a `ContextView`, not a dict. These annotations provide static typing without runtime type constraints.
 
 `Ref("")` identifies the root container and has `parts == ()`; `schema.resolve("")` returns its canonical Ref. The root is permanently declared by Schema itself. Empty segments inside other paths, such as `".user"`, `"user."`, or `"user..name"`, remain invalid.
 
@@ -52,7 +51,7 @@ from slyme.context import Schema
 R = Schema(
     {
         "user": {
-            "name": Schema.leaf(str),
+            "name": Schema.leaf(),
             "age": Schema.leaf(),
         },
         "status": Schema.leaf(),
@@ -70,15 +69,12 @@ Schema is a frozen dataclass with identity equality and weak-reference support. 
 
 A Schema strongly retains each application Store; Store viewer registrations retain its active Contexts. Child Contexts share their root's Store. Root disposal detaches the Store after releasing viewers, even if cleanup fails; failed root construction also detaches it. Dropping the last external Context reference does not release an application while its Schema remains reachable; explicitly call `dispose()` and await any asynchronous cleanup. Withdrawing a field removes its bindings from all registered stores without disposing those Contexts. The order of field cleanup between stores is unspecified.
 
-Schema validates path declarations and rejects conflicting declared value types
-or write modes. It does not validate the runtime type of stored values.
-
-Omitting `value_type` stores an internal `_MISSING` marker and imposes no type constraint; it can merge with any concrete type. `Schema.leaf(None)` explicitly declares `type(None)`. Two specified types must match. Withdrawing the last typed declaration restores the unspecified type if untyped declarations remain, without changing stored values.
+Schema validates path roles, write modes and metadata compatibility. It does not declare or validate runtime value types. Use `Ref[T]` for static read/write types; type parameters on independently constructed Refs do not check each other at runtime.
 
 The path remains a stable semantic name independent of the physical Node graph.
 
-`Schema.leaf()` creates a path-free leaf configuration with an optional value
-type and a write `mode`. The default `"assign"` permits `set()` and `delete()`;
+`Schema.leaf()` creates a path-free leaf configuration with auxiliary metadata
+and a write `mode`. The default `"assign"` permits `set()` and `delete()`;
 `"register"` permits only `register()` and its disposer. Construction binds every configuration to its
 complete path. Other values are invalid inside a declaration tree. Schema
 declarations remain mutable through the reversible `declare()` operation.
@@ -90,7 +86,7 @@ R = Schema(
     {
         "input": {
             "": Schema.container(),
-            "name": Schema.leaf(str),
+            "name": Schema.leaf(),
             "age": Schema.leaf(),
         },
         "output": {
@@ -111,7 +107,7 @@ default container configuration when it is omitted. Schema exposes declared
 paths through `resolve()`, so application paths cannot collide with future
 Schema methods.
 
-The root dict follows the same rule: `Schema({"": Schema.container()})` explicitly supplies its container configuration. Declaration dicts must form a finite tree; cycles are unsupported and fail through Python's recursive execution. After normalizing the declaration structure, registration merges and updates paths individually, preserving existing entries. A failure reverses that declaration's successful registrations, removing new paths and restoring previous owners and effective configs. Registration is not isolated from synchronous callbacks; config merges must depend only on their inputs, not inspect or modify Schema. Rollback does not compensate external side effects.
+The root dict follows the same rule: `Schema({"": Schema.container()})` explicitly supplies its container configuration. Declaration dicts must form a finite tree; cycles are unsupported and fail through Python's recursive execution. After normalizing the declaration structure, registration validates and updates paths individually, preserving existing entries. A failure reverses that declaration's successful registrations, removing new paths and restoring previous owners and effective configs. Registration is not isolated from synchronous callbacks; metadata comparisons must depend only on their inputs, not inspect or modify Schema. Rollback does not compensate external side effects.
 
 `declare()` extends the same Schema object with rollback on failure, then
 returns an idempotent disposer for that exact declaration. Compatible active
@@ -133,20 +129,20 @@ as `Compose`, rather than becoming Context paths.
 
 ### Metadata
 
-`Schema.resolve_entry(path)` returns the current `RefEntry`; `Schema.entries` returns a tuple of all registered root, container, and leaf entries. The tuple snapshots membership, not configurations: each entry exposes its immutable `ref`, current merged `config`, and `alive` status. `RefEntry`, `RefConfig`, `RefLeafConfig`, and `RefContainerConfig` are exported by `slyme.context`. Prefer `Schema.leaf()` and `Schema.container()` for declarations; registration and withdrawal remain Schema operations.
+`Schema.resolve_entry(path)` returns the current `RefEntry`; `Schema.entries` returns a tuple of registered entries, snapshotting membership only. Each entry exposes `ref`, current `config`, cached read-only `metadata`, and `alive`. `RefLeafConfig` and `RefContainerConfig` describe only roles and write modes, with fixed `equals` methods; `RefConfig` is their union type, not a base class. `Schema.leaf()` and `Schema.container()` return a `RefDeclaration` carrying config and metadata separately. These types are exported by `slyme.context`.
 
 ```python
 entry = schema.resolve_entry("user.name")
-metadata = entry.config.metadata
+metadata = entry.metadata
 for entry in schema.entries:
-    print(entry.ref.path, entry.config.metadata)
+    print(entry.ref.path, entry.metadata)
 ```
 
-Lookup and enumeration do not merge configs; reading `entry.config` rebuilds an invalidated cache when needed. A config already obtained remains an immutable snapshot. After an entry's final declaration is withdrawn, `alive` is false and reading its config raises `LookupError`. Resolving a missing path raises `KeyError`; redeclaring that path creates a new entry rather than reviving the old one.
+`entry.config` returns the earliest active declaration's original configuration without merging. `entry.metadata` lazily builds and caches a read-only snapshot of current representatives. Ownership-only changes reuse the snapshot; visible key or representative identity changes invalidate it. Previously obtained snapshots remain unchanged. After the final declaration is withdrawn, `alive` is false and config or metadata access raises `LookupError`; previously obtained metadata snapshots remain readable and unchanged. Resolving a missing path raises `KeyError`; redeclaring it creates a new entry.
 
-Both `Schema.leaf(metadata=...)` and `Schema.container(metadata=...)` accept a mapping from string keys to `Metadata` instances. Use application-qualified keys such as `cli.option` or `docs.description`. Metadata does not change a path's leaf/container role, declared value type, or write mode.
+Both `Schema.leaf(metadata=...)` and `Schema.container(metadata=...)` accept a mapping from string keys to `Metadata` instances. Use application-qualified keys such as `cli.option` or `docs.description`. Metadata does not change a path's leaf/container role or write mode.
 
-`Metadata` is a frozen dataclass, not an abstract base class. Its default `merge()` accepts only the same instance; distinct instances conflict even when their dataclass fields compare equal. Override `merge()` for content-based compatibility or combination:
+`Metadata` is a frozen dataclass with an explicit `equals(other) -> bool` method. The default compares object identity. Schema accepts identical objects without calling `equals`; for distinct objects at the same key, it calls the current representative's `equals(incoming)` once. Python `__eq__` and dataclass equality are not used. Override `equals` to accept equivalent content:
 
 ```python
 from dataclasses import dataclass
@@ -154,27 +150,36 @@ from slyme.context import Metadata, Schema
 
 
 @dataclass(frozen=True)
-class Labels(Metadata):
-    values: tuple[str, ...]
+class Description(Metadata):
+    text: str
 
-    def merge(self, other: Metadata) -> "Labels":
-        if not isinstance(other, Labels):
-            raise ValueError("Incompatible labels")
-        return Labels(self.values + other.values)
+    def equals(self, other: Metadata) -> bool:
+        return type(other) is Description and self.text == other.text
 
 
-schema = Schema(
-    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("core",))})}
+first = Description("Prompt text")
+second = Description("Prompt text")
+schema = Schema()
+remove_first = schema.declare(
+    {"prompt": Schema.leaf(metadata={"docs.description": first})}
 )
-remove = schema.declare(
-    {"prompt": Schema.leaf(str, metadata={"app.labels": Labels(("plugin",))})}
+remove_second = schema.declare(
+    {"prompt": Schema.leaf(metadata={"docs.description": second})}
 )
-remove()
+entry = schema.resolve_entry("prompt")
+snapshot = entry.metadata
+assert snapshot["docs.description"] is first
+remove_first()
+assert entry.metadata["docs.description"] is second
+assert snapshot["docs.description"] is first
+remove_second()
 ```
 
-Distinct metadata keys coexist. For matching keys, Schema calls the existing item's `merge(incoming)`, including when both references point to the same object. It neither infers equality nor recursively merges payloads. Each call must be synchronous, side-effect-free, and depend only on the input items. Each path merges its incoming config once during registration; invalidated caches may first require merging the remaining declarations. Return an immutable compatible item or raise a conflict. Accepted contributions must remain mergeable after arbitrary withdrawals, in their remaining declaration order; commutativity and idempotence are not required. Withdrawal and rollback invalidate config caches without calling metadata merge.
+Comparisons must be synchronous, pure and stable, and define an equivalence relation: reflexive, symmetric and transitive. Equivalent objects must be interchangeable for consumers. Compare only immutable input data, without accessing Schema or external state. Schema trusts this contract; it does not perform reverse comparisons or compare every pair. False means a declaration conflict; a raised exception also fails registration. An entry validates and records metadata in one pass. Failure removes partial contributions and may invalidate the snapshot cache; previously obtained snapshots remain unchanged, and a later path failure withdraws that declaration's earlier registrations.
 
-The metadata mapping is copied and exposed read-only; items are retained by reference. Frozen dataclasses prevent attribute reassignment, not mutation of nested lists or dicts. Implementations must keep their payloads immutable. The cross-language model uses the same string keys, declaration order, object-identity default, and explicit merge method; a JS implementation can store keys in `Map<string, Metadata>` without relying on object-property names or Python equality.
+Different metadata keys coexist. Each key retains the original objects supplied by its active declarations. The earliest active declaration supplies the representative; withdrawing it selects the next original without comparison or cloning. Repeated registrations of the same object still have independent owners. Withdrawal, rollback and config reads never call `equals`. Registration and withdrawal update ownership only for the incoming declaration's keys and invalidate the metadata cache when necessary. For one entry with k contributed keys, bookkeeping costs O(k), plus custom `equals` costs on registration; an invalidated snapshot costs O(m) to rebuild for m visible keys, while cached reads cost O(1). A whole Schema operation also involves path traversal and final-withdrawal data cleanup. Imports copy the current metadata mapping with independent ownership, so later source changes do not propagate. No stable representative identity is promised across withdrawals of equivalent distinct objects. `RefEntry` and the metadata key identify the live marker position.
+
+`RefDeclaration` copies and freezes the input metadata mapping; items retain their identities. Entries expose independently cached read-only snapshots. Frozen dataclasses prevent attribute reassignment, not mutation of nested lists or dicts; implementations must keep their payloads immutable. Python and JS use the same string keys, declaration ownership, identity shortcut and explicit `equals` protocol. Leaf/container configurations use fixed `equals` rules with no custom merge extension; business annotations belong in Metadata.
 
 ## Read and write
 
@@ -226,7 +231,7 @@ A declaration fragment is not a plugin's private lookup space. A plugin that use
 
 ```python
 ready = ctx.resolve("core.ready")
-metadata = ctx.resolve_entry("core.ready").config.metadata
+metadata = ctx.resolve_entry("core.ready").metadata
 
 remove_plugin()
 remove_core()
@@ -236,7 +241,7 @@ The fragment remains useful for declaring and exporting the paths owned by the
 plugin; `ctx.entries` lists the application-wide union. `Schema.declare()` returns a
 caller-managed disposer. `ctx.declare()` registers definitions in the application's Schema and makes their cleanup an effect owned by `ctx`, returning an exact early disposer. Failure of a subsequent `declare()` or `update()` leaves the already-created Context alive; the caller decides whether to retry or dispose it.
 
-The `declaration` argument of `Schema(...)`, `Schema.declare(...)`, and `Context.declare(...)` describes one registration tree, which may contain multiple paths. Each declared leaf and ancestor container maps unique declaration IDs to their original configs and caches the merged config. Config merging rejects incompatible types and settings. Adding a declaration merges it into the current config; withdrawal only invalidates the cache. The next config read rebuilds it in the remaining declarations' insertion order. Consecutive withdrawals without config reads do not repeatedly merge the same remaining declarations. Framework withdrawal, rollback, and Context disposal do not read config; user cleanup that reads config can trigger rebuilding. Each declare call returns one disposer, which reverses registration order and removes a definition only after its last owner leaves. Cleanup continues across entries after a failure and raises all failures as an exception group; subsequent calls reproduce the same group without repeating cleanup. A pending disposer retains the Schema and its entries. Its first call releases those references even on failure, although failure tracebacks can retain cleanup state.
+The `declaration` argument of `Schema(...)`, `Schema.declare(...)`, and `Context.declare(...)` describes one registration tree, which may contain multiple paths. Each declared leaf and ancestor container tracks declaration IDs and per-key metadata contributions. Role and write-mode conflicts are checked before metadata equivalence. Ownership changes preserve cached configs unless visible metadata changes; the next config read snapshots the current representatives without comparing them. Framework withdrawal, rollback and Context disposal do not read config or call `equals`. Each declare call returns one disposer, which reverses registration order and removes a definition only after its last owner leaves. Cleanup continues across entries after a failure and raises all failures as an exception group; subsequent calls reproduce the same group without repeating cleanup. A pending disposer retains the Schema and its entries. Its first call releases those references even on failure, although failure tracebacks can retain cleanup state.
 
 `set` and `update` accept only paths declared as leaves. `keys` and `to_dict(ref)` accept only paths declared as containers. `get`, `exists`, `delete`, and `drop` accept either role. Deleting a container removes its local descendant values, not its Schema declarations or inherited values.
 

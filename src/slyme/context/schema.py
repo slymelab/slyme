@@ -16,13 +16,11 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from collections import OrderedDict
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import InitVar, dataclass, field, replace
-from enum import Enum
-from functools import reduce
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, cast, final
 
 from typing_extensions import TypeVar
 
@@ -39,14 +37,13 @@ __all__ = [
     "Metadata",
     "RefConfig",
     "RefContainerConfig",
+    "RefDeclaration",
     "RefEntry",
     "RefLeafConfig",
     "Schema",
 ]
 
 _T = TypeVar("_T", default=Any)
-_Missing = Enum("_Missing", ["MARK"])
-_MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True)
@@ -78,73 +75,51 @@ class ContextPathError(KeyError):
 
 @dataclass(frozen=True)
 class Metadata:
-    """Immutable metadata, compatible by identity unless merge is overridden.
+    """Immutable auxiliary data with identity compatibility by default.
 
-    Merge only the input items, without reading or modifying Schema or other
-    external state. Merges follow declaration order, including repeated
-    references to the same item.
-    Accepted contributions must remain mergeable after any subset is removed.
+    Override equals for content equivalence. It must be synchronous, pure,
+    stable, reflexive, symmetric and transitive. Equivalent objects must be
+    interchangeable for consumers. Comparisons must not read or modify Schema or external state.
+    The framework accepts identical objects without calling equals.
     """
 
-    def merge(self, other: Metadata) -> Metadata:
-        """Accept the same instance; override to define content-based merging."""
-        if self is not other:
-            raise ValueError(f"Conflicting metadata: {self!r} and {other!r}.")
-        return self
+    def equals(self, other: Metadata) -> bool:
+        """Whether two markers are equivalent, without combining their data."""
+        return self is other
 
 
+@final
 @dataclass(frozen=True, kw_only=True)
-class RefConfig(ABC, Generic[_T]):
-    """Immutable declaration configuration with side-effect-free merging."""
+class RefLeafConfig:
+    """The write mode of one declared leaf."""
 
-    metadata: Mapping[str, Metadata] = field(default_factory=dict)
+    mode: Literal["assign", "register"] = "assign"
+
+    def equals(self, other: RefConfig) -> bool:
+        return isinstance(other, RefLeafConfig) and self.mode == other.mode
+
+
+@final
+@dataclass(frozen=True)
+class RefContainerConfig:
+    """The container role of a declared path."""
+
+    def equals(self, other: RefConfig) -> bool:
+        return isinstance(other, RefContainerConfig)
+
+
+RefConfig = RefLeafConfig | RefContainerConfig
+
+
+@dataclass(frozen=True)
+class RefDeclaration:
+    """One owner's configuration and immutable metadata mapping."""
+
+    config: RefConfig
+    metadata: Mapping[str, Metadata] = field(default_factory=dict, kw_only=True)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
-
-    def _merge_metadata(self, other: RefConfig[Any]) -> dict[str, Metadata]:
-        result = dict(self.metadata)
-        for key, incoming in other.metadata.items():
-            result[key] = result[key].merge(incoming) if key in result else incoming
-        return result
-
-    @abstractmethod
-    def merge(self, other: RefConfig[_T]) -> RefConfig[_T]:
-        """Return a new merged config, or raise for incompatible declarations."""
-
-
-@dataclass(frozen=True)
-class RefLeafConfig(RefConfig[_T]):
-    """Behavior of one leaf declared in a Schema."""
-
-    value_type: type[_T] | _Missing = _MISSING
-    mode: Literal["assign", "register"] = "assign"
-
-    def merge(self, other: RefConfig[_T]) -> RefLeafConfig[_T]:
-        if not isinstance(other, RefLeafConfig):
-            raise ValueError(f"Conflicting Ref configurations: {self!r} and {other!r}.")
-        if self.mode != other.mode or (
-            self.value_type is not _MISSING
-            and other.value_type is not _MISSING
-            and self.value_type != other.value_type
-        ):
-            raise ValueError(f"Conflicting Ref configurations: {self!r} and {other!r}.")
-        value_type = (
-            other.value_type if self.value_type is _MISSING else self.value_type
-        )
-        return replace(
-            self, value_type=value_type, metadata=self._merge_metadata(other)
-        )
-
-
-@dataclass(frozen=True)
-class RefContainerConfig(RefConfig[Any]):
-    """Behavior of one container declared in a Schema."""
-
-    def merge(self, other: RefConfig[Any]) -> RefContainerConfig:
-        if not isinstance(other, RefContainerConfig):
-            raise ValueError(f"Conflicting Ref configurations: {self!r} and {other!r}.")
-        return replace(self, metadata=self._merge_metadata(other))
 
 
 _CONTAINER_ENTRY_KEY = ""
@@ -153,16 +128,22 @@ _SchemaContainer = dict[str, "_SchemaElement"]
 
 @dataclass(frozen=True, eq=False)
 class RefEntry(Generic[_T]):
-    """A live Schema entry exposing its Ref, merged config, and validity.
+    """A live Schema entry exposing its Ref, config, metadata, and validity.
 
     Obtain entries through Schema. Withdrawing the last declaration makes an
     entry inactive; declaring the same path again creates a different entry.
     """
 
     ref: Ref[_T]
-    _config: RefConfig[_T] | None = field(default=None, init=False, repr=False)
-    _declarations: dict[Hashable, RefConfig[_T]] = field(
+    # NOTE: use OrderedDict to keep first-owner selection efficient after arbitrary withdrawals.
+    _declarations: OrderedDict[Hashable, RefDeclaration] = field(
+        default_factory=OrderedDict, init=False, repr=False
+    )
+    _metadata_declarations: dict[str, OrderedDict[Hashable, Metadata]] = field(
         default_factory=dict, init=False, repr=False
+    )
+    _metadata: Mapping[str, Metadata] | None = field(
+        default=None, init=False, repr=False
     )
 
     @property
@@ -171,37 +152,84 @@ class RefEntry(Generic[_T]):
         return bool(self._declarations)
 
     @property
-    def config(self) -> RefConfig[_T]:
-        """Return the merged config; raise LookupError if no declarations remain."""
-        config = self._config
-        if config is None:
-            if not self.alive:
-                raise LookupError(f"Ref path {self.ref.path!r} is no longer declared.")
-            config = reduce(
-                lambda current, incoming: current.merge(incoming),
-                self._declarations.values(),
-            )
-            object.__setattr__(self, "_config", config)
-        return config
+    def config(self) -> RefConfig:
+        """The earliest active owner's original configuration."""
+        if not self.alive:
+            raise LookupError(f"Ref path {self.ref.path!r} is no longer declared.")
+        return next(iter(self._declarations.values())).config
 
-    def _declare(self, declaration_id: Hashable, config: RefConfig[_T]) -> None:
-        """Merge an incoming config before registering its unique owner."""
+    @property
+    def metadata(self) -> Mapping[str, Metadata]:
+        """A cached read-only snapshot of the current metadata representatives."""
+        if not self.alive:
+            raise LookupError(f"Ref path {self.ref.path!r} is no longer declared.")
+        metadata = self._metadata
+        if metadata is None:
+            metadata = MappingProxyType(
+                {
+                    key: next(iter(owners.values()))
+                    for key, owners in self._metadata_declarations.items()
+                }
+            )
+            object.__setattr__(self, "_metadata", metadata)
+        return metadata
+
+    def _declare(self, declaration_id: Hashable, declaration: RefDeclaration) -> None:
+        """Validate and register contributions in one pass, rolling back on failure."""
         if declaration_id in self._declarations:
             raise ValueError(
                 f"Duplicate declaration {declaration_id!r} at {self.ref.path!r}."
             )
-        merged = self.config.merge(config) if self.alive else config
-        self._declarations[declaration_id] = config
-        object.__setattr__(self, "_config", merged)
+        if self.alive:
+            first = next(iter(self._declarations.values())).config
+            if first is not declaration.config and not first.equals(declaration.config):
+                raise ValueError(
+                    f"Conflicting Ref configurations: {first!r} and {declaration.config!r}."
+                )
+        self._declarations[declaration_id] = declaration
+        changed = False
+        try:
+            for key, incoming in declaration.metadata.items():
+                owners = self._metadata_declarations.get(key)
+                if owners is None:
+                    owners = self._metadata_declarations[key] = OrderedDict()
+                    changed = True
+                else:
+                    representative = next(iter(owners.values()))
+                    if representative is not incoming and not representative.equals(
+                        incoming
+                    ):
+                        raise ValueError(
+                            f"Conflicting metadata at {self.ref.path!r}, key {key!r}."
+                        )
+                owners[declaration_id] = incoming
+        except BaseException:
+            self._undeclare(declaration_id)
+            raise
+        if changed:
+            object.__setattr__(self, "_metadata", None)
 
     def _undeclare(self, declaration_id: Hashable) -> None:
-        """Remove an owner and invalidate the merged config cache."""
-        del self._declarations[declaration_id]
-        object.__setattr__(self, "_config", None)
+        """Withdraw complete or partial contributions without comparing metadata."""
+        declaration = self._declarations.pop(declaration_id)
+        changed = not self.alive
+        for key in declaration.metadata:
+            owners = self._metadata_declarations.get(key)
+            if owners is None:
+                continue
+            representative = next(iter(owners.values()))
+            owners.pop(declaration_id, None)
+            if not owners:
+                del self._metadata_declarations[key]
+                changed = True
+            elif representative is not next(iter(owners.values())):
+                changed = True
+        if changed:
+            object.__setattr__(self, "_metadata", None)
 
 
 _SchemaElement = RefEntry[Any] | _SchemaContainer
-_Declaration = dict[str, "_Declaration | RefConfig[Any]"]
+_Declaration = dict[str, "_Declaration | RefDeclaration"]
 
 
 @dataclass(frozen=True, eq=False, repr=False)
@@ -219,7 +247,7 @@ class Schema:
 
     def __post_init__(self, declaration: Schema | _Declaration | None) -> None:
         root: RefEntry[Any] = RefEntry(Ref(_CONTAINER_ENTRY_KEY))
-        root._declare(object(), RefContainerConfig())
+        root._declare(object(), self.container())
         self._set_entry(root)
         if declaration is not None:
             self.declare(declaration)
@@ -233,54 +261,37 @@ class Schema:
         self._stores.discard(store)
 
     @staticmethod
-    @overload
     def leaf(
-        value_type: None,
         *,
         mode: Literal["assign", "register"] = "assign",
         metadata: Mapping[str, Metadata] | None = None,
-    ) -> RefLeafConfig[None]: ...
-    @staticmethod
-    @overload
-    def leaf(
-        value_type: type[_T] | _Missing = _MISSING,
-        *,
-        mode: Literal["assign", "register"] = "assign",
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> RefLeafConfig[_T]: ...
-    @staticmethod
-    def leaf(
-        value_type: type[Any] | None | _Missing = _MISSING,
-        *,
-        mode: Literal["assign", "register"] = "assign",
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> RefLeafConfig[Any]:
-        """Describe a leaf; omit its type for no constraint, use None for NoneType."""
-        return RefLeafConfig(
-            type(None) if value_type is None else value_type,
-            mode,
-            metadata={} if metadata is None else metadata,
+    ) -> RefDeclaration:
+        """Describe a leaf's write mode and auxiliary metadata."""
+        return RefDeclaration(
+            RefLeafConfig(mode=mode), metadata={} if metadata is None else metadata
         )
 
     @staticmethod
-    def container(
-        *, metadata: Mapping[str, Metadata] | None = None
-    ) -> RefContainerConfig:
+    def container(*, metadata: Mapping[str, Metadata] | None = None) -> RefDeclaration:
         """Describe one container explicitly at a dict's empty key."""
-        return RefContainerConfig(metadata={} if metadata is None else metadata)
+        return RefDeclaration(
+            RefContainerConfig(), metadata={} if metadata is None else metadata
+        )
 
     @staticmethod
     def _normalize_declaration(
         tree: _Declaration, path: str = ""
-    ) -> list[tuple[str, RefConfig[Any]]]:
-        """Validate a declaration tree and flatten its configs in tree order."""
-        config = tree.get(_CONTAINER_ENTRY_KEY, RefContainerConfig())
-        if not isinstance(config, RefContainerConfig):
+    ) -> list[tuple[str, RefDeclaration]]:
+        """Validate a declaration tree and flatten it in tree order."""
+        declaration = tree.get(_CONTAINER_ENTRY_KEY, Schema.container())
+        if not isinstance(declaration, RefDeclaration) or not isinstance(
+            declaration.config, RefContainerConfig
+        ):
             raise TypeError(
                 f"Invalid current-entry declaration at {path!r}: "
                 "the empty key must contain Schema.container()."
             )
-        result: list[tuple[str, RefConfig[Any]]] = [(path, config)]
+        result: list[tuple[str, RefDeclaration]] = [(path, declaration)]
         for name, value in tree.items():
             if name == _CONTAINER_ENTRY_KEY:
                 continue
@@ -292,7 +303,9 @@ class Schema:
             child_path = f"{path}.{name}" if path else name
             if isinstance(value, dict):
                 result.extend(Schema._normalize_declaration(value, child_path))
-            elif not isinstance(value, RefLeafConfig):
+            elif not isinstance(value, RefDeclaration) or not isinstance(
+                value.config, RefLeafConfig
+            ):
                 raise TypeError(
                     f"Invalid Schema declaration at {child_path!r}: expected a "
                     f"dict or Schema.leaf(), got {type(value).__name__}."
@@ -300,26 +313,6 @@ class Schema:
             else:
                 result.append((child_path, value))
         return result
-
-    def _merge_declaration(
-        self,
-        declaration: Schema | _Declaration,
-        declaration_id: object,
-        entries: list[RefEntry[Any]],
-    ) -> None:
-        """Merge paths, recording successful registrations for undo."""
-        if isinstance(declaration, Schema):
-            configs = [(entry.ref.path, entry.config) for entry in declaration.entries]
-        else:
-            configs = self._normalize_declaration(declaration)
-        for path, config in configs:
-            entry = self._entries.get(path)
-            if entry is None:
-                entry = RefEntry(Ref(path))
-            entry._declare(declaration_id, config)
-            entries.append(entry)
-            if path not in self._entries:
-                self._set_entry(entry)
 
     def _set_entry(self, entry: RefEntry[Any]) -> None:
         """Install one entry in both indexes without declaring its ancestors."""
@@ -346,23 +339,6 @@ class Schema:
         for store in tuple(self._stores):
             store.delete_entry(entry)
 
-    @staticmethod
-    def _release_declaration(
-        schema: Schema,
-        declaration_id: object,
-        entries: list[RefEntry[Any]],
-    ) -> None:
-        errors: list[BaseException] = []
-        for entry in reversed(entries):
-            try:
-                entry._undeclare(declaration_id)
-                if not entry.alive:
-                    schema._delete_entry(entry)
-            except BaseException as error:
-                errors.append(error)
-        if errors:
-            raise exception_group("Failed to release declaration", errors)
-
     @property
     def entries(self) -> tuple[RefEntry[Any], ...]:
         """Snapshot the registered root, container, and leaf entries, not configs."""
@@ -377,7 +353,7 @@ class Schema:
         """Resolve a declared path; reject missing paths or a required role mismatch.
 
         Strings and Refs resolve by path. Without a required role, resolution
-        does not materialize the entry's merged config.
+        does not need to read the entry's configuration.
         """
         path = key if isinstance(key, str) else key.path
         try:
@@ -410,7 +386,7 @@ class Schema:
         """Register paths with rollback on failure and an idempotent disposer.
 
         Registration updates paths incrementally, without isolation from
-        synchronous callbacks. Config merges must depend only on their inputs.
+        synchronous callbacks. Metadata comparisons must depend only on their inputs.
         The root container remains declared after every disposer has run.
         Disposal reverses registration order, continues after failures, and
         raises them together as an exception group. Subsequent calls reproduce
@@ -426,15 +402,39 @@ class Schema:
         def dispose() -> None:
             nonlocal schema
             try:
-                Schema._release_declaration(
-                    cast(Schema, schema), declaration_id, entries
-                )
+                errors: list[BaseException] = []
+                for entry in reversed(entries):
+                    try:
+                        entry._undeclare(declaration_id)
+                        if not entry.alive:
+                            cast(Schema, schema)._delete_entry(entry)
+                    except BaseException as error:
+                        errors.append(error)
+                if errors:
+                    raise exception_group("Failed to release declaration", errors)
             finally:
                 schema = None
                 entries.clear()
 
         try:
-            self._merge_declaration(declaration, declaration_id, entries)
+            if isinstance(declaration, Schema):
+                declarations = [
+                    (
+                        entry.ref.path,
+                        RefDeclaration(entry.config, metadata=entry.metadata),
+                    )
+                    for entry in declaration.entries
+                ]
+            else:
+                declarations = self._normalize_declaration(declaration)
+            for path, contribution in declarations:
+                entry = self._entries.get(path)
+                if entry is None:
+                    entry = RefEntry(Ref(path))
+                entry._declare(declaration_id, contribution)
+                entries.append(entry)
+                if path not in self._entries:
+                    self._set_entry(entry)
         except BaseException:
             dispose()
             raise

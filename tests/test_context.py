@@ -33,7 +33,7 @@ def test_schema_module_preserves_public_ref_and_context_interoperation() -> None
     assert PathRef is Ref
     assert PathSchema is Schema
     schema = PathSchema()
-    remove_source = schema.declare({"value": PathSchema.leaf(int)})
+    remove_source = schema.declare({"value": PathSchema.leaf()})
     ref = schema.resolve("value")
     assert isinstance(ref, PathRef)
     ctx = Context()
@@ -141,10 +141,10 @@ R = Schema(
 
 
 def test_ref_is_a_directly_constructible_path_handle() -> None:
-    schema = Schema({"input": {"value": Schema.leaf(str)}})
+    schema = Schema({"input": {"value": Schema.leaf()}})
 
     value = schema.resolve("input.value")
-    equivalent = Schema({"input": {"value": Schema.leaf(int)}}).resolve("input.value")
+    equivalent = Schema({"input": {"value": Schema.leaf()}}).resolve("input.value")
 
     assert value.path == "input.value"
     assert value.parts == ("input", "value")
@@ -163,8 +163,8 @@ def test_schema_resolves_leaf_and_container_refs() -> None:
         {
             "input": {
                 "": Schema.container(),
-                "articles": Schema.leaf(list),
-                "count": Schema.leaf(int),
+                "articles": Schema.leaf(),
+                "count": Schema.leaf(),
             },
             "args": Schema.leaf(),
         }
@@ -243,7 +243,7 @@ def test_schema_declare_has_independent_disposers_and_rolls_back_conflicts() -> 
         {
             "input": {
                 "": Schema.container(),
-                "a": Schema.leaf(int),
+                "a": Schema.leaf(),
             },
             "keep": Schema.leaf(),
         }
@@ -277,7 +277,7 @@ def test_schema_declare_has_independent_disposers_and_rolls_back_conflicts() -> 
         base.declare(
             {
                 "partial": Schema.leaf(),
-                "input": {"a": Schema.leaf(str)},
+                "input": {"a": Schema.leaf(mode="register")},
             }
         )
     assert base.resolve("input.a").path == "input.a"
@@ -342,10 +342,10 @@ def test_schema_declarations_keep_shared_ancestors_until_the_last_owner() -> Non
 
 def test_schema_path_can_be_redeclared_with_a_new_structure_after_disposal() -> None:
     schema = Schema()
-    remove_leaf = schema.declare({"entry": Schema.leaf(int)})
+    remove_leaf = schema.declare({"entry": Schema.leaf()})
     remove_leaf()
 
-    remove_container = schema.declare({"entry": {"child": Schema.leaf(str)}})
+    remove_container = schema.declare({"entry": {"child": Schema.leaf()}})
     assert schema.resolve("entry.child").path == "entry.child"
     remove_container()
     with pytest.raises(KeyError, match="entry"):
@@ -500,7 +500,7 @@ def test_schema_disposal_collects_failures_and_replays_without_repeating(
 
 
 def test_schema_rollback_cleanup_failure_preserves_registration_error(monkeypatch):
-    schema = Schema({"stable": Schema.leaf(int)})
+    schema = Schema({"stable": Schema.leaf()})
     cleanup_failure = RuntimeError("rollback failed")
     original = Schema._delete_entry
 
@@ -510,7 +510,9 @@ def test_schema_rollback_cleanup_failure_preserves_registration_error(monkeypatc
 
     monkeypatch.setattr(Schema, "_delete_entry", cleanup)
     with pytest.raises(type(exception_group("expected", [cleanup_failure]))) as caught:
-        schema.declare({"temporary": Schema.leaf(), "stable": Schema.leaf(str)})
+        schema.declare(
+            {"temporary": Schema.leaf(), "stable": Schema.leaf(mode="register")}
+        )
 
     assert caught.value.exceptions == (cleanup_failure,)
     assert isinstance(caught.value.__context__, ValueError)
@@ -602,7 +604,7 @@ def test_context_requires_declared_keys_and_inherits_its_parent_schema() -> None
         with pytest.raises(ContextPathError, match="unknown"):
             operation()
 
-    foreign = Schema({"value": Schema.leaf(str)}).resolve("value")
+    foreign = Schema({"value": Schema.leaf()}).resolve("value")
     root.set("value", 1)
     assert root.get(foreign) == 1
     assert root.flatten() == {**root.get("$").flatten(), root.resolve("value"): 1}

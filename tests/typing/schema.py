@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Hashable, Iterable, Mapping
 from typing import Any, TypeVar
 
@@ -16,6 +17,7 @@ from slyme.context import (
     Ref,
     RefConfig,
     RefContainerConfig,
+    RefDeclaration,
     RefEntry,
     RefLeafConfig,
     Schema,
@@ -118,30 +120,29 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     assert_type(schema.resolve(Ref("value"), role="leaf"), Ref[Any])
     assert_type(schema.resolve_entry("value"), RefEntry[Any])
     assert_type(schema.resolve_entry(Ref("value"), role=None), RefEntry[Any])
-    assert_type(schema.resolve_entry("value").config.metadata, Mapping[str, Metadata])
-    assert_type(Schema.leaf(int), RefLeafConfig[int])
-    assert_type(Schema.leaf(), RefLeafConfig[Any])
-    assert_type(Schema.leaf(None), RefLeafConfig[None])
-    assert_type(Schema.leaf(type(None)), RefLeafConfig[None])
-    assert_type(Schema.container(), RefContainerConfig)
+    assert_type(schema.resolve_entry("value").metadata, Mapping[str, Metadata])
+    assert_type(Schema.leaf(), RefDeclaration)
+    assert_type(Schema.container(), RefDeclaration)
+    Schema.leaf(int)  # type: ignore[misc, arg-type]
+    RefLeafConfig[int]()  # type: ignore[misc]
     marker = Metadata()
-    annotated = Schema.leaf(int, metadata={"app.marker": marker})
-    assert_type(annotated, RefLeafConfig[int])
+    annotated = Schema.leaf(metadata={"app.marker": marker})
+    assert_type(annotated, RefDeclaration)
+    assert_type(annotated.config, RefConfig)
+    assert_type(RefLeafConfig().equals(RefContainerConfig()), bool)
     assert_type(annotated.metadata, Mapping[str, Metadata])
-    assert_type(marker.merge(marker), Metadata)
+    assert_type(marker.equals(marker), bool)
     Schema.container(metadata={"app.marker": marker})
     Schema.leaf(metadata={"invalid": "text"})  # type: ignore[dict-item]
-    config = Schema.leaf(int)
-    assert_type(config.merge(config), RefLeafConfig[int])
+    config = Schema.leaf()
     entry = RefEntry(Ref[int]("value"))
     entry._declare(("plugin", 1), config)
-    assert_type(entry.config, RefConfig[int])
-    assert_type(entry._config, RefConfig[int] | None)
-    assert_type(entry._declarations, dict[Hashable, RefConfig[int]])
+    assert_type(entry.config, RefConfig)
+    assert_type(entry._declarations, OrderedDict[Hashable, RefDeclaration])
     assert_type(entry.alive, bool)
     entry._undeclare(("plugin", 1))
     declaration: _Declaration = {
-        "group": {"": Schema.container(), "value": Schema.leaf(int)},
+        "group": {"": Schema.container(), "value": Schema.leaf()},
         "empty": {},
     }
     Schema(declaration=declaration)

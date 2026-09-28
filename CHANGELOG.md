@@ -34,9 +34,9 @@ breaking changes when they are documented here.
   exact-type lookup. Traversal constructs paths only for path output or a
   resolver requiring `TraverseAux`; Context does not install resolver fields.
 
-- Exposed `RefEntry`, `RefConfig`, `RefLeafConfig`, and `RefContainerConfig`,
+- Exposed `RefEntry`, `RefDeclaration`, `RefConfig`, `RefLeafConfig`, and `RefContainerConfig`,
   plus `Schema.resolve_entry()` and the `Schema.entries` tuple property for
-  metadata introspection. Withdrawn entries reject config reads with `LookupError`.
+  metadata introspection. Withdrawn entries reject config and metadata reads with `LookupError`.
 - Added `slyme.utils.exception.exception_group(message, excs)` with native groups
   on Python 3.11+ and a simple Python 3.10 fallback preserving catch semantics.
 - Added `slyme.utils.execution.once()` to share a callback's first result or
@@ -151,6 +151,17 @@ breaking changes when they are documented here.
   failures during application do not trigger rollback.
 
 ### Removed
+
+- Removed runtime Schema `value_type` declarations and config generics; value
+  typing remains on `Ref[T]` and `RefEntry[T]`.
+- Replaced custom Metadata/config merging with `Metadata.equals(other)` and
+  fixed role/write-mode compatibility. Metadata uses identity shortcuts and
+  per-key declaration ownership; representatives are the earliest active
+  originals. Withdrawal and reads require no user comparisons.
+- Separated `RefEntry.config` from its cached read-only `metadata` snapshots.
+  Configs implement fixed `equals` methods; `RefConfig` is a union alias.
+  Schema factories return `RefDeclaration`.
+  Metadata snapshots are rebuilt lazily only after visible representative changes.
 
 - `Context.install()` and dynamic method lookup through `$.methods`. Register
   functions or Nodes in declared fields, retrieve them with `get()`, and pass

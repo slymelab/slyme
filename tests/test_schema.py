@@ -4,7 +4,7 @@ import asyncio
 import gc
 import inspect
 import weakref
-from dataclasses import FrozenInstanceError, dataclass, fields, is_dataclass, replace
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 from itertools import permutations
 from typing import Any
 
@@ -15,14 +15,13 @@ from slyme.context import (
     ContextPathError,
     Metadata,
     Ref,
-    RefConfig,
     RefContainerConfig,
     RefEntry,
     RefLeafConfig,
     Schema,
     ScopeBinding,
 )
-from slyme.context.schema import _MISSING, _Declaration
+from slyme.context.schema import _Declaration
 from slyme.utils.execution import await_result
 
 
@@ -56,88 +55,6 @@ def test_schema_resolution_normalizes_keys_and_enforces_requested_roles(
     assert caught.value.__cause__.args == ("missing",)
 
 
-@dataclass(frozen=True)
-class _AnnotatedLeaf(RefLeafConfig[str]):
-    labels: tuple[str, ...] = ()
-
-    def merge(self, other: RefConfig[str]) -> _AnnotatedLeaf:
-        if not isinstance(other, _AnnotatedLeaf):
-            raise ValueError("Incompatible annotation config")
-        Schema.leaf(self.value_type, mode=self.mode).merge(
-            Schema.leaf(other.value_type, mode=other.mode)
-        )
-        return replace(self, labels=self.labels + other.labels)
-
-
-@pytest.mark.parametrize("config", [Schema.leaf(int), Schema.container()])
-def test_config_merge_returns_a_new_equal_config(config: RefConfig[Any]) -> None:
-    merged = config.merge(config)
-    assert merged == config
-    assert merged is not config
-
-
-@pytest.mark.parametrize(
-    ("left", "right"),
-    [
-        (Schema.leaf(), Schema.container()),
-        (Schema.container(), Schema.leaf()),
-        (Schema.leaf(int), Schema.leaf(str)),
-        (Schema.leaf(int), Schema.leaf(None)),
-        (Schema.leaf(None), Schema.leaf(int)),
-        (Schema.leaf(mode="register"), Schema.leaf()),
-    ],
-)
-def test_config_merge_rejects_incompatible_definitions(
-    left: RefConfig[Any], right: RefConfig[Any]
-) -> None:
-    with pytest.raises(ValueError, match="Conflicting Ref configurations"):
-        left.merge(right)
-
-
-@pytest.mark.parametrize(
-    ("left", "right", "expected"),
-    [
-        (Schema.leaf(), Schema.leaf(), _MISSING),
-        (Schema.leaf(), Schema.leaf(int), int),
-        (Schema.leaf(int), Schema.leaf(), int),
-        (Schema.leaf(int), Schema.leaf(int), int),
-        (Schema.leaf(), Schema.leaf(None), type(None)),
-        (Schema.leaf(None), Schema.leaf(), type(None)),
-        (Schema.leaf(None), Schema.leaf(type(None)), type(None)),
-    ],
-)
-def test_unspecified_value_type_accepts_concrete_declarations(left, right, expected):
-    assert left.merge(right).value_type is expected
-
-
-def test_leaf_type_default_is_distinct_from_explicit_none() -> None:
-    assert Schema.leaf().value_type is _MISSING
-    assert RefLeafConfig().value_type is _MISSING
-    assert Schema.leaf(None) == Schema.leaf(type(None))
-
-
-def test_withdrawing_typed_declaration_restores_unspecified_type_without_changing_data():
-    ctx = Context()
-    marker = Metadata()
-    ctx.declare({"value": Schema.leaf(metadata={"app.marker": marker})})
-    ctx.set("value", 1)
-    entry = ctx.resolve_entry("value")
-    remove = ctx.declare({"value": Schema.leaf(int)})
-    assert entry.config.value_type is int
-    assert entry.config.metadata["app.marker"] is marker
-    with pytest.raises(ValueError, match="Conflicting Ref configurations"):
-        ctx.declare({"value": Schema.leaf(str)})
-    assert entry.config.value_type is int
-
-    remove()
-    assert entry.config.value_type is _MISSING
-    assert ctx.get("value") == 1
-    ctx.declare({"value": Schema.leaf(str)})
-    assert entry.config.value_type is str
-    assert ctx.get("value") == 1
-    ctx.dispose()
-
-
 def test_public_entries_expose_root_container_and_leaf_metadata() -> None:
     root_marker, group_marker, leaf_marker = Metadata(), Metadata(), Metadata()
     schema = Schema(
@@ -145,7 +62,7 @@ def test_public_entries_expose_root_container_and_leaf_metadata() -> None:
             "": Schema.container(metadata={"app.root": root_marker}),
             "group": {
                 "": Schema.container(metadata={"app.group": group_marker}),
-                "value": Schema.leaf(int, metadata={"app.leaf": leaf_marker}),
+                "value": Schema.leaf(metadata={"app.leaf": leaf_marker}),
                 "empty": {},
             },
         }
@@ -157,31 +74,31 @@ def test_public_entries_expose_root_container_and_leaf_metadata() -> None:
     assert all(entry.alive for entry in snapshot)
     assert isinstance(entries[""].config, RefContainerConfig)
     assert isinstance(entries["group.empty"].config, RefContainerConfig)
-    assert entries[""].config.metadata == {"app.root": root_marker}
-    assert entries["group"].config.metadata == {"app.group": group_marker}
+    assert entries[""].metadata == {"app.root": root_marker}
+    assert entries["group"].metadata == {"app.group": group_marker}
     leaf = schema.resolve_entry("group.value")
     assert leaf is entries["group.value"]
     assert leaf.ref is schema.resolve("group.value")
     assert isinstance(leaf.config, RefLeafConfig)
-    assert leaf.config.value_type is int
-    assert leaf.config.metadata == {"app.leaf": leaf_marker}
+    assert leaf.metadata == {"app.leaf": leaf_marker}
 
 
-def test_entries_snapshot_keeps_live_entries_not_config_snapshots() -> None:
+def test_entries_snapshot_keeps_live_entries_not_metadata_snapshots() -> None:
+    first_marker, second_marker = Metadata(), Metadata()
     schema = Schema()
-    first = schema.declare({"value": _AnnotatedLeaf(labels=("first",))})
+    first = schema.declare({"value": Schema.leaf(metadata={"first": first_marker})})
     snapshot = schema.entries
     entry = schema.resolve_entry("value")
-    cached = entry.config
-    second = schema.declare({"value": _AnnotatedLeaf(labels=("second",))})
+    cached = entry.metadata
+    second = schema.declare({"value": Schema.leaf(metadata={"second": second_marker})})
     third = schema.declare({"other": Schema.leaf()})
     assert entry in snapshot
     assert schema.resolve_entry("other") not in snapshot
-    assert entry.config == _AnnotatedLeaf(labels=("first", "second"))
-    assert cached == _AnnotatedLeaf(labels=("first",))
+    assert entry.metadata == {"first": first_marker, "second": second_marker}
+    assert cached == {"first": first_marker}
     second()
     assert entry.alive
-    assert entry.config == cached
+    assert entry.metadata == cached
     third()
     first()
     assert snapshot == (schema.resolve_entry(""), entry)
@@ -191,7 +108,7 @@ def test_entries_snapshot_keeps_live_entries_not_config_snapshots() -> None:
         _ = entry.config
     with pytest.raises(KeyError, match="value"):
         schema.resolve_entry("value")
-    remove_new = schema.declare({"value": Schema.leaf(str)})
+    remove_new = schema.declare({"value": Schema.leaf()})
     assert schema.resolve_entry("value") is not entry
     assert not entry.alive
     with pytest.raises(LookupError, match="value.*no longer declared"):
@@ -204,7 +121,7 @@ def test_entries_and_resolve_entry_do_not_read_configs(monkeypatch) -> None:
     original = schema.entries
 
     def unexpected_config_read(self):
-        pytest.fail("Entry lookup must not merge configs.")
+        pytest.fail("Entry lookup must not read configs.")
 
     with monkeypatch.context() as patch:
         patch.setattr(RefEntry, "config", property(unexpected_config_read))
@@ -214,22 +131,22 @@ def test_entries_and_resolve_entry_do_not_read_configs(monkeypatch) -> None:
 
 
 def test_entry_is_frozen_and_rejects_duplicate_owners_without_mutation() -> None:
-    config = Schema.leaf(int)
+    config = Schema.leaf()
     entry = RefEntry(Ref[int]("value"))
     assert not entry.alive
     identity_map = {entry: "binding"}
     entry._declare(("plugin", 1), config)
     cached = entry.config
     with pytest.raises(ValueError, match="Duplicate declaration"):
-        entry._declare(tuple(["plugin", 1]), Schema.leaf(int))
+        entry._declare(tuple(["plugin", 1]), Schema.leaf())
     assert entry._declarations == {("plugin", 1): config}
     assert entry.config is cached
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
-        entry._declare("conflicting", Schema.leaf(int, mode="register"))
+        entry._declare("conflicting", Schema.leaf(mode="register"))
     assert entry._declarations == {("plugin", 1): config}
     assert entry.config is cached
     with pytest.raises(FrozenInstanceError):
-        entry.config = Schema.leaf(int)
+        entry.config = RefLeafConfig()
     with pytest.raises(FrozenInstanceError):
         entry._declarations = {}
     with pytest.raises(FrozenInstanceError):
@@ -239,77 +156,6 @@ def test_entry_is_frozen_and_rejects_duplicate_owners_without_mutation() -> None
     entry._undeclare(("plugin", 1))
     assert not entry.alive
     assert entry._declarations == {}
-
-
-def test_entry_recomputes_config_from_remaining_declarations() -> None:
-    configs = [_AnnotatedLeaf(labels=(label,)) for label in ("a", "b", "c")]
-    entry = RefEntry(Ref[str]("value"))
-    for owner, config in enumerate(configs):
-        entry._declare(owner, config)
-    assert entry.config == _AnnotatedLeaf(labels=("a", "b", "c"))
-    assert tuple(entry._declarations.values()) == tuple(configs)
-    entry._undeclare(1)
-    assert entry.config == _AnnotatedLeaf(labels=("a", "c"))
-    entry._undeclare(0)
-    assert entry.config is configs[2]
-    entry._undeclare(2)
-    assert not entry.alive
-    replacement = _AnnotatedLeaf(labels=("new",))
-    entry._declare(0, replacement)
-    assert entry.alive
-    assert entry.config is replacement
-    assert entry._declarations == {0: replacement}
-
-
-def test_entry_defers_merging_until_config_is_needed(monkeypatch) -> None:
-    entry = RefEntry(Ref[str]("value"))
-    for owner, label in enumerate(("a", "b", "c", "d")):
-        entry._declare(owner, _AnnotatedLeaf(labels=(label,)))
-    calls = []
-    original = _AnnotatedLeaf.merge
-
-    def merge(self, other):
-        calls.append((self.labels, other.labels))
-        return original(self, other)
-
-    monkeypatch.setattr(_AnnotatedLeaf, "merge", merge)
-    entry._undeclare(0)
-    entry._undeclare(2)
-    assert entry._config is None
-    assert calls == []
-    cached = entry.config
-    assert cached == _AnnotatedLeaf(labels=("b", "d"))
-    assert calls == [(("b",), ("d",))]
-    assert entry.config is cached
-    assert len(calls) == 1
-
-    entry._undeclare(1)
-    assert entry._config is None
-    entry._declare("new", _AnnotatedLeaf(labels=("e",)))
-    assert entry.config == _AnnotatedLeaf(labels=("d", "e"))
-    assert calls == [(("b",), ("d",)), (("d",), ("e",))]
-    entry._undeclare(3)
-    with pytest.raises(ValueError, match="Duplicate declaration"):
-        entry._declare("new", _AnnotatedLeaf(labels=("duplicate",)))
-    assert entry._config is None
-    entry._undeclare("new")
-    assert not entry.alive
-    assert entry._config is None
-    assert len(calls) == 2
-
-
-def test_entry_withdrawal_releases_cached_aggregate() -> None:
-    entry = RefEntry(Ref[str]("value"))
-    entry._declare("first", _AnnotatedLeaf(labels=("first",)))
-    entry._declare("second", _AnnotatedLeaf(labels=("second",)))
-    aggregate_ref = weakref.ref(entry.config)
-    entry._undeclare("second")
-    gc.collect()
-    assert aggregate_ref() is None
-    assert entry._config is None
-    entry._undeclare("first")
-    assert not entry.alive
-    assert entry._config is None
 
 
 def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -> None:
@@ -334,7 +180,6 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
     with monkeypatch.context() as patch:
         patch.setattr(RefEntry, "config", property(unexpected_config_read))
         first()
-        assert schema._entries["group.value"]._config is None
         second()
         second()
         remove_owned()
@@ -379,12 +224,12 @@ async def test_context_owned_cleanup_does_not_read_config(
 
 
 def test_failed_declaration_rollback_does_not_read_config(monkeypatch) -> None:
-    schema = Schema({"stable": Schema.leaf(int)})
+    schema = Schema({"stable": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
     schema = ctx._schema
     ctx.update({"stable": 1})
-    original = Schema._merge_declaration
+    original = Schema._set_entry
     failure = ValueError("registration failed")
 
     def unexpected_config_read(self):
@@ -392,16 +237,15 @@ def test_failed_declaration_rollback_does_not_read_config(monkeypatch) -> None:
 
     with monkeypatch.context() as patch:
 
-        def fail(self, declaration, declaration_id, entries):
-            original(self, declaration, declaration_id, entries)
-            patch.setattr(RefEntry, "config", property(unexpected_config_read))
-            raise failure
+        def fail(self, entry):
+            original(self, entry)
+            if entry.ref.path == "group.new":
+                patch.setattr(RefEntry, "config", property(unexpected_config_read))
+                raise failure
 
-        patch.setattr(Schema, "_merge_declaration", fail)
+        patch.setattr(Schema, "_set_entry", fail)
         with pytest.raises(ValueError) as caught:
-            schema.declare(
-                {"stable": Schema.leaf(int), "group": {"new": Schema.leaf()}}
-            )
+            schema.declare({"stable": Schema.leaf(), "group": {"new": Schema.leaf()}})
         assert caught.value is failure
         assert caught.value.__cause__ is None
     assert_indexes(schema, {"stable"})
@@ -410,7 +254,7 @@ def test_failed_declaration_rollback_does_not_read_config(monkeypatch) -> None:
 
 
 def test_partial_declaration_commit_removes_only_its_new_paths(monkeypatch) -> None:
-    schema = Schema({"stable": Schema.leaf(int)})
+    schema = Schema({"stable": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
     schema = ctx._schema
@@ -431,7 +275,7 @@ def test_partial_declaration_commit_removes_only_its_new_paths(monkeypatch) -> N
         with pytest.raises(RuntimeError) as caught:
             schema.declare(
                 {
-                    "stable": Schema.leaf(int),
+                    "stable": Schema.leaf(),
                     "group": {
                         "first": Schema.leaf(),
                         "nested": {"last": Schema.leaf()},
@@ -447,62 +291,36 @@ def test_partial_declaration_commit_removes_only_its_new_paths(monkeypatch) -> N
     ctx.dispose()
 
 
-def test_declaration_merges_each_incoming_config_once(monkeypatch) -> None:
-    declaration: _Declaration = {"group": {"value": Schema.leaf(int)}}
-    schema = Schema(declaration)
-    originals = dict(schema._entries)
-    results = []
-    leaf_merge = RefLeafConfig.merge
-    container_merge = RefContainerConfig.merge
-
-    def merge_leaf(self, other):
-        result = leaf_merge(self, other)
-        results.append(result)
-        return result
-
-    def merge_container(self, other):
-        result = container_merge(self, other)
-        results.append(result)
-        return result
-
-    monkeypatch.setattr(RefLeafConfig, "merge", merge_leaf)
-    monkeypatch.setattr(RefContainerConfig, "merge", merge_container)
-    remove = schema.declare(declaration)
-    assert len(results) == 3
-    for path, result in zip(("", "group", "group.value"), results, strict=True):
-        assert schema._entries[path] is originals[path]
-        assert schema._entries[path]._config is result
-    remove()
-    assert len(results) == 3
-    assert_indexes(schema, {"group", "group.value"})
-
-
-def test_schema_merges_contributions_without_replacing_runtime_bindings() -> None:
+def test_schema_tracks_contributions_without_replacing_runtime_bindings() -> None:
+    first_marker, second_marker = Metadata(), Metadata()
     ctx = Context()
-    ctx.declare({"blocked": Schema.leaf(int)})
+    ctx.declare({"blocked": Schema.leaf()})
     schema = ctx._schema
-    first = _AnnotatedLeaf(labels=("first",))
-    second = _AnnotatedLeaf(labels=("second",))
+    first = Schema.leaf(metadata={"first": first_marker})
+    second = Schema.leaf(metadata={"second": second_marker})
     remove_first = schema.declare({"value": first})
     entry = schema.resolve_entry("value")
     ctx.update({"value": "runtime value"})
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
-        schema.declare({"value": second, "blocked": Schema.leaf(str)})
-    assert entry.config is first
+        schema.declare({"value": second, "blocked": Schema.leaf(mode="register")})
+    assert entry.config is first.config
+    assert entry.metadata == first.metadata
     assert list(entry._declarations.values()) == [first]
 
     remove_second = schema.declare({"value": second})
     assert schema.resolve_entry("value") is entry
-    assert entry.config == _AnnotatedLeaf(labels=("first", "second"))
+    assert entry.metadata == {"first": first_marker, "second": second_marker}
     assert list(entry._declarations.values()) == [first, second]
     assert ctx.get("value") == "runtime value"
     imported = Schema(schema)
     remove_first()
-    assert entry.config is second
+    assert entry.config is second.config
+    assert entry.metadata == second.metadata
     assert ctx.get("value") == "runtime value"
-    assert imported.resolve_entry("value").config == _AnnotatedLeaf(
-        labels=("first", "second")
-    )
+    assert imported.resolve_entry("value").metadata == {
+        "first": first_marker,
+        "second": second_marker,
+    }
     remove_second()
     assert not entry.alive
     assert_indexes(schema, {"blocked"})
@@ -547,7 +365,7 @@ def test_schema_initial_declaration_is_not_retained() -> None:
     class Declaration(dict):
         pass
 
-    declaration = Declaration({"group": {"value": Schema.leaf(int)}})
+    declaration = Declaration({"group": {"value": Schema.leaf()}})
     source_ref = weakref.ref(declaration)
     schema = Schema(declaration=declaration)
     del declaration
@@ -561,7 +379,7 @@ def test_schema_normalizes_dicts_without_changing_input() -> None:
         pass
 
     group = DeclarationDict(
-        {"value": Schema.leaf(int), "empty": {}, "": Schema.container()}
+        {"value": Schema.leaf(), "empty": {}, "": Schema.container()}
     )
     declaration: _Declaration = {"left": group, "right": group}
     schema = Schema()
@@ -665,7 +483,7 @@ def test_schema_import_preserves_entry_order_across_separate_declarations(
 
 def test_schema_constructor_imports_entries_without_their_owners() -> None:
     source = Schema()
-    remove_source = source.declare({"group": {"value": Schema.leaf(int)}})
+    remove_source = source.declare({"group": {"value": Schema.leaf()}})
     target = Schema(source)
     assert_indexes(target, {"group", "group.value"})
     for path, entry in source._entries.items():
@@ -772,7 +590,7 @@ def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> N
     monkeypatch.setattr(Schema, "_normalize_declaration", staticmethod(child_first))
     ctx = Context()
     schema = ctx._schema
-    remove = schema.declare({"group": {"0": Schema.leaf(int), "empty": {}}})
+    remove = schema.declare({"group": {"0": Schema.leaf(), "empty": {}}})
     assert_indexes(schema, {"group", "group.0", "group.empty"})
     ctx.set("group.0", 1)
     imported = Schema(schema)
@@ -801,7 +619,7 @@ def test_declare_import_and_dispose_with_child_first_traversal(monkeypatch) -> N
 def test_child_first_conflict_rolls_back_unconfigured_ancestor_dicts(
     monkeypatch,
 ) -> None:
-    schema = Schema({"blocked": Schema.leaf(int)})
+    schema = Schema({"blocked": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
     ctx.update({"blocked": 1})
@@ -871,12 +689,12 @@ def test_schema_redeclaration_does_not_retain_old_index_entries() -> None:
 
 @pytest.mark.parametrize("importing", [False, True])
 def test_schema_index_and_tree_stay_unchanged_after_conflict(importing: bool) -> None:
-    schema = Schema({"group": {"value": Schema.leaf(int)}})
+    schema = Schema({"group": {"value": Schema.leaf()}})
     original = schema.resolve_entry("group.value")
     claims = original._declarations.copy()
     declaration: _Declaration = {
         "added": Schema.leaf(),
-        "group": {"value": Schema.leaf(str)},
+        "group": {"value": Schema.leaf(mode="register")},
     }
     with pytest.raises(ValueError, match="Conflicting"):
         schema.declare(Schema(declaration) if importing else declaration)

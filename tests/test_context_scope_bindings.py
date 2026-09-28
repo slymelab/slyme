@@ -556,9 +556,9 @@ def test_schema_registers_roots_without_registering_children() -> None:
 
 def test_failed_declaration_leaves_the_created_context_available() -> None:
     ctx = Context()
-    ctx.declare({"value": Schema.leaf(int)})
+    ctx.declare({"value": Schema.leaf()})
     with pytest.raises(ValueError, match="Conflicting"):
-        ctx.declare({"temporary": Schema.leaf(), "value": Schema.leaf(str)})
+        ctx.declare({"temporary": Schema.leaf(), "value": Schema.leaf(mode="register")})
     assert ctx._schema._stores == {ctx._store}
     assert ctx._store._scope_usages[ctx.scope].viewers == {ctx}
     with pytest.raises(KeyError):

@@ -52,7 +52,7 @@ from slyme.node import node, wrapper, Auto, Node
 R = Schema(
     {
         "input": {
-            "articles": Schema.leaf(list),
+            "articles": Schema.leaf(),
         },
         "output": {"responses": Schema.leaf()},
     }
@@ -133,9 +133,9 @@ Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递�
 
 ## Context 生命周期、Scope 可见性与 Compose
 
-`ctx.install("provide", provide)` 在 `$.methods.provide` 安装由生命周期管理的扩展方法。调用 `ctx.provide(...)` 会将访问方 Context 作为函数的第一个参数；`ctx.get("$.methods.provide")` 返回原始函数。方法遵循 Scope 可见性，不能替换原生成员，install 返回精确撤销本次安装的 disposer。参见[扩展方法](../docs/src/zh/guide/essentials/context.md#methods)。
+把函数、Node 或服务对象注册到已声明的 register 模式字段，通过类型化 Ref 获取后显式调用。能力相关的声明、注册和清理由所属的子 Context 管理。参见[注册能力](../docs/src/zh/guide/essentials/context.md#capabilities)。
 
-使用 `schema.resolve_entry(path)` 查询单个字段，通过 `schema.entries` tuple 枚举 root、container 和 leaf entry。公开的 `RefEntry` 提供 `ref`、`config` 和 `alive`；metadata 通过 `entry.config.metadata` 读取。配置采用 `slyme.context` 导出的公开类型 `RefConfig`、`RefLeafConfig` 和 `RefContainerConfig`。
+使用 `schema.resolve_entry(path)` 查询单个字段，通过 `schema.entries` tuple 枚举 root、container 和 leaf entry。公开的 `RefEntry` 提供 `ref`、`config`、缓存的只读 `metadata` 快照和 `alive`。仅可见 key 或代表对象身份变化时使缓存失效，读取时按需生成新快照，旧快照保持不变。 Metadata 默认按身份兼容，不同对象使用显式 `equals` 判断等价；比较必须纯粹、稳定，满足等价关系。每个 key 使用最早仍有效的原始贡献作为代表，撤销时直接切换，不比较、不 clone。Schema 只声明角色、写入模式和辅助信息；值的静态类型由 `Ref[T]` 表达。`RefLeafConfig` 和 `RefContainerConfig` 只存角色与写入模式，`RefConfig` 是两者的联合类型。`Schema.leaf/container` 返回分别携带 config 与 metadata 的 `RefDeclaration`。这些类型均由 `slyme.context` 导出。
 
 `set` 和 `delete` 修改单个本地路径。`update` 和 `drop` 会在应用修改前校验整个批次；预检失败时 binding 保持不变，实际应用修改时发生的失败不会触发回滚。
 
