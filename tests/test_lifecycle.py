@@ -16,8 +16,8 @@ from slyme.context import (
     ScopeBinding,
 )
 from slyme.context.lifecycle import Lifecycle, _Effect, _LifecycleState
+from slyme.execution import await_result
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result
 
 
 def test_lifecycle_disposal_visits_each_descendant_once(monkeypatch) -> None:

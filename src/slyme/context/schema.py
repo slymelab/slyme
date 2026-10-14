@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, cast, final
 
 from typing_extensions import TypeVar
 
+from slyme.execution import once
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import once
 
 if TYPE_CHECKING:
     from .store import ContextStore

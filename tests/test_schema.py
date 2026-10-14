@@ -22,7 +22,7 @@ from slyme.context import (
     ScopeBinding,
 )
 from slyme.context.schema import _Declaration
-from slyme.utils.execution import await_result
+from slyme.execution import await_result
 
 
 @pytest.mark.parametrize("method", ["resolve", "resolve_entry"])

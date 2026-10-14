@@ -7,8 +7,8 @@ import pytest
 
 from slyme.context import Context, Schema, Scope
 from slyme.context.default import DATA_TREE_REF
+from slyme.execution import await_result
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result
 
 
 def test_disposal_mode_is_fixed_and_not_inherited() -> None:

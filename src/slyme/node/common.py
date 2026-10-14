@@ -18,7 +18,7 @@ from collections.abc import Generator, Iterable
 from typing import Any
 
 from slyme.context import Context
-from slyme.utils.execution import continuation
+from slyme.execution import continuation
 
 from .core import Node, node
 

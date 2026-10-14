@@ -25,8 +25,8 @@ from typing import Any, Generic, Protocol, TypeVar, overload
 from typing_extensions import Self
 
 from slyme.context import Context
-from slyme.utils.execution import Continuation, continuation
-from slyme.utils.tree import (
+from slyme.execution import Continuation, continuation
+from slyme.tree import (
     AttributeKey,
     TreeAux,
     TreeHandler,

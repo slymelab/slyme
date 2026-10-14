@@ -11,13 +11,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from slyme.utils.exception import (
-    BaseExceptionGroup,
-    ExceptionGroup,
-    enrich_exception,
-    exception_group,
-)
-from slyme.utils.tree import (
+from slyme.tree import (
     AttributeKey,
     MappingKey,
     SequenceKey,
@@ -33,20 +27,26 @@ from slyme.utils.tree import (
     get_element,
     iter_with_key_path,
 )
-from slyme.utils.tree import (
+from slyme.tree import (
     flatten as tree_flatten,
 )
-from slyme.utils.tree import (
+from slyme.tree import (
     iter as iter_leaves,
 )
-from slyme.utils.tree import (
+from slyme.tree import (
     map as map_leaves,
 )
-from slyme.utils.tree.common import (
+from slyme.tree.common import (
     DATA_RULES,
     flatten_mapping_proxy,
     unflatten_dict,
     unflatten_mapping_proxy,
+)
+from slyme.utils.exception import (
+    BaseExceptionGroup,
+    ExceptionGroup,
+    enrich_exception,
+    exception_group,
 )
 from slyme.utils.warning import warning_once
 

@@ -5,9 +5,9 @@ from inspect import isawaitable
 
 import pytest
 
+from slyme.execution import FlatExec, await_result, continuation
 from slyme.node.eval import _batch
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import FlatExec, await_result, continuation
 
 _run_batch = continuation(_batch)
 

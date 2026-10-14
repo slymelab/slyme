@@ -6,6 +6,7 @@ from collections.abc import Callable
 import pytest
 
 from slyme.context import Context, Schema
+from slyme.execution import await_result, continuation
 from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
 from slyme.node.exception import (
     NodeException,
@@ -13,7 +14,6 @@ from slyme.node.exception import (
     WrapperExceptionRecord,
 )
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import await_result, continuation
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

@@ -6,7 +6,7 @@ from inspect import isawaitable, signature
 
 import pytest
 
-from slyme.utils.execution import (
+from slyme.execution import (
     Continuation,
     FlatExec,
     SharedAwaitable,

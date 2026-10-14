@@ -1,6 +1,6 @@
 # Slyme 中的 Tree
 
-Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 leaf。`slyme.utils.tree` 提供 `flatten` 等无状态模块函数和不可变的 `TreeRules`。每次遍历显式传入 `rules=`；这些函数不持有注册表或 Context。
+Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 leaf。`slyme.tree` 提供 `flatten` 等无状态模块函数和不可变的 `TreeRules`。每次遍历显式传入 `rules=`；这些函数不持有注册表或 Context。
 
 ## 规则与分派
 
@@ -11,8 +11,8 @@ Tree 是一种嵌套结构：container 定义拓扑，未注册的对象视为 l
 每个遍历接口可传入 `resolver=TreeResolver(func, takes_aux=False)`。类型查找前先调用 `func(element)`：返回 `True` 将当前位置视为 leaf，返回 `False` 按精确类型查找，返回 `TreeHandler` 则覆盖默认分派。返回 `False` 且没有对应 handler 时，对象仍是 leaf。设置 `takes_aux=True` 后，回调接收 `(element, aux)`；`aux.parent` 是直接父容器，`aux.key_path` 是完整路径，根处分别为 `None` 和 `()`。回调参数数量只由 `takes_aux` 决定，返回路径的遍历也不例外。
 
 ```python
-from slyme.utils.tree import TreeResolver, flatten
-from slyme.utils.tree.common import DATA_RULES
+from slyme.tree import TreeResolver, flatten
+from slyme.tree.common import DATA_RULES
 
 leaves, definition = flatten(
     {"items": [1, 2]},
@@ -30,7 +30,7 @@ Flatten 递归遍历容器，仍受 Python 递归深度限制；重建采用后�
 
 Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。子类自行选择是否声明 slots。
 
-不依赖 Context 的遍历可以显式导入 `slyme.utils.tree.common.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不在包顶层重导出。`_apply` 仍是私有实现细节。
+不依赖 Context 的遍历可以显式导入 `slyme.tree.common.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不在包顶层重导出。`_apply` 仍是私有实现细节。
 
 ## Context 持有的默认配置
 
@@ -54,7 +54,7 @@ Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。
 from dataclasses import dataclass
 
 from slyme.context import DATA_TREE_REF, Context
-from slyme.utils.tree import TreeAux, TreeHandler, TreeRules, flatten
+from slyme.tree import TreeAux, TreeHandler, TreeRules, flatten
 
 
 @dataclass

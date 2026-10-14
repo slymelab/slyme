@@ -7,9 +7,9 @@ from inspect import isawaitable
 import pytest
 
 from slyme.context import Context
+from slyme.execution import await_result, continuation
 from slyme.node import Auto, create_node, sequential
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result, continuation
 
 
 def python_depth():

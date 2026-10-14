@@ -10,6 +10,7 @@ import pytest
 
 from slyme.context import Context, ContextPathError, Ref, Schema
 from slyme.context.default import EVALUATORS_REF, NODE_TREE_REF
+from slyme.execution import await_result
 from slyme.node import (
     Auto,
     Node,
@@ -24,10 +25,9 @@ from slyme.node.exception import (
     NodeExceptionRecord,
     WrapperExceptionRecord,
 )
+from slyme.tree import flatten
+from slyme.tree import iter as iter_leaves
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result
-from slyme.utils.tree import flatten
-from slyme.utils.tree import iter as iter_leaves
 
 R = Schema(
     {

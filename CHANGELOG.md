@@ -8,6 +8,16 @@ breaking changes when they are documented here.
 
 ## [Unreleased]
 
+### Import paths
+
+- `slyme.tree` and `slyme.execution` are now the canonical public modules.
+  `slyme.utils.tree` (including `core` and `common`) and
+  `slyme.utils.execution` re-export the same objects for compatibility.
+  Importing either legacy module emits a `DeprecationWarning`.
+  `slyme.utils.exception` and `slyme.utils.warning` remain unchanged.
+  These compatibility modules will be completely removed in **0.3.0**;
+  update imports to the canonical paths before upgrading.
+
 ### Added
 
 - Generic `Context[A]` facets, created by an optional synchronous `facet_factory`

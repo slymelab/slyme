@@ -24,8 +24,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from slyme.utils.tree import TreeRules
-from slyme.utils.tree.common import DATA_RULES
+from slyme.tree import TreeRules
+from slyme.tree.common import DATA_RULES
 
 from .compose import Compose
 from .schema import Ref, Schema

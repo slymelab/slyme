@@ -21,9 +21,9 @@ from typing import Any, TypeVar, cast
 
 from slyme.context import Context, Ref
 from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
+from slyme.execution import Continuation, FlatExec, continuation
+from slyme.tree import flatten
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import Continuation, FlatExec, continuation
-from slyme.utils.tree import flatten
 
 from .core import Node
 

@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 
 from typing_extensions import assert_type
 
-from slyme.utils.execution import (
+from slyme.execution import (
     Continuation,
     FlatExec,
     await_result,

@@ -10,7 +10,7 @@ import pytest
 
 from slyme.context import Compose, Context, Identity, Schema, ScopeBinding
 from slyme.context.default import DATA_TREE_REF
-from slyme.utils.execution import await_result
+from slyme.execution import await_result
 from tests.compose_helpers import ValueLayer, collect_values
 
 

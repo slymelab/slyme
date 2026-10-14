@@ -7,8 +7,8 @@ from types import MappingProxyType
 import pytest
 
 from slyme.context import Context
+from slyme.execution import await_result, continuation
 from slyme.node import Auto, create_node, create_wrapper, node, wrapper
-from slyme.utils.execution import await_result, continuation
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])

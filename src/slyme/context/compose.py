@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Generic, ParamSpec, Protocol, TypeVar, overload
 
-from slyme.utils.execution import once
+from slyme.execution import once
 
 from .scope import Identity, Scope, ScopeBinding
 

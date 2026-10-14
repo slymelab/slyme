@@ -10,8 +10,8 @@ from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_TREE_REF
 from slyme.context.store import _MISSING
 from slyme.node.eval import ref_evaluator
+from slyme.tree import TreeAux, TreeHandler, TreeRules
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.tree import TreeAux, TreeHandler, TreeRules
 
 
 @pytest.mark.parametrize("key", ["missing.path", Ref("missing.path")])

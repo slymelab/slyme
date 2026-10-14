@@ -8,10 +8,10 @@ from typing import Any, Literal
 from typing_extensions import assert_type
 
 from slyme.context import Context, Ref
+from slyme.execution import FlatExec, await_result, continuation
 from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
 from slyme.node.eval import node_evaluator, ref_evaluator
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.execution import FlatExec, await_result, continuation
 
 
 def direct(*runtime: Any, **kwargs: Any) -> int:

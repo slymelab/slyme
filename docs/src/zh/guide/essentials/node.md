@@ -55,7 +55,7 @@ Context 创建、外部输入处理和输出提取均由调用方负责。Node �
 Node 的返回类型是 `T | Awaitable[T]`，取决于实际执行的 Auto、Wrapper、用户函数及临时 Context 清理。纯同步调用直接返回；普通 `def` 也可以返回 awaitable，不需要声明执行模式。同步父函数可以等待异步 Auto 注入后再运行。
 
 ```python
-from slyme.utils.execution import await_result
+from slyme.execution import await_result
 
 
 async def execute(ctx):
@@ -73,11 +73,11 @@ async def execute(ctx):
 
 ### 生成器组合
 
-`slyme.utils.execution` 的 `@continuation` 将生成器函数转换为可直接调用的同步或异步函数。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
+`slyme.execution` 的 `@continuation` 将生成器函数转换为可直接调用的同步或异步函数。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
 
 ```python
 from slyme.node import Node
-from slyme.utils.execution import continuation
+from slyme.execution import continuation
 
 
 @node
@@ -149,7 +149,7 @@ assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
 ```python
 from collections.abc import Callable
 from slyme.node import Node, wrapper
-from slyme.utils.execution import continuation
+from slyme.execution import continuation
 
 
 @wrapper

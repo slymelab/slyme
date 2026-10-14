@@ -22,14 +22,14 @@ from slyme.context.default import (
     EvaluatorLayer,
     TreeLayer,
 )
+from slyme.execution import await_result
 from slyme.node import Auto, node
 from slyme.node.core import NODE_RULES
 from slyme.node.eval import eval_tree
-from slyme.utils.execution import await_result
-from slyme.utils.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
-from slyme.utils.tree import flatten as tree_flatten
-from slyme.utils.tree import iter as iter_leaves
-from slyme.utils.tree.common import DATA_RULES
+from slyme.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
+from slyme.tree import flatten as tree_flatten
+from slyme.tree import iter as iter_leaves
+from slyme.tree.common import DATA_RULES
 
 
 @dataclass

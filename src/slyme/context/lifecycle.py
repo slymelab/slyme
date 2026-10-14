@@ -21,8 +21,8 @@ from enum import Enum
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Literal, overload
 
+from slyme.execution import Continuation, FlatExec, continuation, once
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import Continuation, FlatExec, continuation, once
 
 if TYPE_CHECKING:
     from .core import Context

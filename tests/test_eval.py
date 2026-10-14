@@ -10,12 +10,12 @@ import pytest
 from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
+from slyme.execution import await_result
 from slyme.node import Auto, Node, eval_tree, node, wrapper
 from slyme.node.eval import node_evaluator
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
+from slyme.tree import TreeAux, TreeHandler, TreeRules
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result
-from slyme.utils.tree import TreeAux, TreeHandler, TreeRules
 
 
 def test_same_evaluator_batches_leaves_registered_under_multiple_types(

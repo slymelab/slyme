@@ -105,7 +105,7 @@ jobs:
           import slyme
           from slyme.context import Compose, Context, Schema
           from slyme.node import node
-          from slyme.utils.execution import await_result, run
+          from slyme.execution import await_result, run
           from slyme.utils.exception import ExceptionGroup, exception_group
 
           schema = Schema({"value": Schema.leaf()})

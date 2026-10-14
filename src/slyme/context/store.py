@@ -21,8 +21,8 @@ from enum import Enum
 from itertools import chain
 from typing import Any, Literal, TypeVar, cast
 
+from slyme.execution import once
 from slyme.utils.exception import exception_group
-from slyme.utils.execution import once
 
 from .schema import ContextPathError, Ref, RefEntry, RefLeafConfig, Schema
 from .scope import Identity, Scope, ScopeBinding

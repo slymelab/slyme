@@ -1,6 +1,6 @@
 # Trees in Slyme
 
-A tree is a nested structure whose containers define topology and whose unregistered objects are leaves. `slyme.utils.tree` provides stateless module functions such as `flatten` and immutable `TreeRules`. Every traversal receives `rules=` explicitly; the functions own no registrations or Context.
+A tree is a nested structure whose containers define topology and whose unregistered objects are leaves. `slyme.tree` provides stateless module functions such as `flatten` and immutable `TreeRules`. Every traversal receives `rules=` explicitly; the functions own no registrations or Context.
 
 ## Rules and dispatch
 
@@ -11,8 +11,8 @@ A rule snapshot copies its handler mapping. `TreeRules.merge()` keeps the first 
 Every traversal accepts an optional `resolver=TreeResolver(func, takes_aux=False)`. Before type lookup, `func(element)` returns `True` to treat that occurrence as a leaf, `False` to use the exact-type rules, or a `TreeHandler` to override them. `False` with no registered handler leaves the element opaque. With `takes_aux=True`, the callback receives `(element, aux)`; `aux.parent` is the direct parent and `aux.key_path` is the full path, with `None` and `()` at the root. Callback arity depends only on `takes_aux`, including for path-returning operations.
 
 ```python
-from slyme.utils.tree import TreeResolver, flatten
-from slyme.utils.tree.common import DATA_RULES
+from slyme.tree import TreeResolver, flatten
+from slyme.tree.common import DATA_RULES
 
 leaves, definition = flatten(
     {"items": [1, 2]},
@@ -30,7 +30,7 @@ Flattening recurses into containers and remains subject to Python's recursion li
 
 Tree's built-in data classes use slots, without an instance dictionary or weak-reference support. Subclasses choose whether to define their own slots.
 
-For traversal without a Context, explicitly import `DATA_RULES` from `slyme.utils.tree.common` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
+For traversal without a Context, explicitly import `DATA_RULES` from `slyme.tree.common` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
 
 ## Context-owned defaults
 
@@ -54,7 +54,7 @@ The default compositions use `TreeLayer` and `EvaluatorLayer` from `slyme.contex
 from dataclasses import dataclass
 
 from slyme.context import DATA_TREE_REF, Context
-from slyme.utils.tree import TreeAux, TreeHandler, TreeRules, flatten
+from slyme.tree import TreeAux, TreeHandler, TreeRules, flatten
 
 
 @dataclass

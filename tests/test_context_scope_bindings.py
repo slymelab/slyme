@@ -7,8 +7,8 @@ import pytest
 
 from slyme.context import Context, Identity, Schema, Scope, ScopeBinding
 from slyme.context.store import ContextStore, _ContextBinding
+from slyme.execution import await_result
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result
 
 
 def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(

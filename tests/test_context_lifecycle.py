@@ -8,8 +8,8 @@ import pytest
 
 from slyme.context import Compose, Context, Identity, Schema, Scope, ScopeBinding
 from slyme.context.core import ContextPathError
+from slyme.execution import await_result
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import await_result
 from tests.compose_helpers import ValueLayer, collect_values
 
 

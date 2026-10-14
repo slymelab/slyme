@@ -55,7 +55,7 @@ There is no Def/Exec conversion or `prepare()` step. Each call binds and resolve
 A Node returns `T | Awaitable[T]` according to the actual Auto, Wrapper, user-function, and temporary Context cleanup results. Purely synchronous calls return directly. A regular `def` can return an awaitable without declaring a mode; a synchronous parent can consume async Auto inputs after they complete.
 
 ```python
-from slyme.utils.execution import await_result
+from slyme.execution import await_result
 
 
 async def execute(ctx):
@@ -73,11 +73,11 @@ Calls inside user functions still need explicit handling: synchronous code canno
 
 ### Generator-based composition
 
-`@continuation` from `slyme.utils.execution` turns a generator function into a directly callable synchronous-or-asynchronous function. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
+`@continuation` from `slyme.execution` turns a generator function into a directly callable synchronous-or-asynchronous function. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
 
 ```python
 from slyme.node import Node
-from slyme.utils.execution import continuation
+from slyme.execution import continuation
 
 
 @node
@@ -151,7 +151,7 @@ Call the Node factory or an assembly function again when another independently c
 ```python
 from collections.abc import Callable
 from slyme.node import Node, wrapper
-from slyme.utils.execution import continuation
+from slyme.execution import continuation
 
 
 @wrapper

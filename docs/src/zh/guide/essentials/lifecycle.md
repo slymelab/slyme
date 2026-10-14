@@ -138,4 +138,4 @@ Auto child 返回的值不得依赖其子 Context 拥有的资源，因为这些
 
 直接等待 `await await_result(ctx.dispose())` 的调用者取消时，已调度的清理不会取消，但该调用者可能先退出。应用退出前应再次等待同一次释放，观察保留的结果。父 Context 只能等待仍由它持有的子 Context 的清理。Auto 不返回临时子 Context；求值取消后，后台清理失败可能既不会传给调用者，也不会传给之后才开始的父 Context 释放。
 
-Context 创建、外部输入校验和输出提取由应用代码负责。使用 `node(ctx)` 执行图，使用 `ctx.dispose()` 释放。通过 `await await_result(...)` 处理普通值或 awaitable，或在 `@continuation` 函数中 yield 这些调用；两个辅助接口都位于 `slyme.utils.execution`。
+Context 创建、外部输入校验和输出提取由应用代码负责。使用 `node(ctx)` 执行图，使用 `ctx.dispose()` 释放。通过 `await await_result(...)` 处理普通值或 awaitable，或在 `@continuation` 函数中 yield 这些调用；两个辅助接口都位于 `slyme.execution`。

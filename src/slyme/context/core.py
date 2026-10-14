@@ -21,8 +21,8 @@ from typing import Any, Generic, Literal, overload
 
 from typing_extensions import TypeVar
 
-from slyme.utils.execution import continuation, once
-from slyme.utils.tree import flatten, get_element, iter_with_key_path
+from slyme.execution import continuation, once
+from slyme.tree import flatten, get_element, iter_with_key_path
 
 from .compose import Compose
 from .default import DATA_TREE_REF, _apply

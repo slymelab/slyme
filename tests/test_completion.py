@@ -8,10 +8,10 @@ import pytest
 
 from slyme.context import Context
 from slyme.context.default import EVALUATORS_REF
+from slyme.execution import SharedAwaitable, await_result, continuation
 from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.exception import BaseExceptionGroup
-from slyme.utils.execution import SharedAwaitable, await_result, continuation
 
 
 async def test_await_result_preserves_values_and_only_awaits_outer_completion() -> None:

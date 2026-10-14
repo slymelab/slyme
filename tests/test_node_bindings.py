@@ -8,11 +8,11 @@ import pytest
 
 from slyme.context import Context, Schema
 from slyme.context.default import NODE_TREE_REF
+from slyme.execution import await_result
 from slyme.node import Auto, Node, node, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
-from slyme.utils.execution import await_result
-from slyme.utils.tree import get_element, iter_with_key_path
-from slyme.utils.tree import iter as iter_leaves
+from slyme.tree import get_element, iter_with_key_path
+from slyme.tree import iter as iter_leaves
 
 
 @pytest.mark.parametrize("kind", ["node", "wrapper"])

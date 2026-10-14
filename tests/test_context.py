@@ -24,9 +24,9 @@ from slyme.context import (
 from slyme.context.core import ContextPathError
 from slyme.context.schema import Ref as PathRef
 from slyme.context.schema import Schema as PathSchema
+from slyme.tree import flatten
+from slyme.tree.common import DATA_RULES
 from slyme.utils.exception import exception_group
-from slyme.utils.tree import flatten
-from slyme.utils.tree.common import DATA_RULES
 
 
 def test_schema_module_preserves_public_ref_and_context_interoperation() -> None:
