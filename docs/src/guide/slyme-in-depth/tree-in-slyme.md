@@ -26,7 +26,7 @@ Ordinary `flatten`, `iter`, and `map` construct no traversal context unless the 
 
 The `TreeAux` returned by a flatten handler is passed unchanged to its unflatten handler; an omitted `cls` remains `None`. `TreeDef` stores a flat, immutable sequence of leaf markers and private container records, including actual container types and child counts. Reconstruction consumes leaves in their original order and uses a local stack to assemble containers; it does not reverse or copy the input leaves. Each occurrence consumes its own leaf. No public per-leaf or per-container definition classes are needed.
 
-Flattening recurses into containers and remains subject to Python's recursion limit. Reconstruction is iterative and follows postorder: children are reconstructed before their container. A traversal-only container raises when its record is reached. Leaf-count mismatches raise `ValueError`. Iterator traversal does not create a `TreeDef`.
+Flattening and leaf iteration use explicit stacks for depth-first traversal, so tree depth does not consume Python's recursive call stack. Iterator traversal consumes children lazily and does not create a `TreeDef`. Reconstruction is also iterative and follows postorder: children are reconstructed before their container. A traversal-only container raises when its record is reached. Leaf-count mismatches raise `ValueError`. Custom handlers and resolvers remain responsible for any recursion inside their own code.
 
 Tree's built-in data classes use slots, without an instance dictionary or weak-reference support. Subclasses choose whether to define their own slots.
 

@@ -170,7 +170,7 @@ class TreeResolver:
     """Override dispatch for one traversal.
 
     Return True for a leaf, False for exact-type lookup, or a TreeHandler.
-    With takes_aux=True, func receives (element, aux), including the parent
+    With takes_aux=True, func receives (element, traverse_aux), including the parent
     and full key path; otherwise it receives only element.
     """
 
@@ -333,20 +333,20 @@ def flatten_one(
     return handler, children_iter, tree_aux
 
 
-def _child_aux(
+def _child_traverse_aux(
     parent: Any,
-    aux: TraverseAux | None,
-    data: TreeAux,
+    traverse_aux: TraverseAux | None,
+    tree_aux: TreeAux,
     index: int,
 ) -> TraverseAux | None:
-    if aux is None:
+    if traverse_aux is None:
         return None
-    keys = data.children_keys
+    keys = tree_aux.children_keys
     if keys is None:
         raise ValueError("TreeAux.children_keys is required for key path traversal.")
     if index >= len(keys):
         raise ValueError("Not enough keys provided in TreeAux for container.")
-    return TraverseAux(parent=parent, key_path=aux.key_path + (keys[index],))
+    return TraverseAux(parent=parent, key_path=traverse_aux.key_path + (keys[index],))
 
 
 def _flatten(
@@ -355,61 +355,61 @@ def _flatten(
     resolver: TreeResolver | None,
     with_key_path: bool,
 ) -> tuple[list[Any], TreeDef]:
-    leaves: list[Any] = []
-    operations: list[_Container | None] = []
-    aux = (
+    traverse_aux = (
         TraverseAux(parent=None, key_path=())
         if with_key_path or (resolver is not None and resolver.takes_aux)
         else None
     )
-    prepared = flatten_one(tree, rules=rules, resolver=resolver, traverse_aux=aux)
+    prepared = flatten_one(
+        tree, rules=rules, resolver=resolver, traverse_aux=traverse_aux
+    )
     if prepared is None:
-        leaves.append(((), tree) if with_key_path else tree)
-        operations.append(None)
-    else:
-        _flatten_container(
-            tree, prepared, aux, leaves, operations, resolver, rules, with_key_path
-        )
-    return leaves, TreeDef(tuple(operations))
+        return [((), tree) if with_key_path else tree], TreeDef((None,))
 
-
-def _flatten_container(
-    element: Any,
-    prepared: tuple[TreeHandler, Iterable[Any], TreeAux],
-    traverse_aux: TraverseAux | None,
-    leaves: list[Any],
-    operations: list[_Container | None],
-    resolver: TreeResolver | None,
-    rules: TreeRules,
-    with_key_path: bool,
-) -> None:
-    """Shared traversal for all flatten modes; recurse only into containers."""
+    leaves: list[Any] = []
+    operations: list[_Container | None] = []
+    # Suspend parent iterators while descending; record containers on completion.
     handler, children, tree_aux = prepared
-    count = 0
-    for count, child in enumerate(children, 1):
-        child_aux = _child_aux(element, traverse_aux, tree_aux, count - 1)
+    stack: list[
+        tuple[Any, TreeHandler, Iterator[Any], TreeAux, TraverseAux | None, int]
+    ] = [(tree, handler, builtins.iter(children), tree_aux, traverse_aux, 0)]
+    while stack:
+        element, handler, children_iter, tree_aux, traverse_aux, count = stack[-1]
+        try:
+            child = next(children_iter)
+        except StopIteration:
+            stack.pop()
+            operations.append(
+                _Container(type(element), tree_aux, count, handler.unflatten)
+            )
+            continue
+
+        child_traverse_aux = _child_traverse_aux(element, traverse_aux, tree_aux, count)
+        stack[-1] = (element, handler, children_iter, tree_aux, traverse_aux, count + 1)
         child_prepared = flatten_one(
-            child, rules=rules, resolver=resolver, traverse_aux=child_aux
+            child, rules=rules, resolver=resolver, traverse_aux=child_traverse_aux
         )
         if child_prepared is None:
             leaves.append(
-                (cast(TraverseAux, child_aux).key_path, child)
+                (cast(TraverseAux, child_traverse_aux).key_path, child)
                 if with_key_path
                 else child
             )
             operations.append(None)
         else:
-            _flatten_container(
-                child,
-                child_prepared,
-                child_aux,
-                leaves,
-                operations,
-                resolver,
-                rules,
-                with_key_path,
+            handler, children, tree_aux = child_prepared
+            stack.append(
+                (
+                    child,
+                    handler,
+                    builtins.iter(children),
+                    tree_aux,
+                    child_traverse_aux,
+                    0,
+                )
             )
-    operations.append(_Container(type(element), tree_aux, count, handler.unflatten))
+
+    return leaves, TreeDef(tuple(operations))
 
 
 def _iter(
@@ -418,48 +418,44 @@ def _iter(
     resolver: TreeResolver | None,
     with_key_path: bool,
 ) -> Iterator[Any]:
-    aux = (
+    traverse_aux = (
         TraverseAux(parent=None, key_path=())
         if with_key_path or (resolver is not None and resolver.takes_aux)
         else None
     )
-    prepared = flatten_one(tree, rules=rules, resolver=resolver, traverse_aux=aux)
+    prepared = flatten_one(
+        tree, rules=rules, resolver=resolver, traverse_aux=traverse_aux
+    )
     if prepared is None:
         yield ((), tree) if with_key_path else tree
-    else:
-        yield from _iter_container(tree, prepared, aux, resolver, rules, with_key_path)
+        return
 
-
-def _iter_container(
-    element: Any,
-    prepared: tuple[TreeHandler, Iterable[Any], TreeAux],
-    traverse_aux: TraverseAux | None,
-    resolver: TreeResolver | None,
-    rules: TreeRules,
-    with_key_path: bool,
-) -> Iterator[Any]:
-    """Stream leaves directly, recursing only into child containers."""
+    # Keep child iterators lazy: never request a sibling before its subtree ends.
     _, children, tree_aux = prepared
-    for index, child in enumerate(children):
-        child_aux = _child_aux(element, traverse_aux, tree_aux, index)
+    stack: list[tuple[Any, Iterator[tuple[int, Any]], TreeAux, TraverseAux | None]] = [
+        (tree, enumerate(children), tree_aux, traverse_aux)
+    ]
+    while stack:
+        element, children_iter, tree_aux, traverse_aux = stack[-1]
+        try:
+            index, child = next(children_iter)
+        except StopIteration:
+            stack.pop()
+            continue
+
+        child_traverse_aux = _child_traverse_aux(element, traverse_aux, tree_aux, index)
         child_prepared = flatten_one(
-            child, rules=rules, resolver=resolver, traverse_aux=child_aux
+            child, rules=rules, resolver=resolver, traverse_aux=child_traverse_aux
         )
         if child_prepared is None:
             yield (
-                (cast(TraverseAux, child_aux).key_path, child)
+                (cast(TraverseAux, child_traverse_aux).key_path, child)
                 if with_key_path
                 else child
             )
         else:
-            yield from _iter_container(
-                child,
-                child_prepared,
-                child_aux,
-                resolver,
-                rules,
-                with_key_path,
-            )
+            _, children, tree_aux = child_prepared
+            stack.append((child, enumerate(children), tree_aux, child_traverse_aux))
 
 
 def map(

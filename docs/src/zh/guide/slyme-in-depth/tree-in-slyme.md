@@ -26,7 +26,7 @@ assert leaves == [[1, 2]]
 
 flatten handler 返回的 `TreeAux` 会原样传给其 unflatten handler；未指定的 `cls` 保持 `None`。`TreeDef` 保存平铺、不可变的 leaf 标记与私有 container 记录，其中包括实际容器类型和子元素数量。重建按原顺序消费 leaf，使用局部栈组装容器，不倒序或复制输入的 leaf 序列。每次出现的位置分别消费一个 leaf，无需公开逐 leaf 或逐 container 的定义类。
 
-Flatten 递归遍历容器，仍受 Python 递归深度限制；重建采用后序迭代，先重建子元素，再重建其容器。遇到仅支持遍历的容器记录时才报错。Leaf 数量不匹配会抛出 `ValueError`。迭代器遍历不创建 `TreeDef`。
+Flatten 和 leaf 迭代使用显式栈进行深度优先遍历，树的深度不再消耗 Python 递归调用栈。迭代器按需消费子元素，不创建 `TreeDef`。重建同样采用迭代实现，按后序先重建子元素，再重建其容器。遇到仅支持遍历的容器记录时才报错。Leaf 数量不匹配会抛出 `ValueError`。自定义 handler 和 resolver 内部的递归仍由各自负责。
 
 Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。子类自行选择是否声明 slots。
 

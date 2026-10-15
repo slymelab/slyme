@@ -247,6 +247,8 @@ breaking changes when they are documented here.
 
 ### Changed
 
+- Tree flattening and leaf iteration use explicit stacks, preserving depth-first
+  order and lazy child iteration without recursive traversal calls.
 - Postpone annotations consistently across source and tests, avoiding repeated
   type-expression evaluation when creating `once` and execution callbacks.
   Raw runtime annotations are strings; the minimum Python version remains 3.10.
