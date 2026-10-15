@@ -298,19 +298,29 @@ def iter_with_key_path(
     yield from _iter(tree, rules, resolver, with_key_path=True)
 
 
-def _prepare_element(
+def flatten_one(
     element: Any,
-    traverse_aux: TraverseAux | None,
-    resolver: TreeResolver | None,
+    *,
     rules: TreeRules,
+    resolver: TreeResolver | None = None,
+    traverse_aux: TraverseAux | None = None,
 ) -> tuple[TreeHandler, Iterable[Any], TreeAux] | None:
-    """Return container traversal data, or None for a leaf."""
+    """Expand one element, without visiting or reconstructing children.
+
+    Return (handler, children, tree_aux), or None for a leaf. An empty iterable
+    means a recognized empty container. The selected handler is retained so
+    callers can use its unflatten function without resolving it again.
+    A resolver with takes_aux=True requires explicit traverse_aux, including
+    at the root. The caller owns traversal context and child iteration.
+    """
     decision: TreeHandler | bool = False
     if resolver is not None:
         if resolver.takes_aux:
-            decision = cast(_AuxResolverFunc, resolver.func)(
-                element, cast(TraverseAux, traverse_aux)
-            )
+            if traverse_aux is None:
+                raise ValueError(
+                    "traverse_aux is required when resolver.takes_aux=True."
+                )
+            decision = cast(_AuxResolverFunc, resolver.func)(element, traverse_aux)
         else:
             decision = cast(_ResolverFunc, resolver.func)(element)
     if decision is True:
@@ -352,7 +362,7 @@ def _flatten(
         if with_key_path or (resolver is not None and resolver.takes_aux)
         else None
     )
-    prepared = _prepare_element(tree, aux, resolver, rules)
+    prepared = flatten_one(tree, rules=rules, resolver=resolver, traverse_aux=aux)
     if prepared is None:
         leaves.append(((), tree) if with_key_path else tree)
         operations.append(None)
@@ -378,7 +388,9 @@ def _flatten_container(
     count = 0
     for count, child in enumerate(children, 1):
         child_aux = _child_aux(element, traverse_aux, tree_aux, count - 1)
-        child_prepared = _prepare_element(child, child_aux, resolver, rules)
+        child_prepared = flatten_one(
+            child, rules=rules, resolver=resolver, traverse_aux=child_aux
+        )
         if child_prepared is None:
             leaves.append(
                 (cast(TraverseAux, child_aux).key_path, child)
@@ -411,7 +423,7 @@ def _iter(
         if with_key_path or (resolver is not None and resolver.takes_aux)
         else None
     )
-    prepared = _prepare_element(tree, aux, resolver, rules)
+    prepared = flatten_one(tree, rules=rules, resolver=resolver, traverse_aux=aux)
     if prepared is None:
         yield ((), tree) if with_key_path else tree
     else:
@@ -430,7 +442,9 @@ def _iter_container(
     _, children, tree_aux = prepared
     for index, child in enumerate(children):
         child_aux = _child_aux(element, traverse_aux, tree_aux, index)
-        child_prepared = _prepare_element(child, child_aux, resolver, rules)
+        child_prepared = flatten_one(
+            child, rules=rules, resolver=resolver, traverse_aux=child_aux
+        )
         if child_prepared is None:
             yield (
                 (cast(TraverseAux, child_aux).key_path, child)

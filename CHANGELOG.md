@@ -20,6 +20,10 @@ breaking changes when they are documented here.
 
 ### Added
 
+- `slyme.tree.flatten_one()` exposes the shared one-level traversal operation,
+  returning the selected handler, children, and TreeAux. Resolvers with
+  `takes_aux=True` require an explicit `traverse_aux`.
+
 - Generic `Context[A]` facets, created by an optional synchronous `facet_factory`
   on Context construction, `fork()`, or `derive()`. Facets are per-Context,
   remain available after disposal, and are not inherited or automatically

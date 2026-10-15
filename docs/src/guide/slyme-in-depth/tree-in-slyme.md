@@ -32,6 +32,8 @@ Tree's built-in data classes use slots, without an instance dictionary or weak-r
 
 For traversal without a Context, explicitly import `DATA_RULES` from `slyme.tree.common` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
 
+`flatten_one(element, *, rules, resolver=None, traverse_aux=None)` exposes the same dispatch for a single level. It returns `None` for a leaf, or `(handler, children, tree_aux)` for a container; an empty container has an empty iterable. It does not visit children or reconstruct anything. The returned handler is the actual selected handler, including resolver overrides, so callers can use its `unflatten` function without repeating dispatch. A resolver with `takes_aux=True` requires an explicit `traverse_aux`; omitting it raises `ValueError`. The caller supplies `TraverseAux(parent=None, key_path=())` at a root and manages context for subsequent levels. Whole-tree flattening, iteration, and their path variants share this single-level operation.
+
 ## Context-owned defaults
 
 Root `Context()` installs three register-mode fields from `slyme.context.default`. Each contains its own Compose:
