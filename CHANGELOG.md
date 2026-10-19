@@ -24,6 +24,8 @@ breaking changes when they are documented here.
   returning the selected handler, children, and TreeAux. Resolvers with
   `takes_aux=True` require an explicit `traverse_aux`.
 
+- Node/Wrapper decorators and constructors accept auxiliary metadata.
+
 - Generic `Context[A]` facets, created by an optional synchronous `facet_factory`
   on Context construction, `fork()`, or `derive()`. Facets are per-Context,
   remain available after disposal, and are not inherited or automatically

@@ -33,7 +33,9 @@ from slyme.node import create_node
 inline = create_node(lambda ctx, *, value: value + 1, {"value": 3})
 ```
 
-`create_node(func, params=None, *, wrappers=None)` 通过 mapping 接收业务绑定，组装配置独立传入。每个实例复制自己的参数 mapping 和 wrapper 列表，但保持内部值与 Wrapper 对象的引用。构造时不执行函数，也不求值 Auto 绑定。组装时通过 `create_node(..., wrappers=[...])` 或 `task.add_wrappers(...)` 添加 wrappers；`@node` 不接收 wrappers。装饰后的工厂保留函数元信息，通过 `.__wrapped__` 可获得原函数。
+`create_node(func, params=None, *, wrappers=None, metadata=None)` 通过 mapping 接收业务绑定，组装配置独立传入。每个实例复制自己的参数 mapping 和 wrapper 列表，但保持内部值与 Wrapper 对象的引用。构造时不执行函数，也不求值 Auto 绑定。组装时通过 `create_node(..., wrappers=[...])` 或 `task.add_wrappers(...)` 添加 wrappers；`@node` 不接收 wrappers。装饰后的工厂保留函数元信息，通过 `.__wrapped__` 可获得原函数。
+
+`@node(metadata={"description": marker})`、`@wrapper(metadata=...)` 及其直接构造入口支持 `Mapping[str, Metadata]`，其中 `Metadata` 来自 `slyme.context`。每个实例浅复制输入 mapping，公开独立的可变 `metadata: dict[str, Metadata]`，保留标记对象的身份；装饰器在配置时捕获 mapping。使用原生字典操作读写或删除 metadata，不影响其他实例或装饰器配置。这些描述不参与执行、相等性检查、合并或 Auto 求值。`task(metadata=value)` 这样的工厂参数仍是普通业务绑定。
 
 ## 执行
 

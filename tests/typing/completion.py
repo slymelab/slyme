@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from typing_extensions import assert_type
 
-from slyme.context import Context, Ref
+from slyme.context import Context, Metadata, Ref
 from slyme.execution import FlatExec, await_result, continuation
 from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
 from slyme.node.eval import node_evaluator, ref_evaluator
@@ -175,3 +175,26 @@ def check_wrapper_result_types(
     Node(func=direct, params={}, wrappers=[text_wrapper])  # type: ignore[arg-type]
     Wrapper.compose([text_wrapper], wrapped=integer, call_next=integer)  # type: ignore[misc]
     integer_wrapper(ctx, text, text)  # type: ignore[arg-type]
+
+
+def metadata_types() -> None:
+    markers = {"description": Metadata()}
+    for element in (create_node(direct), create_wrapper(direct)):
+        assert_type(element.metadata, dict[str, Metadata])
+        element.metadata["description"] = markers["description"]
+        assert_type(element.metadata.get("description"), Metadata | None)
+        del element.metadata["description"]
+    assert_type(node(direct, metadata=markers)(), Node[int])
+    assert_type(node(direct_async, metadata=markers)(), Node[int])
+    assert_type(node(metadata=markers)(direct)(), Node[int])
+    assert_type(node(metadata=markers)(direct_async)(), Node[int])
+    assert_type(wrapper(direct, metadata=markers)(), Wrapper[int])
+    assert_type(wrapper(direct_async, metadata=markers)(), Wrapper[int])
+    assert_type(wrapper(metadata=markers)(direct)(), Wrapper[int])
+    assert_type(wrapper(metadata=markers)(direct_async)(), Wrapper[int])
+    assert_type(create_node(direct_async, metadata=markers), Node[int])
+    assert_type(create_node(direct, metadata=markers), Node[int])
+    assert_type(create_wrapper(direct_async, metadata=markers), Wrapper[int])
+    assert_type(create_wrapper(direct, metadata=markers), Wrapper[int])
+    assert_type(Node(func=direct, params={}, metadata=markers), Node[int])
+    assert_type(Wrapper(func=direct, params={}, metadata=markers), Wrapper[int])
