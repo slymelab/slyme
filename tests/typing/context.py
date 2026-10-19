@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from typing_extensions import assert_type
 
-from slyme.context import Context, Scope
+from slyme.context import Context, Lifecycle, Scope
+from slyme.context.core import ContextView
+
+
+def check_observation_properties(ctx: Context, lifecycle: Lifecycle, view: ContextView):
+    assert_type(
+        ctx.state, Literal["active", "dispose_pending", "disposing", "disposed"]
+    )
+    assert_type(
+        lifecycle.state, Literal["active", "dispose_pending", "disposing", "disposed"]
+    )
+    assert_type(view.context, Context[Any])
+    assert_type(view.path, str)
 
 
 class Plugin:

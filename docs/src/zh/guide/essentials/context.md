@@ -401,6 +401,8 @@ root.dispose()
 
 ## Effect 与 dispose
 
+`Context.state` 和 `Lifecycle.state` 是只读字符串：`active`、`dispose_pending`（祖先开始释放后，等待轮到自身清理）、`disposing` 或 `disposed`。读取状态不会启动清理，释放后仍可访问。
+
 `ctx.effect(setup)` 管理一次 setup 及其 cleanup。同步 setup 立即运行，并返回提前 disposer；如果 setup 返回 awaitable，`effect()` 则返回一个解析为 disposer 的 awaitable。两种情况统一使用 `await await_result(ctx.effect(setup))`。异步 setup 在启动前就已登记归属：即使调用者没有等待注册，owner 释放时也会等待 setup，再执行其 cleanup。使用取得的资源前必须等待 setup；如果 setup 在返回 cleanup 前失败，部分资源的回滚仍由 setup 自己负责。
 
 parent 会强引用并拥有子 Context。每个 Context 按登记逆序调用直接拥有的 disposer。`dispose_mode="sequential"` 等待每项结束后再调用下一项；`"batch"` 先调用所有项，再一起等待异步结果。构造、`fork()` 和 `derive()` 均独立默认使用串行策略。嵌套分组和共享等待参见[生命周期](./lifecycle.md#清理分组)。`dispose()` 立即执行同步清理；全部完成时返回 `None`，否则返回用于完成剩余异步清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.execution` 导入。异步 continuation 在被等待时才调度；丢弃返回值会让释放停留在未完成状态。一旦调度，清理 task 不会因等待者取消而取消。提前 effect disposer 采用相同的完成协议。清理失败不会跳过其余项目，最后抛出异常组，只按登记逆序保存失败，不依赖完成顺序；重复调用共享完成结果、重现最终失败，不会重复清理。已释放的 Context 拒绝后续数据及生命周期操作。
@@ -479,7 +481,7 @@ root.dispose()
 
 Context 接受 Ref Tree 进行批量读写。`extract` 会将输入展开一次，按遍历顺序逐个解析 Ref 并读取值，再重建一次请求结构；遇到第一个未声明路径或缺少可见值的路径即停止，不再解析后续 Ref。叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
 
-`ContextView` 只提供 `get/exists/keys/to_dict/flatten`，用于读取和自省子树。它仅保存 Context 与路径前缀并转发读取，不独立管理数据、Scope 或生命周期操作。树形提取使用 `ctx.extract(...)`，传入绝对路径或 Ref；View 不提供 `extract()`，也不依赖 Tree 配置。
+`ContextView` 只提供 `get/exists/keys/to_dict/flatten`，用于读取和自省子树。它仅保存 Context 与路径前缀并转发读取，不独立管理数据、Scope 或生命周期操作。只读属性 `context` 和 `path` 暴露所属 Context 与绝对路径（根路径为空字符串），释放后仍可访问，但不能据此读取已释放的数据。树形提取使用 `ctx.extract(...)`，传入绝对路径或 Ref；View 不提供 `extract()`，也不依赖 Tree 配置。
 
 `Context.flatten(ref=None, *, local=False)` 接受字符串或 Ref 指定的 container 路径，省略时选择根。ContextView 的 `flatten()` 将自身前缀转发给这个方法。两者都返回绝对 Ref 键，不复制 leaf value。
 

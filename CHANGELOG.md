@@ -25,6 +25,7 @@ breaking changes when they are documented here.
   `takes_aux=True` require an explicit `traverse_aux`.
 
 - Node/Wrapper decorators and constructors accept auxiliary metadata.
+- Read-only `Context.state`, `Lifecycle.state`, and `ContextView.context` / `path`.
 
 - Generic `Context[A]` facets, created by an optional synchronous `facet_factory`
   on Context construction, `fork()`, or `derive()`. Facets are per-Context,

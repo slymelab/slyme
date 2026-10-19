@@ -411,6 +411,8 @@ Use ordinary functions for local operations and Nodes when parameter binding, Au
 
 ## Effects and disposal
 
+`Context.state` and `Lifecycle.state` are read-only strings: `active`, `dispose_pending` (waiting for cleanup after an ancestor begins disposal), `disposing`, or `disposed`. Reading state never starts cleanup and remains available after disposal.
+
 `ctx.effect(setup)` owns one setup and its cleanup. A synchronous setup runs immediately and returns an early disposer. If setup returns an awaitable, `effect()` returns an awaitable resolving to that disposer; use `await await_result(ctx.effect(setup))` when either form is possible. Async setup is owned before it starts: owner disposal waits for it and then runs its cleanup, even if its caller never awaited registration. Await setup before using the resource it acquires. Setup remains responsible for undoing partial acquisition if it raises before returning cleanup.
 
 Each asynchronous call returns a single-use coroutine. Repeated calls to `ctx.dispose()` or an early disposer wait for the same underlying operation without repeating cleanup. To await one returned coroutine multiple times, explicitly share it with a Task or `SharedAwaitable`; setup registration follows the same single-use rule.
@@ -491,7 +493,7 @@ Each successful registration keeps a unique token and its contributing Scope ali
 
 Context accepts Ref Trees for batch reads and writes. `extract` flattens the input once, resolves and reads each Ref in traversal order, and reconstructs the requested structure once. It stops at the first unresolved path or missing visible value, without resolving later Refs. Leaf values retain their identities. `update_tree` assigns values from a matching tree using `update`'s preflight checks.
 
-`ContextView` provides only `get/exists/keys/to_dict/flatten` for reading and inspecting a subtree. It keeps a Context and a path prefix, forwards reads, and does not own data, Scope, or lifecycle operations. For tree-shaped extraction, use `ctx.extract(...)` with absolute paths or Refs; views do not provide `extract()` or require Tree configuration.
+`ContextView` provides only `get/exists/keys/to_dict/flatten` for reading and inspecting a subtree. It keeps a Context and a path prefix, forwards reads, and does not own data, Scope, or lifecycle operations. Its read-only `context` and `path` properties expose the owning Context and absolute path (an empty string for the root), including after disposal; they do not make disposed data readable. For tree-shaped extraction, use `ctx.extract(...)` with absolute paths or Refs; views do not provide `extract()` or require Tree configuration.
 
 `Context.flatten(ref=None, *, local=False)` accepts a container path as a string or Ref; omitting it selects the root. ContextView delegates its `flatten()` call to this method with its prefix. Both return absolute Ref keys without copying leaf values.
 

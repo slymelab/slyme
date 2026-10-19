@@ -159,6 +159,11 @@ class Context(Generic[_A]):
                 self.parent._children.pop(self).finalize()
 
     @property
+    def state(self) -> Literal["active", "dispose_pending", "disposing", "disposed"]:
+        """Return this Context's lifecycle state, including after disposal."""
+        return self._lifecycle.state
+
+    @property
     def dispose_mode(self) -> Literal["sequential", "batch"]:
         """Return the immutable disposal mode owned by this Context's Lifecycle."""
         return self._lifecycle.dispose_mode
@@ -479,6 +484,16 @@ class ContextView:
 
     _context: Context
     _parts: tuple[str, ...]
+
+    @property
+    def context(self) -> Context:
+        """The Context whose visibility this view follows."""
+        return self._context
+
+    @property
+    def path(self) -> str:
+        """The absolute path of this subtree."""
+        return ".".join(self._parts)
 
     def _adjust_key(self, ref: str) -> str:
         return ".".join((*self._parts, *Ref._split_path(ref)))

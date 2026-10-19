@@ -151,6 +151,11 @@ class Lifecycle:
     def _set_state(self, state: _LifecycleState) -> None:
         object.__setattr__(self, "_state", state)
 
+    @property
+    def state(self) -> Literal["active", "dispose_pending", "disposing", "disposed"]:
+        """Return the current lifecycle state without changing it."""
+        return self._state.value
+
     def assert_readable(self) -> None:
         if self._state is _LifecycleState.DISPOSED:
             raise RuntimeError("Lifecycle has been disposed.")
