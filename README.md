@@ -37,6 +37,11 @@ paths are compatibility re-exports and will be completely removed in **0.3.0**.
 Importing either legacy path emits a `DeprecationWarning`.
 `slyme.utils.exception` and `slyme.utils.warning` remain unchanged.
 
+`slyme.inspection.inspect(value, tree_rules=...)` returns an in-memory graph of
+structure and synchronous, environment-dependent interpretations. It supports
+shared objects, cycles, custom Tree rules and configurable raw-value retention.
+See [Inspection](docs/src/guide/slyme-in-depth/inspection.md).
+
 Node and Wrapper factories save only supplied keyword bindings. Native function
 defaults apply at invocation; `node(ctx, **kwargs)` overrides saved bindings for
 one call before Auto evaluation. Use `get`, `set`, and `delete` to manage bindings.

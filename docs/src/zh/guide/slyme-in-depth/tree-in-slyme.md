@@ -32,7 +32,7 @@ Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。
 
 不依赖 Context 的遍历可以显式导入 `slyme.tree.common.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不在包顶层重导出。`_apply` 仍是私有实现细节。
 
-`flatten_one(element, *, rules, resolver=None, traverse_aux=None)` 将同样的分派逻辑开放为单层操作。叶子返回 `None`，容器返回 `(handler, children, tree_aux)`，空容器的 children 为空。它不继续访问子节点，也不重建对象。返回的 handler 是实际选中的处理器，包括 resolver 的覆盖结果，因此调用者可以直接使用其 `unflatten`，不必重复分派。`takes_aux=True` 的 resolver 要求显式传入 `traverse_aux`，省略时抛出 `ValueError`。调用者在根节点提供 `TraverseAux(parent=None, key_path=())`，并维护后续层级的上下文。整树 flatten、iter 及其路径版本共用这个单层操作。
+`flatten_one(element, *, rules, resolver=None, traverse_aux=None)` 将同样的分派逻辑开放为单层操作。叶子返回 `None`，容器返回 `(handler, children, tree_aux)`，空容器的 children 为空。它不继续访问子节点，也不重建对象。返回的 handler 是实际选中的处理器，包括 resolver 的覆盖结果，因此调用者可以直接使用其 `unflatten`，不必重复分派。`takes_aux=True` 的 resolver 要求显式传入 `traverse_aux`，省略时抛出 `ValueError`。调用者在根节点提供 `TraverseAux(parent=None, key_path=())`，并维护后续层级的上下文。整树 flatten、iter 及其路径版本共用这个单层操作。[自省](./inspection.md) 也使用该操作与显式工作队列，保留对象身份并处理循环引用。
 
 ## Context 持有的默认配置
 

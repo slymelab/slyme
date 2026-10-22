@@ -32,6 +32,10 @@ Tree handler 和 Auto evaluator 按精确类型匹配，子类需要显式注册
 导入这两个旧路径会发出 `DeprecationWarning`。
 `slyme.utils.exception` 和 `slyme.utils.warning` 保持不变。
 
+`slyme.inspection.inspect(value, tree_rules=...)` 返回结构与依赖环境的同步解释结果组成的内存图，
+支持共享对象、循环引用、自定义 Tree rules 和可配置的原值保留类型。
+详见[自省文档](../docs/src/zh/guide/slyme-in-depth/inspection.md)。
+
 Node 和 Wrapper 工厂只保存传入的关键字绑定。函数原生默认值在实际调用时生效；`node(ctx, **kwargs)` 在 Auto 求值前为本次调用覆盖已保存的绑定。使用 `get`、`set`、`delete` 管理绑定。
 
 ## 安装

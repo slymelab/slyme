@@ -24,6 +24,10 @@ breaking changes when they are documented here.
   returning the selected handler, children, and TreeAux. Resolvers with
   `takes_aux=True` require an explicit `traverse_aux`.
 
+- `slyme.inspection.inspect(value, tree_rules=...)` describes shared and cyclic
+  structures as an in-memory graph using explicit Tree rules and synchronous
+  interpreters. It supports configurable raw-value retention and optional
+  record/relationship budgets and exploration depth limits.
 - Node/Wrapper decorators and constructors accept auxiliary metadata.
 - Read-only `Context.state`, `Lifecycle.state`, and `ContextView.context` / `path`.
 
