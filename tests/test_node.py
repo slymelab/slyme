@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from slyme.context import Context, ContextPathError, Ref, Schema
-from slyme.context.default import EVALUATORS_REF, NODE_TREE_REF
+from slyme.context.default import EVALUATORS_REF, INSPECTION_TREE_RULES_REF
 from slyme.execution import await_result
 from slyme.node import (
     Auto,
@@ -1075,10 +1075,15 @@ def test_node_and_wrapper_trees_support_traversal_without_reconstruction() -> No
         return nested
 
     ctx = Context()
-    rules = ctx.get(NODE_TREE_REF).resolve(ctx.scope)
-    assert flatten(child(), rules=rules)[0] == []
-    graph = parent(nested=Auto(child(value=1))).add_wrappers(trace())
-    for value, expected_leaves in ((graph, [1]), (trace(), [])):
+    rules = ctx.get(INSPECTION_TREE_RULES_REF).resolve(ctx.scope)
+    child_node = child(value=1)
+    trace_wrapper = trace()
+    graph = parent(nested=Auto(child_node)).add_wrappers(trace_wrapper)
+    assert flatten(child(), rules=rules)[0] == [child_node.func]
+    for value, expected_leaves in (
+        (graph, [graph.func, child_node.func, 1, trace_wrapper.func]),
+        (trace_wrapper, [trace_wrapper.func]),
+    ):
         leaves, definition = flatten(value, rules=rules)
         assert leaves == expected_leaves
         assert list(iter_leaves(value, rules=rules)) == expected_leaves

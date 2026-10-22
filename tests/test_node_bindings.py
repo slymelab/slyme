@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from slyme.context import Context, Schema
-from slyme.context.default import NODE_TREE_REF
+from slyme.context.default import INSPECTION_TREE_RULES_REF
 from slyme.execution import await_result
 from slyme.node import Auto, Node, node, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
@@ -267,13 +267,14 @@ def test_inspection_follows_explicit_bindings_and_auto_trees() -> None:
     ref = schema.resolve("input")
     instance = value(dynamic=Auto({"value": ref}), extra="raw")
     ctx = Context()
-    rules = ctx.get(NODE_TREE_REF).resolve(ctx.scope)
+    rules = ctx.get(INSPECTION_TREE_RULES_REF).resolve(ctx.scope)
     paths_and_leaves = list(iter_with_key_path(instance, rules=rules))
-    assert [leaf for _, leaf in paths_and_leaves] == [ref, "raw"]
+    assert [leaf for _, leaf in paths_and_leaves] == [instance.func, ref.path, "raw"]
     assert [get_element(instance, path) for path, _ in paths_and_leaves] == [
-        ref,
+        instance.func,
+        ref.path,
         "raw",
     ]
     instance.delete("extra")
-    assert list(iter_leaves(instance, rules=rules)) == [ref]
+    assert list(iter_leaves(instance, rules=rules)) == [instance.func, ref.path]
     ctx.dispose()

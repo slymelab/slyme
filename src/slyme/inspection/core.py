@@ -86,7 +86,7 @@ class _Inspector:
         interpreters: Mapping[type, Interpreter],
         interpreter_resolver: InterpreterResolver | None,
         type_names: Mapping[type, str],
-        raw_value_types: Collection[type],
+        raw_value_types: Collection[type] | None,
         budget: int | None,
         max_depth: int | None,
     ) -> None:
@@ -95,7 +95,9 @@ class _Inspector:
         self.interpreters = dict(interpreters)
         self.interpreter_resolver = interpreter_resolver
         self.type_names = dict(type_names)
-        self.raw_value_types = frozenset(raw_value_types)
+        self.raw_value_types = (
+            None if raw_value_types is None else frozenset(raw_value_types)
+        )
         self.budget = budget
         self.max_depth = max_depth
         self.exhausted = False
@@ -142,7 +144,7 @@ class _Inspector:
                 "label": _type_label(value),
                 "entries": [],
             }
-            if type(value) in self.raw_value_types:
+            if self.raw_value_types is None or type(value) in self.raw_value_types:
                 data["value"] = value
             semantic_type = self.type_names.get(type(value))
             if semantic_type is not None:
@@ -298,14 +300,15 @@ def inspect(
     interpreters: Mapping[type, Interpreter] | None = None,
     interpreter_resolver: InterpreterResolver | None = None,
     type_names: Mapping[type, str] | None = None,
-    raw_value_types: Collection[type] = (),
+    raw_value_types: Collection[type] | None = (),
     budget: int | None = None,
     max_depth: int | None = None,
 ) -> InspectionGraph:
     """Build an object graph from structure and environment-dependent interpretations.
 
     Rules match exact types; tree_resolver must use takes_aux=False.
-    Only values whose exact types are in raw_value_types retain their raw value.
+    raw_value_types selects exact types to retain; None retains all original values.
+    The default empty collection retains none.
     Consumers own serialization. budget counts records plus entries; max_depth
     limits followed relationships from root depth zero. None leaves either unlimited.
     Callbacks must be synchronous, stable and side-effect-free; exceptions propagate.

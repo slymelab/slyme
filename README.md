@@ -38,8 +38,9 @@ Importing either legacy path emits a `DeprecationWarning`.
 `slyme.utils.exception` and `slyme.utils.warning` remain unchanged.
 
 `slyme.inspection.inspect(value, tree_rules=...)` returns an in-memory graph of
-structure and synchronous, environment-dependent interpretations. It supports
-shared objects, cycles, custom Tree rules and configurable raw-value retention.
+structure and synchronous observations. It supports shared/cyclic objects and
+custom Tree rules without executing Node bodies. `resolve_inspection_options(ctx)` from
+`slyme.context.inspection` supplies scoped configuration through `**options`.
 See [Inspection](docs/src/guide/slyme-in-depth/inspection.md).
 
 Node and Wrapper factories save only supplied keyword bindings. Native function
@@ -160,7 +161,7 @@ Use `schema.resolve_entry(path)` to inspect one field and the `schema.entries` t
 
 `Schema.leaf()` and `Schema.container()` accept `metadata={"namespace.key": item}`. Items derive from the frozen `Metadata` dataclass. Identity matches are accepted directly; distinct objects at one key must satisfy the representative's `equals(other)` method, which defaults to identity comparison. Custom comparisons must define a pure, stable equivalence relation. Each key exposes its earliest active original; withdrawal selects another without comparison or cloning. Metadata is exposed as a cached read-only snapshot, rebuilt lazily after visible keys or representative identities change. See [Schema metadata](docs/src/guide/essentials/context.md#metadata). Schema declares roles and write modes, not runtime value types; use `Ref[T]` for static value types.
 
-`Ref("")` identifies Schema's permanently declared root container. `ctx.get("")` returns a live root view even without visible values. Root `Context()` installs independent rule Composes at `$.tree.data.rules`, `$.tree.node.rules`, and `$.eval.handlers` through `context/default.py`. They appear in root views and use `register` mode, so `ctx.delete("")` rejects them; delete an assign-only business subtree instead. Deletion preserves inherited data, isolation barriers, declarations, and effects. Root assignment is rejected like any other container assignment.
+`Ref("")` identifies Schema's permanently declared root container. `ctx.get("")` returns a live root view even without visible values. Root `Context()` installs independent rule Composes at `$.tree.data.rules` and `$.eval.handlers`, with inspection configuration under `$.inspection` through `context/default.py`. They appear in root views and use `register` mode, so `ctx.delete("")` rejects them; delete an assign-only business subtree instead. Deletion preserves inherited data, isolation barriers, declarations, and effects. Root assignment is rejected like any other container assignment.
 
 `set` and `delete` change individual local paths. `update` and `drop` validate
 the complete batch before applying changes; preflight failures leave bindings
@@ -235,7 +236,7 @@ new Scopes do not require that scan.
 
 **Unlimited Composability:** Build arbitrarily complex execution flows with complete decoupling. Thanks to Tree augmentation, Node containment relationships can be represented directly through native Python structures.
 
-**Context-owned Tree Rules:** Module functions such as `from slyme.tree import flatten` receive `TreeRules` explicitly. Configure runtime traversal and evaluation through `DATA_TREE_REF`, `NODE_TREE_REF`, and `EVALUATORS_REF` from `slyme.context`; contributions follow Scope visibility and Context-owned disposal. See the [Tree guide](docs/src/guide/slyme-in-depth/tree-in-slyme.md).
+**Context-owned Tree Rules:** Module functions such as `from slyme.tree import flatten` receive `TreeRules` explicitly. Configure runtime traversal and evaluation through `DATA_TREE_REF` and `EVALUATORS_REF` from `slyme.context`; contributions follow Scope visibility and Context-owned disposal. See the [Tree guide](docs/src/guide/slyme-in-depth/tree-in-slyme.md).
 
 **Explicit Lifetime and Visibility:** Context provides single-parent lifetime ownership, while Scope provides independent C3 visibility. Every Context path, structural role, and write mode is declared by a shared Schema; `flatten()` exposes the visible Ref-to-value mapping, and `Compose` provides ordered, reversible values across Scope hierarchies.
 

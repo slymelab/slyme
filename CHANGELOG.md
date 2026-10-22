@@ -24,10 +24,15 @@ breaking changes when they are documented here.
   returning the selected handler, children, and TreeAux. Resolvers with
   `takes_aux=True` require an explicit `traverse_aux`.
 
-- `slyme.inspection.inspect(value, tree_rules=...)` describes shared and cyclic
-  structures as an in-memory graph using explicit Tree rules and synchronous
-  interpreters. It supports configurable raw-value retention and optional
-  record/relationship budgets and exploration depth limits.
+- `slyme.inspection.inspect(value, tree_rules=...)` describes shared/cyclic structures as an
+  in-memory object graph with configurable raw-value retention, using Tree rules and synchronous value interpreters.
+  Context, Ref, Compose, Node, and Wrapper adapters preserve runtime behavior.
+  Root-owned `$.inspection.tree_rules`, `$.inspection.interpreters`, and
+  `$.inspection.type_names` and `$.inspection.raw_value_types` provide scoped configuration without
+  implicit fallback through `slyme.context.inspection.resolve_inspection_options(ctx)`.
+  Inspection itself is independent of Context and accepts explicit configuration.
+  Node, Wrapper, and Auto structural descriptions live in `slyme.node.inspection`;
+  execution and data traversal use separate rules.
 - Node/Wrapper decorators and constructors accept auxiliary metadata.
 - Read-only `Context.state`, `Lifecycle.state`, and `ContextView.context` / `path`.
 
@@ -42,7 +47,7 @@ breaking changes when they are documented here.
   registration order. Nested Contexts and shared early disposers compose cleanup
   dependencies without an additional Effect grouping API.
 - Context-owned Tree rules and Auto evaluators, installed by `context/default.py`
-  in independent Composes at `$.tree.data.rules`, `$.tree.node.rules`, and `$.eval.handlers`.
+  in independent Composes at `$.tree.data.rules` and `$.eval.handlers`.
   Defaults follow normal Scope visibility with no root fallback and are released
   with their root Context. Public Ref constants expose these configuration paths.
 - Stateless module functions in `slyme.utils.tree`, including `flatten`, with

@@ -1,0 +1,246 @@
+{
+  "root": {
+    "$ref": "0"
+  },
+  "objects": {
+    "0": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "1"
+          },
+          "key": {
+            "$ref": "2"
+          }
+        },
+        {
+          "role": "child",
+          "value": {
+            "$ref": "3"
+          },
+          "key": {
+            "$ref": "4"
+          }
+        }
+      ]
+    },
+    "1": {
+      "kind": "opaque",
+      "entries": [
+        {
+          "role": "interpretation",
+          "value": {
+            "$ref": "5"
+          }
+        }
+      ],
+      "type": "example.in_environment"
+    },
+    "2": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "6"
+          },
+          "key": {
+            "$ref": "6"
+          }
+        }
+      ],
+      "type": "slyme.tree.sequence_key"
+    },
+    "3": {
+      "kind": "opaque",
+      "entries": [
+        {
+          "role": "interpretation",
+          "value": {
+            "$ref": "7"
+          }
+        }
+      ],
+      "type": "example.in_environment"
+    },
+    "4": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "8"
+          },
+          "key": {
+            "$ref": "6"
+          }
+        }
+      ],
+      "type": "slyme.tree.sequence_key"
+    },
+    "5": {
+      "kind": "interpretation",
+      "attributes": {
+        "state": "resolved"
+      },
+      "entries": [
+        {
+          "role": "env",
+          "value": {
+            "$ref": "9"
+          }
+        },
+        {
+          "role": "value_env",
+          "value": {
+            "$ref": "10"
+          }
+        },
+        {
+          "role": "value",
+          "value": {
+            "$ref": "11"
+          }
+        }
+      ]
+    },
+    "6": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "7": {
+      "kind": "interpretation",
+      "attributes": {
+        "state": "resolved"
+      },
+      "entries": [
+        {
+          "role": "env",
+          "value": {
+            "$ref": "9"
+          }
+        },
+        {
+          "role": "value_env",
+          "value": {
+            "$ref": "12"
+          }
+        },
+        {
+          "role": "value",
+          "value": {
+            "$ref": "11"
+          }
+        }
+      ]
+    },
+    "8": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "9": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "10": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "11": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "13"
+          },
+          "key": {
+            "$ref": "14"
+          }
+        },
+        {
+          "role": "interpretation",
+          "value": {
+            "$ref": "15"
+          }
+        },
+        {
+          "role": "interpretation",
+          "value": {
+            "$ref": "16"
+          }
+        }
+      ],
+      "type": "slyme.ref"
+    },
+    "12": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "13": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "14": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "17"
+          },
+          "key": {
+            "$ref": "6"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "15": {
+      "kind": "interpretation",
+      "attributes": {
+        "state": "resolved"
+      },
+      "entries": [
+        {
+          "role": "env",
+          "value": {
+            "$ref": "10"
+          }
+        },
+        {
+          "role": "value",
+          "value": {
+            "$ref": "10"
+          }
+        }
+      ]
+    },
+    "16": {
+      "kind": "interpretation",
+      "attributes": {
+        "state": "resolved"
+      },
+      "entries": [
+        {
+          "role": "env",
+          "value": {
+            "$ref": "12"
+          }
+        },
+        {
+          "role": "value",
+          "value": {
+            "$ref": "12"
+          }
+        }
+      ]
+    },
+    "17": {
+      "kind": "opaque",
+      "entries": []
+    }
+  }
+}

@@ -28,7 +28,7 @@ def test_root_with_defaults_is_a_readable_view(key: str | Ref, local: bool) -> N
     assert view.to_dict(local=local) == {"$": ctx.get("$").to_dict()}
     assert view.flatten(local=local) == ctx.get("$").flatten()
     assert ctx.extract({"root": key}, local=local) == {"root": view}
-    assert len(ctx._store._data) == 3
+    assert len(ctx._store._data) == 6
     with pytest.raises(ContextPathError, match="register"):
         ctx.delete(key)
     with pytest.raises(ContextPathError, match="register"):

@@ -26,13 +26,6 @@ from typing_extensions import Self
 
 from slyme.context import Context, Metadata
 from slyme.execution import Continuation, continuation
-from slyme.tree import (
-    AttributeKey,
-    TreeAux,
-    TreeHandler,
-    TreeKey,
-    TreeRules,
-)
 
 from .exception import (
     NodeException,
@@ -135,15 +128,6 @@ class Node(NodeElement[_R]):
 
     __slots__ = ("wrappers",)
 
-    @staticmethod
-    def _flatten(obj: Node[Any]) -> tuple[Iterable[Any], TreeAux]:
-        children = [obj.wrappers]
-        keys: list[TreeKey] = [AttributeKey("wrappers")]
-        for name, value in obj._params.items():
-            children.append(value)
-            keys.append(_NodeParameterKey(name))
-        return tuple(children), TreeAux(children_keys=tuple(keys), cls=Node)
-
     def __init__(
         self,
         /,
@@ -197,11 +181,6 @@ class Wrapper(NodeElement[_R]):
     """Preserve a Node's result type; await completion before result-dependent work."""
 
     __slots__ = ()
-
-    @staticmethod
-    def _flatten(obj: Wrapper[Any]) -> tuple[Iterable[Any], TreeAux]:
-        keys = tuple(_NodeParameterKey(name) for name in obj._params)
-        return tuple(obj._params.values()), TreeAux(children_keys=keys, cls=Wrapper)
 
     @staticmethod
     def compose(
@@ -435,30 +414,5 @@ def wrapper(
 
     return decorate if func is None else decorate(func)
 
-
-@dataclass(frozen=True)
-class _NodeParameterKey(TreeKey):
-    """Address one NodeElement build parameter without attribute projection."""
-
-    name: str
-
-    def resolve(self, element: Any) -> Any:
-        return element.get(self.name)
-
-    def codify(self, parent_expr: str) -> str:
-        return f"{parent_expr}.get({self.name!r})"
-
-
-# Nodes, Wrappers, and Auto support inspection, not reconstruction.
-NODE_RULES = TreeRules(
-    handlers={
-        Node: TreeHandler(Node._flatten, None),
-        Wrapper: TreeHandler(Wrapper._flatten, None),
-        Auto: TreeHandler(
-            lambda obj: ((obj.value,), TreeAux(children_keys=(AttributeKey("value"),))),
-            None,
-        ),
-    }
-)
 
 from .eval import eval_tree

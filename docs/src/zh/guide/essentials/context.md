@@ -237,7 +237,7 @@ fragment 仍用于声明和导出该插件拥有的路径；`ctx.entries` 列出
 
 ### 框架配置
 
-`context/default.py` 在根 Context 安装三个 register 模式的 Compose：`$.tree.data.rules`、`$.tree.node.rules` 和 `$.eval.handlers`。分别通过 `DATA_TREE_REF`、`NODE_TREE_REF`、`EVALUATORS_REF` 访问；这些常量由 `slyme.context` 导出。它们和贡献的清理由根生命周期管理，不存在可变的进程级 registry。
+`context/default.py` 在根 Context 安装用于 Tree 遍历、求值和自省的 register 模式 Compose。通过 `slyme.context` 导出的 `DATA_TREE_REF`、`EVALUATORS_REF` 访问遍历与求值配置；四个 `INSPECTION_*_REF` 路径见[自省](../slyme-in-depth/inspection.md)。这些值及其默认贡献由根生命周期管理，不存在可变的进程级 registry。
 
 这些路径服从普通 Context/Scope 规则。子 Scope 可继承，完全无关的 Scope 必须显式获得配置，不会隐式回退到 root。可以通过 Compose 贡献规则，也可以调用 `ctx.derive(bindings={ref: ScopeBinding(blocked=True)})`，再在返回的子 Context 中注册独立的 Compose。详见 [Tree 规则](../slyme-in-depth/tree-in-slyme.md)。
 

@@ -30,7 +30,7 @@ Flattening and leaf iteration use explicit stacks for depth-first traversal, so 
 
 Tree's built-in data classes use slots, without an instance dictionary or weak-reference support. Subclasses choose whether to define their own slots.
 
-For traversal without a Context, explicitly import `DATA_RULES` from `slyme.tree.common` and `NODE_RULES` from `slyme.node.core`. The former handles ordinary data containers; the latter handles only Node, Wrapper, and Auto. Combine them with `TreeRules.merge((NODE_RULES, DATA_RULES))` for graph inspection. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
+For traversal without a Context, explicitly import `DATA_RULES` from `slyme.tree.common`. For Node, Wrapper, and Auto descriptions, combine it with `NODE_INSPECTION_TREE_RULES` from `slyme.node.inspection`: `TreeRules.merge((NODE_INSPECTION_TREE_RULES, DATA_RULES))`. These traversal-only handlers expose functions, parameters, metadata, wrappers and Auto payloads; they do not reconstruct Nodes or execute their bodies. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
 
 `flatten_one(element, *, rules, resolver=None, traverse_aux=None)` exposes the same dispatch for a single level. It returns `None` for a leaf, or `(handler, children, tree_aux)` for a container; an empty container has an empty iterable. It does not visit children or reconstruct anything. The returned handler is the actual selected handler, including resolver overrides, so callers can use its `unflatten` function without repeating dispatch. A resolver with `takes_aux=True` requires an explicit `traverse_aux`; omitting it raises `ValueError`. The caller supplies `TraverseAux(parent=None, key_path=())` at a root and manages context for subsequent levels. Whole-tree flattening, iteration, and their path variants share this single-level operation. [Inspection](./inspection.md) also uses it with an explicit work queue to preserve object identity and handle cycles.
 
@@ -41,16 +41,15 @@ Root `Context()` installs three register-mode fields from `slyme.context.default
 | Ref constant | Path | Contributions |
 | --- | --- | --- |
 | `DATA_TREE_REF` | `$.tree.data.rules` | `TreeRules` for Auto, `extract`, and `update_tree` |
-| `NODE_TREE_REF` | `$.tree.node.rules` | `TreeRules` for explicit Node graph inspection |
 | `EVALUATORS_REF` | `$.eval.handlers` | Exact-type evaluator mappings |
 
-These constants are also exported by `slyme.context`. Data rules expand list, tuple, dict, and MappingProxyType. Node rules additionally traverse Node and Wrapper bindings and Auto payloads. Node, Wrapper, and Auto are traversal-only containers, with no reconstruction function.
+These constants are also exported by `slyme.context`. Data rules expand list, tuple, dict, and MappingProxyType; Node and Ref values remain leaves for evaluator dispatch. Inspection rules describe Node, Wrapper and Auto separately, without reconstruction functions.
 
-The `$.tree.data` and `$.tree.node` containers currently contain only `rules`; no resolver fields are declared or read by Context operations.
+The `$.tree.data` container currently contains only `rules`; no resolver fields are declared or read by Context operations. Inspection has separate configuration under `$.inspection`; see [Inspection](./inspection.md).
 
 Each operation resolves its rule and evaluator mappings once, before traversal or asynchronous suspension. Contributions added or removed afterward affect subsequent operations, not that operation's dispatch or reconstruction. Capturing a callable does not extend the lifetime of resources managed by its owner.
 
-The default compositions use `TreeLayer` and `EvaluatorLayer` from `slyme.context.default`. Each layer rejects a second registration of the same exact class, even for the same handler or through a different Scope sharing its Identity. A conflicting batch installs none of its classes. Withdrawal allows those classes to be registered again. Across layers, queries keep the first handler in Scope C3 order; register into a child layer to override an inherited contribution. Dispose a contribution to reveal the next applicable definition:
+The default compositions use `TreeLayer` and `TypeLayer` from `slyme.context.default`. Each layer rejects a second registration of the same exact class, even for the same handler or through a different Scope sharing its Identity. A conflicting batch installs none of its classes. Withdrawal allows those classes to be registered again. Across layers, queries keep the first handler in Scope C3 order; register into a child layer to override an inherited contribution. Dispose a contribution to reveal the next applicable definition:
 
 ```python
 from dataclasses import dataclass
@@ -109,7 +108,7 @@ assert not child.get(DATA_TREE_REF).resolve(child.scope).handlers
 ctx.dispose()
 ```
 
-An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection explicitly resolves NODE_TREE_REF and passes those rules to the traversal functions.
+An empty composition produces empty rules, not implicit defaults. Node assembly remains Context-independent; execution uses the supplied Context. Graph inspection obtains its configuration through `resolve_inspection_options(ctx)` from `slyme.context.inspection`; Node execution does not read inspection rules.
 
 Schema declaration normalizes nested dicts directly and does not read runtime tree configuration. Configuring a data tree cannot change how Schema interprets declarations.
 

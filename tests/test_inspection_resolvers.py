@@ -6,7 +6,9 @@ from dataclasses import dataclass
 import pytest
 
 from slyme.inspection import Interpretation, inspect
+from slyme.inspection.common import SCALAR_TYPES
 from slyme.tree import (
+    AttributeKey,
     TreeAux,
     TreeHandler,
     TreeKey,
@@ -15,11 +17,48 @@ from slyme.tree import (
 )
 from slyme.tree.common import DATA_RULES
 
-SCALAR_TYPES = (type(None), bool, int, float, str)
-
 
 class Value:
     pass
+
+
+@pytest.mark.parametrize(
+    "value", [None, False, 42, "text", [], {}, Value(), lambda: None]
+)
+def test_raw_value_types_none_retains_any_original_value(value):
+    document = inspect(value, tree_rules=TreeRules(), raw_value_types=None)
+    assert record(document, document["root"])["value"] is value
+    for options in ({}, {"raw_value_types": ()}):
+        document = inspect(value, tree_rules=TreeRules(), **options)
+        assert "value" not in record(document, document["root"])
+
+
+def test_unrestricted_raw_values_preserve_cycles_and_interpretation_values():
+    source = Value()
+    env = object()
+    result = object()
+    values = [source]
+    values.append(values)
+    document = inspect(
+        values,
+        env=env,
+        tree_rules=DATA_RULES,
+        interpreters={Value: lambda value, env: Interpretation(result)},
+        raw_value_types=None,
+    )
+    root = record(document, document["root"])
+    assert root["value"] is values
+    assert root["entries"][1]["value"] == document["root"]
+    source_record = record(document, root["entries"][0]["value"])
+    observation = record(document, source_record["entries"][0]["value"])
+    assert "value" not in observation
+    assert record(document, observation["entries"][0]["value"])["value"] is env
+    assert record(document, observation["entries"][1]["value"])["value"] is result
+    assert all(
+        "value" in data
+        for data in document["objects"].values()
+        if data is not observation
+    )
 
 
 def record(document, ref):
@@ -104,6 +143,32 @@ def test_tree_keys_preserve_identity_and_use_both_dispatch_paths():
         observations(document, key_ref)[0]["entries"][-1]["value"] == document["root"]
     )
     assert calls == [(key, "env")]
+
+
+def test_standard_key_descriptions_are_optional_overridable_rules():
+    from slyme.inspection.common import (
+        KEY_INSPECTION_TREE_RULES,
+        KEY_INSPECTION_TYPE_NAMES,
+    )
+
+    key = AttributeKey("name")
+    opaque = inspect(key, raw_value_types=SCALAR_TYPES, tree_rules=TreeRules())
+    assert record(opaque, opaque["root"])["kind"] == "opaque"
+    described = inspect(
+        key,
+        raw_value_types=SCALAR_TYPES,
+        tree_rules=KEY_INSPECTION_TREE_RULES,
+        type_names=KEY_INSPECTION_TYPE_NAMES,
+    )
+    assert record(described, described["root"])["type"] == "slyme.tree.attribute_key"
+    assert child_values(described, described["root"]) == ["name"]
+    overridden = inspect(
+        key,
+        raw_value_types=SCALAR_TYPES,
+        tree_rules=KEY_INSPECTION_TREE_RULES,
+        tree_resolver=TreeResolver(lambda _: True),
+    )
+    assert record(overridden, overridden["root"])["kind"] == "opaque"
 
 
 @pytest.mark.parametrize("stop_tree", [False, True])

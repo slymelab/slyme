@@ -8,7 +8,7 @@ import pytest
 from slyme.context import (
     DATA_TREE_REF,
     EVALUATORS_REF,
-    NODE_TREE_REF,
+    INSPECTION_TREE_RULES_REF,
     Compose,
     Context,
     Identity,
@@ -19,13 +19,13 @@ from slyme.context import (
 )
 from slyme.context.core import ContextPathError
 from slyme.context.default import (
-    EvaluatorLayer,
     TreeLayer,
+    TypeLayer,
 )
 from slyme.execution import await_result
 from slyme.node import Auto, node
-from slyme.node.core import NODE_RULES
 from slyme.node.eval import eval_tree
+from slyme.node.inspection import NODE_INSPECTION_TREE_RULES
 from slyme.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
 from slyme.tree import flatten as tree_flatten
 from slyme.tree import iter as iter_leaves
@@ -49,8 +49,8 @@ def test_rule_definitions_support_inspection_without_a_context() -> None:
         return value
 
     graph = echo(value=42)
-    rules = TreeRules.merge((NODE_RULES, DATA_RULES))
-    assert list(iter_leaves([graph], rules=rules)) == [42]
+    rules = TreeRules.merge((NODE_INSPECTION_TREE_RULES, DATA_RULES))
+    assert list(iter_leaves([graph], rules=rules)) == [graph.func, 42]
     assert list(iter_leaves([graph], rules=DATA_RULES)) == [graph]
 
 
@@ -58,7 +58,7 @@ def test_defaults_are_root_owned_and_forks_do_not_install_again() -> None:
     left, right = Context(), Context()
     baseline = tuple(left._lifecycle._effects)
     child = left.fork()
-    for ref in (DATA_TREE_REF, NODE_TREE_REF, EVALUATORS_REF):
+    for ref in (DATA_TREE_REF, INSPECTION_TREE_RULES_REF, EVALUATORS_REF):
         assert child.get(ref) is left.get(ref)
         assert left.get(ref) is not right.get(ref)
     assert not child._lifecycle._effects
@@ -69,7 +69,10 @@ def test_defaults_are_root_owned_and_forks_do_not_install_again() -> None:
     assert Box not in right.get(DATA_TREE_REF).resolve(right.scope).handlers
     child.dispose()
     assert Box not in data.resolve(left.scope).handlers
-    retained = [left.get(ref) for ref in (DATA_TREE_REF, NODE_TREE_REF, EVALUATORS_REF)]
+    retained = [
+        left.get(ref)
+        for ref in (DATA_TREE_REF, INSPECTION_TREE_RULES_REF, EVALUATORS_REF)
+    ]
     left.dispose()
     assert all(not tuple(compose.layers(left.scope)) for compose in retained)
     assert not left._store._data
@@ -106,7 +109,7 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
     assert detached.extract(["value"]) == [7]
     with pytest.raises(ContextPathError):
         eval_tree(detached, [])
-    evaluators = Compose(factory=EvaluatorLayer, query=EvaluatorLayer.merge)
+    evaluators = Compose(factory=TypeLayer, query=TypeLayer.merge)
     detached.register(EVALUATORS_REF, evaluators)
     detached.effect(
         lambda: evaluators.register(
@@ -181,14 +184,13 @@ def test_tree_rules_snapshot_handlers_and_preserve_reconstruction() -> None:
 
 def test_tree_configuration_namespaces_contain_only_rules() -> None:
     ctx = Context()
-    for namespace, ref in (("data", DATA_TREE_REF), ("node", NODE_TREE_REF)):
-        path = f"$.tree.{namespace}"
-        assert ref.path == f"{path}.rules"
-        view = ctx.get(path)
-        assert tuple(view.keys()) == ("rules",)
-        assert view.get("rules") is ctx.get(ref)
-        with pytest.raises(ContextPathError):
-            ctx.resolve(f"{path}.resolver")
+    assert ctx.get("$.tree").keys() == ("data",)
+    assert DATA_TREE_REF.path == "$.tree.data.rules"
+    view = ctx.get("$.tree.data")
+    assert tuple(view.keys()) == ("rules",)
+    assert view.get("rules") is ctx.get(DATA_TREE_REF)
+    with pytest.raises(ContextPathError):
+        ctx.resolve("$.tree.data.resolver")
     ctx.dispose()
 
 
@@ -262,8 +264,11 @@ def test_node_assembly_stays_independent_of_the_execution_context() -> None:
     )
     assert graph(left) == Box(6)
     assert graph(right) == Box(3)
-    rules = left.get(NODE_TREE_REF).resolve(left.scope)
-    assert list(iter_leaves(graph, rules=rules)) == [graph.get("value").value]
+    rules = left.get(INSPECTION_TREE_RULES_REF).resolve(left.scope)
+    assert list(iter_leaves(graph, rules=rules)) == [
+        graph.func,
+        graph.get("value").value,
+    ]
     left.dispose()
     right.dispose()
 
@@ -315,7 +320,7 @@ def test_failed_default_application_releases_partial_root(monkeypatch) -> None:
     ("ref", "wrap", "builtin"),
     [
         (DATA_TREE_REF, TreeRules, list),
-        (NODE_TREE_REF, TreeRules, list),
+        (INSPECTION_TREE_RULES_REF, TreeRules, list),
         (EVALUATORS_REF, dict, Ref),
     ],
 )
@@ -348,7 +353,11 @@ def test_default_layers_reject_conflicting_batches_without_partial_registration(
 
 @pytest.mark.parametrize(
     ("ref", "wrap"),
-    [(DATA_TREE_REF, TreeRules), (NODE_TREE_REF, TreeRules), (EVALUATORS_REF, dict)],
+    [
+        (DATA_TREE_REF, TreeRules),
+        (INSPECTION_TREE_RULES_REF, TreeRules),
+        (EVALUATORS_REF, dict),
+    ],
 )
 def test_shared_identity_rejects_duplicate_classes_but_child_layers_can_override(
     ref, wrap

@@ -42,13 +42,13 @@ from .store import ContextStore
 
 _T = TypeVar("_T", default=Any)
 _T2 = TypeVar("_T2")
-_A = TypeVar("_A", default=Any, covariant=True)
+_F = TypeVar("_F", default=Any, covariant=True)
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True, repr=False, eq=False, init=False)
-class Context(Generic[_A]):
+class Context(Generic[_F]):
     """Coordinate shared declarations and data with one owned Lifecycle.
 
     Forks retain the same Schema and Store references for their entire lifetime;
@@ -64,7 +64,7 @@ class Context(Generic[_A]):
     parent: Context | None = field(init=False)
     scope: Scope = field(init=False)
     root: Context = field(init=False)
-    facet: _A = field(init=False)
+    facet: _F = field(init=False)
     _children: dict[Context, _Effect] = field(init=False)
     _schema: Schema = field(init=False)
     _store: ContextStore = field(init=False)
@@ -77,7 +77,7 @@ class Context(Generic[_A]):
         parent: None = None,
         scope: Scope | None = None,
         dispose_mode: Literal["sequential"] = "sequential",
-        facet_factory: Callable[[Context[_A]], _A] | None = None,
+        facet_factory: Callable[[Context[_F]], _F] | None = None,
     ) -> None: ...
     @overload
     def __init__(
@@ -86,7 +86,7 @@ class Context(Generic[_A]):
         parent: Context,
         scope: Scope | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
-        facet_factory: Callable[[Context[_A]], _A] | None = None,
+        facet_factory: Callable[[Context[_F]], _F] | None = None,
     ) -> None: ...
     def __init__(
         self,
@@ -94,7 +94,7 @@ class Context(Generic[_A]):
         parent: Context | None = None,
         scope: Scope | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
-        facet_factory: Callable[[Context[_A]], _A] | None = None,
+        facet_factory: Callable[[Context[_F]], _F] | None = None,
     ) -> None:
         """Create a lifetime and data view, then construct the facet if supplied.
 

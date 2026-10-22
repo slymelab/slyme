@@ -30,7 +30,7 @@ Flatten 和 leaf 迭代使用显式栈进行深度优先遍历，树的深度不
 
 Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。子类自行选择是否声明 slots。
 
-不依赖 Context 的遍历可以显式导入 `slyme.tree.common.DATA_RULES` 和 `slyme.node.core.NODE_RULES`。前者处理普通数据容器，后者仅处理 Node、Wrapper 和 Auto；通过 `TreeRules.merge((NODE_RULES, DATA_RULES))` 组合后即可遍历 Node 图。这些不可变定义不在包顶层重导出。`_apply` 仍是私有实现细节。
+不依赖 Context 的遍历可以显式导入 `slyme.tree.common.DATA_RULES`。描述 Node、Wrapper 和 Auto 时，将它与 `slyme.node.inspection.NODE_INSPECTION_TREE_RULES` 通过 `TreeRules.merge((NODE_INSPECTION_TREE_RULES, DATA_RULES))` 组合。这些仅用于遍历的处理器展示函数、参数、元数据、wrappers 和 Auto 内容，不重建 Node，也不执行函数体。这些不可变定义不在包顶层重导出。`_apply` 仍是私有实现细节。
 
 `flatten_one(element, *, rules, resolver=None, traverse_aux=None)` 将同样的分派逻辑开放为单层操作。叶子返回 `None`，容器返回 `(handler, children, tree_aux)`，空容器的 children 为空。它不继续访问子节点，也不重建对象。返回的 handler 是实际选中的处理器，包括 resolver 的覆盖结果，因此调用者可以直接使用其 `unflatten`，不必重复分派。`takes_aux=True` 的 resolver 要求显式传入 `traverse_aux`，省略时抛出 `ValueError`。调用者在根节点提供 `TraverseAux(parent=None, key_path=())`，并维护后续层级的上下文。整树 flatten、iter 及其路径版本共用这个单层操作。[自省](./inspection.md) 也使用该操作与显式工作队列，保留对象身份并处理循环引用。
 
@@ -41,16 +41,15 @@ Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。
 | Ref 常量 | 路径 | contribution |
 | --- | --- | --- |
 | `DATA_TREE_REF` | `$.tree.data.rules` | 用于 Auto、`extract` 和 `update_tree` 的 `TreeRules` |
-| `NODE_TREE_REF` | `$.tree.node.rules` | 用于显式 Node 图遍历的 `TreeRules` |
 | `EVALUATORS_REF` | `$.eval.handlers` | 精确类型 evaluator 映射 |
 
-这些常量也由 `slyme.context` 导出。Data 规则展开 list、tuple、dict 和 MappingProxyType；Node 规则额外遍历 Node/Wrapper 参数绑定和 Auto payload。Node、Wrapper 和 Auto 仅用于遍历，没有重建函数。
+这些常量也由 `slyme.context` 导出。Data 规则展开 list、tuple、dict 和 MappingProxyType；Node 与 Ref 保持为叶子，由 evaluator 分派处理。自省规则独立描述 Node、Wrapper 和 Auto，不提供重建函数。
 
-`$.tree.data` 和 `$.tree.node` 容器目前只有 `rules`；Context 操作不声明也不读取 resolver 字段。
+`$.tree.data` 容器目前只有 `rules`；Context 操作不声明也不读取 resolver 字段。自省使用独立的 `$.inspection` 配置，详见[自省](./inspection.md)。
 
 每次操作在遍历或异步暂停前，只解析一次有效规则与 evaluator 映射。之后新增或撤销 contribution 影响后续操作，不改变本次分派和重建。保留 callable 并不延长其 owner 管理的资源生命周期。
 
-默认组合使用 `slyme.context.default` 中的 `TreeLayer` 和 `EvaluatorLayer`。每层拒绝重复登记相同的精确 class，即使 handler 相同，或登记来自共享该 Identity 的另一个 Scope。批次中存在冲突时，不会安装其中任何 class。撤销后可以重新登记这些 class。跨层查询按 Scope C3 顺序保留首个 handler；向子层登记以覆盖继承的贡献。撤销后重新显露下一条适用定义：
+默认组合使用 `slyme.context.default` 中的 `TreeLayer` 和 `TypeLayer`。每层拒绝重复登记相同的精确 class，即使 handler 相同，或登记来自共享该 Identity 的另一个 Scope。批次中存在冲突时，不会安装其中任何 class。撤销后可以重新登记这些 class。跨层查询按 Scope C3 顺序保留首个 handler；向子层登记以覆盖继承的贡献。撤销后重新显露下一条适用定义：
 
 ```python
 from dataclasses import dataclass
@@ -109,7 +108,7 @@ assert not child.get(DATA_TREE_REF).resolve(child.scope).handlers
 ctx.dispose()
 ```
 
-空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图遍历显式解析 NODE_TREE_REF，再将规则传给遍历函数。
+空组合返回空规则，不隐式补充默认值。Node 的组装不依赖 Context，执行时使用传入的 Context；图自省通过 `slyme.context.inspection.resolve_inspection_options(ctx)` 获取配置；Node 执行不读取自省规则。
 
 Schema 声明直接归一化嵌套 dict，不读取运行时 Tree 配置。修改 data tree 规则不会改变 Schema 对声明的解释方式。
 

@@ -1,0 +1,133 @@
+{
+  "root": {
+    "$ref": "0"
+  },
+  "objects": {
+    "0": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "1"
+          },
+          "key": {
+            "$ref": "2"
+          }
+        },
+        {
+          "role": "child",
+          "value": {
+            "$ref": "1"
+          },
+          "key": {
+            "$ref": "3"
+          }
+        },
+        {
+          "role": "child",
+          "value": {
+            "$ref": "0"
+          },
+          "key": {
+            "$ref": "4"
+          }
+        }
+      ]
+    },
+    "1": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "5"
+          },
+          "key": {
+            "$ref": "6"
+          }
+        }
+      ]
+    },
+    "2": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "7"
+          },
+          "key": {
+            "$ref": "7"
+          }
+        }
+      ],
+      "type": "slyme.tree.sequence_key"
+    },
+    "3": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "8"
+          },
+          "key": {
+            "$ref": "7"
+          }
+        }
+      ],
+      "type": "slyme.tree.sequence_key"
+    },
+    "4": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "9"
+          },
+          "key": {
+            "$ref": "7"
+          }
+        }
+      ],
+      "type": "slyme.tree.sequence_key"
+    },
+    "5": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "6": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "10"
+          },
+          "key": {
+            "$ref": "7"
+          }
+        }
+      ],
+      "type": "slyme.tree.mapping_key"
+    },
+    "7": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "8": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "9": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "10": {
+      "kind": "opaque",
+      "entries": []
+    }
+  }
+}

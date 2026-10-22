@@ -1,74 +1,172 @@
 # Inspection
 
-`slyme.inspection.inspect()` builds an in-memory graph of an object's structure and environment-dependent interpretations. It accepts explicit configuration and requires no Context.
+`slyme.inspection.inspect(value, tree_rules=..., interpreters=..., type_names=..., env=...)` returns an in-memory inspection graph with configurable raw-value retention. It observes the current structure; it does not execute a Node graph or predict a future execution trace. All configuration is explicit; no Context is required. For ordinary data, pass `DATA_RULES` from `slyme.tree.common`. Applications can obtain their scoped configuration using `resolve_inspection_options(ctx)`:
 
 ```python
-from slyme.inspection import Interpretation, inspect
-from slyme.tree.common import DATA_RULES
+from slyme.context import Context, Ref, Schema
+from slyme.context.inspection import resolve_inspection_options
+from slyme.inspection import inspect
+from slyme.node import Auto, node
 
-class Lookup:
-    def __init__(self, name):
-        self.name = name
 
-shared = [Lookup("answer")]
-value = [shared, shared]
-graph = inspect(
-    value,
-    env={"answer": 42},
-    tree_rules=DATA_RULES,
-    interpreters={Lookup: lambda value, env: Interpretation(env[value.name])},
-    raw_value_types=(type(None), bool, int, float, str),
-)
-root = graph["objects"][graph["root"]["$ref"]]
-assert root["entries"][0]["value"] == root["entries"][1]["value"]
+@node
+def task(ctx, *, value):
+    return value
+
+
+ctx = Context()
+ctx.declare({"input": Schema.leaf()})
+ctx.set("input", 42)
+graph = task(value=Auto({"items": [Ref("input")]}))
+
+options = resolve_inspection_options(ctx)
+document = inspect(graph, **options, env=ctx)
+assert "value" not in document["objects"][document["root"]["$ref"]]
+context_document = inspect(ctx, **options)  # Context observes its own values.
+ctx.dispose()
 ```
 
-## Structure and interpretation
+## Names and responsibilities
 
-`tree_rules: TreeRules` supplies exact-type structural handlers. `flatten_one()` obtains each object's children once; shared objects and cycles reuse references. Keys and values both participate in inspection. Without explicit child keys, ordinal indices serve as keys. Reconstruction metadata is not included.
+Names follow their roles rather than sharing one grammatical form. `inspection` names the feature; `inspect()` performs it and returns an `InspectionGraph`. An `Interpreter` is a synchronous function, `Interpretation` is its returned value and environment, and `interpretation` identifies its record or relationship in the graph. `interpreters` maps types to these functions; `interpreter_resolver` selects one and has type `InterpreterResolver`. `resolve_inspection_options(ctx)` resolves scoped configuration without inspecting a value. Structural expansion separately uses the existing `TreeRules`, `TreeHandler` and `TreeResolver` names.
 
-`interpreters` maps exact types to synchronous `Interpreter` functions accepting `(value, env)`. Return `Interpretation(value)` to inherit the environment, `Interpretation(value, env=...)` to select another environment, or `None` when unavailable. Explicit `env=None` clears the environment. `Interpretation(None)` is a resolved value, not an unavailable result.
+## Two independent operations
 
-Structural children and interpreted results both undergo further expansion and interpretation. Children inherit their current environment; an interpretation's environment override applies only to its result. Structure is cached per object identity; interpretation is recorded once per object/environment identity pair. Shared containers are followed under each environment. Equality is not used for deduplication.
+**Children** come from `TreeRules` and `flatten_one()`. Defaults cover data containers, Node/Wrapper bindings and metadata, Auto payloads, Context ownership children and declarations, Scopes, Refs, and Compose layers. Node and Wrapper values inside any parameter continue expanding. `Wrapper.compose()` creates a temporary call chain; inspection does not infer relationships from its closures or mutate the original objects.
 
-Callbacks must be synchronous, stable during inspection and free of side effects. They are ordinary Python code, not sandboxed. Unknown objects stay opaque. The inspector does not invoke arbitrary getters, `repr()`, generators or awaitables; explicit handlers and interpreters determine what is accessed.
+**Interpretation** uses a mapping from exact types to synchronous functions. Each function receives `(value, env)` and returns `Interpretation(value, env=...)` or `None`. Omitting `env` inherits the input environment; explicitly passing `None` clears it. Returning `None` means unavailable; `Interpretation(None)` means an observed value of `None`.
 
-## Dispatch and descriptions
+With a Context environment, default interpreters read Refs through `ctx.get()` and call a Compose's configured query through `resolve(ctx.scope)`. Compose without a query remains unavailable. Context and ContextView interpret their own visible Ref-to-value mappings and select their owning Context as the result's environment. With these adapters, `inspect(target_ctx, **options)` needs no extra environment; `inspect(node, **options)` without an environment still describes its stored structure. The configuration source, target object and interpretation environment are independent.
 
-Optional resolvers independently override structural and interpretation dispatch:
+Both structural children and interpreted values continue through structure expansion and interpretation. Children inherit their current environment; only the interpreted result uses an environment explicitly supplied by `Interpretation.env`. A query can therefore expose Nodes nested in arbitrary containers without executing those Nodes. The inspector never evaluates Auto, invokes Node/Wrapper bodies, awaits values, drives generators, or calls arbitrary `repr`, getters, or iteration protocols. Unknown objects remain opaque references. Queries and user-supplied adapters are ordinary Python code: keep them synchronous, lightweight, stable during the call, and free of side effects. They are not sandboxed or interrupted by the inspector.
 
-| Result | `tree_resolver` | `interpreter_resolver` |
+## Extension
+
+Root Contexts install four register-mode Composes, exposed by constants from `slyme.context`:
+
+| Ref | Path | Contribution |
 | --- | --- | --- |
-| `False` | Use the exact-type tree handler | Use the exact-type interpreter |
-| `True` | Skip structural expansion | Skip interpretation without recording it |
+| `INSPECTION_TREE_RULES_REF` | `$.inspection.tree_rules` | `TreeRules` |
+| `INSPECTION_INTERPRETERS_REF` | `$.inspection.interpreters` | Exact type → synchronous interpreter |
+| `INSPECTION_TYPE_NAMES_REF` | `$.inspection.type_names` | Exact type → semantic type name |
+| `INSPECTION_RAW_VALUE_TYPES_REF` | `$.inspection.raw_value_types` | Exact type → `None`; keys allow raw-value retention |
+
+Register through `ctx.effect()` to own contribution cleanup. Each layer rejects duplicate exact types; child layers override inherited entries in Scope C3 order. Withdrawal reveals the next applicable entry. Subclasses need separate registrations. An interpreter returning `None` disables an inherited observation.
+
+`resolve_inspection_options(ctx)` resolves configuration using `ctx.scope` and returns keyword arguments: `tree_rules`, `interpreters`, `type_names`, and `raw_value_types`. It does not observe objects or choose an `env`. All configurations are shallow snapshots; `raw_value_types` is a fresh `dict[type, None]` whose keys form the allowlist. Resolve again to observe configuration changes. Switching interpretation environments does not reselect configuration. Missing configuration raises rather than falling back to the root or built-in adapters.
+
+`type_names` names types; `raw_value_types` independently controls which records contain a raw `value`. A collection is an exact-type allowlist, not an encoder or a serialization validator; `None` retains every original value. Calling `inspect()` directly defaults to an empty allowlist. To retain all values with Context configuration, resolve `options = resolve_inspection_options(ctx)`, then pass `tree_rules=options["tree_rules"]`, `interpreters=options["interpreters"]`, `type_names=options["type_names"]` and `raw_value_types=None` explicitly to `inspect()`. Context defaults register `SCALAR_TYPES` from `slyme.inspection.common`: `NoneType`, `bool`, `int`, `float`, and `str`. Add types with `ctx.effect(lambda: compose.register(ctx.scope, {MyType: None}))`, where `compose = ctx.get(INSPECTION_RAW_VALUE_TYPES_REF)`. It uses `TypeLayer[None]`: duplicate types in one layer are rejected, and withdrawal reveals inherited entries. To replace inherited defaults, first derive a Context with `bindings={compose: ScopeBinding(blocked=True)}`, then register the desired types there. An empty visible composition retains no raw values. Subclasses require explicit inclusion. Neither setting changes structural expansion or interpretation.
+
+Semantic type names identify object-table records independently of Python class names. They do not change structural handlers or interpreters and apply equally to scalars and other objects. Unknown objects need no semantic type to be displayed generically.
+
+```python
+from dataclasses import dataclass
+
+from slyme.context import Context, Metadata, INSPECTION_TREE_RULES_REF, INSPECTION_TYPE_NAMES_REF
+from slyme.context.inspection import resolve_inspection_options
+from slyme.inspection import inspect
+from slyme.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
+
+
+@dataclass(frozen=True)
+class Description(Metadata):
+    text: str
+
+
+rules = TreeRules(
+    {
+        Description: TreeHandler(
+            lambda value: (
+                (value.text,),
+                TreeAux(children_keys=(AttributeKey("text"),)),
+            ),
+            None,
+        ),
+    }
+)
+ctx = Context()
+plugin = ctx.derive()
+plugin.effect(
+    lambda: plugin.get(INSPECTION_TREE_RULES_REF).register(plugin.scope, rules)
+)
+plugin.effect(
+    lambda: plugin.get(INSPECTION_TYPE_NAMES_REF).register(
+        plugin.scope, {Description: "example.description"}
+    )
+)
+document = inspect(Description("A task"), **resolve_inspection_options(plugin))
+ctx.dispose()
+```
+
+### Dispatch control
+
+`tree_rules` maps exact types to structural handlers through `TreeRules`; `interpreters` is an exact-type mapping to interpreters. The optional `tree_resolver=TreeResolver(...)` and `interpreter_resolver=callback` independently override those defaults:
+
+| Resolver result | Tree | Interpretation |
+| --- | --- | --- |
+| `False` | Use the exact-type tree rule | Use the exact-type interpreter |
+| `True` | Skip structural expansion | Skip interpretation without creating a record |
 | Handler | Use the returned `TreeHandler` | Use the returned `Interpreter` |
 
-Supply a `TreeResolver` with `takes_aux=False` for structural dispatch. It receives the value; structure cannot depend on a path or environment. The `InterpreterResolver` callable receives `(value, env)`. Stopping either operation does not stop the other.
+The tree resolver receives `value` and runs once per object. Inspection accepts only `takes_aux=False`; structure must not depend on a path, environment, or visit count. The interpreter resolver receives `(value, env)` and runs once per object/environment pair. It can select an interpreter even when no type rule exists. It selects a function, not an `Interpretation` result. `InterpreterResolver` is the exported callable type; no resolver list or extra dispatch object is needed. Resolvers are explicit per-call arguments, separate from the rule snapshots returned by `resolve_inspection_options()`.
 
-`type_names` maps exact types to optional semantic names, independently of structural handlers and interpreters. `raw_value_types` is an exact-type allowlist controlling which records retain their original value. Its default is empty; subclasses require separate inclusion. Neither option changes traversal.
+Stopping one side does not stop the other. Set both resolvers to return `True` for an object to leave only its reference and basic description. An interpreter returning `None` still records `unavailable`; a resolver returning `True` does not invoke it. Resolver exceptions propagate. Scalars use the same dispatch as every other value; there is no built-in terminal type.
 
-## Graph and ownership
+Reconstruction metadata in `TreeAux.metadata` is not included in the graph. All structural entries use `role="child"`. Their keys preserve the original TreeKey objects, including shared identity, and pass through the same structural and interpretation rules as values. No key's `resolve()` or `codify()` method is called. Missing `children_keys` uses ordinal indices, which also participate in dispatch.
 
-`InspectionGraph` contains `root: {"$ref": str}` and `objects: dict[str, InspectionObject]`. IDs are local to one inspection. Every reference points to a record in the table; relationship order is preserved.
+`slyme.inspection.common` provides optional `KEY_INSPECTION_TREE_RULES` and `KEY_INSPECTION_TYPE_NAMES` for standard Tree keys. Each key exposes one child containing its name, mapping key, or index, tagged respectively as `slyme.tree.attribute_key`, `slyme.tree.mapping_key`, or `slyme.tree.sequence_key`. Root Contexts install these ordinary, overridable rules. They are not built into the inspector.
 
-Records contain `kind` and `entries`, with optional `value`, `type`, `label` and `attributes`. Each `InspectionEntry` has `role`, a `value` reference and optionally a `key` reference.
+Framework adapters live in `slyme.context.inspection` and `slyme.node.inspection` and are installed by `context/default.py`. The public `inspect` function directly exposes the engine; it has no Context-specific wrapper.
 
-| Kind | Contents |
+Inspection is not a redaction mechanism: an interpreter adds a relation without replacing the original value. Applications exporting observations must apply their own encoding, truncation and redaction policy.
+
+## Inspection graph
+
+The returned dictionary contains a root reference and an object table:
+
+```typescript
+type Reference = { $ref: string };
+interface InspectionGraph {
+  root: Reference;
+  objects: Record<string, {
+    kind: string;
+    value?: unknown;
+    type?: string;
+    label?: string;
+    attributes?: Record<string, unknown>;
+    entries: Array<{ role: string; key?: Reference; value: Reference }>;
+  }>;
+}
+```
+
+Object IDs are local to the graph. Shared objects and cycles reuse references. Every admitted value has a record; types allowed by `raw_value_types` include the original object in `value`, or all types when it is `None`. Omission does not mean the value is `None`: an allowed `None` is stored explicitly. Synthetic interpretation records have no raw `value`. Root and entry references always point into the object table; entries retain order. The source object's `interpretation` entry identifies its observation; no reverse `source` or `parent` entries are stored. Consumers can index incoming entries when needed.
+
+`kind` describes the representation; optional `type` identifies its semantics; `label` is display-only. Built-in semantic types are `slyme.node`, `slyme.wrapper`, `slyme.auto`, `slyme.context`, `slyme.context_view`, `slyme.ref`, `slyme.scope`, `slyme.identity`, `slyme.scope_binding`, `slyme.ref_entry`, `slyme.ref_declaration`, `slyme.ref_leaf_config`, `slyme.ref_container_config`, and `slyme.compose`. These identifiers and adapter field names are independent of implementation module paths and storage attributes. A type does not imply that structural expansion succeeded.
+
+| Kind | Meaning |
 | --- | --- |
-| `object` | Structural `child` entries |
-| `opaque` | A value's identity and type label, without structural expansion |
-| `interpretation` | `env`, a resolved `value`, and `value_env` when the environment changes |
+| `object` | A structurally expanded object, with `child` entry roles |
+| `opaque` | An object reference with a type label, without structural expansion |
+| `interpretation` | An observation with `env` and, when resolved, `value`; `value_env` records an environment change |
 
-The source record links to each interpretation through an `interpretation` entry. No reverse source or parent links are stored. Interpretation attributes contain `state="resolved"` or `state="unavailable"`. Environment annotations alone do not cause those objects to be traversed.
+Interpretation `attributes.state` is `resolved` or `unavailable`. Runtime errors from handlers, child iterators, resolvers and interpreters propagate without returning a partial graph. Ordinary exceptions gain object, environment type, depth and operation context through `enrich_exception`; their identity, traceback and cause are preserved. Control exceptions propagate unchanged. Budget and depth truncation remain part of the returned graph.
 
-Allowed raw values are retained by reference, not copied or encoded. All visited values and environments are retained during traversal to preserve identity. The returned graph can retain excluded objects indirectly through allowed containers. Mutating a retained value does not update recorded relationships. Consumers own serialization and redaction: finite scalars can be JSON encoded, but NaN, large integers, unsupported objects and cycles require serializer-specific policies. Inspection is not a reconstruction format.
+Container and function classes have no special display classification. A function without a registered handler stays opaque; a custom container with a handler is an `object`, just like a list. Consumers use semantic types and configured descriptions for specialized displays.
 
-Handler, iterator, resolver and interpreter errors propagate rather than becoming graph records. Ordinary exceptions gain operation, object, environment type and depth information through `enrich_exception`; control exceptions propagate unchanged.
+Children are recorded once per object identity. Interpretation is recorded once per object/environment identity pair. Equality is never invoked: equal but distinct values or environments remain distinct, while the same object is reused. This applies to scalars too; Python may reuse immutable objects. An environment override emits `value_env` when it is not the original object. A shared container is followed under each environment so its descendants receive the right environment. Annotating an environment does not by itself expand that object. Object IDs cannot identify objects across observations.
+
+The graph strongly retains allowed raw values without copying, truncating or encoding them. With `raw_value_types=None`, this includes containers, functions and environment objects; the graph may retain cycles and is not generally JSON serializable. All values are retained internally during traversal; excluded values are not directly retained by the returned graph. An allowed container can still hold excluded objects transitively. Mutable payloads can change after inspection, while recorded relations remain unchanged. Release the graph when those references are no longer needed. Retention does not keep disposed external resources usable.
+
+Serialization belongs to consumers. Context defaults omit raw Node, Context, function and container objects, allowing ordinary finite scalar observations to be JSON encoded. The allowlist is not a universal guarantee: NaN fails strict JSON, large integers can lose precision in other languages, and explicitly allowed containers can contain unsupported values or cycles. Exporters own those policies, string limits and redaction. Inspection does not define a wire format or reconstruction format.
+
+No interpreter means no interpretation entry; an interpreter returning `None` records `unavailable`; returning `Interpretation(None)` records a resolved `None`. Missing children or values in an opaque or truncated observation are not evidence of absence. Relationship snapshots in `tests/fixtures/inspection` normalize IDs and omit raw payloads and display labels while preserving entry order; they are test projections, not an export format.
 
 ## Limits
 
-`budget: int | None = None` limits object records plus relationship entries. Each costs one unit. Reusing an object saves a record, not an edge. A budget must be positive to accommodate the root. Each relationship and its new targets are admitted together; the first failed admission stops new relationships and marks the affected record with `attributes.truncated=True, reason="budget"`. Some capacity may remain unused. Filling the budget exactly does not itself mark truncation; callbacks may still run to determine whether further content exists. All records remain reachable.
+`budget: int | None = None` limits the sum of object records and relationship entries. Every record, including scalars and interpretation records, costs one unit; every entry costs one unit. Reusing an object costs no additional record, but a new relationship to it still costs one entry. A supplied budget must be positive so the root record can always be represented. The inspector admits each relationship with its new targets together. At the first admission that cannot fit, traversal stops adding relationships; some budget can remain unused. Existing records are marked with `attributes.truncated=true` and `reason="budget"`; no extra truncation record is allocated. All records remain reachable and no reference points to an absent record. Filling the budget alone does not mark a record as truncated: dispatch and expansion may still run to determine whether an additional relationship is needed. Empty containers and uninterpreted leaves require no further budget.
 
-`max_depth: int | None = None` limits exploration from root depth zero. Child keys, child values and interpreted results add one level; interpretation records and environment annotations do not. At the limit, callbacks still run: only actual omitted children or results produce `reason="max_depth"`. Empty containers, uninterpreted leaves and unavailable interpretations need not be truncated. Child iteration stops at the first omitted child. Breadth-first traversal visits each object/environment pair through its shallowest path. Shared records can retain relationships from shallower visits while being marked incomplete for another, deeper visit. Negative depths are rejected.
+`max_depth: int | None = None` limits logical exploration from root depth zero. Tree child values and keys, and interpretation results, add one level. Synthetic interpretation records and environment annotations add no exploration depth; annotated environments are not followed. At the depth limit, resolvers, handlers and interpreters still run to determine whether more content exists. Empty containers, uninterpreted leaves and unavailable interpretations are complete, not truncated. An actual child or interpretation result beyond the limit is omitted, and its containing record gets `reason="max_depth"`. A child iterator stops at its first omitted child. Breadth-first traversal uses the shallowest path for each value/environment pair. Cached structural children are not followed past the limit in another environment; shared records can retain relations from shallower visits while being marked incomplete for a deeper visit. `max_depth=0` inspects the root without following its children or interpreted results; interpretation records and environment annotations may still be present. Negative depths are rejected.
 
-Both limits default to unlimited. They bound output and exploration, not callback duration or raw payload size. A depth limit alone does not bound an infinite child iterator; supply a finite budget. Neither limit interrupts a callback that never returns. Consumers must check truncation attributes before treating missing relationships as absent.
+Both limits default to unlimited. Output consumers such as debug interfaces can choose their own limits. They bound graph records, relationships and exploration depth, not payload sizes, retained memory or callback time. A depth limit alone cannot bound an infinite child iterator; use a finite budget. An interpreter producing an endless chain of fresh objects needs a finite budget or depth limit. A callback that never returns cannot be interrupted by either limit. Incomplete observations can lack their usual entries; consumers must check truncation flags.
+
+The engine uses an explicit work queue and supports deep or cyclic graphs without recursive Python traversal. Tree's whole-tree operations also use explicit stacks, but visit shared objects separately for each occurrence and do not support cycles. Inspection records shared objects and cycles as references.

@@ -16,7 +16,14 @@ from __future__ import annotations
 
 from .compose import Compose, ComposeLayer
 from .core import Context
-from .default import DATA_TREE_REF, EVALUATORS_REF, NODE_TREE_REF
+from .default import (
+    DATA_TREE_REF,
+    EVALUATORS_REF,
+    INSPECTION_INTERPRETERS_REF,
+    INSPECTION_RAW_VALUE_TYPES_REF,
+    INSPECTION_TREE_RULES_REF,
+    INSPECTION_TYPE_NAMES_REF,
+)
 from .lifecycle import Lifecycle
 from .schema import (
     ContextKey,
@@ -41,8 +48,11 @@ __all__ = [
     "ContextPathError",
     "ContextStore",
     "DATA_TREE_REF",
-    "NODE_TREE_REF",
     "EVALUATORS_REF",
+    "INSPECTION_TREE_RULES_REF",
+    "INSPECTION_INTERPRETERS_REF",
+    "INSPECTION_TYPE_NAMES_REF",
+    "INSPECTION_RAW_VALUE_TYPES_REF",
     "Lifecycle",
     "Identity",
     "Metadata",

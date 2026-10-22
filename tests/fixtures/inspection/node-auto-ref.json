@@ -1,0 +1,277 @@
+{
+  "root": {
+    "$ref": "0"
+  },
+  "objects": {
+    "0": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "1"
+          },
+          "key": {
+            "$ref": "2"
+          }
+        },
+        {
+          "role": "child",
+          "value": {
+            "$ref": "3"
+          },
+          "key": {
+            "$ref": "4"
+          }
+        },
+        {
+          "role": "child",
+          "value": {
+            "$ref": "5"
+          },
+          "key": {
+            "$ref": "6"
+          }
+        },
+        {
+          "role": "child",
+          "value": {
+            "$ref": "7"
+          },
+          "key": {
+            "$ref": "8"
+          }
+        }
+      ],
+      "type": "slyme.node"
+    },
+    "1": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "2": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "9"
+          },
+          "key": {
+            "$ref": "10"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "3": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "11"
+          },
+          "key": {
+            "$ref": "12"
+          }
+        }
+      ]
+    },
+    "4": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "13"
+          },
+          "key": {
+            "$ref": "10"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "5": {
+      "kind": "object",
+      "entries": []
+    },
+    "6": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "14"
+          },
+          "key": {
+            "$ref": "10"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "7": {
+      "kind": "object",
+      "entries": []
+    },
+    "8": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "15"
+          },
+          "key": {
+            "$ref": "10"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "9": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "10": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "11": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "16"
+          },
+          "key": {
+            "$ref": "17"
+          }
+        }
+      ],
+      "type": "slyme.auto"
+    },
+    "12": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "18"
+          },
+          "key": {
+            "$ref": "10"
+          }
+        }
+      ],
+      "type": "slyme.tree.mapping_key"
+    },
+    "13": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "14": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "15": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "16": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "19"
+          },
+          "key": {
+            "$ref": "20"
+          }
+        },
+        {
+          "role": "interpretation",
+          "value": {
+            "$ref": "21"
+          }
+        }
+      ],
+      "type": "slyme.ref"
+    },
+    "17": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "18"
+          },
+          "key": {
+            "$ref": "10"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "18": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "19": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "20": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "22"
+          },
+          "key": {
+            "$ref": "10"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "21": {
+      "kind": "interpretation",
+      "attributes": {
+        "state": "resolved"
+      },
+      "entries": [
+        {
+          "role": "env",
+          "value": {
+            "$ref": "23"
+          }
+        },
+        {
+          "role": "value",
+          "value": {
+            "$ref": "24"
+          }
+        }
+      ]
+    },
+    "22": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "23": {
+      "kind": "opaque",
+      "entries": [],
+      "type": "slyme.context"
+    },
+    "24": {
+      "kind": "opaque",
+      "entries": []
+    }
+  }
+}

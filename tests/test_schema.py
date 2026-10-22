@@ -516,10 +516,13 @@ def assert_indexes(schema: Schema, paths: set[str]) -> None:
             "$.tree",
             "$.tree.data",
             "$.tree.data.rules",
-            "$.tree.node",
-            "$.tree.node.rules",
             "$.eval",
             "$.eval.handlers",
+            "$.inspection",
+            "$.inspection.tree_rules",
+            "$.inspection.interpreters",
+            "$.inspection.type_names",
+            "$.inspection.raw_value_types",
         }
     assert set(entries) == paths | {""}
     for path, entry in entries.items():

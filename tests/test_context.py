@@ -725,10 +725,13 @@ def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
         "$.tree",
         "$.tree.data",
         "$.tree.data.rules",
-        "$.tree.node",
-        "$.tree.node.rules",
         "$.eval",
         "$.eval.handlers",
+        "$.inspection",
+        "$.inspection.tree_rules",
+        "$.inspection.interpreters",
+        "$.inspection.type_names",
+        "$.inspection.raw_value_types",
     ]
     with pytest.raises(ContextPathError, match="value"):
         ctx.update({"value": 1})
