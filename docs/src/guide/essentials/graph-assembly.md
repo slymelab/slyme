@@ -7,7 +7,7 @@ Use ordinary Python functions to assemble and reuse Node graphs. A function can 
 Given application Nodes `load_data`, `process_data`, and `save_data`, a function can assemble a sequential pipeline:
 
 ```python
-from slyme.node import Node, sequential
+from slyme.node import AnyNode, sequential
 from slyme.context import Schema
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
@@ -15,7 +15,7 @@ from slyme.context import Schema
 R = Schema({"process_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
-def create_data_pipeline(source_path: str) -> Node[None]:
+def create_data_pipeline(source_path: str) -> AnyNode[None]:
     # 1. Instantiate each Node — pass paths from R via keyword arguments
     load_node = load_data(path=source_path)
     process_node = process_data(config=R.resolve("process_config"))
@@ -39,13 +39,13 @@ Use return type annotations and a static type checker to verify assembly functio
 Assembly functions can call each other. Their returned Node graphs remain mutable, so a function can create a base pipeline and customize it:
 
 ```python
-from slyme.node import Node, sequential
+from slyme.node import AnyNode, sequential
 from slyme.context import Schema
 
 R = Schema({"default_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
-def base_pipeline() -> Node[None]:
+def base_pipeline() -> AnyNode[None]:
     return sequential(
         nodes=[
             load_data(path="default_path"),
@@ -54,7 +54,7 @@ def base_pipeline() -> Node[None]:
     )
 
 
-def custom_pipeline(new_path: str) -> Node[None]:
+def custom_pipeline(new_path: str) -> AnyNode[None]:
     # 1. Get the base Node tree
     pipeline = base_pipeline()
 

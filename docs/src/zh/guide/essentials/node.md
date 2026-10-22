@@ -78,13 +78,13 @@ async def execute(ctx):
 `slyme.execution` 的 `@continuation` 将生成器函数转换为可直接调用的同步或异步函数。yield 普通值时立即将值送回；yield awaitable 时返回尚未调度的异步剩余流程。等待产生的异常会在暂停的 `yield` 位置抛回，因此循环、分支和 `try/except/finally` 只需写一份：
 
 ```python
-from slyme.node import Node
+from slyme.node import AnyNode
 from slyme.execution import continuation
 
 
 @node
 @continuation
-def increment_child(ctx, *, child: Node[int]):
+def increment_child(ctx, *, child: AnyNode[int]):
     value = yield child(ctx)
     return value + 1
 ```
@@ -150,13 +150,13 @@ assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
 
 ```python
 from collections.abc import Callable
-from slyme.node import Node, wrapper
+from slyme.node import AnyNode, wrapper
 from slyme.execution import continuation
 
 
 @wrapper
 @continuation
-def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
+def trace(ctx, wrapped: AnyNode, call_next: Callable, *, name: str):
     print(name, "start")
     try:
         return (yield call_next(ctx))
@@ -169,7 +169,7 @@ task.add_wrappers(trace(name="add"))
 
 Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例等待同步或异步调用完成，无论成功还是失败都会执行 `finally`。仅转发结果的 Wrapper 可以直接返回 `call_next(ctx)`，不需要 `@continuation`；`async def` Wrapper 也可以使用 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
-`Node[R]` 接受 `Wrapper[R]`：Wrapper 应保持最终结果类型，短路时也一样，但可以引入异步操作。这是静态类型约束，不进行运行时值类型检查。需要改变结果类型时，使用另一个 Node 组合原 Node。
+`Node[P, R]` 接受 `AnyWrapper[R]`：Wrapper 应保持最终结果类型，短路时也一样，但可以引入异步操作。这是静态类型约束，不进行运行时值类型检查。需要改变结果类型时，使用另一个 Node 组合原 Node。
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 且保持最终结果类型的 callable。Wrapper 参数保持实时读取；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
 
@@ -180,3 +180,29 @@ Node 与 Wrapper 参数可以保存任意值和嵌套 Tree，包括其他 Node �
 ## 顺序组合
 
 声明式顺序组合使用 `sequential(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部完成后返回 `None`，所有步骤同步时保持同步。失败会停止执行并传播失败 Node 的异常，不收集此前的结果。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。
+
+
+## 静态类型
+
+`Node[P, R]` 和 `Wrapper[P, R]` 使用“业务参数签名、最终结果”的顺序。
+`P` 是 `ParamSpec`，保留原函数业务参数的名称、类型和默认值；Context 以及
+Wrapper 的 wrapped/call_next 属于框架前置参数。通常让装饰器或创建函数推导
+`P`，通过 `.func` 访问原函数时会检查完整签名。
+
+只关心结果时使用 `AnyNode[R]` / `AnyWrapper[R]`，分别等价于
+`Node[..., R]` / `Wrapper[..., R]`。原来的单参数 `Node[R]` / `Wrapper[R]`
+类型标注应迁移到这两个别名；函数定义、构造、绑定和调用方式不变。
+这些别名主动擦除业务参数签名，不是只读视图。
+
+Wrapper 回调中的 `wrapped: AnyNode[R]`、
+`call_next: Callable[[Context], R | Awaitable[R]]` 和自身的最终返回值共用一个
+结果类型。应明确标注这些参数；通用转发回调可用 `TypeVar` 表达 `R`。
+裸 `Node` / `Callable` 或显式 `Any` 会削弱推导和检查。构造接口保留这个类型关联，
+不会为了仅从返回值推导类型而忽略回调输入的约束。
+
+Python 的标准类型系统无法把任意 ParamSpec 转换成“每项可省略并接受 Auto”
+的关键字参数映射。因此工厂仍接受部分关键字绑定，Node/Wrapper 调用覆盖及
+`get/set/delete/params` 保持动态类型；工厂会静态拒绝位置参数。
+这些入口不会证明必需参数已经绑定完整，也不会检查任意绑定值或拼写。
+`Auto[S]` 保留输入树的类型，`value` 的类型是 S，不承诺任意 evaluator 的结果类型。
+没有类型检查器插件、代码生成、函数签名反射或额外运行时校验。

@@ -7,7 +7,7 @@
 假设应用已定义 `load_data`、`process_data` 和 `save_data`，可以通过函数组装顺序执行的流水线：
 
 ```python
-from slyme.node import Node, sequential
+from slyme.node import AnyNode, sequential
 from slyme.context import Schema
 # 假设有定义好的 nodes
 # from my_nodes import load_data, process_data, save_data
@@ -15,7 +15,7 @@ from slyme.context import Schema
 R = Schema({"process_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
-def create_data_pipeline(source_path: str) -> Node[None]:
+def create_data_pipeline(source_path: str) -> AnyNode[None]:
     # 1. 实例化各个 Node — 通过关键字参数直接传入 Ref
     load_node = load_data(path=source_path)
     process_node = process_data(config=R.resolve("process_config"))
@@ -39,13 +39,13 @@ pipeline = create_data_pipeline("/path/to/data")
 组装函数可以互相调用。返回的 Node 图保持可变，因此函数可以创建基础流水线，再进行定制：
 
 ```python
-from slyme.node import Node, sequential
+from slyme.node import AnyNode, sequential
 from slyme.context import Schema
 
 R = Schema({"default_config": Schema.leaf(), "output_path": Schema.leaf()})
 
 
-def base_pipeline() -> Node[None]:
+def base_pipeline() -> AnyNode[None]:
     return sequential(
         nodes=[
             load_data(path="default_path"),
@@ -54,7 +54,7 @@ def base_pipeline() -> Node[None]:
     )
 
 
-def custom_pipeline(new_path: str) -> Node[None]:
+def custom_pipeline(new_path: str) -> AnyNode[None]:
     # 1. 获取基础的 Node 树
     pipeline = base_pipeline()
 

@@ -8,6 +8,16 @@ breaking changes when they are documented here.
 
 ## [Unreleased]
 
+### Type annotations
+
+- Node and Wrapper now retain the callback's business `ParamSpec` as `Node[P, R]`
+  and `Wrapper[P, R]`. Use `AnyNode[R]` / `AnyWrapper[R]` for former result-only
+  annotations. Factories remain ordinary keyword-only partial builders; binding
+  and invocation behavior is unchanged.
+- Original callback signatures are retained by `.func`; async constructors infer
+  completion results, and `Auto[S].value` preserves its source type. Partial
+  keyword bindings remain dynamic within standard Python typing's limits.
+
 ### Import paths
 
 - `slyme.tree` and `slyme.execution` are now the canonical public modules.

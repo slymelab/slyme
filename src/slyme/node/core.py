@@ -20,7 +20,16 @@ from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Generic, Protocol, TypeVar, overload
+from typing import (
+    Any,
+    Concatenate,
+    Generic,
+    ParamSpec,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    overload,
+)
 
 from typing_extensions import Self
 
@@ -41,25 +50,29 @@ __all__ = [
     "create_wrapper",
     "NodeElement",
     "Node",
+    "AnyNode",
     "Wrapper",
+    "AnyWrapper",
 ]
 
+_P = ParamSpec("_P")
 _R = TypeVar("_R")
+_S = TypeVar("_S", covariant=True)
 _MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
-class Auto:
+class Auto(Generic[_S]):
     """Evaluate a bound parameter tree before invoking its Node or Wrapper.
 
     Ordinary parameters pass through unchanged. Containers inside value are
     reconstructed; evaluator results are not recursively evaluated.
     """
 
-    value: Any
+    value: _S
 
 
-class NodeElement(Generic[_R]):
+class NodeElement(Generic[_P, _R]):
     """A function with mutable keyword bindings and auxiliary metadata.
 
     Metadata is an instance-owned dictionary; its values are never evaluated or merged.
@@ -67,14 +80,30 @@ class NodeElement(Generic[_R]):
 
     __slots__ = ("_func", "_params", "metadata")
 
+    @overload
     def __init__(
         self,
         *,
-        func: Callable[..., _R | Awaitable[_R]],
+        func: Callable[_P, Awaitable[_R]],
+        params: Mapping[str, Any],
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        *,
+        func: Callable[_P, _R | Awaitable[_R]],
+        params: Mapping[str, Any],
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> None: ...
+    def __init__(
+        self,
+        *,
+        func: Callable[_P, _R | Awaitable[_R]],
         params: Mapping[str, Any],
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None:
-        self._func = func
+        self._func: Callable[..., _R | Awaitable[_R]] = func
         self._params: dict[str, Any] = dict(params)
         self.metadata: dict[str, Metadata] = {} if metadata is None else dict(metadata)
 
@@ -93,7 +122,7 @@ class NodeElement(Generic[_R]):
         return raw_params, eval_params
 
     @property
-    def func(self) -> Callable[..., _R | Awaitable[_R]]:
+    def func(self) -> Callable[_P, _R | Awaitable[_R]]:
         return self._func
 
     @property
@@ -119,7 +148,7 @@ class NodeElement(Generic[_R]):
         self._params.pop(name, None)
 
 
-class Node(NodeElement[_R]):
+class Node(NodeElement[Concatenate[Context, _P], _R], Generic[_P, _R]):
     """A mutable keyword partial with Auto evaluation and Wrapper composition.
 
     Calls shallowly override saved bindings without modifying them. Python
@@ -128,19 +157,39 @@ class Node(NodeElement[_R]):
 
     __slots__ = ("wrappers",)
 
+    @overload
     def __init__(
         self,
         /,
         *,
-        func: Callable[..., _R | Awaitable[_R]],
-        wrappers: Iterable[Wrapper[_R]] | None = None,
+        func: Callable[Concatenate[Context, _P], Awaitable[_R]],
+        wrappers: Iterable[AnyWrapper[_R]] | None = None,
         params: Mapping[str, Any],
         metadata: Mapping[str, Metadata] | None = None,
-    ):
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        /,
+        *,
+        func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
+        wrappers: Iterable[AnyWrapper[_R]] | None = None,
+        params: Mapping[str, Any],
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> None: ...
+    def __init__(
+        self,
+        /,
+        *,
+        func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
+        wrappers: Iterable[AnyWrapper[_R]] | None = None,
+        params: Mapping[str, Any],
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> None:
         super().__init__(func=func, params=params, metadata=metadata)
-        self.wrappers: list[Wrapper[_R]] = list(wrappers or ())
+        self.wrappers: list[AnyWrapper[_R]] = list(wrappers or ())
 
-    def add_wrappers(self, *wrappers: Wrapper[_R]) -> Self:
+    def add_wrappers(self, *wrappers: AnyWrapper[_R]) -> Self:
         self.wrappers.extend(wrappers)
         return self
 
@@ -177,16 +226,24 @@ class Node(NodeElement[_R]):
             raise NodeExceptionRecord(exception_node=self) from error
 
 
-class Wrapper(NodeElement[_R]):
+class Wrapper(
+    NodeElement[
+        Concatenate[
+            Context, Node[..., _R], Callable[[Context], _R | Awaitable[_R]], _P
+        ],
+        _R,
+    ],
+    Generic[_P, _R],
+):
     """Preserve a Node's result type; await completion before result-dependent work."""
 
     __slots__ = ()
 
     @staticmethod
     def compose(
-        wrappers: Iterable[Wrapper[_R]],
+        wrappers: Iterable[AnyWrapper[_R]],
         *,
-        wrapped: Node[_R],
+        wrapped: AnyNode[_R],
         call_next: Callable[[Context], _R | Awaitable[_R]],
     ) -> Callable[[Context], _R | Awaitable[_R]]:
         """Assemble outermost-first wrappers without invoking them.
@@ -202,21 +259,54 @@ class Wrapper(NodeElement[_R]):
             call_next = invoke
         return call_next
 
+    @overload
     def __init__(
         self,
         /,
         *,
-        func: Callable[..., _R | Awaitable[_R]],
+        func: Callable[
+            Concatenate[
+                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
+            ],
+            Awaitable[_R],
+        ],
         params: Mapping[str, Any],
         metadata: Mapping[str, Metadata] | None = None,
-    ):
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        /,
+        *,
+        func: Callable[
+            Concatenate[
+                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
+            ],
+            _R | Awaitable[_R],
+        ],
+        params: Mapping[str, Any],
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> None: ...
+    def __init__(
+        self,
+        /,
+        *,
+        func: Callable[
+            Concatenate[
+                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
+            ],
+            _R | Awaitable[_R],
+        ],
+        params: Mapping[str, Any],
+        metadata: Mapping[str, Metadata] | None = None,
+    ) -> None:
         super().__init__(func=func, params=params, metadata=metadata)
 
     @continuation
     def __call__(
         self,
         ctx: Context,
-        wrapped: Node[_R],
+        wrapped: AnyNode[_R],
         call_next: Callable[[Context], _R | Awaitable[_R]],
         /,
         **kwargs: Any,
@@ -241,32 +331,47 @@ class Wrapper(NodeElement[_R]):
             ) from error
 
 
+# Erase the business signature while retaining the completion type.
+AnyNode: TypeAlias = Node[..., _R]
+AnyWrapper: TypeAlias = Wrapper[..., _R]
+
+
+class _NodeFactory(Protocol[_P, _R]):
+    """Keyword bindings stay partial; Python cannot map a ParamSpec to optional Auto values."""
+
+    def __call__(self, **kwargs: Any) -> Node[_P, _R]: ...
+
+
+class _WrapperFactory(Protocol[_P, _R]):
+    def __call__(self, **kwargs: Any) -> Wrapper[_P, _R]: ...
+
+
 @overload
 def create_node(
-    func: Callable[..., Awaitable[_R]],
+    func: Callable[Concatenate[Context, _P], Awaitable[_R]],
     /,
     params: Mapping[str, Any] | None = None,
     *,
-    wrappers: Iterable[Wrapper[_R]] | None = None,
+    wrappers: Iterable[AnyWrapper[_R]] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Node[_R]: ...
+) -> Node[_P, _R]: ...
 @overload
 def create_node(
-    func: Callable[..., _R | Awaitable[_R]],
+    func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
     /,
     params: Mapping[str, Any] | None = None,
     *,
-    wrappers: Iterable[Wrapper[_R]] | None = None,
+    wrappers: Iterable[AnyWrapper[_R]] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Node[_R]: ...
+) -> Node[_P, _R]: ...
 def create_node(
-    func: Callable[..., _R | Awaitable[_R]],
+    func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
     /,
     params: Mapping[str, Any] | None = None,
     *,
-    wrappers: Iterable[Wrapper[_R]] | None = None,
+    wrappers: Iterable[AnyWrapper[_R]] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Node[_R]:
+) -> Node[_P, _R]:
     """Create a Node with shallow-copied bindings and assembly-time wrappers.
 
     Parameter values and Wrapper objects retain their identities. Construction
@@ -282,27 +387,36 @@ def create_node(
 
 @overload
 def create_wrapper(
-    func: Callable[..., Awaitable[_R]],
+    func: Callable[
+        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
+        Awaitable[_R],
+    ],
     /,
     params: Mapping[str, Any] | None = None,
     *,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_R]: ...
+) -> Wrapper[_P, _R]: ...
 @overload
 def create_wrapper(
-    func: Callable[..., _R | Awaitable[_R]],
+    func: Callable[
+        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
+        _R | Awaitable[_R],
+    ],
     /,
     params: Mapping[str, Any] | None = None,
     *,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_R]: ...
+) -> Wrapper[_P, _R]: ...
 def create_wrapper(
-    func: Callable[..., _R | Awaitable[_R]],
+    func: Callable[
+        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
+        _R | Awaitable[_R],
+    ],
     /,
     params: Mapping[str, Any] | None = None,
     *,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_R]:
+) -> Wrapper[_P, _R]:
     """Create a Wrapper with shallow-copied bindings without invoking it."""
     return Wrapper(
         func=func, params={} if params is None else params, metadata=metadata
@@ -312,39 +426,53 @@ def create_wrapper(
 class _NodeDecorator(Protocol):
     @overload
     def __call__(
-        self, func: Callable[..., Awaitable[_R]], /
-    ) -> Callable[..., Node[_R]]: ...
+        self, func: Callable[Concatenate[Context, _P], Awaitable[_R]], /
+    ) -> _NodeFactory[_P, _R]: ...
     @overload
     def __call__(
-        self, func: Callable[..., _R | Awaitable[_R]], /
-    ) -> Callable[..., Node[_R]]: ...
+        self, func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]], /
+    ) -> _NodeFactory[_P, _R]: ...
 
 
 class _WrapperDecorator(Protocol):
     @overload
     def __call__(
-        self, func: Callable[..., Awaitable[_R]], /
-    ) -> Callable[..., Wrapper[_R]]: ...
+        self,
+        func: Callable[
+            Concatenate[
+                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
+            ],
+            Awaitable[_R],
+        ],
+        /,
+    ) -> _WrapperFactory[_P, _R]: ...
     @overload
     def __call__(
-        self, func: Callable[..., _R | Awaitable[_R]], /
-    ) -> Callable[..., Wrapper[_R]]: ...
+        self,
+        func: Callable[
+            Concatenate[
+                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
+            ],
+            _R | Awaitable[_R],
+        ],
+        /,
+    ) -> _WrapperFactory[_P, _R]: ...
 
 
 @overload
 def node(
-    func: Callable[..., Awaitable[_R]],
+    func: Callable[Concatenate[Context, _P], Awaitable[_R]],
     /,
     *,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Callable[..., Node[_R]]: ...
+) -> _NodeFactory[_P, _R]: ...
 @overload
 def node(
-    func: Callable[..., _R | Awaitable[_R]],
+    func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
     /,
     *,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Callable[..., Node[_R]]: ...
+) -> _NodeFactory[_P, _R]: ...
 @overload
 def node(
     func: None = None,
@@ -365,9 +493,9 @@ def node(
     """
     saved_metadata = {} if metadata is None else dict(metadata)
 
-    def decorate(target: Callable[..., Any]) -> Callable[..., Node[Any]]:
+    def decorate(target: Callable[..., Any]) -> Callable[..., AnyNode[Any]]:
         @wraps(target)
-        def factory(**kwargs: Any) -> Node[Any]:
+        def factory(**kwargs: Any) -> AnyNode[Any]:
             return create_node(target, kwargs, metadata=saved_metadata)
 
         return factory
@@ -377,18 +505,24 @@ def node(
 
 @overload
 def wrapper(
-    func: Callable[..., Awaitable[_R]],
+    func: Callable[
+        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
+        Awaitable[_R],
+    ],
     /,
     *,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Callable[..., Wrapper[_R]]: ...
+) -> _WrapperFactory[_P, _R]: ...
 @overload
 def wrapper(
-    func: Callable[..., _R | Awaitable[_R]],
+    func: Callable[
+        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
+        _R | Awaitable[_R],
+    ],
     /,
     *,
     metadata: Mapping[str, Metadata] | None = None,
-) -> Callable[..., Wrapper[_R]]: ...
+) -> _WrapperFactory[_P, _R]: ...
 @overload
 def wrapper(
     func: None = None,
@@ -405,9 +539,9 @@ def wrapper(
     """Create a keyword-only Wrapper factory with auxiliary metadata."""
     saved_metadata = {} if metadata is None else dict(metadata)
 
-    def decorate(target: Callable[..., Any]) -> Callable[..., Wrapper[Any]]:
+    def decorate(target: Callable[..., Any]) -> Callable[..., AnyWrapper[Any]]:
         @wraps(target)
-        def factory(**kwargs: Any) -> Wrapper[Any]:
+        def factory(**kwargs: Any) -> AnyWrapper[Any]:
             return create_wrapper(target, kwargs, metadata=saved_metadata)
 
         return factory

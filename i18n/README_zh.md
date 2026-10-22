@@ -57,7 +57,7 @@ pip install slyme
 from time import time
 from collections.abc import Callable
 from slyme.context import Context, Ref, Schema
-from slyme.node import node, wrapper, Auto, Node
+from slyme.node import node, wrapper, Auto, AnyNode
 
 
 R = Schema(
@@ -90,7 +90,7 @@ def format_prompts(ctx: Context, /, *, articles: list[dict]) -> list[str]:
 @wrapper
 def timing(
     ctx: Context,
-    wrapped: Node,
+    wrapped: AnyNode,
     call_next: Callable[[Context], object],
     /,
     *,
@@ -104,7 +104,7 @@ def timing(
 
 
 # 4. 在构建时组装流水线
-def build_pipeline() -> Node[None]:
+def build_pipeline() -> AnyNode[None]:
     return llm_api(
         responses=R.resolve("output.responses"),
         prompts=Auto(

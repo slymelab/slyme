@@ -25,7 +25,7 @@ from slyme.execution import Continuation, FlatExec, continuation
 from slyme.tree import flatten
 from slyme.utils.exception import exception_group
 
-from .core import Node
+from .core import AnyNode
 
 __all__ = [
     "eval_tree",
@@ -150,7 +150,7 @@ def ref_evaluator(
     return (yield FlatExec(_batch(refs, ctx.get)))
 
 
-def _evaluate_node(ctx: Context, node: Node[_T]) -> Generator[Any, Any, _T]:
+def _evaluate_node(ctx: Context, node: AnyNode[_T]) -> Generator[Any, Any, _T]:
     child = ctx.derive()
     try:
         return (yield node.__call__.flat_call(child))
@@ -160,7 +160,7 @@ def _evaluate_node(ctx: Context, node: Node[_T]) -> Generator[Any, Any, _T]:
 
 @continuation
 def node_evaluator(
-    ctx: Context, nodes: Sequence[Node[Any]]
+    ctx: Context, nodes: Sequence[AnyNode[Any]]
 ) -> Generator[Any, Any, Sequence[Any]]:
     """Evaluate every sibling and report failures after all children settle.
 

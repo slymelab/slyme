@@ -12,6 +12,7 @@ from slyme.context import Context, ContextPathError, Ref, Schema
 from slyme.context.default import EVALUATORS_REF, INSPECTION_TREE_RULES_REF
 from slyme.execution import await_result
 from slyme.node import (
+    AnyNode,
     Auto,
     Node,
     Wrapper,
@@ -158,7 +159,7 @@ def test_schema_integrates_with_auto_during_graph_assembly() -> None:
     ctx.set(value_ref, 4)
     assert increment(value=Auto(value_ref))(ctx) == 5
 
-    def misspelled() -> Node[int]:
+    def misspelled() -> AnyNode[int]:
         return increment(value=Auto(schema.resolve("input.vlaue")))
 
     with pytest.raises(ContextPathError) as caught:
@@ -250,7 +251,7 @@ async def test_async_node_and_wrapper_calls_use_live_parameters() -> None:
     @wrapper
     async def record(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Awaitable[Any]],
         /,
         *,
@@ -287,7 +288,7 @@ def test_wrappers_execute_in_declared_order_and_evaluate_parameters() -> None:
     @wrapper
     def trace(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Any],
         /,
         *,
@@ -341,7 +342,7 @@ def test_node_and_wrapper_exceptions_preserve_provenance() -> None:
     @wrapper
     def broken_wrapper(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Any],
         /,
     ) -> Any:
@@ -379,7 +380,7 @@ async def test_async_node_wrapper_and_mixed_evaluation() -> None:
     @wrapper
     async def async_trace(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Awaitable[Any]],
         /,
         *,
@@ -960,7 +961,7 @@ async def test_plain_functions_assemble_independent_node_graphs() -> None:
     def leaf(ctx: Context, /, *, value: int = 1) -> int:
         return value
 
-    def build(*, value: int = 1) -> Node[int]:
+    def build(*, value: int = 1) -> AnyNode[int]:
         return leaf(value=value)
 
     first = build()
@@ -976,7 +977,7 @@ async def test_plain_functions_assemble_independent_node_graphs() -> None:
     async def async_leaf(ctx: Context, /) -> int:
         return 1
 
-    def build_async() -> Node[int]:
+    def build_async() -> AnyNode[int]:
         return async_leaf()
 
     assert await build_async()(ctx) == 1
@@ -986,7 +987,7 @@ def test_node_elements_can_nest_freely() -> None:
     @wrapper
     def sync_wrapper(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Any],
         /,
         *,
@@ -1018,7 +1019,7 @@ async def test_wrappers_can_be_added_through_the_public_list() -> None:
     @wrapper
     def sync_wrapper(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Any],
         /,
     ) -> Any:
@@ -1028,7 +1029,7 @@ async def test_wrappers_can_be_added_through_the_public_list() -> None:
     @wrapper
     async def async_wrapper(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Awaitable[Any]],
         /,
     ) -> Any:
@@ -1060,7 +1061,7 @@ def test_node_and_wrapper_trees_support_traversal_without_reconstruction() -> No
     @wrapper
     def trace(
         ctx: Context,
-        wrapped: Node[Any],
+        wrapped: AnyNode[Any],
         call_next: Callable[[Context], Any],
         /,
     ) -> Any:

@@ -78,13 +78,13 @@ Calls inside user functions still need explicit handling: synchronous code canno
 `@continuation` from `slyme.execution` turns a generator function into a directly callable synchronous-or-asynchronous function. A yielded ordinary value is immediately sent back; a yielded awaitable returns an unscheduled asynchronous remainder. Awaited failures are thrown at the suspended `yield`, so one set of loops, branches, and `try/except/finally` handles both execution modes:
 
 ```python
-from slyme.node import Node
+from slyme.node import AnyNode
 from slyme.execution import continuation
 
 
 @node
 @continuation
-def increment_child(ctx, *, child: Node[int]):
+def increment_child(ctx, *, child: AnyNode[int]):
     value = yield child(ctx)
     return value + 1
 ```
@@ -152,13 +152,13 @@ Call the Node factory or an assembly function again when another independently c
 
 ```python
 from collections.abc import Callable
-from slyme.node import Node, wrapper
+from slyme.node import AnyNode, wrapper
 from slyme.execution import continuation
 
 
 @wrapper
 @continuation
-def trace(ctx, wrapped: Node, call_next: Callable, *, name: str):
+def trace(ctx, wrapped: AnyNode, call_next: Callable, *, name: str):
     print(name, "start")
     try:
         return (yield call_next(ctx))
@@ -171,7 +171,7 @@ task.add_wrappers(trace(name="add"))
 
 Wrappers use onion ordering and read their live parameters when invoked. The example waits for synchronous or asynchronous completion and runs its `finally` block on success or failure. A forwarding wrapper may return `call_next(ctx)` unchanged without `@continuation`. An `async def` wrapper can instead use `await await_result(call_next(ctx))`. Slyme does not rewrite a wrapper's `try/finally`.
 
-`Node[R]` accepts `Wrapper[R]`: wrappers preserve the resolved result type, including when short-circuiting, but may introduce asynchronous work. This is a static typing requirement, not a runtime value check. Express a change of result type through another Node that composes the original.
+`Node[P, R]` accepts `AnyWrapper[R]`: wrappers preserve the resolved result type, including when short-circuiting, but may introduce asynchronous work. This is a static typing requirement, not a runtime value check. Express a change of result type through another Node that composes the original.
 
 `Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context with the same resolved result type. Wrapper parameters remain live. Each wrapper controls whether and how often it invokes the next layer and which Context it passes. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
 
@@ -182,3 +182,34 @@ Node and Wrapper parameters may contain arbitrary values and nested Trees, inclu
 ## Sequential composition
 
 Use `sequential(nodes=[...])` for a declarative sequence or `sequential_exec(ctx, nodes)` for an existing iterable. Both return `None` after waiting for each completion before starting the next Node, and remain synchronous when every step is synchronous. A failure stops execution and propagates the failing Node's exception without collecting earlier results. They share the supplied Context, so later steps observe earlier local writes, unlike Auto child evaluation.
+
+
+## Static types
+
+`Node[P, R]` and `Wrapper[P, R]` put the business parameter signature before the
+completion result. `P` is a `ParamSpec`, retaining names, types and defaults from
+the original callback. Context and the Wrapper's wrapped/call_next arguments are
+framework prefixes. Prefer inference through decorators or creation helpers;
+`.func` retains and checks the full original callback signature.
+
+Use `AnyNode[R]` / `AnyWrapper[R]` when only the result matters. They alias
+`Node[..., R]` / `Wrapper[..., R]`. Migrate former result-only `Node[R]` /
+`Wrapper[R]` annotations to these aliases; function definitions, construction,
+binding and invocation stay unchanged. These aliases erase the business signature;
+they are not read-only views.
+
+A Wrapper callback shares one result type across `wrapped: AnyNode[R]`,
+`call_next: Callable[[Context], R | Awaitable[R]]`, and its own completion result.
+Annotate these arguments explicitly; a reusable forwarding callback can use a
+`TypeVar` for `R`. Bare `Node` / `Callable` or explicit `Any` can weaken inference
+and checking. The construction APIs preserve this relationship rather than
+ignoring callback input types to infer only from the return annotation.
+
+Standard Python typing cannot map an arbitrary ParamSpec into optional keyword
+bindings accepting either a value or Auto. Factories therefore still accept
+partial keyword bindings; invocation overrides and `get/set/delete/params` remain
+dynamic. Factories statically reject positional arguments. These entries neither
+prove that required bindings are complete nor check arbitrary binding values or
+spellings. `Auto[S]` retains its source tree type (`value: S`), without promising
+the result of arbitrary evaluators. No checker plugin, code generation, signature
+reflection or additional runtime validation is introduced.

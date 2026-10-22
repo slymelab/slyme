@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .core import Node, Wrapper
+    from .core import AnyNode, AnyWrapper
 
 
 class NodeException(Exception):
@@ -31,11 +31,11 @@ class NodeException(Exception):
 class NodeExceptionRecord(NodeException):
     """Used to record the node exception info."""
 
-    def __init__(self, exception_node: Node[Any]) -> None:
+    def __init__(self, exception_node: AnyNode[Any]) -> None:
         super().__init__(exception_node)
 
     @property
-    def exception_node(self) -> Node[Any]:
+    def exception_node(self) -> AnyNode[Any]:
         return self.args[0]
 
     def __str__(self) -> str:
@@ -45,15 +45,17 @@ class NodeExceptionRecord(NodeException):
 class WrapperExceptionRecord(NodeException):
     """Used to record the exception info raised by a ``Wrapper``."""
 
-    def __init__(self, exception_node: Wrapper[Any], wrapped_node: Node[Any]) -> None:
+    def __init__(
+        self, exception_node: AnyWrapper[Any], wrapped_node: AnyNode[Any]
+    ) -> None:
         super().__init__(exception_node, wrapped_node)
 
     @property
-    def exception_node(self) -> Wrapper[Any]:
+    def exception_node(self) -> AnyWrapper[Any]:
         return self.args[0]
 
     @property
-    def wrapped_node(self) -> Node[Any]:
+    def wrapped_node(self) -> AnyNode[Any]:
         return self.args[1]
 
     def __str__(self) -> str:

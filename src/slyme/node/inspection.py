@@ -16,7 +16,7 @@ NODE_INSPECTION_TYPE_NAMES: Mapping[type, str] = {
 }
 
 
-def _flatten(value: NodeElement[Any]) -> tuple[Iterable[Any], TreeAux]:
+def _flatten(value: NodeElement[..., Any]) -> tuple[Iterable[Any], TreeAux]:
     names: tuple[str, ...] = ("func", "params", "metadata")
     if isinstance(value, Node):
         names += ("wrappers",)

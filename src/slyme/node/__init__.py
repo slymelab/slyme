@@ -19,6 +19,8 @@ from .common import (
     sequential_exec,
 )
 from .core import (
+    AnyNode,
+    AnyWrapper,
     Auto,
     Node,
     NodeElement,
@@ -33,6 +35,8 @@ from .eval import eval_tree
 __all__ = [
     "NodeElement",
     "Node",
+    "AnyNode",
+    "AnyWrapper",
     "Wrapper",
     "node",
     "wrapper",
