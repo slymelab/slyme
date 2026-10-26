@@ -34,6 +34,7 @@ __all__ = [
     "ContextKey",
     "ContextPathError",
     "Ref",
+    "ref",
     "Metadata",
     "RefConfig",
     "RefContainerConfig",
@@ -64,6 +65,11 @@ class Ref(Generic[_T]):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parts", self._split_path(self.path))
+
+
+def ref(path: str) -> Ref[_T]:
+    """Create a path reference; the expected type can supply its value type."""
+    return Ref(path)
 
 
 ContextKey = str | Ref[_T]

@@ -4,7 +4,7 @@
 
 ```python
 from slyme.context import Compose, Context, Ref, Schema, Scope
-from slyme.node import Auto, Node, node, sequential_exec, wrapper
+from slyme.node import Node, node, sequential_exec, wrapper
 
 
 R = Schema(
@@ -43,7 +43,7 @@ def execute(
     return derived
 ```
 
-Factories accept keyword bindings without inspecting function signatures. Node execution passes Context positionally and bindings by keyword; Python handles defaults, variadic parameters, and argument errors. Wrap a bound parameter tree in `Auto(...)` to resolve registered leaves such as Ref and value-producing Node; omit the wrapper when the function needs the object itself.
+`partial(**params)` accepts keyword bindings without inspecting function signatures. Node execution passes Context positionally and bindings by keyword; Python handles defaults, variadic parameters, and argument errors. Wrap a bound parameter tree in `auto(...)` to resolve registered leaves such as Ref and value-producing Node; omit the wrapper when the function needs the object itself.
 
 An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned child Context with a distinct `ctx.scope.fork()`. Slyme disposes that child, including its effects, before parent execution continues. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe its writes.
 
@@ -119,21 +119,23 @@ def trace(ctx, wrapped: Node, call_next, *, name: str):
         print(name, "end")
 ```
 
-Wrapper execution passes Context, the wrapped Node, and the next callable positionally, followed by keyword bindings. Attach it through `node.add_wrappers(...)`. This example and the `execute` function above assume synchronous children. For mixed children, use `async def` and `await await_result(...)` before inspecting results, executing following statements, or leaving `try/finally`; see [async.md](async.md).
+Wrapper execution passes Context, the wrapped Node, and the next callable positionally, followed by keyword bindings. Attach it by deriving a new Node with `task.replace(wrappers=(...))`. This example and the `execute` function above assume synchronous children. For mixed children, use `async def` and `await await_result(...)` before inspecting results, executing following statements, or leaving `try/finally`; see [async.md](async.md).
 
 ## Assembly and execution
 
 ```python
-root = execute(
-    derived=Auto(
-        calculate(
-            value=Auto(R.resolve("input.value")),
+from slyme.node import auto
+
+root = execute.partial(
+    derived=auto(
+        calculate.partial(
+            value=auto(R.resolve("input.value")),
             scale=2.0,
         )
     ),
-    children=(increment(counter=R.resolve("state.counter")),),
+    children=(increment.partial(counter=R.resolve("state.counter")),),
     output=R.resolve("output.result"),
-).add_wrappers(trace(name="execute"))
+).replace(wrappers=(trace.partial(name="execute"),))
 
 ctx = Context()
 ctx.declare(R)
@@ -142,6 +144,6 @@ result = root(ctx)
 assert ctx.get(R.resolve("output.result")) == result
 ```
 
-The Node graph stays mutable. Read explicit bindings with `root.get(name)`, replace them with `root.set(name, value)`, and remove them with `root.delete(name)`. Absent bindings use the function's native defaults at invocation. `root(ctx, **kwargs)` overrides saved bindings for one call before Auto evaluation. Static parameter containers are passed directly to Node and Wrapper functions, so in-call mutations remain on the live element. Call the relevant factory or assembly function again when another independently configurable graph is needed, and copy mutable application values explicitly when they must not be shared.
+Node bindings are read-only. Read them with `root.get(name)` or `root.params`; derive a new Node with `root.partial(**params)`. Later bindings win, and call-time keywords override them for one execution. `partial` and `replace` preserve referenced values and Wrapper objects; configuration mappings are read-only snapshots and wrapper order is a tuple. Copy application containers explicitly when independent contents are required.
 
 Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

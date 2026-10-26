@@ -4,9 +4,9 @@ Slyme binds build parameters by keyword and optionally evaluates their values wi
 
 ## Explicit bindings
 
-Node and Wrapper factories store only supplied keyword bindings. Function signatures and annotations are not inspected; `Auto(tree)` marks a binding for evaluation. Ordinary values, including bare Ref and Node objects, pass through unchanged.
+Node and Wrapper objects store only supplied keyword bindings. Function signatures and annotations are not inspected; `auto(tree)` marks a binding for evaluation. Ordinary values, including bare Ref and Node objects, pass through unchanged.
 
-At execution, keyword overrides replace saved bindings for that call without mutating them. Defaults and argument errors belong to Python's actual function call. Deleting a binding makes that argument absent; a function default is not an implicit stored or Auto-evaluated value.
+At execution, keyword overrides replace saved bindings for that call without mutating them. Defaults and argument errors belong to Python's actual function call. Use `replace(params=...)` to derive a Node or Wrapper without a particular binding. Native defaults then apply to that new object; defaults are not implicitly stored or Auto-evaluated.
 
 ## Call-time evaluation
 
@@ -24,6 +24,6 @@ For each call, Slyme:
 
 ## Evaluation timing
 
-Each Node or Wrapper call takes a shallow snapshot of its parameter bindings. Auto traversal and evaluation occur immediately before its user function is invoked. A Wrapper that calls `call_next` repeatedly triggers a fresh traversal each time, observing in-place changes to Auto containers and current Context values; replacing a Node parameter binding affects the next Node call. A short-circuiting Wrapper does not traverse or evaluate the wrapped Node's Auto parameters.
+Each Node or Wrapper call takes a shallow snapshot of its parameter bindings. Auto traversal and evaluation occur immediately before its user function is invoked. A Wrapper that calls `call_next` repeatedly triggers a fresh traversal each time, observing in-place changes to Auto containers and current Context values; `partial` and `replace` create new Nodes and leave the original Node and any existing wrapper chain unchanged. A short-circuiting Wrapper does not traverse or evaluate the wrapped Node's Auto parameters.
 
 An Auto child may return a derived value, but Slyme disposes its Context and registered effects before parent execution continues. Asynchronous child execution or cleanup makes the enclosing call awaitable; cancellation also waits for child cleanup. If a higher-order Node explicitly invokes children with its own Context, read a later value through its Ref after those calls instead of relying on the earlier Auto value.

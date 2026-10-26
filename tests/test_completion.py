@@ -9,7 +9,7 @@ import pytest
 from slyme.context import Context
 from slyme.context.default import EVALUATORS_REF
 from slyme.execution import SharedAwaitable, await_result, continuation
-from slyme.node import Auto, Node, eval_tree, node, sequential_exec, wrapper
+from slyme.node import Node, auto, eval_tree, node, sequential_exec, wrapper
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.utils.exception import BaseExceptionGroup
 
@@ -31,7 +31,7 @@ def test_sync_call_and_disposal_need_no_event_loop() -> None:
         return 3
 
     ctx = Context()
-    assert value()(ctx) == 3
+    assert value.partial()(ctx) == 3
     assert ctx.dispose() is None
 
 
@@ -55,7 +55,7 @@ async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    graph = parent(value=Auto(child()))
+    graph = parent.partial(value=auto(child.partial()))
     pending = graph(ctx)
     assert inspect.isawaitable(pending)
     assert events == ["call"]
@@ -83,7 +83,9 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    result = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
+    result = parent.partial(
+        values=auto([child.partial(index=1), child.partial(index=2)])
+    )(ctx)
     assert await asyncio.wait_for(await_result(result), 1) == 3
     assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
@@ -110,7 +112,9 @@ async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
     before = asyncio.all_tasks()
-    pending = parent(values=Auto([child(index=1), child(index=2)]))(ctx)
+    pending = parent.partial(
+        values=auto([child.partial(index=1), child.partial(index=2)])
+    )(ctx)
     assert events == [("call", 1), ("call", 2)]
     assert asyncio.all_tasks() == before
     assert await await_result(pending) == 3
@@ -140,7 +144,9 @@ async def test_node_sequence_stops_at_first_failure(asynchronous) -> None:
 
     ctx = Context()
     with pytest.raises(NodeExceptionRecord) as caught:
-        await await_result(sequential_exec(ctx, [child(index=i) for i in range(3)]))
+        await await_result(
+            sequential_exec(ctx, [child.partial(index=i) for i in range(3)])
+        )
     assert calls == [0, 1]
     assert caught.value.__cause__ is failure
     ctx.dispose()
@@ -167,7 +173,12 @@ async def test_sync_wrapper_forwards_completion_and_async_wrapper_waits() -> Non
         return result + 1
 
     ctx = Context()
-    graph = value().add_wrappers(forward(), finished())
+    graph = value.partial().replace(
+        wrappers=(
+            forward.partial(),
+            finished.partial(),
+        )
+    )
     pending = graph(ctx)
     assert events == ["forward"]
     assert await await_result(pending) == 6
@@ -196,10 +207,10 @@ async def test_awaited_failures_keep_node_and_wrapper_attribution(
         return result
 
     ctx = Context()
-    wrapping = wrap()
-    graph = value()
+    wrapping = wrap.partial()
+    graph = value.partial()
     if failure_in_wrapper:
-        graph.add_wrappers(wrapping)
+        graph = graph.replace(wrappers=(wrapping,))
     error_type = WrapperExceptionRecord if failure_in_wrapper else NodeExceptionRecord
     with pytest.raises(error_type) as caught:
         await await_result(graph(ctx))
@@ -406,7 +417,7 @@ async def test_continuation_composes_node_setup_and_disposal(asynchronous) -> No
     def execute():
         try:
             dispose = yield ctx.effect(setup)
-            result = yield value()(ctx)
+            result = yield value.partial()(ctx)
             yield dispose()
             return result
         finally:
@@ -524,7 +535,12 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
     assert (
-        await await_result(value().add_wrappers(add(extra=Auto(parameter())))(ctx)) == 5
+        await await_result(
+            value.partial().replace(
+                wrappers=(add.partial(extra=auto(parameter.partial())),)
+            )(ctx)
+        )
+        == 5
     )
     assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()
@@ -545,7 +561,12 @@ async def test_sequential_continues_sync_and_async_steps_after_first_await() -> 
     ctx = Context()
     await await_result(
         sequential_exec(
-            ctx, [asynchronous(value=1), synchronous(value=2), asynchronous(value=3)]
+            ctx,
+            [
+                asynchronous.partial(value=1),
+                synchronous.partial(value=2),
+                asynchronous.partial(value=3),
+            ],
         )
     )
     assert events == [1, 2, 3]
@@ -572,7 +593,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(NodeExceptionRecord) as caught:
-        await await_result(parent(value=Auto(child()))(ctx))
+        await await_result(parent.partial(value=auto(child.partial()))(ctx))
     group = caught.value.__cause__
     assert isinstance(group, BaseExceptionGroup)
     child_errors = group.exceptions[0]

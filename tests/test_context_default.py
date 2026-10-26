@@ -23,7 +23,7 @@ from slyme.context.default import (
     TypeLayer,
 )
 from slyme.execution import await_result
-from slyme.node import Auto, node
+from slyme.node import auto, node
 from slyme.node.eval import eval_tree
 from slyme.node.inspection import NODE_INSPECTION_TREE_RULES
 from slyme.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
@@ -48,7 +48,7 @@ def test_rule_definitions_support_inspection_without_a_context() -> None:
     def echo(ctx, *, value):
         return value
 
-    graph = echo(value=42)
+    graph = echo.partial(value=42)
     rules = TreeRules.merge((NODE_INSPECTION_TREE_RULES, DATA_RULES))
     assert list(iter_leaves([graph], rules=rules)) == [graph.func, 42]
     assert list(iter_leaves([graph], rules=DATA_RULES)) == [graph]
@@ -250,7 +250,7 @@ def test_node_assembly_stays_independent_of_the_execution_context() -> None:
     def consume(ctx, *, value):
         return value
 
-    graph = consume(value=Auto(Box(3)))
+    graph = consume.partial(value=auto(Box(3)))
     left, right = Context(), Context()
     left.effect(
         lambda: left.get(DATA_TREE_REF).register(

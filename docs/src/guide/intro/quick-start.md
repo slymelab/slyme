@@ -7,7 +7,7 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.context import Context, Ref, Schema
-from slyme.node import Auto, Node, node, wrapper
+from slyme.node import Node, node, wrapper, auto
 
 
 R = Schema(
@@ -47,11 +47,11 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 
 def build() -> Node:
-    formatter = format_prompts(articles=Auto(R.resolve("input.articles")))
-    return call_llm(
-        prompts=Auto(formatter),
+    formatter = format_prompts.partial(articles=auto(R.resolve("input.articles")))
+    return call_llm.partial(
+        prompts=auto(formatter),
         output=R.resolve("output.responses"),
-    ).add_wrappers(timing(name="llm"))
+    ).replace(wrappers=(timing.partial(name="llm"),))
 
 
 ctx = Context()
@@ -75,4 +75,4 @@ The important pieces are:
 - `build()` is an ordinary Python function that assembles and returns the Node graph.
 - Application code creates a Context, supplies external inputs, calls the Node, and reads outputs explicitly.
 
-Nodes remain mutable and static parameter containers stay live during calls; there is no Def/Exec or explicit prepare phase. Call the assembly function again when another independently configurable graph is required.
+Node bindings are read-only; referenced parameter containers can still change during calls; there is no Def/Exec or explicit prepare phase. Call the assembly function again when another independently configurable graph is required.

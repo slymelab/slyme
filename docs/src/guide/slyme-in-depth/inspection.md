@@ -3,10 +3,10 @@
 `slyme.inspection.inspect(value, tree_rules=..., interpreters=..., type_names=..., env=...)` returns an in-memory inspection graph with configurable raw-value retention. It observes the current structure; it does not execute a Node graph or predict a future execution trace. All configuration is explicit; no Context is required. For ordinary data, pass `DATA_RULES` from `slyme.tree.common`. Applications can obtain their scoped configuration using `resolve_inspection_options(ctx)`:
 
 ```python
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import inspect
-from slyme.node import Auto, node
+from slyme.node import node, auto
 
 
 @node
@@ -17,7 +17,7 @@ def task(ctx, *, value):
 ctx = Context()
 ctx.declare({"input": Schema.leaf()})
 ctx.set("input", 42)
-graph = task(value=Auto({"items": [Ref("input")]}))
+graph = task.partial(value=auto({"items": [ref("input")]}))
 
 options = resolve_inspection_options(ctx)
 document = inspect(graph, **options, env=ctx)

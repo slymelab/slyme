@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Mutable keyword partials with explicit Auto evaluation and Wrapper composition."""
+"""Keyword partials with explicit Auto evaluation and Wrapper composition."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
-from functools import wraps
+from enum import Enum
 from types import MappingProxyType
 from typing import (
     Any,
@@ -31,8 +31,6 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Self
-
 from slyme.context import Context, Metadata
 from slyme.execution import Continuation, continuation
 
@@ -43,11 +41,9 @@ from .exception import (
 )
 
 __all__ = [
-    "Auto",
+    "auto",
     "node",
     "wrapper",
-    "create_node",
-    "create_wrapper",
     "NodeElement",
     "Node",
     "AnyNode",
@@ -58,7 +54,10 @@ __all__ = [
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _S = TypeVar("_S", covariant=True)
-_MISSING = object()
+_V = TypeVar("_V")
+
+_Missing = Enum("_Missing", ["MARK"])
+_MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,20 +71,25 @@ class Auto(Generic[_S]):
     value: _S
 
 
-class NodeElement(Generic[_P, _R]):
-    """A function with mutable keyword bindings and auxiliary metadata.
+def auto(value: _V) -> Auto[_V]:
+    """Mark a value tree for evaluation when its Node or Wrapper executes."""
+    return Auto(value)
 
-    Metadata is an instance-owned dictionary; its values are never evaluated or merged.
+
+class NodeElement(Generic[_P, _R]):
+    """A function with read-only keyword bindings and auxiliary metadata.
+
+    Mappings are shallow snapshots; referenced values retain their identities.
     """
 
-    __slots__ = ("_func", "_params", "metadata")
+    __slots__ = ("_func", "_params", "_metadata")
 
     @overload
     def __init__(
         self,
         *,
         func: Callable[_P, Awaitable[_R]],
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     @overload
@@ -93,19 +97,46 @@ class NodeElement(Generic[_P, _R]):
         self,
         *,
         func: Callable[_P, _R | Awaitable[_R]],
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     def __init__(
         self,
         *,
         func: Callable[_P, _R | Awaitable[_R]],
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None:
         self._func: Callable[..., _R | Awaitable[_R]] = func
-        self._params: dict[str, Any] = dict(params)
-        self.metadata: dict[str, Metadata] = {} if metadata is None else dict(metadata)
+        self._params: Mapping[str, Any] = MappingProxyType(
+            {} if params is None else dict(params)
+        )
+        self._metadata: Mapping[str, Metadata] = MappingProxyType(
+            {} if metadata is None else dict(metadata)
+        )
+
+    @property
+    def func(self) -> Callable[_P, _R | Awaitable[_R]]:
+        return self._func
+
+    @property
+    def params(self) -> Mapping[str, Any]:
+        """Return a read-only view of explicitly bound parameters."""
+        return self._params
+
+    @property
+    def metadata(self) -> Mapping[str, Metadata]:
+        """Return the read-only snapshot of auxiliary metadata."""
+        return self._metadata
+
+    def get(self, name: str, default: Any = _MISSING) -> Any:
+        """Return a binding or default; absent bindings otherwise raise KeyError."""
+        try:
+            return self._params[name]
+        except KeyError:
+            if default is _MISSING:
+                raise
+            return default
 
     @staticmethod
     def _prepare_eval(
@@ -121,41 +152,15 @@ class NodeElement(Generic[_P, _R]):
                 raw_params[name] = value
         return raw_params, eval_params
 
-    @property
-    def func(self) -> Callable[_P, _R | Awaitable[_R]]:
-        return self._func
-
-    @property
-    def params(self) -> Mapping[str, Any]:
-        """Return a live, read-only view of explicitly bound parameters."""
-        return MappingProxyType(self._params)
-
-    def get(self, name: str, default: Any = _MISSING) -> Any:
-        """Return a binding or default; absent bindings otherwise raise KeyError."""
-        try:
-            return self._params[name]
-        except KeyError:
-            if default is _MISSING:
-                raise
-            return default
-
-    def set(self, name: str, value: Any) -> None:
-        """Store a parameter without inspecting the function signature."""
-        self._params[name] = value
-
-    def delete(self, name: str) -> None:
-        """Remove a binding; an absent binding is a no-op."""
-        self._params.pop(name, None)
-
 
 class Node(NodeElement[Concatenate[Context, _P], _R], Generic[_P, _R]):
-    """A mutable keyword partial with Auto evaluation and Wrapper composition.
+    """A keyword partial with Auto evaluation and Wrapper composition.
 
     Calls shallowly override saved bindings without modifying them. Python
     applies function defaults and argument validation at invocation time.
     """
 
-    __slots__ = ("wrappers",)
+    __slots__ = ("_wrappers",)
 
     @overload
     def __init__(
@@ -164,7 +169,7 @@ class Node(NodeElement[Concatenate[Context, _P], _R], Generic[_P, _R]):
         *,
         func: Callable[Concatenate[Context, _P], Awaitable[_R]],
         wrappers: Iterable[AnyWrapper[_R]] | None = None,
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     @overload
@@ -174,7 +179,7 @@ class Node(NodeElement[Concatenate[Context, _P], _R], Generic[_P, _R]):
         *,
         func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
         wrappers: Iterable[AnyWrapper[_R]] | None = None,
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     def __init__(
@@ -183,22 +188,48 @@ class Node(NodeElement[Concatenate[Context, _P], _R], Generic[_P, _R]):
         *,
         func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
         wrappers: Iterable[AnyWrapper[_R]] | None = None,
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None:
         super().__init__(func=func, params=params, metadata=metadata)
-        self.wrappers: list[AnyWrapper[_R]] = list(wrappers or ())
+        self._wrappers: tuple[AnyWrapper[_R], ...] = (
+            () if wrappers is None else tuple(wrappers)
+        )
 
-    def add_wrappers(self, *wrappers: AnyWrapper[_R]) -> Self:
-        self.wrappers.extend(wrappers)
-        return self
+    @property
+    def wrappers(self) -> tuple[AnyWrapper[_R], ...]:
+        """Return the read-only, outermost-first wrapper sequence."""
+        return self._wrappers
+
+    def partial(self, /, **params: Any) -> Node[_P, _R]:
+        """Return a new Node with shallowly merged bindings, without evaluation."""
+        return self.replace(params={**self._params, **params})
+
+    def replace(
+        self,
+        *,
+        params: Mapping[str, Any] | None | _Missing = _MISSING,
+        wrappers: Iterable[AnyWrapper[_R]] | None | _Missing = _MISSING,
+        metadata: Mapping[str, Metadata] | None | _Missing = _MISSING,
+    ) -> Node[_P, _R]:
+        """Return a new Node, replacing supplied configuration fields in full.
+
+        Omitted fields are retained; None clears a field. Values and Wrapper
+        objects keep their identities. The callback is unchanged.
+        """
+        return Node(
+            func=self.func,
+            params=self.params if params is _MISSING else params,
+            wrappers=self.wrappers if wrappers is _MISSING else wrappers,
+            metadata=self.metadata if metadata is _MISSING else metadata,
+        )
 
     @continuation
     def __call__(self, ctx: Context, /, **kwargs: Any) -> Generator[Any, Any, _R]:
         """Snapshot bindings and wrappers; evaluate Auto when call_next delegates."""
         try:
             func = self._func
-            wrappers = tuple(self.wrappers)
+            wrappers = self.wrappers
             kwargs = {**self._params, **kwargs}
             raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
 
@@ -239,26 +270,6 @@ class Wrapper(
 
     __slots__ = ()
 
-    @staticmethod
-    def compose(
-        wrappers: Iterable[AnyWrapper[_R]],
-        *,
-        wrapped: AnyNode[_R],
-        call_next: Callable[[Context], _R | Awaitable[_R]],
-    ) -> Callable[[Context], _R | Awaitable[_R]]:
-        """Assemble outermost-first wrappers without invoking them.
-
-        Snapshot wrapper order; each invocation reads the wrappers' live
-        parameters. Wrappers control whether and how often to call the next
-        layer and its Context. Results preserve the Node's type and may be awaitable.
-        """
-        for wrapper_obj in reversed(tuple(wrappers)):
-            invoke = lambda ctx, current=wrapper_obj, next_call=call_next: current(  # noqa: E731
-                ctx, wrapped, next_call
-            )
-            call_next = invoke
-        return call_next
-
     @overload
     def __init__(
         self,
@@ -270,7 +281,7 @@ class Wrapper(
             ],
             Awaitable[_R],
         ],
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     @overload
@@ -284,7 +295,7 @@ class Wrapper(
             ],
             _R | Awaitable[_R],
         ],
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     def __init__(
@@ -297,10 +308,47 @@ class Wrapper(
             ],
             _R | Awaitable[_R],
         ],
-        params: Mapping[str, Any],
+        params: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None:
         super().__init__(func=func, params=params, metadata=metadata)
+
+    def partial(self, /, **params: Any) -> Wrapper[_P, _R]:
+        """Return a new Wrapper with shallowly merged bindings, without evaluation."""
+        return self.replace(params={**self._params, **params})
+
+    def replace(
+        self,
+        *,
+        params: Mapping[str, Any] | None | _Missing = _MISSING,
+        metadata: Mapping[str, Metadata] | None | _Missing = _MISSING,
+    ) -> Wrapper[_P, _R]:
+        """Return a new Wrapper; omitted fields stay, None clears a field."""
+        return Wrapper(
+            func=self.func,
+            params=self.params if params is _MISSING else params,
+            metadata=self.metadata if metadata is _MISSING else metadata,
+        )
+
+    @staticmethod
+    def compose(
+        wrappers: Iterable[AnyWrapper[_R]],
+        *,
+        wrapped: AnyNode[_R],
+        call_next: Callable[[Context], _R | Awaitable[_R]],
+    ) -> Callable[[Context], _R | Awaitable[_R]]:
+        """Assemble outermost-first wrappers without invoking them.
+
+        Snapshot wrapper order; each invocation evaluates the wrappers' Auto
+        bindings. Wrappers control whether and how often to call the next
+        layer and its Context. Results preserve the Node's type and may be awaitable.
+        """
+        for wrapper_obj in reversed(tuple(wrappers)):
+            invoke = lambda ctx, current=wrapper_obj, next_call=call_next: current(  # noqa: E731
+                ctx, wrapped, next_call
+            )
+            call_next = invoke
+        return call_next
 
     @continuation
     def __call__(
@@ -336,102 +384,15 @@ AnyNode: TypeAlias = Node[..., _R]
 AnyWrapper: TypeAlias = Wrapper[..., _R]
 
 
-class _NodeFactory(Protocol[_P, _R]):
-    """Keyword bindings stay partial; Python cannot map a ParamSpec to optional Auto values."""
-
-    def __call__(self, **kwargs: Any) -> Node[_P, _R]: ...
-
-
-class _WrapperFactory(Protocol[_P, _R]):
-    def __call__(self, **kwargs: Any) -> Wrapper[_P, _R]: ...
-
-
-@overload
-def create_node(
-    func: Callable[Concatenate[Context, _P], Awaitable[_R]],
-    /,
-    params: Mapping[str, Any] | None = None,
-    *,
-    wrappers: Iterable[AnyWrapper[_R]] | None = None,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Node[_P, _R]: ...
-@overload
-def create_node(
-    func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
-    /,
-    params: Mapping[str, Any] | None = None,
-    *,
-    wrappers: Iterable[AnyWrapper[_R]] | None = None,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Node[_P, _R]: ...
-def create_node(
-    func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
-    /,
-    params: Mapping[str, Any] | None = None,
-    *,
-    wrappers: Iterable[AnyWrapper[_R]] | None = None,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Node[_P, _R]:
-    """Create a Node with shallow-copied bindings and assembly-time wrappers.
-
-    Parameter values and Wrapper objects retain their identities. Construction
-    does not invoke the function or evaluate Auto bindings.
-    """
-    return Node(
-        func=func,
-        params={} if params is None else params,
-        wrappers=wrappers,
-        metadata=metadata,
-    )
-
-
-@overload
-def create_wrapper(
-    func: Callable[
-        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
-        Awaitable[_R],
-    ],
-    /,
-    params: Mapping[str, Any] | None = None,
-    *,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_P, _R]: ...
-@overload
-def create_wrapper(
-    func: Callable[
-        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
-        _R | Awaitable[_R],
-    ],
-    /,
-    params: Mapping[str, Any] | None = None,
-    *,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_P, _R]: ...
-def create_wrapper(
-    func: Callable[
-        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
-        _R | Awaitable[_R],
-    ],
-    /,
-    params: Mapping[str, Any] | None = None,
-    *,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_P, _R]:
-    """Create a Wrapper with shallow-copied bindings without invoking it."""
-    return Wrapper(
-        func=func, params={} if params is None else params, metadata=metadata
-    )
-
-
 class _NodeDecorator(Protocol):
     @overload
     def __call__(
         self, func: Callable[Concatenate[Context, _P], Awaitable[_R]], /
-    ) -> _NodeFactory[_P, _R]: ...
+    ) -> Node[_P, _R]: ...
     @overload
     def __call__(
         self, func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]], /
-    ) -> _NodeFactory[_P, _R]: ...
+    ) -> Node[_P, _R]: ...
 
 
 class _WrapperDecorator(Protocol):
@@ -445,7 +406,7 @@ class _WrapperDecorator(Protocol):
             Awaitable[_R],
         ],
         /,
-    ) -> _WrapperFactory[_P, _R]: ...
+    ) -> Wrapper[_P, _R]: ...
     @overload
     def __call__(
         self,
@@ -456,7 +417,7 @@ class _WrapperDecorator(Protocol):
             _R | Awaitable[_R],
         ],
         /,
-    ) -> _WrapperFactory[_P, _R]: ...
+    ) -> Wrapper[_P, _R]: ...
 
 
 @overload
@@ -464,41 +425,42 @@ def node(
     func: Callable[Concatenate[Context, _P], Awaitable[_R]],
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
-) -> _NodeFactory[_P, _R]: ...
+) -> Node[_P, _R]: ...
 @overload
 def node(
     func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
-) -> _NodeFactory[_P, _R]: ...
+) -> Node[_P, _R]: ...
 @overload
 def node(
     func: None = None,
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> _NodeDecorator: ...
 def node(
     func: Callable[..., Any] | None = None,
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> Any:
-    """Create a keyword-only Node factory with optional auxiliary metadata.
+    """Decorate a function as a directly callable Node.
 
-    Snapshot metadata when configuring the decorator. Factory keyword arguments,
-    including a keyword named metadata, remain ordinary parameter bindings.
+    Snapshot params and metadata when configuring the decorator. Use partial()
+    to derive independent bindings; Auto evaluation happens only on invocation.
     """
-    saved_metadata = {} if metadata is None else dict(metadata)
+    saved_params = None if params is None else dict(params)
+    saved_metadata = None if metadata is None else dict(metadata)
 
-    def decorate(target: Callable[..., Any]) -> Callable[..., AnyNode[Any]]:
-        @wraps(target)
-        def factory(**kwargs: Any) -> AnyNode[Any]:
-            return create_node(target, kwargs, metadata=saved_metadata)
-
-        return factory
+    def decorate(target: Callable[..., Any]) -> AnyNode[Any]:
+        return Node(func=target, params=saved_params, metadata=saved_metadata)
 
     return decorate if func is None else decorate(func)
 
@@ -511,8 +473,9 @@ def wrapper(
     ],
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
-) -> _WrapperFactory[_P, _R]: ...
+) -> Wrapper[_P, _R]: ...
 @overload
 def wrapper(
     func: Callable[
@@ -521,30 +484,30 @@ def wrapper(
     ],
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
-) -> _WrapperFactory[_P, _R]: ...
+) -> Wrapper[_P, _R]: ...
 @overload
 def wrapper(
     func: None = None,
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> _WrapperDecorator: ...
 def wrapper(
     func: Callable[..., Any] | None = None,
     /,
     *,
+    params: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> Any:
-    """Create a keyword-only Wrapper factory with auxiliary metadata."""
-    saved_metadata = {} if metadata is None else dict(metadata)
+    """Decorate a function as a directly callable Wrapper with saved bindings."""
+    saved_params = None if params is None else dict(params)
+    saved_metadata = None if metadata is None else dict(metadata)
 
-    def decorate(target: Callable[..., Any]) -> Callable[..., AnyWrapper[Any]]:
-        @wraps(target)
-        def factory(**kwargs: Any) -> AnyWrapper[Any]:
-            return create_wrapper(target, kwargs, metadata=saved_metadata)
-
-        return factory
+    def decorate(target: Callable[..., Any]) -> AnyWrapper[Any]:
+        return Wrapper(func=target, params=saved_params, metadata=saved_metadata)
 
     return decorate if func is None else decorate(func)
 

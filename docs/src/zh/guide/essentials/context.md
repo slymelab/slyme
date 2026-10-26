@@ -26,12 +26,12 @@ Schema 维护完整路径索引和结构化树，两者引用同一批条目。C
 `resolve()` 返回这些路径的规范 Ref：
 
 ```python
-from slyme.context import Ref, Schema
+from slyme.context import Ref, Schema, ref
 
 schema = Schema({"user": {"name": Schema.leaf()}})
 name = schema.resolve("user.name")
 assert name.path == "user.name"
-assert Ref("user.name") == name
+assert ref("user.name") == name
 ```
 
 直接构造 `Ref` 不会修改 Schema。Context 操作会在应用的 Schema 中解析它的路径；
@@ -246,13 +246,13 @@ fragment 仍用于声明和导出该插件拥有的路径；`ctx.entries` 列出
 Context 可读期间，即使没有可见值，`ctx.get("")` 也返回实时的根 `ContextView`，`ctx.exists("")` 为真。`ctx.keys("")` 和 `ctx.to_dict("")` 分别等价于不传参数的调用。新建根的 `keys()`、`to_dict()` 和 `flatten()` 包含 `$`，不会隐藏框架字段；没有可见 leaf 的非根 container 仍视为不存在。
 
 ```python
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 
 root_ctx = Context()
 root_ctx.declare(Schema({"value": Schema.leaf()}))
 root_ctx.update({"value": 1})
 child_ctx = root_ctx.fork(scope=root_ctx.scope.fork())
-root_view = child_ctx.get(Ref(""))
+root_view = child_ctx.get(ref(""))
 child_ctx.set("value", 2)
 assert root_view.get("value") == 2
 

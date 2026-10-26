@@ -23,7 +23,7 @@ Slyme (pronounced /slaɪm/) is a highly composable functional execution framewor
 
 Whether you are building complex LLM pipelines, executing DAGs, or creating generic data-processing flows, Slyme provides a structural, functional, and deeply Pythonic foundation.
 
-`Auto(tree)` explicitly marks a bound parameter for evaluation. It evaluates
+`auto(tree)` explicitly marks a bound parameter for evaluation. It evaluates
 registered leaves and reconstructs Tree containers on each
 invocation, including containers holding only ordinary values. Ordinary leaves
 and evaluator results retain their identities; non-Auto parameters pass through
@@ -43,9 +43,11 @@ custom Tree rules without executing Node bodies. `resolve_inspection_options(ctx
 `slyme.context.inspection` supplies scoped configuration through `**options`.
 See [Inspection](docs/src/guide/slyme-in-depth/inspection.md).
 
-Node and Wrapper factories save only supplied keyword bindings. Native function
+Use `node`, `wrapper`, and `auto` from `slyme.node`, and `ref` from `slyme.context` as the four common function entry points. `Node`, `Wrapper`, and `Ref` remain available for type annotations and explicit construction; the Auto marker class is internal. Node/Wrapper configuration is read-only; use `partial` or `replace` to derive a new object.
+
+Node and Wrapper objects save only supplied keyword bindings. Native function
 defaults apply at invocation; `node(ctx, **kwargs)` overrides saved bindings for
-one call before Auto evaluation. Use `get`, `set`, and `delete` to manage bindings.
+one call before Auto evaluation. Read bindings with `get` or read-only `params`; use `partial(**params)` to create a new Node or Wrapper with merged bindings.
 
 ## Installation
 
@@ -65,7 +67,7 @@ Here is a quick example using `@node`, `@wrapper`, and an ordinary function to a
 from time import time
 from collections.abc import Callable
 from slyme.context import Context, Ref, Schema
-from slyme.node import node, wrapper, Auto, AnyNode
+from slyme.node import node, wrapper, AnyNode, auto
 
 
 R = Schema(
@@ -113,14 +115,14 @@ def timing(
 
 # 4. Assemble the pipeline at Build-Time
 def build_pipeline() -> AnyNode[None]:
-    return llm_api(
+    return llm_api.partial(
         responses=R.resolve("output.responses"),
-        prompts=Auto(
-            format_prompts(
-                articles=Auto(R.resolve("input.articles")),
+        prompts=auto(
+            format_prompts.partial(
+                articles=auto(R.resolve("input.articles")),
             )
         ),
-    ).add_wrappers(timing(prefix="LLM API Call"))
+    ).replace(wrappers=(timing.partial(prefix="LLM API Call"),))
 
 
 # 5. Execute at Run-Time
@@ -141,13 +143,13 @@ if __name__ == "__main__":
 
 Typed APIs rely on their annotations for argument and callback types, including synchronous versus asynchronous callbacks and `Literal` options. Use a static type checker to validate these calls. Slyme checks dynamic Schema declarations, structural conflicts, and lifecycle constraints at runtime. Assemble reusable Node graphs with ordinary Python functions.
 
-`@node` / `@node()` and `@wrapper` / `@wrapper()` return ordinary keyword-only factory functions. Use `create_node(func, params=None, *, wrappers=None)` or `create_wrapper(func, params=None)` from `slyme.node` to create an instance directly. Business bindings live in `params`, separately from assembly configuration. Each instance shallow-copies its bindings and wrapper list, retaining the referenced values and Wrapper objects. Attach wrappers during assembly with `create_node(..., wrappers=[...])` or `task.add_wrappers(...)`, not on `@node`.
+`@node` / `@node()` and `@wrapper` / `@wrapper()` directly return Node / Wrapper objects. Both decorators accept `params` and `metadata` mappings. Use `node(func, params=...)` or `wrapper(func, params=...)` to wrap existing functions. `partial(**params)` returns a new object with shallowly merged bindings; call-time keywords override bindings only for that execution. `.func` exposes the original callback. `replace(params=..., wrappers=..., metadata=...)` returns a new Node with the supplied fields replaced in full. Omitted fields stay unchanged; None clears a field. All configuration properties are read-only, with wrappers stored as a tuple.
 
 When execution or cleanup may be asynchronous, use `await await_result(task(ctx))` and `await await_result(ctx.dispose())`, importing `await_result` from `slyme.execution`. To compose both modes in one function, use `@continuation` from the same module and yield those calls. Purely synchronous applications can call `task(ctx)` and `ctx.dispose()` directly.
 
-`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` builds an outermost-first callable chain without running it. Wrapper order is snapshotted; their parameters remain live. Each wrapper controls calls to the next layer and may return an immediate or asynchronous result.
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` builds an outermost-first callable chain without running it. Wrapper order is snapshotted; the original Wrapper objects are retained. Each wrapper controls calls to the next layer and may return an immediate or asynchronous result.
 
-For mixed execution, decorate an ordinary generator function with `@continuation` or `@continuation()` from `slyme.execution`. Each call drives a fresh generator: `value = yield operation()` accepts an immediate or asynchronous result. The driver runs synchronously until an awaitable is yielded, then returns an unscheduled awaitable remainder. Loops, branches, and `try/except/finally` stay in the generator. Use `await await_result(execute(...))` when either return mode is possible. Place `@node` or `@wrapper` outside `@continuation` to create graph-element factories from these functions. `run(generator)` remains available for directly driving a generator. Neither interface schedules tasks, aggregates errors, or owns resource lifetimes.
+For mixed execution, decorate an ordinary generator function with `@continuation` or `@continuation()` from `slyme.execution`. Each call drives a fresh generator: `value = yield operation()` accepts an immediate or asynchronous result. The driver runs synchronously until an awaitable is yielded, then returns an unscheduled awaitable remainder. Loops, branches, and `try/except/finally` stay in the generator. Use `await await_result(execute(...))` when either return mode is possible. Place `@node` or `@wrapper` outside `@continuation` to create graph elements from these functions. `run(generator)` remains available for directly driving a generator. Neither interface schedules tasks, aggregates errors, or owns resource lifetimes.
 
 Auto owns its independent all-settled evaluation policy; Context owns nested cleanup groups, using sequential LIFO by default or explicit batch disposal. Both report failures as exception groups without exposing partial successful results. Auto orders errors by input index; Context orders them by reverse registration order, independently of cleanup completion order. A returned exception remains ordinary data. Node and Wrapper wrap ordinary failures, including ordinary exception groups, in records whose `__cause__` retains the original error; existing Node records and non-`Exception` control failures propagate unchanged.
 

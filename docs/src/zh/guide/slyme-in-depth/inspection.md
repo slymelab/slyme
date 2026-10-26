@@ -3,10 +3,10 @@
 `slyme.inspection.inspect(value, tree_rules=..., interpreters=..., type_names=..., env=...)` 返回原值保留策略可配置的内存观察图。它观测当前结构，不执行 Node 图，也不预测未来的运行轨迹。全部配置显式传入，不要求 Context；普通数据可以传入 `slyme.tree.common` 的 `DATA_RULES`。应用也可以通过 `resolve_inspection_options(ctx)` 获取分层配置：
 
 ```python
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import inspect
-from slyme.node import Auto, node
+from slyme.node import node, auto
 
 
 @node
@@ -17,7 +17,7 @@ def task(ctx, *, value):
 ctx = Context()
 ctx.declare({"input": Schema.leaf()})
 ctx.set("input", 42)
-graph = task(value=Auto({"items": [Ref("input")]}))
+graph = task.partial(value=auto({"items": [ref("input")]}))
 
 options = resolve_inspection_options(ctx)
 document = inspect(graph, **options, env=ctx)

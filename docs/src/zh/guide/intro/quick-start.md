@@ -7,7 +7,7 @@ from collections.abc import Callable
 from time import monotonic
 
 from slyme.context import Context, Ref, Schema
-from slyme.node import Auto, Node, node, wrapper
+from slyme.node import Node, node, wrapper, auto
 
 
 R = Schema(
@@ -47,11 +47,11 @@ def timing(ctx, wrapped: Node, call_next: Callable, *, name: str):
 
 
 def build() -> Node:
-    formatter = format_prompts(articles=Auto(R.resolve("input.articles")))
-    return call_llm(
-        prompts=Auto(formatter),
+    formatter = format_prompts.partial(articles=auto(R.resolve("input.articles")))
+    return call_llm.partial(
+        prompts=auto(formatter),
         output=R.resolve("output.responses"),
-    ).add_wrappers(timing(name="llm"))
+    ).replace(wrappers=(timing.partial(name="llm"),))
 
 
 ctx = Context()
@@ -75,4 +75,4 @@ print(ctx.get(R.resolve("output.responses")))
 - `build()` 是组装并返回 Node 图的普通 Python 函数。
 - 应用代码显式创建 Context、提供外部输入、调用 Node 并读取输出。
 
-Node 始终可变，调用期间静态参数容器也保持实时状态；不再存在 Def/Exec 或显式 prepare 阶段。需要另一张可独立配置的图时，应再次调用 组装函数。
+Node 的参数绑定只读，但引用的参数容器仍然可以修改；不再存在 Def/Exec 或显式 prepare 阶段。需要另一张可独立配置的图时，应再次调用 组装函数。

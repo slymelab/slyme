@@ -21,7 +21,7 @@ from slyme.context import (
 )
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import Interpretation, inspect
-from slyme.node import Auto, Node, Wrapper, node, wrapper
+from slyme.node import Node, Wrapper, auto, node, wrapper
 from slyme.tree import (
     TreeAux,
     TreeHandler,
@@ -177,7 +177,7 @@ def test_builtin_semantic_types_and_user_override(observe) -> None:
     def task(ctx, **kwargs):
         pytest.fail("Node body")
 
-    graph = task(value=Auto(Ref("input")))
+    graph = task.partial(value=auto(Ref("input")))
     document = observe(graph)
     assert {obj.get("type") for obj in document["objects"].values()} >= {
         "slyme.node",
@@ -315,7 +315,7 @@ def test_relationship_node_auto_ref(observe) -> None:
         ctx.declare({"input": Schema.leaf()})
         ctx.set("input", 42)
         assert_relationship_example(
-            "node-auto-ref", observe(task(value=Auto(Ref("input"))), env=ctx)
+            "node-auto-ref", observe(task.partial(value=auto(Ref("input"))), env=ctx)
         )
     finally:
         ctx.dispose()
@@ -414,11 +414,11 @@ def test_node_and_wrapper_bindings_expand_without_temporary_compose_edges(
     def around(ctx, wrapped, call_next, **kwargs):
         pytest.fail("Wrapper body")
 
-    nested = task()
-    inner = around(child=nested)
-    outer = around(other=inner)
-    root = task(child=inner)
-    root.add_wrappers(outer)
+    nested = task.partial()
+    inner = around.partial(child=nested)
+    outer = around.partial(other=inner)
+    root = task.partial(child=inner)
+    root = root.replace(wrappers=(outer,))
     before = observe(root)
     temporary = Wrapper.compose([inner], wrapped=root, call_next=root)
     assert observe(root) == before
@@ -440,11 +440,15 @@ def test_auto_nested_refs_and_compose_queries_expand_dynamic_nodes(observe) -> N
 
     root = Context()
     root.declare({"task": Schema.leaf(), "missing": Schema.leaf()})
-    leaf = task(value=19)
+    leaf = task.partial(value=19)
     root.set("task", leaf)
     composition = Compose(factory=ValueLayer, query=collect_values)
-    remove = composition.register(root.scope, task(next=Auto({"node": Ref("task")})))
-    graph = task(items=Auto({"refs": [Ref("task")], "composition": composition}))
+    remove = composition.register(
+        root.scope, task.partial(next=auto({"node": Ref("task")}))
+    )
+    graph = task.partial(
+        items=auto({"refs": [Ref("task")], "composition": composition})
+    )
     document = observe(graph, env=root)
     assert any(
         key_value(document, entry.get("key")) == "value"
@@ -461,7 +465,7 @@ def test_auto_nested_refs_and_compose_queries_expand_dynamic_nodes(observe) -> N
     assert len(contexts) == 1 and contexts[0]["entries"] == []
     assert_graph(document)
     with pytest.raises(ContextPathError):
-        observe(task(items=Auto(Ref("missing"))), env=root)
+        observe(task.partial(items=auto(Ref("missing"))), env=root)
     remove()
     root.dispose()
 
@@ -666,7 +670,7 @@ def test_custom_metadata_rules_and_custom_tree_keys_do_not_need_path_resolution(
     def task(ctx):
         return 1
 
-    document = observe(task(), tree_rules=tree_rules)
+    document = observe(task.partial(), tree_rules=tree_rules)
     description = field(
         document, field(document, document["root"], "metadata"), "description"
     )

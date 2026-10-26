@@ -11,7 +11,7 @@ from slyme.context import Context, Ref, Schema
 from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_TREE_REF, EVALUATORS_REF
 from slyme.execution import await_result
-from slyme.node import AnyNode, Auto, Node, eval_tree, node, wrapper
+from slyme.node import Node, auto, eval_tree, node, wrapper
 from slyme.node.eval import node_evaluator
 from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
 from slyme.tree import TreeAux, TreeHandler, TreeRules
@@ -61,7 +61,7 @@ def test_auto_async_result_can_be_created_before_starting_event_loop(
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    graph = parent(value=Auto(child()))
+    graph = parent.partial(value=auto(child.partial()))
     pending = await_result(graph(ctx)) if adapt else graph(ctx)
     assert not events
     assert asyncio.run(await_result(pending)) == 7
@@ -86,7 +86,7 @@ async def test_concurrent_evaluations_keep_results_and_children_separate() -> No
         ctx.set("value", index * 10)
     owned = [tuple(ctx._lifecycle._effects) for ctx in contexts]
     pending = [
-        await_result(eval_tree(ctx, [ctx.resolve("value"), read(index=index)]))
+        await_result(eval_tree(ctx, [ctx.resolve("value"), read.partial(index=index)]))
         for index, ctx in enumerate(contexts)
     ]
     assert await asyncio.wait_for(asyncio.gather(*pending), timeout=1) == [
@@ -165,11 +165,13 @@ async def test_auto_collects_ref_and_node_errors_across_groups(target: str) -> N
         visited.append("wrapper")
         return values
 
-    values = [schema.resolve("first"), schema.resolve("second"), child()]
+    values = [schema.resolve("first"), schema.resolve("second"), child.partial()]
     if target == "node":
-        call = parent(values=Auto(values))
+        call = parent.partial(values=auto(values))
     elif target == "wrapper":
-        call = parent(values=Auto(None)).add_wrappers(middleware(values=Auto(values)))
+        call = parent.partial(values=auto(None)).replace(
+            wrappers=(middleware.partial(values=auto(values)),)
+        )
     else:
 
         def call(ctx):
@@ -234,7 +236,14 @@ async def test_auto_reports_cleanup_failures_with_node_exception_context(
     initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(
-            node_evaluator(ctx, [failing(index=0), failing(index=1), successful()])
+            node_evaluator(
+                ctx,
+                [
+                    failing.partial(index=0),
+                    failing.partial(index=1),
+                    successful.partial(),
+                ],
+            )
         )
     assert len(caught.value.exceptions) == 2
     for index, failure in enumerate(failures):
@@ -277,7 +286,7 @@ def test_auto_reports_retained_cleanup_failure_once() -> None:
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
     with pytest.raises(BaseExceptionGroup) as caught:
-        node_evaluator(ctx, [first(), second()])
+        node_evaluator(ctx, [first.partial(), second.partial()])
     cleanup_error = caught.value.exceptions[0]
     assert isinstance(cleanup_error, BaseExceptionGroup)
     assert cleanup_error.exceptions == (failure,)
@@ -302,7 +311,7 @@ async def test_sync_auto_failure_still_starts_async_siblings() -> None:
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    pending = node_evaluator(ctx, [failing(), asynchronous()])
+    pending = node_evaluator(ctx, [failing.partial(), asynchronous.partial()])
     assert inspect.isawaitable(pending)
     assert visited == ["sync"]
     with pytest.raises(BaseExceptionGroup):
@@ -325,7 +334,9 @@ async def test_auto_keeps_exception_objects_returned_as_data() -> None:
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    result = await await_result(node_evaluator(ctx, [asynchronous(), synchronous()]))
+    result = await await_result(
+        node_evaluator(ctx, [asynchronous.partial(), synchronous.partial()])
+    )
     assert result[0] is first and result[1] is second
     assert tuple(ctx._lifecycle._effects) == initial_effects
 
@@ -350,7 +361,9 @@ async def test_auto_disposes_child_before_siblings_finish(fails: bool) -> None:
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    task = asyncio.create_task(await_result(node_evaluator(ctx, [child(), waiting()])))
+    task = asyncio.create_task(
+        await_result(node_evaluator(ctx, [child.partial(), waiting.partial()]))
+    )
     await cleaned.wait()
     assert not task.done()
     release.set()
@@ -390,7 +403,7 @@ async def test_business_cancellation_does_not_cancel_auto_siblings() -> None:
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
     task = asyncio.create_task(
-        await_result(node_evaluator(ctx, [cancelled(), sibling()]))
+        await_result(node_evaluator(ctx, [cancelled.partial(), sibling.partial()]))
     )
     await started.wait()
     operation.cancel()
@@ -427,7 +440,7 @@ async def test_caller_cancellation_waits_for_node_exit_before_disposal() -> None
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
+    task = asyncio.create_task(await_result(node_evaluator(ctx, [child.partial()])))
     await started.wait()
     task.cancel()
     await exiting.wait()
@@ -468,7 +481,7 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    task = asyncio.create_task(await_result(node_evaluator(ctx, [child()])))
+    task = asyncio.create_task(await_result(node_evaluator(ctx, [child.partial()])))
     await started.wait()
     try:
         task.cancel()
@@ -491,13 +504,41 @@ async def test_cancelled_auto_leaves_failure_cleanup_owned_by_context(
     ctx.dispose()
 
 
+def test_auto_custom_values_require_explicit_evaluator_registration() -> None:
+    class CustomValue:
+        def __init__(self, value):
+            self.value = value
+
+    ctx = Context()
+    ctx.declare({"value": Schema.leaf()})
+    ctx.set("value", 7)
+    custom = CustomValue(3)
+
+    @node
+    def collect(ctx, *, values):
+        return values
+
+    graph = collect.partial(values=auto([Ref("value"), custom]))
+    assert graph(ctx) == [7, custom]
+    remove = ctx.effect(
+        lambda: ctx.get(EVALUATORS_REF).register(
+            ctx.scope,
+            {CustomValue: lambda ctx, values: [item.value for item in values]},
+        )
+    )
+    assert graph(ctx) == [7, 3]
+    remove()
+    assert graph(ctx) == [7, custom]
+    ctx.dispose()
+
+
 def test_auto_subclasses_require_explicit_evaluator_registration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class CustomRef(Ref[int]):
         pass
 
-    class CustomNode(AnyNode[int]):
+    class CustomNode(Node[..., int]):
         pass
 
     ctx = Context()
@@ -512,7 +553,7 @@ def test_auto_subclasses_require_explicit_evaluator_registration(
     def collect(ctx: Context, /, *, values: list[Any]) -> list[Any]:
         return values
 
-    graph = collect(values=Auto([Ref("value"), custom_ref, custom_node]))
+    graph = collect.partial(values=auto([Ref("value"), custom_ref, custom_node]))
     result = graph(ctx)
     assert result[0] == 7
     assert result[1] is custom_ref and result[2] is custom_node
@@ -569,9 +610,11 @@ async def test_auto_reconstructs_containers_and_preserves_ordinary_leaves(
         return value
 
     if target == "node":
-        call = identity(value=Auto(payload))
+        call = identity.partial(value=auto(payload))
     elif target == "wrapper":
-        call = identity(value=Auto(None)).add_wrappers(capture(value=Auto(payload)))
+        call = identity.partial(value=auto(None)).replace(
+            wrappers=(capture.partial(value=auto(payload)),)
+        )
     else:
 
         def call(ctx):
@@ -611,13 +654,13 @@ async def test_auto_and_non_auto_parameters_have_binding_driven_identity(
     payload = [marker]
     factory = async_identity if asynchronous else identity
     evaluated, raw = await await_result(
-        factory(evaluated=Auto(payload), raw=payload)(ctx)
+        factory.partial(evaluated=auto(payload), raw=payload)(ctx)
     )
     assert evaluated is not payload
     assert evaluated[0] is marker
     assert raw is payload
     evaluated, raw = await await_result(
-        factory(evaluated=Auto(marker), raw=marker)(ctx)
+        factory.partial(evaluated=auto(marker), raw=marker)(ctx)
     )
     assert evaluated is raw is marker
     ctx.dispose()
@@ -632,11 +675,12 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
             self.value = value
 
     calls = 0
+    derived = []
 
     def flatten(box):
         nonlocal calls
         calls += 1
-        element.set("other", 2)
+        derived.append(element.partial(other=2))
         return iter((box.value,)), TreeAux()
 
     rules = TreeRules(
@@ -662,10 +706,10 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
     marker = object()
     box = Box(marker)
     if target == "node":
-        element = graph = identity(value=Auto(box), other=1)
+        element = graph = identity.partial(value=auto(box), other=1)
     else:
-        element = capture(value=Auto(box), other=1)
-        graph = identity(value=Auto(None), other=0).add_wrappers(element)
+        element = capture.partial(value=auto(box), other=1)
+        graph = identity.partial(value=auto(None), other=0).replace(wrappers=(element,))
     ctx = Context()
     ctx.effect(lambda: ctx.get(DATA_TREE_REF).register(ctx.scope, rules))
     result, other = graph(ctx)
@@ -673,7 +717,8 @@ def test_auto_flattens_custom_container_once_and_keeps_parameter_bindings(
     assert result is not box
     assert result.value is marker
     assert other == 1
-    assert element.get("other") == 2
+    assert element.get("other") == 1
+    assert derived[0].get("other") == 2
     ctx.dispose()
 
 
@@ -687,7 +732,6 @@ def test_wrapper_reentry_evaluates_current_auto_container_each_time() -> None:
 
     @wrapper
     def repeat(ctx: Context, wrapped: Node, call_next: Callable, /) -> Any:
-        wrapped.set("values", Auto([42]))
         first = call_next(ctx)
         payload.append(schema.resolve("value"))
         ctx.set("value", 3)
@@ -696,9 +740,9 @@ def test_wrapper_reentry_evaluates_current_auto_container_each_time() -> None:
     ctx = Context()
     ctx.declare(schema)
     ctx.update({"value": 2})
-    graph = read(values=Auto(payload)).add_wrappers(repeat())
+    graph = read.partial(values=auto(payload)).replace(wrappers=(repeat.partial(),))
     assert graph(ctx) == ([1], [1, 3])
-    assert graph(ctx) == ([42], [42])
+    assert graph(ctx) == ([1, 3], [1, 3, 3])
     ctx.dispose()
 
 
@@ -723,5 +767,8 @@ def test_short_circuiting_wrapper_does_not_traverse_auto_parameters(
 
     ctx = Context()
     ctx.effect(lambda: ctx.get(DATA_TREE_REF).register(ctx.scope, rules))
-    assert identity(value=Auto(Box())).add_wrappers(stop())(ctx) == 12
+    assert (
+        identity.partial(value=auto(Box())).replace(wrappers=(stop.partial(),))(ctx)
+        == 12
+    )
     ctx.dispose()

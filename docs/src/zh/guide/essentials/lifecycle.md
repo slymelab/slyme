@@ -12,7 +12,7 @@ Lifecycle 状态依次为 `ACTIVE → DISPOSE_PENDING → DISPOSING → DISPOSED
 
 构造过程先登记子级归属，再获取 Scope 可见性。获取时先登记整个 MRO 的 viewer，再恢复 binding 数据。恢复或默认配置安装失败时，统一通过 Context dispose 回滚，Store acquire 不自行回滚。每次 viewer 登记必须恰好释放一次；Context dispose 和 finalize 的重复调用由各实例的 `once` 包装处理。
 
-Slyme 使用一张持续存在的 `Node` 图，而不再区分定义树与执行树。调用装饰后的函数会创建可变 Node；调用这个 Node 时，会使用它的当前参数直接执行。
+`@node` 直接返回可调用的 Node，调用它时执行原函数；使用 `partial(**params)` 派生新的参数绑定。组装和执行不区分定义树与执行树。
 
 ## Context facet
 
@@ -49,7 +49,7 @@ facet 属于 Context 实例，而不是 Scope 身份。即使共享父级 Scope�
 
 ```python
 from slyme.context import Context, Schema
-from slyme.node import Auto, node
+from slyme.node import node, auto
 
 R = Schema(
     {
@@ -66,7 +66,7 @@ def process(ctx: Context, /, *, timeout: int = 30, data: list):
     return timeout, data
 
 
-task = process(data=Auto([R.resolve("user.age"), R.resolve("user.name")]))
+task = process.partial(data=auto([R.resolve("user.age"), R.resolve("user.name")]))
 task.set("timeout", 60)
 ```
 
@@ -83,7 +83,7 @@ Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新
 
 参数绑定使用浅快照，不做深拷贝。在 Node 或 Wrapper 内修改非 Auto 的 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。每个 Auto 参数都会按 Tree 规则遍历并重建容器，无论其中是否包含可求值叶子。普通叶子和 evaluator 返回值仍然共享。
 
-需要另一张可独立配置的图时，应重新调用对应的 Node factory 或 组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；所选业务子树的字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.update(context.get("app").flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
+需要另一张可独立配置的图时，应调用 `partial(...)` 或重新调用组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；所选业务子树的字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.update(context.get("app").flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
 
 Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare()` 注册的 cleanup。其 `dispose_mode` 决定直接归属项采用串行还是批量清理。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
 
@@ -116,14 +116,16 @@ plugin_b = plugins.fork()
 静态参数值和从 `Context` 取得的值都保持普通 Python 可变语义：
 
 ```python
+from slyme.node import auto
+
 ctx = Context()
 ctx.declare(R)
 ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
-process(data=Auto([R.resolve("a"), R.resolve("b")]))(
+process.partial(data=auto([R.resolve("a"), R.resolve("b")]))(
     ctx
 )  # Auto 生成求值后的 list [1, 2]
-process(data=Auto(R.resolve("items")))(ctx)  # data 是 Context 中保存的 list
+process.partial(data=auto(R.resolve("items")))(ctx)  # data 是 Context 中保存的 list
 ```
 
 Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。子调用和同步清理内联执行；异步结果在被等待时并发调度，结果保持输入顺序。每个子节点无论成功还是失败，都在自己的 `finally` 中释放 Context，不等待其他 sibling。在调用者未取消的情况下，求值会等待所有子节点及其清理完成，再报告错误或执行父函数。

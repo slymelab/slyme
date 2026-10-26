@@ -12,7 +12,7 @@ Finalization runs even when effect cleanup fails. If finalization also fails, it
 
 Construction registers child ownership before acquiring Scope visibility. Acquisition registers every MRO viewer before restoring binding data. Restoration and default-installation failures use Context disposal for rollback; Store acquisition does not roll itself back. Each viewer registration must be released exactly once, with repeated Context disposal and finalization handled by their instance-local `once` wrappers.
 
-Slyme uses one live `Node` graph rather than separate definition and execution trees. Creating a decorated function builds a mutable Node; calling it executes that same Node with its current parameters.
+Slyme uses one live `Node` graph rather than separate definition and execution trees. `@node` returns a directly callable Node; calling it executes its function. `partial(**params)` derives a new Node with merged parameter bindings.
 
 ## Context facets
 
@@ -49,7 +49,7 @@ Facets belong to Context instances, not Scope identities. A child receives `None
 
 ```python
 from slyme.context import Context, Schema
-from slyme.node import Auto, node
+from slyme.node import node, auto
 
 R = Schema(
     {
@@ -66,7 +66,7 @@ def process(ctx: Context, /, *, timeout: int = 30, data: list):
     return timeout, data
 
 
-task = process(data=Auto([R.resolve("user.age"), R.resolve("user.name")]))
+task = process.partial(data=auto([R.resolve("user.age"), R.resolve("user.name")]))
 task.set("timeout", 60)
 ```
 
@@ -83,7 +83,7 @@ At the start of each Node or Wrapper call, Slyme:
 
 Parameter bindings are shallow-snapshotted, not deep-copied. Mutating a non-Auto `list`, `dict`, or other leaf from inside a Node or Wrapper mutates the live parameter and is visible to later calls. Every Auto parameter is traversed and its containers reconstructed according to Tree rules, whether or not they contain evaluatable leaves. Ordinary leaves and evaluator results remain shared.
 
-Call the relevant Node factory or assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. To materialize `assign` fields into a new root, create it, declare the copied paths, then call `snapshot.update(context.get("app").flatten())`; `register` fields require explicit `register()` calls on the new owner. None of these operations copies application values.
+Use `partial(...)` or call an assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. To materialize `assign` fields into a new root, create it, declare the copied paths, then call `snapshot.update(context.get("app").flatten())`; `register` fields require explicit `register()` calls on the new owner. None of these operations copies application values.
 
 A Context owns its children and cleanup registered through `effect()`, `register()`, and `declare()`. Its `dispose_mode` selects sequential or batch cleanup of these directly owned items. `dispose()` returns `None` on synchronous completion or an awaitable when cleanup is asynchronous; `await await_result(ctx.dispose())` handles either. Context does not own arbitrary tasks using it: stop and await those tasks before disposal.
 
@@ -116,14 +116,16 @@ Different cleanup functions can wait on the same early disposer; it executes onc
 Static parameter values and values retrieved from `Context` keep their normal Python mutability:
 
 ```python
+from slyme.node import auto
+
 ctx = Context()
 ctx.declare(R)
 ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
-process(data=Auto([R.resolve("a"), R.resolve("b")]))(
+process.partial(data=auto([R.resolve("a"), R.resolve("b")]))(
     ctx
 )  # Auto produces the evaluated list [1, 2]
-process(data=Auto(R.resolve("items")))(ctx)  # data is the list stored in Context
+process.partial(data=auto(R.resolve("items")))(ctx)  # data is the list stored in Context
 ```
 
 Auto Ref values are read from `ctx`. Every Auto child Node instead executes with an owned child Context and a distinct child Scope. Child calls and synchronous cleanup run inline; asynchronous results are scheduled concurrently when awaited, retaining input order. Each child disposes its Context in `finally` on success or failure, independently of other siblings. Without caller cancellation, evaluation waits for every child and its cleanup before reporting errors or running the parent function.

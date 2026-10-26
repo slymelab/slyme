@@ -36,6 +36,7 @@ from .schema import (
     RefEntry,
     RefLeafConfig,
     Schema,
+    ref,
 )
 from .scope import Identity, Scope, ScopeBinding
 from .store import ContextStore
@@ -57,6 +58,7 @@ __all__ = [
     "Identity",
     "Metadata",
     "Ref",
+    "ref",
     "RefConfig",
     "RefContainerConfig",
     "RefDeclaration",

@@ -3,7 +3,7 @@
 Node and Wrapper share one immediate-or-awaitable completion protocol. Actual returned values, not whether the function uses `async def`, determine execution. A synchronous parent can receive an asynchronous Auto result.
 
 ```python
-from slyme.node import Auto, Node, node, wrapper
+from slyme.node import Node, node, wrapper
 from slyme.execution import await_result
 
 

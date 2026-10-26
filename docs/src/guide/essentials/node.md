@@ -1,14 +1,32 @@
 # Node
 
-`@node` turns a function into a factory for mutable, directly callable `Node` objects. A Node may update `Context`, perform side effects, coordinate child Nodes, or return a derived value for `Auto` injection.
+`@node` turns a function directly into a callable `Node` object. A Node may update `Context`, perform side effects, coordinate child Nodes, or return a derived value for `Auto` injection.
+
+
+The four recommended function entry points are `node`, `wrapper`, `auto` (from
+`slyme.node`) and `ref` (from `slyme.context`). `Node`, `Wrapper`, and `Ref` remain available for type annotations and explicit
+construction. The marker returned by `auto()` is an internal type. Prefer
+composition when extending behavior; the classes do not prohibit inheritance.
+
+```python
+from slyme.context import Ref, ref
+from slyme.node import auto
+
+count: Ref[int] = ref("count")
+input_value = auto(count)
+```
+
+`ref` retains a generic return type that can be inferred from the expected type.
+Python functions do not currently support `ref[int](...)`; use an annotation as
+above. `auto` preserves its source type, without executing or copying its value.
 
 ## Define and create a Node
 
-A Node factory accepts only keyword bindings. Execution passes Context positionally and the merged bindings by keyword; the function's own signature controls how they are received:
+Use `partial(**params)` to bind keyword arguments without executing the Node. Execution passes Context positionally and the merged bindings by keyword; the function's own signature controls how they are received:
 
 ```python
 from slyme.context import Context, Ref, Schema
-from slyme.node import Auto, node
+from slyme.node import node, auto
 
 R = Schema({"input": {"x": Schema.leaf()}, "output": {"total": Schema.leaf()}})
 
@@ -20,22 +38,23 @@ def add(ctx: Context, *, x: int, y: int, output: Ref[int]):
     return result
 
 
-task = add(x=Auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
+task = add.partial(x=auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
 ```
 
 Slyme does not inspect function signatures or resolve type annotations. Functions may declare `*args` and `**kwargs`; Python binds the positional Context and supplied keywords normally. Node's framework `ctx` argument is positional-only, so a business keyword named `ctx` can be forwarded independently.
 
-`@node` and `@node()` both return an ordinary factory function; each call creates a separate Node. Use `create_node()` to construct an instance directly, without defining a factory:
+`@node` and `@node()` both return a Node. Call `node(func, params=None, metadata=None)` with keyword-only configuration to wrap an existing function:
 
 ```python
-from slyme.node import create_node
-
-inline = create_node(lambda ctx, *, value: value + 1, {"value": 3})
+inline = node(lambda ctx, *, value: value + 1, params={"value": 3})
+assert inline(Context()) == 4
 ```
 
-`create_node(func, params=None, *, wrappers=None, metadata=None)` accepts business bindings as a mapping and assembly configuration separately. Each instance copies its parameter mapping and wrapper list, but keeps the referenced values and Wrapper objects. Construction does not execute the function or evaluate Auto bindings. Attach wrappers during assembly through `create_node(..., wrappers=[...])` or `task.add_wrappers(...)`; `@node` does not accept wrappers. Decorated factories preserve function metadata and expose the wrapped function through `.__wrapped__`.
+`@node(params={...}, metadata={...})` and `@wrapper(params={...}, metadata={...})` snapshot the supplied mappings when configured. Construction and `partial()` never execute the function or evaluate Auto. Access the original callback through `.func`. The former `create_node` and `create_wrapper` helpers have been removed.
 
-`@node(metadata={"description": marker})`, `@wrapper(metadata=...)`, and their direct constructors accept a `Mapping[str, Metadata]` from `slyme.context`. Each instance shallowly copies the input into its own public, mutable `metadata: dict[str, Metadata]`; marker identities are preserved. Decorators capture the mapping when configured. Use ordinary dictionary operations to read, write, or delete metadata without changing other instances or decorator configuration. These descriptions do not participate in execution, equality checks, merging or Auto evaluation. A factory argument such as `task(metadata=value)` remains an ordinary business binding. [Inspection](../slyme-in-depth/inspection.md) exposes metadata structurally; add a Tree rule to describe a custom Metadata subclass.
+Metadata accepts `Mapping[str, Metadata]` from `slyme.context`. Each instance exposes a read-only snapshot in `metadata`, preserving marker identities. Use `replace(metadata=...)` to derive a new object. Metadata is not evaluated or merged with parameters. Bind a business argument named metadata through `task.partial(metadata=value)` or `params={"metadata": value}`. [Inspection](../slyme-in-depth/inspection.md) exposes metadata structurally.
+
+Use `task.replace(wrappers=(...))` to derive a Node with a new wrapper sequence. `wrappers` is a read-only tuple; Wrapper objects retain their identities. `func`, `params`, and `metadata` are also read-only properties.
 
 ## Execute
 
@@ -89,7 +108,7 @@ def increment_child(ctx, *, child: AnyNode[int]):
     return value + 1
 ```
 
-`@continuation()` is equivalent to `@continuation`. The decorator preserves function metadata and argument types, and each call creates a fresh generator without sharing execution state. Place it inside `@node` or `@wrapper`: first adapt execution, then define the factory. A decorated function can also be called directly without either graph decorator.
+`@continuation()` is equivalent to `@continuation`. The decorator preserves function metadata and argument types, and each call creates a fresh generator without sharing execution state. Place it inside `@node` or `@wrapper`: first adapt execution, then create the Node or Wrapper. A decorated function can also be called directly without either graph decorator.
 
 Calling the decorated function executes its synchronous prefix immediately, including synchronous errors. Await the returned remainder to continue asynchronous work: `await await_result(execute(...))`. Use `asyncio.run(await_result(execute(...)))` only at a synchronous application entry point. The driver neither starts an event loop nor schedules tasks. `execute.flat_call(...)` creates a request holding a fresh generator without advancing it; `run(execute.flat_call(...).generate())` has the same behavior as calling `execute(...)`.
 
@@ -105,9 +124,11 @@ Auto independently owns its all-settled evaluation policy. It calls every evalua
 
 ## Parameters and Auto
 
-Function parameters describe the values the function receives. Wrap a bound parameter tree in `Auto(...)` at construction or invocation to request evaluation:
+Function parameters describe the values the function receives. Wrap a bound parameter tree in `auto(...)` at construction or invocation to request evaluation:
 
 ```python
+from slyme.node import auto
+
 @node
 def parent(ctx, *, child: int):
     return child + 1
@@ -118,37 +139,62 @@ def child(ctx, *, value: int):
     return value
 
 
-root = parent(child=Auto(child(value=4)))
+root = parent.partial(child=auto(child.partial(value=4)))
 assert root(Context()) == 5
 ```
 
 `Auto` recursively resolves registered evaluator leaves such as `Ref` and `Node`. A Ref reads the supplied Context directly. Each value-producing child Node receives an owned child Context bound to a distinct `ctx.scope.fork()`. Slyme disposes that Context and its effects before parent execution continues, so child-Scope writes and Context-owned registrations do not leak into the parent or a sibling Auto child. Returned values, mutations to shared leaf objects, direct registrations whose disposers were not adopted by the child Context, and external side effects without registered cleanup are not isolated. Without `Auto`, Ref and Node objects are passed through unchanged.
 
-Only explicitly supplied bindings are stored. Absent parameters use native function defaults; missing required or unexpected arguments raise Python `TypeError` when the function is invoked, retained by the Node or Wrapper exception record. Auto work can therefore run before a parameter error is discovered. Defaults are not scanned or evaluated by Slyme: bind dynamic inputs explicitly rather than placing `Auto(...)` in a function default. An Auto object nested inside an ordinary, unwrapped parameter is ordinary data.
+Only explicitly supplied bindings are stored. Absent parameters use native function defaults; missing required or unexpected arguments raise Python `TypeError` when the function is invoked, retained by the Node or Wrapper exception record. Auto work can therefore run before a parameter error is discovered. Defaults are not scanned or evaluated by Slyme: bind dynamic inputs explicitly rather than placing `auto(...)` in a function default. An Auto object nested inside an ordinary, unwrapped parameter is ordinary data.
 
-## Dynamic modification
+## Parameter binding with partial
 
-Node and Wrapper parameters remain mutable between calls through an explicit parameter API:
+`partial(**params)` returns a new Node or Wrapper with shallowly merged bindings. Later partial bindings win; call-time keywords override them for that invocation only:
 
 ```python
-root.get("child").value.set("value", 10)
-assert root(Context()) == 11
-assert root(Context(), child=20) == 21  # Does not execute the bound child.
+from slyme.node import auto
+
+updated = root.partial(child=auto(child.partial(value=10)))
+assert updated(Context()) == 11
+assert root(Context()) == 5
+assert updated(Context(), child=20) == 21
 ```
 
-Use `get(name)` to read a binding, `set(name, value)` to store any binding, and `delete(name)` to remove one. Deleting an absent binding is a no-op. Reading a missing key raises `KeyError` unless `get(name, default)` supplies a fallback, which may be any value including `None`. The fallback is returned without saving a binding; an existing value, including `None`, takes precedence. These operations never read function defaults. The live, read-only `params` mapping contains only saved bindings. `node(ctx, **kwargs)` shallowly overrides those bindings for one call before Auto evaluation, without updating `params` or merging nested containers. Parameter names may overlap framework attributes because parameters are not projected as object attributes.
+`get(name, default)` reads saved bindings, and `params` exposes a read-only mapping. Missing keys raise `KeyError` unless a default is supplied. Function defaults are not stored in this mapping. There are no parameter `set` or `delete` methods; derive a new Node instead. To return to function defaults, remove the binding with `replace(params=...)`, or clear all bindings with `replace(params=None)`.
 
-Factories and mutable bindings accept dynamic keyword names and values, including partial bindings and Auto trees. Their typing preserves execution result types but does not statically validate each binding against the underlying function's parameters.
+Bindings merge shallowly, including nested mappings. Parameters may share names with framework attributes: `partial(params=..., metadata=...)` binds ordinary business arguments. Partial does not bind the execution Context. Auto resolves against the Context of each execution.
 
 At call time, non-Auto parameters are passed directly to the user function. Mutating their containers therefore updates the live Node or Wrapper parameter. Every Auto parameter is traversed and its containers reconstructed according to Tree rules, including subtrees containing only ordinary values. Ordinary leaves and evaluator results retain their original identities; this is not a deep copy.
 
-Call the Node factory or an assembly function again when another independently configurable graph is required. Copy mutable application values explicitly according to their own semantics; Slyme does not guess which shared references should be duplicated.
+Use `partial(...)` or call an assembly function again when another independently configurable graph is required. Copy mutable application values explicitly according to their own semantics; Slyme does not guess which shared references should be duplicated.
+
+## Replacing configuration
+
+`partial(**params)` shallowly merges business bindings. In contrast,
+`replace(params=..., wrappers=..., metadata=...)` replaces entire supplied fields.
+Both always return new objects with the same callback; Wrapper.replace has no
+wrappers field. Omitted fields are retained, and None or an empty collection
+clears a supplied field. Replacement never invokes the callback or evaluates Auto.
+
+```python
+traced = task.replace(wrappers=(*task.wrappers, trace.partial(name="extra")))
+unbound = traced.replace(params=None)
+plain = unbound.replace(wrappers=(), metadata={})
+```
+
+The snippet assumes `trace` is defined as below. Configuration mappings are copied
+before exposing read-only views. Tuples and unchanged immutable snapshots may
+share identity; callers should rely on their contents, not copying identities.
+Nested parameter values remain ordinary shared Python objects. This is shallow
+configuration immutability, not deep data freezing or a concurrency guarantee.
+Node and Wrapper retain identity equality; deriving an object does not deduplicate
+it by contents. There are no parameter set/delete or add_wrappers methods.
 
 ## Wrappers
 
-`@wrapper` and `@wrapper()` define reusable factories. `create_wrapper(func, params=None)` directly creates a Wrapper with its own shallow-copied bindings.
+`@wrapper` and `@wrapper()` return a Wrapper directly. `wrapper(func, params=..., metadata=...)` wraps an existing callback; `partial(**params)` derives independent bindings.
 
-`@wrapper` factories also accept only keyword bindings. Execution passes Context, the wrapped Node, and the next callable positionally, followed by the merged keyword bindings. User functions may receive them with named parameters or `*args`/`**kwargs`. The framework's `Wrapper.__call__` parameters are positional-only; direct calls may independently override business keywords named `ctx`, `wrapped`, or `call_next`.
+Wrapper `partial()` also accepts only keyword bindings. Execution passes Context, the wrapped Node, and the next callable positionally, followed by the merged keyword bindings. User functions may receive them with named parameters or `*args`/`**kwargs`. The framework's `Wrapper.__call__` parameters are positional-only; direct calls may independently override business keywords named `ctx`, `wrapped`, or `call_next`.
 
 ```python
 from collections.abc import Callable
@@ -166,14 +212,14 @@ def trace(ctx, wrapped: AnyNode, call_next: Callable, *, name: str):
         print(name, "end")
 
 
-task.add_wrappers(trace(name="add"))
+task = task.replace(wrappers=(trace.partial(name="add"),))
 ```
 
-Wrappers use onion ordering and read their live parameters when invoked. The example waits for synchronous or asynchronous completion and runs its `finally` block on success or failure. A forwarding wrapper may return `call_next(ctx)` unchanged without `@continuation`. An `async def` wrapper can instead use `await await_result(call_next(ctx))`. Slyme does not rewrite a wrapper's `try/finally`.
+Wrappers use onion ordering and evaluate their Auto bindings when invoked. The example waits for synchronous or asynchronous completion and runs its `finally` block on success or failure. A forwarding wrapper may return `call_next(ctx)` unchanged without `@continuation`. An `async def` wrapper can instead use `await await_result(call_next(ctx))`. Slyme does not rewrite a wrapper's `try/finally`.
 
 `Node[P, R]` accepts `AnyWrapper[R]`: wrappers preserve the resolved result type, including when short-circuiting, but may introduce asynchronous work. This is a static typing requirement, not a runtime value check. Express a change of result type through another Node that composes the original.
 
-`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context with the same resolved result type. Wrapper parameters remain live. Each wrapper controls whether and how often it invokes the next layer and which Context it passes. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` assembles the same onion chain without executing it. It snapshots wrapper order, with the first wrapper outermost, and returns a callable accepting a Context with the same resolved result type. The chain retains the original Wrapper objects; deriving a partial does not replace them. Each wrapper controls whether and how often it invokes the next layer and which Context it passes. An empty wrapper iterable returns `terminal` unchanged. Node execution uses this method internally; when composing externally around a Node, using `call_next=task` also runs any wrappers already attached to that Node.
 
 ## Composition structure
 
@@ -181,7 +227,7 @@ Node and Wrapper parameters may contain arbitrary values and nested Trees, inclu
 
 ## Sequential composition
 
-Use `sequential(nodes=[...])` for a declarative sequence or `sequential_exec(ctx, nodes)` for an existing iterable. Both return `None` after waiting for each completion before starting the next Node, and remain synchronous when every step is synchronous. A failure stops execution and propagates the failing Node's exception without collecting earlier results. They share the supplied Context, so later steps observe earlier local writes, unlike Auto child evaluation.
+Use `sequential.partial(nodes=[...])` for a declarative sequence or `sequential_exec(ctx, nodes)` for an existing iterable. Both return `None` after waiting for each completion before starting the next Node, and remain synchronous when every step is synchronous. A failure stops execution and propagates the failing Node's exception without collecting earlier results. They share the supplied Context, so later steps observe earlier local writes, unlike Auto child evaluation.
 
 
 ## Static types
@@ -189,13 +235,13 @@ Use `sequential(nodes=[...])` for a declarative sequence or `sequential_exec(ctx
 `Node[P, R]` and `Wrapper[P, R]` put the business parameter signature before the
 completion result. `P` is a `ParamSpec`, retaining names, types and defaults from
 the original callback. Context and the Wrapper's wrapped/call_next arguments are
-framework prefixes. Prefer inference through decorators or creation helpers;
+framework prefixes. Prefer inference through decorators;
 `.func` retains and checks the full original callback signature.
 
 Use `AnyNode[R]` / `AnyWrapper[R]` when only the result matters. They alias
 `Node[..., R]` / `Wrapper[..., R]`. Migrate former result-only `Node[R]` /
 `Wrapper[R]` annotations to these aliases; function definitions, construction,
-binding and invocation stay unchanged. These aliases erase the business signature;
+binding and invocation use the APIs described above. These aliases erase the business signature;
 they are not read-only views.
 
 A Wrapper callback shares one result type across `wrapped: AnyNode[R]`,
@@ -206,10 +252,10 @@ and checking. The construction APIs preserve this relationship rather than
 ignoring callback input types to infer only from the return annotation.
 
 Standard Python typing cannot map an arbitrary ParamSpec into optional keyword
-bindings accepting either a value or Auto. Factories therefore still accept
-partial keyword bindings; invocation overrides and `get/set/delete/params` remain
-dynamic. Factories statically reject positional arguments. These entries neither
+bindings accepting either a value or Auto. `partial()` therefore accepts dynamic
+keyword bindings; invocation overrides and `get/params` remain dynamic.
+`partial()` statically rejects positional arguments. These entries neither
 prove that required bindings are complete nor check arbitrary binding values or
-spellings. `Auto[S]` retains its source tree type (`value: S`), without promising
+spellings. `auto(source)` retains the source tree type on `.value`, without promising
 the result of arbitrary evaluators. No checker plugin, code generation, signature
 reflection or additional runtime validation is introduced.

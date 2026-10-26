@@ -7,7 +7,7 @@ import pytest
 
 from slyme.context import Context, Schema
 from slyme.execution import await_result, continuation
-from slyme.node import Auto, Node, Wrapper, create_node, create_wrapper, node, wrapper
+from slyme.node import Node, Wrapper, auto, node, wrapper
 from slyme.node.exception import (
     NodeException,
     NodeExceptionRecord,
@@ -61,10 +61,12 @@ async def test_node_and_wrapper_preserve_control_and_framework_exceptions(
     @wrapper
     async def aaround(ctx: Context, wrapped: Node, call_next: Callable, /):
         await asyncio.sleep(0)
-        return await await_result(around()(ctx, wrapped, call_next))
+        return await await_result(around.partial()(ctx, wrapped, call_next))
 
-    graph = atarget() if asynchronous else target()
-    graph.add_wrappers(aaround() if asynchronous else around())
+    graph = atarget.partial() if asynchronous else target.partial()
+    graph = graph.replace(
+        wrappers=(aaround.partial() if asynchronous else around.partial(),)
+    )
     ctx = Context()
     try:
         with pytest.raises(type(failure)) as caught:
@@ -87,14 +89,14 @@ async def test_node_and_wrapper_record_exception_groups_as_cause(
             yield asyncio.sleep(0)
         raise failure
 
-    graph = create_node(lambda ctx: fail() if origin == "node" else None)
-    around = create_wrapper(
+    graph = node(lambda ctx: fail() if origin == "node" else None)
+    around = wrapper(
         lambda ctx, wrapped, call_next: (
             fail() if origin == "wrapper" else call_next(ctx)
         )
     )
     if origin == "wrapper":
-        graph.add_wrappers(around)
+        graph = graph.replace(wrappers=(around,))
     expected = NodeExceptionRecord if origin == "node" else WrapperExceptionRecord
     ctx = Context()
     try:
@@ -106,7 +108,7 @@ async def test_node_and_wrapper_record_exception_groups_as_cause(
         await await_result(ctx.dispose())
 
 
-def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
+def test_compose_retains_original_wrappers_when_partial_creates_a_replacement() -> None:
     events = []
 
     @node
@@ -114,7 +116,7 @@ def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
         events.append("target")
         return 3
 
-    graph = target()
+    graph = target.partial()
 
     @wrapper
     @continuation
@@ -125,12 +127,13 @@ def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
         events.append((label, "after"))
         return value
 
-    outer, inner = around(label="outer"), around(label="inner")
+    outer, inner = around.partial(label="outer"), around.partial(label="inner")
     wrappers = [outer, inner]
     chain = Wrapper.compose(iter(wrappers), wrapped=graph, call_next=graph)
     assert events == []
     wrappers.clear()
-    inner.set("label", "updated")
+    replacement = inner.partial(label="updated")
+    assert replacement.get("label") == "updated"
     ctx = Context()
     for _ in range(2):
         assert chain(ctx) == 3
@@ -138,9 +141,9 @@ def test_compose_snapshots_order_but_reads_live_wrapper_parameters() -> None:
         events
         == [
             ("outer", "before"),
-            ("updated", "before"),
+            ("inner", "before"),
             "target",
-            ("updated", "after"),
+            ("inner", "after"),
             ("outer", "after"),
         ]
         * 2
@@ -174,8 +177,8 @@ async def test_compose_preserves_context_replacement_and_multiple_next_calls(
         second = yield call_next(child)
         return first + second
 
-    graph = avalue() if asynchronous else value()
-    chain = Wrapper.compose([twice()], wrapped=graph, call_next=graph)
+    graph = avalue.partial() if asynchronous else value.partial()
+    chain = Wrapper.compose([twice.partial()], wrapped=graph, call_next=graph)
     assert await await_result(chain(ctx)) == 3
     ctx.dispose()
 
@@ -189,8 +192,8 @@ def test_compose_wrapper_can_short_circuit_without_calling_the_target() -> None:
     def stop(ctx: Context, wrapped: Node, call_next: Callable, /) -> str:
         return "stopped"
 
-    graph = target()
-    chain = Wrapper.compose([stop()], wrapped=graph, call_next=graph)
+    graph = target.partial()
+    chain = Wrapper.compose([stop.partial()], wrapped=graph, call_next=graph)
     ctx = Context()
     assert chain(ctx) == "stopped"
     ctx.dispose()
@@ -232,7 +235,9 @@ async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
         second = yield call_next(ctx)
         return first + second
 
-    graph = target(value=Auto(parameter())).add_wrappers(around())
+    graph = target.partial(value=auto(parameter.partial())).replace(
+        wrappers=(around.partial(),)
+    )
     try:
         result = await await_result(graph(ctx))
         if short_circuit:

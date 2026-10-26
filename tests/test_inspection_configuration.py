@@ -20,7 +20,7 @@ from slyme.context import (
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import Interpretation, inspect
 from slyme.inspection.common import SCALAR_TYPES
-from slyme.node import Auto, node
+from slyme.node import auto, node
 from slyme.tree import TreeAux, TreeHandler, TreeRules
 
 
@@ -107,7 +107,7 @@ def test_default_options_allow_json_for_node_and_context_graphs(root):
 
     root.declare({"input": Schema.leaf()})
     root.set("input", 42)
-    for value in (root, task(value=Auto(Ref("input")))):
+    for value in (root, task.partial(value=auto(Ref("input")))):
         graph = inspect(value, **resolve_inspection_options(root), env=root)
         assert json.loads(json.dumps(graph, allow_nan=False)) == graph
         assert "value" not in root_record(graph)

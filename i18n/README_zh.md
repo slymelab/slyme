@@ -22,7 +22,7 @@ Slyme（发音为 /slaɪm/）是一个高度可组合的函数式执行框架。
 
 无论是构建复杂的 LLM 流水线、执行 DAG，还是创建通用的数据处理流程，Slyme 都提供了结构化、函数式且深度符合 Python 习惯的基础。
 
-`Auto(tree)` 显式标记需要求值的参数绑定，在每次调用时求值已注册叶子并重建 Tree 容器，包括只有普通值的容器。普通叶子和 evaluator 返回值保持原对象 identity；非 Auto 参数直接传递。`eval_tree(ctx, tree)` 提供相同的求值行为。
+`auto(tree)` 显式标记需要求值的参数绑定，在每次调用时求值已注册叶子并重建 Tree 容器，包括只有普通值的容器。普通叶子和 evaluator 返回值保持原对象 identity；非 Auto 参数直接传递。`eval_tree(ctx, tree)` 提供相同的求值行为。
 
 Tree handler 和 Auto evaluator 按精确类型匹配，子类需要显式注册。遍历工具位于 `slyme.tree`。
 
@@ -37,7 +37,9 @@ Tree handler 和 Auto evaluator 按精确类型匹配，子类需要显式注册
 `slyme.context.inspection` 中的 `resolve_inspection_options(ctx)` 可通过 `**options` 提供分层配置。
 详见[自省文档](../docs/src/zh/guide/slyme-in-depth/inspection.md)。
 
-Node 和 Wrapper 工厂只保存传入的关键字绑定。函数原生默认值在实际调用时生效；`node(ctx, **kwargs)` 在 Auto 求值前为本次调用覆盖已保存的绑定。使用 `get`、`set`、`delete` 管理绑定。
+推荐 `slyme.node` 的 `node/wrapper/auto` 和 `slyme.context` 的 `ref` 作为四个常用函数入口。`Node/Wrapper/Ref` 保留用于类型标注与显式构造，Auto 标记类为内部实现；`Node/Wrapper` 的公开配置只读，通过 `partial/replace` 派生新对象。
+
+Node 和 Wrapper 对象只保存传入的关键字绑定。函数原生默认值在实际调用时生效；`node(ctx, **kwargs)` 在 Auto 求值前为本次调用覆盖已保存的绑定。使用 `get` 或只读 `params` 读取绑定，通过 `partial(**params)` 派生新的 Node/Wrapper。
 
 ## 安装
 
@@ -57,7 +59,7 @@ pip install slyme
 from time import time
 from collections.abc import Callable
 from slyme.context import Context, Ref, Schema
-from slyme.node import node, wrapper, Auto, AnyNode
+from slyme.node import node, wrapper, AnyNode, auto
 
 
 R = Schema(
@@ -105,26 +107,27 @@ def timing(
 
 # 4. 在构建时组装流水线
 def build_pipeline() -> AnyNode[None]:
-    return llm_api(
+    return llm_api.partial(
         responses=R.resolve("output.responses"),
-        prompts=Auto(
-            format_prompts(
-                articles=Auto(R.resolve("input.articles")),
+        prompts=auto(
+            format_prompts.partial(
+                articles=auto(R.resolve("input.articles")),
             )
         ),
-    ).add_wrappers(timing(prefix="LLM API Call"))
+    ).replace(wrappers=(timing.partial(prefix="LLM API Call"),))
 
 
 # 5. 在运行时执行
 if __name__ == "__main__":
-    ctx = Context(
+    ctx = Context()
+    ctx.declare(R)
+    ctx.update(
         {
-            R.resolve("input.articles"): [
+            "input.articles": [
                 {"title": "Article 1", "content": "Content 1"},
                 {"title": "Article 2", "content": "Content 2"},
             ]
-        },
-        schema=R,
+        }
     )
     build_pipeline()(ctx)
     print(ctx.get(R.resolve("output.responses")))
@@ -134,7 +137,7 @@ if __name__ == "__main__":
 
 执行或清理可能异步时，从 `slyme.execution` 导入 `await_result`，使用 `await await_result(task(ctx))` 和 `await await_result(ctx.dispose())`。需要在同一个函数中组合两种模式时，使用同模块的 `@continuation` 并 yield 这些调用。纯同步应用仍可直接调用 `task(ctx)` 和 `ctx.dispose()`。
 
-`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 构建从外到内的 callable 链，不执行它。Wrapper 顺序采用快照，参数仍实时读取；每个 wrapper 控制对下一层的调用，并可返回同步或异步结果。
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 构建从外到内的 callable 链，不执行它。Wrapper 顺序采用快照，组合链保留原有 Wrapper 对象；每个 wrapper 控制对下一层的调用，并可返回同步或异步结果。
 
 需要混合执行时，编写普通生成器并传给 `slyme.execution` 的 `run()`。每个 `value = yield operation()` 都可以接收同步或异步结果。驱动器同步执行到第一个被 yield 的 awaitable，再返回尚未调度的异步剩余流程。循环、分支和 `try/except/finally` 留在生成器内。返回模式不确定时，使用 `await await_result(run(generator))`。驱动器不调度 task、不汇总错误，也不拥有资源生命周期。
 

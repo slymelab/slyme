@@ -1,14 +1,31 @@
 # Node
 
-`@node` 将函数转换为可变、可直接调用的 `Node` 对象工厂。Node 可以修改 `Context`、执行副作用、协调子 Node，也可以返回供 `Auto` 注入的派生值。
+`@node` 将函数直接转换为可调用的 `Node` 对象。Node 可以更新 Context、执行副作用、组合子 Node，或返回供 Auto 注入的值。
+
+
+推荐的四个函数入口是 `slyme.node` 的 `node/wrapper/auto` 和
+`slyme.context` 的 `ref`。大写 `Node/Wrapper/Ref` 保留用于类型标注与
+显式构造；`auto()` 返回的标记类型是内部实现；优先通过组合扩展行为，但不限制继承。
+
+```python
+from slyme.context import Ref, ref
+from slyme.node import auto
+
+count: Ref[int] = ref("count")
+input_value = auto(count)
+```
+
+`ref` 保留泛型返回类型，可根据接收位置的预期类型推导。Python 普通函数目前
+不支持 `ref[int](...)`，需要时采用上面的变量标注。`auto` 保留源值类型，
+不会执行或复制源值。
 
 ## 定义与创建 Node
 
-Node 工厂只接受关键字绑定。执行时按位置传入 Context，并按关键字传入合并后的绑定；具体如何接收由用户函数自身的签名决定：
+通过 `partial(**params)` 绑定关键字参数，不执行 Node。执行时按位置传入 Context，并按关键字传入合并后的绑定；具体如何接收由用户函数自身的签名决定：
 
 ```python
 from slyme.context import Context, Ref, Schema
-from slyme.node import Auto, node
+from slyme.node import node, auto
 
 R = Schema({"input": {"x": Schema.leaf()}, "output": {"total": Schema.leaf()}})
 
@@ -20,22 +37,23 @@ def add(ctx: Context, *, x: int, y: int, output: Ref[int]):
     return result
 
 
-task = add(x=Auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
+task = add.partial(x=auto(R.resolve("input.x")), y=2, output=R.resolve("output.total"))
 ```
 
 Slyme 不分析函数签名或解析类型注解。函数可以声明 `*args` 和 `**kwargs`，由 Python 正常绑定位置 Context 和传入的关键字。Node 的框架参数 `ctx` 为仅位置参数，因此可以独立传递名为 `ctx` 的业务关键字。
 
-`@node` 和 `@node()` 都返回普通工厂函数，每次调用创建独立的 Node。无需定义工厂时，可以用 `create_node()` 直接创建实例：
+`@node` 和 `@node()` 都直接返回 Node。也可以用 `node(func, params=..., metadata=...)` 包装已有函数，配置参数仅支持关键字传入：
 
 ```python
-from slyme.node import create_node
-
-inline = create_node(lambda ctx, *, value: value + 1, {"value": 3})
+inline = node(lambda ctx, *, value: value + 1, params={"value": 3})
+assert inline(Context()) == 4
 ```
 
-`create_node(func, params=None, *, wrappers=None, metadata=None)` 通过 mapping 接收业务绑定，组装配置独立传入。每个实例复制自己的参数 mapping 和 wrapper 列表，但保持内部值与 Wrapper 对象的引用。构造时不执行函数，也不求值 Auto 绑定。组装时通过 `create_node(..., wrappers=[...])` 或 `task.add_wrappers(...)` 添加 wrappers；`@node` 不接收 wrappers。装饰后的工厂保留函数元信息，通过 `.__wrapped__` 可获得原函数。
+`@node(params={...}, metadata={...})` 和 `@wrapper(params={...}, metadata={...})` 在配置装饰器时浅复制输入 mapping。创建对象和调用 `partial()` 都不会执行函数或求值 Auto；`.func` 保留原函数。原来的 `create_node` 和 `create_wrapper` 已移除。
 
-`@node(metadata={"description": marker})`、`@wrapper(metadata=...)` 及其直接构造入口支持 `Mapping[str, Metadata]`，其中 `Metadata` 来自 `slyme.context`。每个实例浅复制输入 mapping，公开独立的可变 `metadata: dict[str, Metadata]`，保留标记对象的身份；装饰器在配置时捕获 mapping。使用原生字典操作读写或删除 metadata，不影响其他实例或装饰器配置。这些描述不参与执行、相等性检查、合并或 Auto 求值。`task(metadata=value)` 这样的工厂参数仍是普通业务绑定。[自省](../slyme-in-depth/inspection.md) 会展示 metadata 的结构；自定义 Metadata 子类可通过 Tree rule 描述。
+metadata 接受来自 `slyme.context` 的 `Mapping[str, Metadata]`。每个实例通过 metadata 暴露只读快照，保留标记对象的身份；使用 `replace(metadata=...)` 派生新对象。metadata 不参与参数合并或 Auto 求值。同名业务参数通过 `task.partial(metadata=value)` 或 `params={"metadata": value}` 绑定。[自省](../slyme-in-depth/inspection.md) 会展示 metadata 的结构。
+
+通过 `task.replace(wrappers=(...))` 派生使用新 Wrapper 序列的 Node。`wrappers` 是只读 tuple，内部 Wrapper 保持原引用；`func`、`params`、`metadata` 也都是只读属性。
 
 ## 执行
 
@@ -89,7 +107,7 @@ def increment_child(ctx, *, child: AnyNode[int]):
     return value + 1
 ```
 
-`@continuation()` 等价于 `@continuation`。装饰器保留函数元信息与参数类型，每次调用都会创建新的生成器，不共享执行状态。叠加使用时，将它放在 `@node` 或 `@wrapper` 内侧：先适配执行，再定义工厂。也可以不加图装饰器，直接调用装饰后的函数。
+`@continuation()` 等价于 `@continuation`。装饰器保留函数元信息与参数类型，每次调用都会创建新的生成器，不共享执行状态。叠加使用时，将它放在 `@node` 或 `@wrapper` 内侧：先适配执行，再创建 Node 或 Wrapper。也可以不加图装饰器，直接调用装饰后的函数。
 
 调用装饰后的函数会立即执行同步前缀，同步错误也立即抛出。通过 `await await_result(execute(...))` 等待返回的剩余流程，继续异步工作。只在同步应用入口使用 `asyncio.run(await_result(execute(...)))`。驱动器不启动事件循环，也不调度 task。已有生成器仍可直接交给 `run(generator)`；装饰器内部委托给它。
 
@@ -103,9 +121,11 @@ Auto 独立拥有全部完成后汇总的求值策略。它先内联调用每个
 
 ## 参数与 Auto
 
-函数参数描述最终接收的值。构造或调用时，将需要求值的参数树包装为 `Auto(...)`：
+函数参数描述最终接收的值。构造或调用时，将需要求值的参数树包装为 `auto(...)`：
 
 ```python
+from slyme.node import auto
+
 @node
 def parent(ctx, *, child: int):
     return child + 1
@@ -116,37 +136,59 @@ def child(ctx, *, value: int):
     return value
 
 
-root = parent(child=Auto(child(value=4)))
+root = parent.partial(child=auto(child.partial(value=4)))
 assert root(Context()) == 5
 ```
 
 `Auto` 会递归解析已注册的 evaluator 叶子，例如 `Ref` 和 `Node`。Ref 会直接读取传入的 Context；每个产生值的子 Node 则获得由父 Context 管理、绑定到独立 `ctx.scope.fork()` 的子 Context。父 Node 继续执行前，Slyme 会 dispose 该 Context 及其 effect，因此 child Scope 的写入与由 Context 管理的注册不会泄漏到父级或其他 Auto 子 Node。返回值、对共享 leaf 对象的修改、disposer 未交给子 Context 管理的直接注册，以及没有注册 cleanup 的外部副作用并不会被隔离。没有 `Auto` 时，Ref 和 Node 对象会原样传入。
 
-框架只保存显式传入的绑定。未绑定参数使用函数原生默认值；缺少必需参数或传入未知参数时，由 Python 在实际调用函数时抛出 `TypeError`，并保留在 Node 或 Wrapper 的异常记录中。因此参数错误被发现前，Auto 工作可能已经执行。Slyme 不扫描或求值函数默认值：动态输入应显式绑定，而不是把 `Auto(...)` 放进函数默认值。普通未包装参数内部的 Auto 对象也是普通数据。
+框架只保存显式传入的绑定。未绑定参数使用函数原生默认值；缺少必需参数或传入未知参数时，由 Python 在实际调用函数时抛出 `TypeError`，并保留在 Node 或 Wrapper 的异常记录中。因此参数错误被发现前，Auto 工作可能已经执行。Slyme 不扫描或求值函数默认值：动态输入应显式绑定，而不是把 `auto(...)` 放进函数默认值。普通未包装参数内部的 Auto 对象也是普通数据。
 
-## 动态修改
+## 通过 partial 绑定参数
 
-Node 和 Wrapper 参数通过显式参数 API 在两次调用之间保持可变：
+`partial(**params)` 浅合并参数并返回新的 Node 或 Wrapper。后一次绑定覆盖前一次；实际调用时传入的关键字仅覆盖本次执行：
 
 ```python
-root.get("child").value.set("value", 10)
-assert root(Context()) == 11
-assert root(Context(), child=20) == 21  # 不执行已绑定的子 Node。
+from slyme.node import auto
+
+updated = root.partial(child=auto(child.partial(value=10)))
+assert updated(Context()) == 11
+assert root(Context()) == 5
+assert updated(Context(), child=20) == 21
 ```
 
-使用 `get(name)` 读取绑定，使用 `set(name, value)` 保存任意绑定，使用 `delete(name)` 删除绑定。删除不存在的绑定不做任何操作。读取不存在的 key 会抛出 `KeyError`，除非通过 `get(name, default)` 提供回退值；回退值可以是包括 `None` 在内的任意值。返回回退值不会新增绑定，已有值（包括 `None`）始终优先。这些操作不会读取函数默认值。实时、只读的 `params` mapping 只包含已保存的绑定。`node(ctx, **kwargs)` 在 Auto 求值前，为本次调用浅覆盖绑定，不修改 `params`，也不合并嵌套容器。参数名可以与框架属性重合，因为参数不会投影为对象属性。
+`get(name, default)` 读取已有绑定，`params` 提供只读 mapping。缺少绑定且未指定 default 时抛出 KeyError；函数默认值不存入 params。参数不再提供 `set/delete`，修改绑定需派生新对象；需要恢复函数默认值时，用 `replace(params=...)` 提供不含该项的 mapping，或用 `replace(params=None)` 清空全部绑定。
 
-工厂和可变绑定接受动态关键字名称与值，包括部分绑定和 Auto 树。类型声明保留执行结果类型，但不会根据底层函数参数逐项静态检查绑定。
+合并是浅层的，不合并嵌套 mapping。`partial(params=..., metadata=...)` 绑定的是普通业务参数。partial 不绑定执行 Context，Auto 在每次执行时根据当次 Context 求值。
 
 调用时，非 Auto 参数会直接传给用户函数，因此对其容器的修改会更新 Node 或 Wrapper 上的实时参数。每个 Auto 参数都会按 Tree 规则遍历并重建容器，包括只有普通值的子树。普通叶子与 evaluator 返回值保持原对象 identity；这不是深拷贝。
 
-需要另一张可独立配置的图时，应重新调用 Node factory 或 组装函数。可变应用值是否共享或复制由其自身语义决定；Slyme 不会猜测哪些引用需要复制。
+需要另一张可独立配置的图时，应调用 `partial(...)` 或重新调用组装函数。可变应用值是否共享或复制由其自身语义决定；Slyme 不会猜测哪些引用需要复制。
+
+## 替换配置
+
+`partial(**params)` 浅合并业务绑定；`replace(params=..., wrappers=..., metadata=...)`
+完整替换指定字段。两者始终返回新对象，并保留原函数；Wrapper.replace 没有
+wrappers 字段。省略字段表示保留，传入 None 或空集合表示清空。
+替换不会执行函数或求值 Auto。
+
+```python
+traced = task.replace(wrappers=(*task.wrappers, trace.partial(name="extra")))
+unbound = traced.replace(params=None)
+plain = unbound.replace(wrappers=(), metadata={})
+```
+
+示例假设 trace 已按下文定义。配置 mapping 在复制后通过只读视图暴露。
+tuple 和未变更的不可变快照可以共享身份；调用者应依赖内容，不应依赖复制后的身份。
+嵌套参数仍是普通 Python 对象，保持共享引用；这不是深冻结，也不自动保证并发安全。
+Node/Wrapper 仍按对象身份比较，派生不会按内容去重。
+参数 set/delete 和 add_wrappers 均不再提供。
 
 ## Wrapper
 
-`@wrapper` 和 `@wrapper()` 定义可复用的工厂；`create_wrapper(func, params=None)` 直接创建拥有独立浅拷贝绑定的 Wrapper。
+`@wrapper` 和 `@wrapper()` 直接返回 Wrapper；`wrapper(func, params=..., metadata=...)` 包装已有回调，`partial(**params)` 派生独立绑定。
 
-`@wrapper` 工厂同样只接受关键字绑定。执行时依次按位置传入 Context、被包装的 Node 和下一层 callable，再传入合并后的关键字绑定。用户函数可以使用具名参数或 `*args`/`**kwargs` 接收。框架的 `Wrapper.__call__` 参数为仅位置参数，直接调用时可以独立覆盖名为 `ctx`、`wrapped` 或 `call_next` 的业务关键字。
+Wrapper 的 `partial()` 同样只接受关键字绑定。执行时依次按位置传入 Context、被包装的 Node 和下一层 callable，再传入合并后的关键字绑定。用户函数可以使用具名参数或 `*args`/`**kwargs` 接收。框架的 `Wrapper.__call__` 参数为仅位置参数，直接调用时可以独立覆盖名为 `ctx`、`wrapped` 或 `call_next` 的业务关键字。
 
 ```python
 from collections.abc import Callable
@@ -164,14 +206,14 @@ def trace(ctx, wrapped: AnyNode, call_next: Callable, *, name: str):
         print(name, "end")
 
 
-task.add_wrappers(trace(name="add"))
+task = task.replace(wrappers=(trace.partial(name="add"),))
 ```
 
-Wrapper 按洋葱模型组合，并在调用时读取实时参数。上例等待同步或异步调用完成，无论成功还是失败都会执行 `finally`。仅转发结果的 Wrapper 可以直接返回 `call_next(ctx)`，不需要 `@continuation`；`async def` Wrapper 也可以使用 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
+Wrapper 按洋葱模型组合，并在调用时求值 Auto 参数。上例等待同步或异步调用完成，无论成功还是失败都会执行 `finally`。仅转发结果的 Wrapper 可以直接返回 `call_next(ctx)`，不需要 `@continuation`；`async def` Wrapper 也可以使用 `await await_result(call_next(ctx))`。框架不会改写用户的 `try/finally`。
 
 `Node[P, R]` 接受 `AnyWrapper[R]`：Wrapper 应保持最终结果类型，短路时也一样，但可以引入异步操作。这是静态类型约束，不进行运行时值类型检查。需要改变结果类型时，使用另一个 Node 组合原 Node。
 
-`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 且保持最终结果类型的 callable。Wrapper 参数保持实时读取；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
+`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 组装同样的洋葱链，但不执行它。它对 wrapper 顺序取快照，第一个 wrapper 在最外层，返回接收 Context 且保持最终结果类型的 callable。组合链保留原来的 Wrapper 对象，派生 partial 不会替换它们；各 wrapper 自行决定是否及多少次调用下一层、传入哪个 Context。空 wrapper iterable 原样返回 `terminal`。Node 执行内部使用此方法；从外部包装 Node 时，传入 `call_next=task` 也会运行该 Node 已有的 wrappers。
 
 ## 组合结构
 
@@ -179,7 +221,7 @@ Node 与 Wrapper 参数可以保存任意值和嵌套 Tree，包括其他 Node �
 
 ## 顺序组合
 
-声明式顺序组合使用 `sequential(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部完成后返回 `None`，所有步骤同步时保持同步。失败会停止执行并传播失败 Node 的异常，不收集此前的结果。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。
+声明式顺序组合使用 `sequential.partial(nodes=[...])`，已有 iterable 使用 `sequential_exec(ctx, nodes)`。两者均在上一步完成后运行下一步，全部完成后返回 `None`，所有步骤同步时保持同步。失败会停止执行并传播失败 Node 的异常，不收集此前的结果。各步骤共享传入的 Context，有意观察之前的局部写入，与 Auto 子 Node 求值不同。
 
 
 ## 静态类型
@@ -191,7 +233,7 @@ Wrapper 的 wrapped/call_next 属于框架前置参数。通常让装饰器或�
 
 只关心结果时使用 `AnyNode[R]` / `AnyWrapper[R]`，分别等价于
 `Node[..., R]` / `Wrapper[..., R]`。原来的单参数 `Node[R]` / `Wrapper[R]`
-类型标注应迁移到这两个别名；函数定义、构造、绑定和调用方式不变。
+类型标注应迁移到这两个别名；具体构造、绑定和调用方式见上文。
 这些别名主动擦除业务参数签名，不是只读视图。
 
 Wrapper 回调中的 `wrapped: AnyNode[R]`、
@@ -201,8 +243,8 @@ Wrapper 回调中的 `wrapped: AnyNode[R]`、
 不会为了仅从返回值推导类型而忽略回调输入的约束。
 
 Python 的标准类型系统无法把任意 ParamSpec 转换成“每项可省略并接受 Auto”
-的关键字参数映射。因此工厂仍接受部分关键字绑定，Node/Wrapper 调用覆盖及
-`get/set/delete/params` 保持动态类型；工厂会静态拒绝位置参数。
+的关键字参数映射。因此 `partial()` 接受动态关键字绑定，Node/Wrapper 调用覆盖及
+`get/params` 保持动态类型；`partial()` 会静态拒绝位置参数。
 这些入口不会证明必需参数已经绑定完整，也不会检查任意绑定值或拼写。
-`Auto[S]` 保留输入树的类型，`value` 的类型是 S，不承诺任意 evaluator 的结果类型。
+`auto(source)` 保留输入树类型，`.value` 具有源值类型，不承诺任意 evaluator 的结果类型。
 没有类型检查器插件、代码生成、函数签名反射或额外运行时校验。

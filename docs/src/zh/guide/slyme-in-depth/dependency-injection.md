@@ -4,9 +4,9 @@ Slyme 通过关键字绑定构建参数，并可结合运行时 `Context` 对参
 
 ## 显式绑定
 
-Node 和 Wrapper 工厂只保存传入的关键字绑定，不分析函数签名或类型注解；`Auto(tree)` 标记需要求值的绑定。普通值，包括裸的 Ref 和 Node 对象，均原样传入。
+Node 和 Wrapper 对象只保存传入的关键字绑定，不分析函数签名或类型注解；`auto(tree)` 标记需要求值的绑定。普通值，包括裸的 Ref 和 Node 对象，均原样传入。
 
-执行时，关键字覆盖仅替换本次调用的绑定，不修改已保存的绑定。默认值和参数错误由 Python 的实际函数调用处理。删除绑定会让该参数缺席，函数默认值不会被隐式存储或参与 Auto 求值。
+执行时，关键字覆盖仅替换本次调用的绑定，不修改已保存的绑定。默认值和参数错误由 Python 的实际函数调用处理。使用 `replace(params=...)` 派生不包含某项绑定的 Node 或 Wrapper，新对象调用时将使用原生默认值；函数默认值不会被隐式存储或参与 Auto 求值。
 
 ## 调用时求值
 
@@ -24,6 +24,6 @@ Node 和 Wrapper 工厂只保存传入的关键字绑定，不分析函数签名
 
 ## 求值时机
 
-每次 Node 或 Wrapper 调用会对参数绑定取浅快照，在其用户函数被调用前遍历和求值 Auto 参数。Wrapper 多次调用 `call_next` 时，每次都会重新遍历，观察 Auto 容器的原地变化和当前 Context 值；替换 Node 参数绑定则影响下一次 Node 调用。短路返回的 Wrapper 不会遍历或求值被包装 Node 的 Auto 参数。
+每次 Node 或 Wrapper 调用会对参数绑定取浅快照，在其用户函数被调用前遍历和求值 Auto 参数。Wrapper 多次调用 `call_next` 时，每次都会重新遍历，观察 Auto 容器的原地变化和当前 Context 值；`partial/replace` 创建新的 Node，不改变原 Node 或已有的 Wrapper 组合链。短路返回的 Wrapper 不会遍历或求值被包装 Node 的 Auto 参数。
 
 Auto 子 Node 可以返回派生值，但父级继续执行前，Slyme 会 dispose 其 Context 与注册的 effect。异步 child 执行或 cleanup 会使外层调用返回 awaitable，取消时也会等待 child cleanup。如果高阶 Node 显式地使用自己的 Context 调用子 Node，应在调用结束后通过 Ref 重新读取值，而不是依赖更早的 Auto 结果。

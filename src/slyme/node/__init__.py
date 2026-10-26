@@ -21,12 +21,10 @@ from .common import (
 from .core import (
     AnyNode,
     AnyWrapper,
-    Auto,
     Node,
     NodeElement,
     Wrapper,
-    create_node,
-    create_wrapper,
+    auto,
     node,
     wrapper,
 )
@@ -40,10 +38,8 @@ __all__ = [
     "Wrapper",
     "node",
     "wrapper",
-    "create_node",
-    "create_wrapper",
     "sequential_exec",
     "sequential",
-    "Auto",
+    "auto",
     "eval_tree",
 ]

@@ -27,12 +27,12 @@ records the paths available to an application, and `resolve()` returns their
 canonical Refs:
 
 ```python
-from slyme.context import Ref, Schema
+from slyme.context import Ref, Schema, ref
 
 schema = Schema({"user": {"name": Schema.leaf()}})
 name = schema.resolve("user.name")
 assert name.path == "user.name"
-assert Ref("user.name") == name
+assert ref("user.name") == name
 ```
 
 Constructing a `Ref` does not alter the Schema. Context operations resolve its
@@ -256,13 +256,13 @@ These paths follow ordinary Context/Scope rules. Child Scopes inherit them; unre
 While Context is readable, `ctx.get("")` returns its live root `ContextView` and `ctx.exists("")` is true, including when no values are visible. `ctx.keys("")` and `ctx.to_dict("")` are equivalent to their argument-free forms. A fresh root includes `$` in `keys()`, `to_dict()`, and `flatten()`; these methods do not hide framework fields. Non-root containers without visible leaves still count as absent.
 
 ```python
-from slyme.context import Context, Ref, Schema
+from slyme.context import Context, Ref, Schema, ref
 
 root_ctx = Context()
 root_ctx.declare(Schema({"value": Schema.leaf()}))
 root_ctx.update({"value": 1})
 child_ctx = root_ctx.fork(scope=root_ctx.scope.fork())
-root_view = child_ctx.get(Ref(""))
+root_view = child_ctx.get(ref(""))
 child_ctx.set("value", 2)
 assert root_view.get("value") == 2
 

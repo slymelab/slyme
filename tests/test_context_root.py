@@ -4,7 +4,7 @@ import pytest
 
 from slyme.context import Context, Ref, Schema, ScopeBinding
 from slyme.context.core import ContextPathError, ContextView
-from slyme.node import Auto, node
+from slyme.node import auto, node
 
 
 @pytest.mark.parametrize("path", [".", ".value", "value.", "value..child"])
@@ -128,7 +128,7 @@ def test_auto_can_inject_the_root_view() -> None:
         return data.to_dict()
 
     ctx = Context()
-    graph = snapshot(data=Auto(Ref("")))
+    graph = snapshot.partial(data=auto(Ref("")))
     assert graph(ctx) == {"$": ctx.get("$").to_dict()}
     remove = ctx.declare({"value": Schema.leaf()})
     ctx.set("value", 3)

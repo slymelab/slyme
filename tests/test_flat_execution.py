@@ -8,7 +8,7 @@ import pytest
 
 from slyme.context import Context
 from slyme.execution import await_result, continuation
-from slyme.node import Auto, create_node, sequential
+from slyme.node import auto, node, sequential
 from slyme.utils.exception import BaseExceptionGroup
 
 
@@ -101,9 +101,9 @@ async def test_deep_auto_nodes_use_a_bounded_python_stack(asynchronous):
         depths.append(python_depth())
         return value + 1
 
-    graph = create_node(leaf)
+    graph = node(leaf)
     for _ in range(1100):
-        graph = create_node(increment, {"value": Auto(graph)})
+        graph = node(increment, params={"value": auto(graph)})
     root = Context()
     effects = tuple(root._lifecycle._effects)
     try:
@@ -127,9 +127,9 @@ async def test_deep_sequential_nodes_flatten_the_existing_execution_body(asynchr
             yield asyncio.sleep(0)
         calls.append(1)
 
-    graph = create_node(leaf)
+    graph = node(leaf)
     for _ in range(2500):
-        graph = sequential(nodes=[graph])
+        graph = sequential.partial(nodes=[graph])
     ctx = Context()
     try:
         assert await await_result(graph(ctx)) is None
