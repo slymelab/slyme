@@ -326,9 +326,9 @@ class ContextStore:
             self._validate_mode(entry, "assign")
             self._delete_leaf(scope, entry)
         else:
-            self.drop(scope, (entry,))
+            self.delete_many(scope, (entry,))
 
-    def update(
+    def set_many(
         self, scope: Scope, updates: Iterable[tuple[RefEntry[Any], Any]]
     ) -> None:
         """Consume resolved leaf updates, keep each entry's last value, then validate modes.
@@ -342,7 +342,7 @@ class ContextStore:
         for entry, value in entries.items():
             self._writable_binding(scope, entry).set(scope, value)
 
-    def drop(self, scope: Scope, entries: Iterable[RefEntry[Any]]) -> None:
+    def delete_many(self, scope: Scope, entries: Iterable[RefEntry[Any]]) -> None:
         """Consume resolved entries, then validate all descendant modes before deletion.
 
         Preflight failures leave bindings unchanged. Failures during application
@@ -388,6 +388,37 @@ class ContextStore:
             finally:
                 binding = None
 
+        return dispose
+
+    def register_many(
+        self, scope: Scope, registrations: Iterable[tuple[RefEntry[Any], Any]]
+    ) -> Callable[[], None]:
+        """Install a batch with rollback on failure and reverse-order withdrawal."""
+        entries = tuple(registrations)
+        for entry, _ in entries:
+            self._validate_mode(entry, "register")
+        disposers: list[Callable[[], None]] = []
+
+        @once
+        def dispose() -> None:
+            errors: list[BaseException] = []
+            try:
+                for disposer in reversed(disposers):
+                    try:
+                        disposer()
+                    except BaseException as error:
+                        errors.append(error)
+                if errors:
+                    raise exception_group("Failed to release registrations", errors)
+            finally:
+                disposers.clear()
+
+        try:
+            for entry, value in entries:
+                disposers.append(self.register(scope, entry, value))
+        except BaseException:
+            dispose()
+            raise
         return dispose
 
     def bind(

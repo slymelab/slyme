@@ -101,9 +101,9 @@ async def test_deep_auto_nodes_use_a_bounded_python_stack(asynchronous):
         depths.append(python_depth())
         return value + 1
 
-    graph = node(leaf)
+    graph = node(leaf, inject_ctx=True)
     for _ in range(1100):
-        graph = node(increment, params={"value": auto(graph)})
+        graph = node(increment, params={"value": auto(graph)}, inject_ctx=True)
     root = Context()
     effects = tuple(root._lifecycle._effects)
     try:
@@ -127,7 +127,7 @@ async def test_deep_sequential_nodes_flatten_the_existing_execution_body(asynchr
             yield asyncio.sleep(0)
         calls.append(1)
 
-    graph = node(leaf)
+    graph = node(leaf, inject_ctx=True)
     for _ in range(2500):
         graph = sequential.partial(nodes=[graph])
     ctx = Context()

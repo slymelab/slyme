@@ -6,10 +6,10 @@
 from slyme.context import Context, Ref, Schema, ref
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import inspect
-from slyme.node import node, auto
+from slyme.node import node, auto, wrap
 
 
-@node
+@node(inject_ctx=True)
 def task(ctx, *, value):
     return value
 
@@ -32,13 +32,13 @@ ctx.dispose()
 
 ## 两个独立职责
 
-**children 展开**复用 `TreeRules` 和 `flatten_one()`。默认支持普通容器、Node／Wrapper 的参数和 metadata、Auto 的内容、Context 的子节点与声明、Scope、Ref 和 Compose 的 layers。参数中绑定的 Node 或 Wrapper 可以继续展开。`Wrapper.compose()` 只产生临时调用链；自省不会扫描闭包来推断对象关系，也不会改变原对象。
+**children 展开**复用 `TreeRules` 和 `flatten_one()`。默认支持普通容器、Node 的参数和 metadata、Auto 的内容、Context 的子节点与声明、Scope、Ref 和 Compose 的 layers。参数中绑定的 Node 可以继续展开。`wrap()` 返回具有显式 wrapped 参数的嵌套 Node，临时组装的结构同样可以自省，且不会改变原对象。
 
 **value 解释**使用精确类型到同步函数的映射。函数接收 `(value, env)`，返回 `Interpretation(value, env=...)` 或 `None`。省略 `env` 表示继承当前环境，显式传 `None` 表示清除环境。回调返回 `None` 表示无法解释，`Interpretation(None)` 表示观测结果确实为 `None`。
 
 当环境是 Context 时，默认解释器通过 `ctx.get()` 读取 Ref，通过 `resolve(ctx.scope)` 调用 Compose 已配置的 query。没有 query 的 Compose 不解释。Context 和 ContextView 解释为自身可见的 Ref 到原始值的映射，结果的环境自动设为所属 Context。使用这些适配器时，`inspect(target_ctx, **options)` 不需要额外指定环境；没有环境的 `inspect(node, **options)` 仍能展示保存的结构。配置来源、被观察对象和解释环境相互独立。
 
-结构 children 和解释得到的值都会继续进行结构展开和语义解释。children 继承当前环境；只有解释结果使用 `Interpretation.env` 显式指定的新环境。因此 query 可以返回嵌套在任意容器中的 Node，自省能够展开它们而不执行它们。自省不运行 Auto 求值、Node／Wrapper 函数体、awaitable 或 generator，也不调用不透明对象的 `repr`、属性枚举或迭代协议。未知对象以引用和类型标签展示。query 和扩展回调是普通 Python 代码，应保证同步、轻量、在本次观测中稳定且无副作用；自省不会对它们施加沙箱或超时中断。
+结构 children 和解释得到的值都会继续进行结构展开和语义解释。children 继承当前环境；只有解释结果使用 `Interpretation.env` 显式指定的新环境。因此 query 可以返回嵌套在任意容器中的 Node，自省能够展开它们而不执行它们。自省不运行 Auto 求值、Node 函数体、awaitable 或 generator，也不调用不透明对象的 `repr`、属性枚举或迭代协议。未知对象以引用和类型标签展示。query 和扩展回调是普通 Python 代码，应保证同步、轻量、在本次观测中稳定且无副作用；自省不会对它们施加沙箱或超时中断。
 
 ## 扩展方式
 
@@ -62,7 +62,12 @@ ctx.dispose()
 ```python
 from dataclasses import dataclass
 
-from slyme.context import Context, Metadata, INSPECTION_TREE_RULES_REF, INSPECTION_TYPE_NAMES_REF
+from slyme.context import (
+    Context,
+    Metadata,
+    INSPECTION_TREE_RULES_REF,
+    INSPECTION_TYPE_NAMES_REF,
+)
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import inspect
 from slyme.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
@@ -141,7 +146,7 @@ interface InspectionGraph {
 
 对象 ID 仅在本次观察图内有效，共享对象和循环引用复用同一个引用。每个获准纳入的值都有记录，`raw_value_types` 允许的类型会在 `value` 中保留原始对象；配置为 `None` 时保留所有类型。省略不表示值为 `None`：允许的 `None` 会显式保存。合成的解释记录没有原始 `value`。根引用和条目引用始终指向对象表，`entries` 保留顺序。来源对象的 `interpretation` 条目指向其观测记录，不存储反向的 `source` 或 `parent` 条目；消费端可按需建立入边索引。
 
-`kind` 描述表示类别，可选的 `type` 标识语义，`label` 仅用于显示。内置语义类型为 `slyme.node`、`slyme.wrapper`、`slyme.auto`、`slyme.context`、`slyme.context_view`、`slyme.ref`、`slyme.scope`、`slyme.identity`、`slyme.scope_binding`、`slyme.ref_entry`、`slyme.ref_declaration`、`slyme.ref_leaf_config`、`slyme.ref_container_config` 和 `slyme.compose`。这些标识与适配器字段名独立于实现的模块路径和存储属性。存在类型标识不代表结构展开成功。
+`kind` 描述表示类别，可选的 `type` 标识语义，`label` 仅用于显示。内置语义类型为 `slyme.node`、`slyme.auto`、`slyme.context`、`slyme.context_view`、`slyme.ref`、`slyme.scope`、`slyme.identity`、`slyme.scope_binding`、`slyme.ref_entry`、`slyme.ref_declaration`、`slyme.ref_leaf_config`、`slyme.ref_container_config` 和 `slyme.compose`。这些标识与适配器字段名独立于实现的模块路径和存储属性。存在类型标识不代表结构展开成功。
 
 | kind | 含义 |
 | --- | --- |

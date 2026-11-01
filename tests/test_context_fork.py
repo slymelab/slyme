@@ -369,7 +369,7 @@ def test_derive_uses_c3_parents_and_allows_an_independent_root_scope() -> None:
     left = root.fork(scope=root.scope.fork())
     right = root.fork(scope=root.scope.fork())
     left.set("first", "left")
-    right.update({"first": "right", "second": "right"})
+    right.set_many({"first": "right", "second": "right"})
     child = root.derive(parents=(left.scope, right.scope))
     assert child.scope.mro == (child.scope, left.scope, right.scope, root.scope)
     assert child.get("first") == "left"

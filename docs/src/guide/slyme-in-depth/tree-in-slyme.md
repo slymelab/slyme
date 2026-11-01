@@ -30,7 +30,7 @@ Flattening and leaf iteration use explicit stacks for depth-first traversal, so 
 
 Tree's built-in data classes use slots, without an instance dictionary or weak-reference support. Subclasses choose whether to define their own slots.
 
-For traversal without a Context, explicitly import `DATA_RULES` from `slyme.tree.common`. For Node, Wrapper, and Auto descriptions, combine it with `NODE_INSPECTION_TREE_RULES` from `slyme.node.inspection`: `TreeRules.merge((NODE_INSPECTION_TREE_RULES, DATA_RULES))`. These traversal-only handlers expose functions, parameters, metadata, wrappers and Auto payloads; they do not reconstruct Nodes or execute their bodies. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
+For traversal without a Context, explicitly import `DATA_RULES` from `slyme.tree.common`. For Node and Auto descriptions, combine it with `NODE_INSPECTION_TREE_RULES` from `slyme.node.inspection`: `TreeRules.merge((NODE_INSPECTION_TREE_RULES, DATA_RULES))`. These traversal-only handlers expose functions, parameters, metadata, inject_ctx, result_to destinations and Auto payloads; they do not reconstruct Nodes or execute their bodies. These immutable definitions are not re-exported at package level. `_apply` remains a private implementation detail.
 
 `flatten_one(element, *, rules, resolver=None, traverse_aux=None)` exposes the same dispatch for a single level. It returns `None` for a leaf, or `(handler, children, tree_aux)` for a container; an empty container has an empty iterable. It does not visit children or reconstruct anything. The returned handler is the actual selected handler, including resolver overrides, so callers can use its `unflatten` function without repeating dispatch. A resolver with `takes_aux=True` requires an explicit `traverse_aux`; omitting it raises `ValueError`. The caller supplies `TraverseAux(parent=None, key_path=())` at a root and manages context for subsequent levels. Whole-tree flattening, iteration, and their path variants share this single-level operation. [Inspection](./inspection.md) also uses it with an explicit work queue to preserve object identity and handle cycles.
 
@@ -40,10 +40,10 @@ Root `Context()` installs three register-mode fields from `slyme.context.default
 
 | Ref constant | Path | Contributions |
 | --- | --- | --- |
-| `DATA_TREE_REF` | `$.tree.data.rules` | `TreeRules` for Auto, `extract`, and `update_tree` |
+| `DATA_TREE_REF` | `$.tree.data.rules` | `TreeRules` for Auto, `eval_tree`, and Node result projection |
 | `EVALUATORS_REF` | `$.eval.handlers` | Exact-type evaluator mappings |
 
-These constants are also exported by `slyme.context`. Data rules expand list, tuple, dict, and MappingProxyType; Node and Ref values remain leaves for evaluator dispatch. Inspection rules describe Node, Wrapper and Auto separately, without reconstruction functions.
+These constants are also exported by `slyme.context`. Data rules expand list, tuple, dict, and MappingProxyType; Node and Ref values remain leaves for evaluator dispatch. Inspection rules describe Node and Auto separately, without reconstruction functions.
 
 The `$.tree.data` container currently contains only `rules`; no resolver fields are declared or read by Context operations. Inspection has separate configuration under `$.inspection`; see [Inspection](./inspection.md).
 

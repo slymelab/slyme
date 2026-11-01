@@ -204,7 +204,7 @@ async def test_lifo_cleanup_waits_for_child_before_releasing_earlier_resources(
     failure = ValueError("child cleanup")
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": 1})
+    root.set_many({"value": 1})
     root.effect(lambda: lambda: events.append("first"))
     child = root.fork()
 
@@ -498,9 +498,9 @@ async def test_scope_cleanup_failure_finishes_other_bindings_and_scopes(
     initial_effects = tuple(root._lifecycle._effects)
     parent_scope = root.scope.fork()
     parent = root.fork(scope=parent_scope)
-    parent.update({"first": "parent", "second": "parent"})
+    parent.set_many({"first": "parent", "second": "parent"})
     child = root.fork(scope=parent_scope.fork())
-    child.update({"first": "child", "second": "child"})
+    child.set_many({"first": "child", "second": "child"})
     parent.dispose()
     bindings = tuple(
         root._store._data[root.resolve_entry(path)] for path in ("first", "second")
@@ -612,7 +612,7 @@ def test_scope_reuse_after_disposal_restores_bindings_without_old_values() -> No
 
     payloads = {path: Payload() for path in ("first", "second")}
     references = [weakref.ref(payload) for payload in payloads.values()]
-    writer.update(payloads)
+    writer.set_many(payloads)
     del payloads
     bindings = {
         path: root._store._data[root.resolve_entry(path)]
@@ -637,7 +637,7 @@ def test_scope_reuse_after_disposal_restores_bindings_without_old_values() -> No
         root.resolve_entry("first"),
         root.resolve_entry("second"),
     }
-    reader.update({"first": "new first", "second": "new second"})
+    reader.set_many({"first": "new first", "second": "new second"})
     writer.dispose()
     assert reader.get("first") == "new first"
     assert reader.get("second") == "new second"
@@ -1009,7 +1009,7 @@ def test_isolated_contexts_can_share_one_private_identity() -> None:
     schema = Schema({"service": Schema.leaf()})
     root = Context()
     root.declare(schema)
-    root.update({"service": "root"})
+    root.set_many({"service": "root"})
     identity = Identity(blocked=True)
     left = root.derive(bindings={"service": ScopeBinding(identity, blocked=False)})
     right = root.derive(bindings={"service": ScopeBinding(identity, blocked=False)})
@@ -1104,18 +1104,19 @@ def test_disposed_context_rejects_data_and_lifecycle_operations() -> None:
     schema = Schema({"value": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"value": 1})
+    ctx.set_many({"value": 1})
     ctx.dispose()
 
     for operation in (
         lambda: ctx.resolve("value"),
         lambda: ctx.resolve_entry("value"),
         lambda: ctx.get("value"),
-        lambda: ctx.extract({}),
+        lambda: ctx.resolve_entries([]),
+        lambda: ctx.register_many({}),
         lambda: ctx.set("value", 2),
         lambda: ctx.delete("value"),
-        lambda: ctx.update({}),
-        lambda: ctx.drop([]),
+        lambda: ctx.set_many({}),
+        lambda: ctx.delete_many([]),
         lambda: ctx.fork(),
         lambda: ctx.effect(lambda: lambda: None),
     ):
@@ -1127,7 +1128,7 @@ def test_cleanup_can_read_context_but_cannot_start_new_mutation() -> None:
     schema = Schema({"value": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"value": 1})
+    ctx.set_many({"value": 1})
     observed: list[int] = []
 
     def cleanup() -> None:
@@ -1287,7 +1288,7 @@ def test_parent_disposal_blocks_new_effects_in_active_children() -> None:
 def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": 1})
+    root.set_many({"value": 1})
     events: list[str] = []
     root.effect(lambda: lambda: events.append("first"))
     child = root.fork()
@@ -1302,8 +1303,8 @@ def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
         for operation in (
             lambda: ctx.set("value", 2),
             lambda: ctx.delete("value"),
-            lambda: ctx.update({"value": 2}),
-            lambda: ctx.drop(["value"]),
+            lambda: ctx.set_many({"value": 2}),
+            lambda: ctx.delete_many(["value"]),
             lambda: ctx.register("value", 2),
             lambda: ctx.declare({"other": Schema.leaf()}),
             lambda: ctx.effect(lambda: lambda: None),
@@ -1328,7 +1329,7 @@ def test_dispose_blocks_descendant_mutations_before_first_cleanup() -> None:
 async def test_dispose_pending_child_can_dispose_while_parent_cleanup_waits() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": 1})
+    root.set_many({"value": 1})
     child = root.fork()
     grandchild = child.fork()
     events: list[str] = []
@@ -1364,7 +1365,7 @@ async def test_dispose_pending_child_can_dispose_while_parent_cleanup_waits() ->
 async def test_parent_disposal_preserves_child_cleanup_in_progress(fail: bool) -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": 1})
+    root.set_many({"value": 1})
     child = root.fork()
     grandchild = child.fork()
     started = asyncio.Event()
@@ -1437,7 +1438,7 @@ def test_dispose_does_not_close_contexts_that_only_share_visibility(
 async def test_cancelled_dispose_waiter_does_not_reopen_descendants() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": 1})
+    root.set_many({"value": 1})
     child = root.fork()
     grandchild = child.fork()
     cleaned: list[str] = []
@@ -1473,7 +1474,7 @@ def test_cleanup_failures_do_not_skip_remaining_cleanup_or_scope_release() -> No
     schema = Schema({"value": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"value": object()})
+    ctx.set_many({"value": object()})
     events: list[str] = []
     ctx.effect(lambda: lambda: events.append("first"))
 

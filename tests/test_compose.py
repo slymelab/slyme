@@ -668,7 +668,7 @@ def test_flattened_context_shares_compose_but_not_scope_identity() -> None:
 
     snapshot = Context()
     snapshot.declare(R)
-    snapshot.update({ref: ctx.get(ref)})
+    snapshot.set_many({ref: ctx.get(ref)})
     assert snapshot.get(ref) is hooks
     assert hooks.resolve(ctx.scope) == ("handler",)
     assert hooks.resolve(snapshot.scope) == ()

@@ -44,13 +44,13 @@ BOX_HANDLER = TreeHandler(
 
 
 def test_rule_definitions_support_inspection_without_a_context() -> None:
-    @node
+    @node(inject_ctx=True)
     def echo(ctx, *, value):
         return value
 
     graph = echo.partial(value=42)
     rules = TreeRules.merge((NODE_INSPECTION_TREE_RULES, DATA_RULES))
-    assert list(iter_leaves([graph], rules=rules)) == [graph.func, 42]
+    assert list(iter_leaves([graph], rules=rules)) == [graph.func, 42, True, None]
     assert list(iter_leaves([graph], rules=DATA_RULES)) == [graph]
 
 
@@ -92,8 +92,6 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
     with pytest.raises(ContextPathError):
         detached.get(DATA_TREE_REF)
     with pytest.raises(ContextPathError):
-        detached.extract(["value"])
-    with pytest.raises(ContextPathError):
         eval_tree(detached, [])
 
     rules = Compose(
@@ -106,7 +104,7 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
             detached.scope, root.get(DATA_TREE_REF).resolve(root.scope)
         )
     )
-    assert detached.extract(["value"]) == [7]
+    assert node(lambda: 7).to("value")(detached) == 7
     with pytest.raises(ContextPathError):
         eval_tree(detached, [])
     evaluators = Compose(factory=TypeLayer, query=TypeLayer.merge)
@@ -164,7 +162,7 @@ def test_isolated_tree_rules_do_not_affect_schema_or_parent_rules() -> None:
     tree = [isolated.resolve("group.value")]
     assert eval_tree(isolated, tree) is tree
     assert root.get(DATA_TREE_REF).resolve(root.scope).handlers[list]
-    assert isolated.extract("group.value") == 3
+    assert isolated.get("group.value") == 3
     root.dispose()
 
 
@@ -246,7 +244,7 @@ async def test_inflight_evaluation_uses_captured_rules_until_reconstruction() ->
 
 
 def test_node_assembly_stays_independent_of_the_execution_context() -> None:
-    @node
+    @node(inject_ctx=True)
     def consume(ctx, *, value):
         return value
 
@@ -268,12 +266,14 @@ def test_node_assembly_stays_independent_of_the_execution_context() -> None:
     assert list(iter_leaves(graph, rules=rules)) == [
         graph.func,
         graph.get("value").value,
+        True,
+        None,
     ]
     left.dispose()
     right.dispose()
 
 
-def test_context_tree_operations_use_the_same_scoped_rules() -> None:
+def test_node_result_uses_scoped_data_tree_rules() -> None:
     root = Context()
     root.declare({"group": {"value": Schema.leaf()}})
     plugin = root.fork()
@@ -286,12 +286,12 @@ def test_context_tree_operations_use_the_same_scoped_rules() -> None:
             plugin.scope, TreeRules({Box: handler})
         )
     )
-    root.update_tree(Box("group.value"), Box(5))
-    assert root.extract(Box("group.value")) == Box(5)
-    assert root.extract(Box(root.resolve("group.value")), local=True) == Box(5)
+    result = Box(7)
+    assert node(lambda: result).to(Box("group.value"))(root) is result
+    assert root.get("group.value") == 7
     plugin.dispose()
     assert Box not in root.get(DATA_TREE_REF).resolve(root.scope).handlers
-    assert root.get("group.value") == 5
+    assert root.get("group.value") == 7
     root.dispose()
 
 

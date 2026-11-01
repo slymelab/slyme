@@ -422,7 +422,7 @@ def test_shared_identity_has_one_current_value_and_a_persistent_barrier() -> Non
     shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": "root"})
+    root.set_many({"value": "root"})
     left = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
     right = root.derive(
         bindings={"value": ScopeBinding(shared_identity, blocked=False)}
@@ -511,7 +511,7 @@ def test_identity_release_preserves_a_barrier_created_by_a_value_finalizer() -> 
     shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": "root"})
+    root.set_many({"value": "root"})
     writer = root.derive(
         bindings={"value": ScopeBinding(shared_identity, blocked=False)}
     )
@@ -543,7 +543,7 @@ def test_context_get_stops_at_value_or_barrier_without_creating_identities(
     shared_identity = Identity("shared", blocked=True)
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": "root"})
+    root.set_many({"value": "root"})
     left = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
     right = root.derive(
         bindings={"value": ScopeBinding(shared_identity, blocked=False)}

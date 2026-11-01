@@ -22,7 +22,7 @@ def test_scope_release_is_sparse_and_saved_scopes_restore_their_bindings(
 
     root = Context()
     root.declare(Schema({f"value{i}": Schema.leaf() for i in range(100)}))
-    root.update({f"value{i}": i for i in range(100)})
+    root.set_many({f"value{i}": i for i in range(100)})
     object.__setattr__(root._store, "_data", NoScan(root._store._data))
     previous = root.derive(
         bindings={"value0": ScopeBinding(shared_identity, blocked=False)}
@@ -218,10 +218,10 @@ def test_shared_scope_indexes_remain_local_to_each_application() -> None:
     schema = Schema({"value": Schema.leaf()})
     left = Context(scope=scope)
     left.declare(schema)
-    left.update({"value": "left"})
+    left.set_many({"value": "left"})
     right = Context(scope=scope)
     right.declare(schema)
-    right.update({"value": "right"})
+    right.set_many({"value": "right"})
     assert left._store._scope_usages is not right._store._scope_usages
     assert left._store._scope_usages[scope].entries == {
         left.resolve_entry(ref.path) for ref in left.flatten()
@@ -246,7 +246,7 @@ def test_new_scopes_do_not_scan_schema_entries() -> None:
 
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
-    root.update({"value": 1})
+    root.set_many({"value": 1})
     object.__setattr__(root._schema, "_entries", NoScan(root._schema._entries))
     child = root.fork(scope=root.scope.fork())
     child.set("value", 2)
@@ -338,7 +338,7 @@ def test_sparse_restore_failure_rolls_back_all_recorded_bindings(
     scope = previous.scope
     previous.dispose()
     writer = root.derive(bindings={path: config for path in paths})
-    writer.update({path: path for path in paths})
+    writer.set_many({path: path for path in paths})
     entries = set(root._store._scope_usages[scope].entries)
     restored = []
     original = _ContextBinding.restore_scope
@@ -395,7 +395,7 @@ def test_scope_usage_lifecycle_requires_only_point_lookups() -> None:
     root.dispose()
 
 
-@pytest.mark.parametrize("operation", ["delete", "drop"])
+@pytest.mark.parametrize("operation", ["delete", "delete_many"])
 @pytest.mark.parametrize("target", ["group"])
 def test_container_deletion_only_visits_intersecting_bindings(
     monkeypatch: pytest.MonkeyPatch, operation: str, target: str
@@ -409,7 +409,7 @@ def test_container_deletion_only_visits_intersecting_bindings(
             }
         )
     )
-    root.update({f"group.value{i}": i for i in range(1000)})
+    root.set_many({f"group.value{i}": i for i in range(1000)})
     child = root.fork(scope=root.scope.fork())
     child.set("group.value0", "child")
     child.set("other", "keep")
@@ -425,7 +425,7 @@ def test_container_deletion_only_visits_intersecting_bindings(
         if operation == "delete":
             child.delete(target)
         else:
-            child.drop([target, "group.value0", target])
+            child.delete_many([target, "group.value0", target])
     expected = {"group.value0", "other"} if target == "" else {"group.value0"}
     assert set(visited) == expected
     assert len(visited) == len(expected)
@@ -438,7 +438,7 @@ def test_container_deletion_only_visits_intersecting_bindings(
     root.dispose()
 
 
-@pytest.mark.parametrize("operation", ["delete", "drop"])
+@pytest.mark.parametrize("operation", ["delete", "delete_many"])
 def test_delete_keeps_shared_identity_ownership_without_a_prior_write(
     operation: str,
 ) -> None:
@@ -455,7 +455,7 @@ def test_delete_keeps_shared_identity_ownership_without_a_prior_write(
     if operation == "delete":
         reader.delete("group")
     else:
-        reader.drop(["group"])
+        reader.delete_many(["group"])
     assert not reader.exists("group.value")
     assert reader._store._scope_usages[reader.scope].entries == {
         root.resolve_entry("group.value")
@@ -520,7 +520,7 @@ def test_schema_retains_an_application_until_explicit_disposal() -> None:
     schema = Schema({"value": Schema.leaf()})
     root = Context()
     root.declare(schema)
-    root.update({"value": object()})
+    root.set_many({"value": object()})
     schema = root._schema
     root_ref = weakref.ref(root)
     del root

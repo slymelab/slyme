@@ -12,84 +12,67 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Keyword partials with explicit Auto evaluation and Wrapper composition."""
+"""Native functions with keyword bindings, composition, and optional result binding."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import (
     Any,
-    Concatenate,
     Generic,
     ParamSpec,
     Protocol,
     TypeAlias,
     TypeVar,
+    cast,
     overload,
 )
 
-from slyme.context import Context, Metadata
-from slyme.execution import Continuation, continuation
-
-from .exception import (
-    NodeException,
-    NodeExceptionRecord,
-    WrapperExceptionRecord,
+from slyme.context import (
+    DATA_TREE_REF,
+    Context,
+    ContextKey,
+    ContextPathError,
+    Metadata,
+    RefLeafConfig,
 )
-
-__all__ = [
-    "auto",
-    "node",
-    "wrapper",
-    "NodeElement",
-    "Node",
-    "AnyNode",
-    "Wrapper",
-    "AnyWrapper",
-]
+from slyme.execution import Continuation, continuation
+from slyme.tree import get_element, iter_with_key_path
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _S = TypeVar("_S", covariant=True)
 _V = TypeVar("_V")
-
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
 
 
 @dataclass(frozen=True, slots=True)
 class Auto(Generic[_S]):
-    """Evaluate a bound parameter tree before invoking its Node or Wrapper.
-
-    Ordinary parameters pass through unchanged. Containers inside value are
-    reconstructed; evaluator results are not recursively evaluated.
-    """
-
     value: _S
 
 
 def auto(value: _V) -> Auto[_V]:
-    """Mark a value tree for evaluation when its Node or Wrapper executes."""
+    """Mark a value tree for evaluation at invocation."""
     return Auto(value)
 
 
-class NodeElement(Generic[_P, _R]):
-    """A function with read-only keyword bindings and auxiliary metadata.
+class Node(Generic[_P, _R]):
+    """A callable with keyword bindings that can write its result to Context."""
 
-    Mappings are shallow snapshots; referenced values retain their identities.
-    """
-
-    __slots__ = ("_func", "_params", "_metadata")
+    __slots__ = ("_func", "_inject_ctx", "_params", "_result_to", "_metadata")
 
     @overload
     def __init__(
         self,
         *,
         func: Callable[_P, Awaitable[_R]],
+        inject_ctx: bool = False,
         params: Mapping[str, Any] | None = None,
+        result_to: Any = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     @overload
@@ -97,20 +80,26 @@ class NodeElement(Generic[_P, _R]):
         self,
         *,
         func: Callable[_P, _R | Awaitable[_R]],
+        inject_ctx: bool = False,
         params: Mapping[str, Any] | None = None,
+        result_to: Any = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None: ...
     def __init__(
         self,
         *,
         func: Callable[_P, _R | Awaitable[_R]],
+        inject_ctx: bool = False,
         params: Mapping[str, Any] | None = None,
+        result_to: Any = None,
         metadata: Mapping[str, Metadata] | None = None,
     ) -> None:
-        self._func: Callable[..., _R | Awaitable[_R]] = func
+        self._func = func
+        self._inject_ctx = inject_ctx
         self._params: Mapping[str, Any] = MappingProxyType(
             {} if params is None else dict(params)
         )
+        self._result_to = result_to
         self._metadata: Mapping[str, Metadata] = MappingProxyType(
             {} if metadata is None else dict(metadata)
         )
@@ -120,17 +109,22 @@ class NodeElement(Generic[_P, _R]):
         return self._func
 
     @property
+    def inject_ctx(self) -> bool:
+        return self._inject_ctx
+
+    @property
     def params(self) -> Mapping[str, Any]:
-        """Return a read-only view of explicitly bound parameters."""
         return self._params
 
     @property
+    def result_to(self) -> Any:
+        return self._result_to
+
+    @property
     def metadata(self) -> Mapping[str, Metadata]:
-        """Return the read-only snapshot of auxiliary metadata."""
         return self._metadata
 
     def get(self, name: str, default: Any = _MISSING) -> Any:
-        """Return a binding or default; absent bindings otherwise raise KeyError."""
         try:
             return self._params[name]
         except KeyError:
@@ -138,302 +132,125 @@ class NodeElement(Generic[_P, _R]):
                 raise
             return default
 
-    @staticmethod
-    def _prepare_eval(
-        params: Mapping[str, Any],
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Separate explicitly wrapped Auto trees from ordinary parameters."""
-        raw_params = {}
-        eval_params = {}
-        for name, value in params.items():
-            if isinstance(value, Auto):
-                eval_params[name] = value.value
-            else:
-                raw_params[name] = value
-        return raw_params, eval_params
-
-
-class Node(NodeElement[Concatenate[Context, _P], _R], Generic[_P, _R]):
-    """A keyword partial with Auto evaluation and Wrapper composition.
-
-    Calls shallowly override saved bindings without modifying them. Python
-    applies function defaults and argument validation at invocation time.
-    """
-
-    __slots__ = ("_wrappers",)
-
-    @overload
-    def __init__(
-        self,
-        /,
-        *,
-        func: Callable[Concatenate[Context, _P], Awaitable[_R]],
-        wrappers: Iterable[AnyWrapper[_R]] | None = None,
-        params: Mapping[str, Any] | None = None,
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> None: ...
-    @overload
-    def __init__(
-        self,
-        /,
-        *,
-        func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
-        wrappers: Iterable[AnyWrapper[_R]] | None = None,
-        params: Mapping[str, Any] | None = None,
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> None: ...
-    def __init__(
-        self,
-        /,
-        *,
-        func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
-        wrappers: Iterable[AnyWrapper[_R]] | None = None,
-        params: Mapping[str, Any] | None = None,
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> None:
-        super().__init__(func=func, params=params, metadata=metadata)
-        self._wrappers: tuple[AnyWrapper[_R], ...] = (
-            () if wrappers is None else tuple(wrappers)
-        )
-
-    @property
-    def wrappers(self) -> tuple[AnyWrapper[_R], ...]:
-        """Return the read-only, outermost-first wrapper sequence."""
-        return self._wrappers
-
     def partial(self, /, **params: Any) -> Node[_P, _R]:
-        """Return a new Node with shallowly merged bindings, without evaluation."""
-        return self.replace(params={**self._params, **params})
+        """Return a new Node with merged, unevaluated keyword bindings."""
+        return self.replace(params={**self.params, **params})
+
+    def auto_partial(self, /, **params: Any) -> Node[_P, _R]:
+        """Bind each supplied value as auto(value) in a new Node."""
+        return self.partial(**{name: auto(value) for name, value in params.items()})
+
+    def to(self, result_to: Any) -> Node[_P, _R]:
+        """Set result destinations in a new Node, or disable binding with None."""
+        return self.replace(result_to=result_to)
 
     def replace(
         self,
         *,
         params: Mapping[str, Any] | None | _Missing = _MISSING,
-        wrappers: Iterable[AnyWrapper[_R]] | None | _Missing = _MISSING,
+        result_to: Any = _MISSING,
         metadata: Mapping[str, Metadata] | None | _Missing = _MISSING,
     ) -> Node[_P, _R]:
-        """Return a new Node, replacing supplied configuration fields in full.
-
-        Omitted fields are retained; None clears a field. Values and Wrapper
-        objects keep their identities. The callback is unchanged.
-        """
         return Node(
             func=self.func,
+            inject_ctx=self.inject_ctx,
             params=self.params if params is _MISSING else params,
-            wrappers=self.wrappers if wrappers is _MISSING else wrappers,
+            result_to=self.result_to if result_to is _MISSING else result_to,
             metadata=self.metadata if metadata is _MISSING else metadata,
         )
+
+    def _publish_result(self, ctx: Context, result: _R) -> None:
+        rules = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
+        updates = [
+            (destination, get_element(result, path))
+            for path, destination in iter_with_key_path(self.result_to, rules=rules)
+        ]
+        entries = ctx.resolve_entries(
+            (destination for destination, _ in updates), role="leaf"
+        )
+        assignments: dict[ContextKey, Any] = {}
+        registrations: dict[ContextKey, Any] = {}
+        for entry, (_, value) in zip(entries, updates, strict=True):
+            if cast(RefLeafConfig, entry.config).mode == "register":
+                if entry.ref in registrations:
+                    raise ContextPathError(
+                        f"Duplicate registration result path {entry.ref.path!r}."
+                    )
+                registrations[entry.ref] = value
+            else:
+                assignments[entry.ref] = value
+        if registrations:
+            ctx.register_many(registrations)
+        if assignments:
+            ctx.set_many(assignments)
 
     @continuation
     def __call__(self, ctx: Context, /, **kwargs: Any) -> Generator[Any, Any, _R]:
-        """Snapshot bindings and wrappers; evaluate Auto when call_next delegates."""
         try:
-            func = self._func
-            wrappers = self.wrappers
-            kwargs = {**self._params, **kwargs}
-            raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
-
-            @continuation
-            def chain(call_ctx: Context) -> Generator[Any, Any, _R]:
-                if eval_kwargs:
-                    evaluated = yield eval_tree.flat_call(call_ctx, eval_kwargs)
+            # Keep .func typed while accepting dynamic invocation kwargs.
+            func: Callable[..., _R | Awaitable[_R]] = self.func
+            params = {**self.params, **kwargs}
+            raw: dict[str, Any] = {}
+            deferred: dict[str, Any] = {}
+            for name, value in params.items():
+                if isinstance(value, Auto):
+                    deferred[name] = value.value
                 else:
-                    evaluated = {}
-                return (
-                    yield func.flat_call(call_ctx, **raw_kwargs, **evaluated)
-                    if isinstance(func, Continuation)
-                    else func(call_ctx, **raw_kwargs, **evaluated)
-                )
-
-            composed = Wrapper.compose(wrappers, wrapped=self, call_next=chain)
-            return (
-                yield composed.flat_call(ctx)
-                if isinstance(composed, Continuation)
-                else composed(ctx)
-            )
-        except NodeException:
-            raise
-        except Exception as error:
-            raise NodeExceptionRecord(exception_node=self) from error
-
-
-class Wrapper(
-    NodeElement[
-        Concatenate[
-            Context, Node[..., _R], Callable[[Context], _R | Awaitable[_R]], _P
-        ],
-        _R,
-    ],
-    Generic[_P, _R],
-):
-    """Preserve a Node's result type; await completion before result-dependent work."""
-
-    __slots__ = ()
-
-    @overload
-    def __init__(
-        self,
-        /,
-        *,
-        func: Callable[
-            Concatenate[
-                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
-            ],
-            Awaitable[_R],
-        ],
-        params: Mapping[str, Any] | None = None,
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> None: ...
-    @overload
-    def __init__(
-        self,
-        /,
-        *,
-        func: Callable[
-            Concatenate[
-                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
-            ],
-            _R | Awaitable[_R],
-        ],
-        params: Mapping[str, Any] | None = None,
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> None: ...
-    def __init__(
-        self,
-        /,
-        *,
-        func: Callable[
-            Concatenate[
-                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
-            ],
-            _R | Awaitable[_R],
-        ],
-        params: Mapping[str, Any] | None = None,
-        metadata: Mapping[str, Metadata] | None = None,
-    ) -> None:
-        super().__init__(func=func, params=params, metadata=metadata)
-
-    def partial(self, /, **params: Any) -> Wrapper[_P, _R]:
-        """Return a new Wrapper with shallowly merged bindings, without evaluation."""
-        return self.replace(params={**self._params, **params})
-
-    def replace(
-        self,
-        *,
-        params: Mapping[str, Any] | None | _Missing = _MISSING,
-        metadata: Mapping[str, Metadata] | None | _Missing = _MISSING,
-    ) -> Wrapper[_P, _R]:
-        """Return a new Wrapper; omitted fields stay, None clears a field."""
-        return Wrapper(
-            func=self.func,
-            params=self.params if params is _MISSING else params,
-            metadata=self.metadata if metadata is _MISSING else metadata,
-        )
-
-    @staticmethod
-    def compose(
-        wrappers: Iterable[AnyWrapper[_R]],
-        *,
-        wrapped: AnyNode[_R],
-        call_next: Callable[[Context], _R | Awaitable[_R]],
-    ) -> Callable[[Context], _R | Awaitable[_R]]:
-        """Assemble outermost-first wrappers without invoking them.
-
-        Snapshot wrapper order; each invocation evaluates the wrappers' Auto
-        bindings. Wrappers control whether and how often to call the next
-        layer and its Context. Results preserve the Node's type and may be awaitable.
-        """
-        for wrapper_obj in reversed(tuple(wrappers)):
-            invoke = lambda ctx, current=wrapper_obj, next_call=call_next: current(  # noqa: E731
-                ctx, wrapped, next_call
-            )
-            call_next = invoke
-        return call_next
-
-    @continuation
-    def __call__(
-        self,
-        ctx: Context,
-        wrapped: AnyNode[_R],
-        call_next: Callable[[Context], _R | Awaitable[_R]],
-        /,
-        **kwargs: Any,
-    ) -> Generator[Any, Any, _R]:
-        """Evaluate wrapper Auto bindings and invoke its function on this Context."""
-        try:
-            kwargs = {**self._params, **kwargs}
-            raw_kwargs, eval_kwargs = self._prepare_eval(kwargs)
-            if eval_kwargs:
-                raw_kwargs.update((yield eval_tree.flat_call(ctx, eval_kwargs)))
-            func = self._func
-            return (
-                yield func.flat_call(ctx, wrapped, call_next, **raw_kwargs)
+                    raw[name] = value
+            if deferred:
+                raw.update((yield eval_tree.flat_call(ctx, deferred)))
+            args = (ctx,) if self.inject_ctx else ()
+            result = yield (
+                func.flat_call(*args, **raw)
                 if isinstance(func, Continuation)
-                else func(ctx, wrapped, call_next, **raw_kwargs)
+                else func(*args, **raw)
             )
-        except NodeException:
+            if self.result_to is not None:
+                self._publish_result(ctx, result)
+            return result
+        except BaseException:
+            # Reserved for runtime trace hooks.
             raise
-        except Exception as error:
-            raise WrapperExceptionRecord(
-                exception_node=self, wrapped_node=wrapped
-            ) from error
 
 
-# Erase the business signature while retaining the completion type.
 AnyNode: TypeAlias = Node[..., _R]
-AnyWrapper: TypeAlias = Wrapper[..., _R]
+
+
+def wrap(outer: Node[_P, _R], /, *inner: AnyNode[Any]) -> Node[_P, _R]:
+    """Bind Nodes from outermost to innermost, with the target last."""
+    if not inner:
+        return outer
+    wrapped = inner[-1]
+    for layer in reversed(inner[:-1]):
+        wrapped = layer.partial(wrapped=wrapped)
+    return outer.partial(wrapped=wrapped)
 
 
 class _NodeDecorator(Protocol):
     @overload
-    def __call__(
-        self, func: Callable[Concatenate[Context, _P], Awaitable[_R]], /
-    ) -> Node[_P, _R]: ...
+    def __call__(self, func: Callable[_P, Awaitable[_R]], /) -> Node[_P, _R]: ...
     @overload
-    def __call__(
-        self, func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]], /
-    ) -> Node[_P, _R]: ...
-
-
-class _WrapperDecorator(Protocol):
-    @overload
-    def __call__(
-        self,
-        func: Callable[
-            Concatenate[
-                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
-            ],
-            Awaitable[_R],
-        ],
-        /,
-    ) -> Wrapper[_P, _R]: ...
-    @overload
-    def __call__(
-        self,
-        func: Callable[
-            Concatenate[
-                Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P
-            ],
-            _R | Awaitable[_R],
-        ],
-        /,
-    ) -> Wrapper[_P, _R]: ...
+    def __call__(self, func: Callable[_P, _R | Awaitable[_R]], /) -> Node[_P, _R]: ...
 
 
 @overload
 def node(
-    func: Callable[Concatenate[Context, _P], Awaitable[_R]],
+    func: Callable[_P, Awaitable[_R]],
     /,
     *,
+    inject_ctx: bool = False,
     params: Mapping[str, Any] | None = None,
+    result_to: Any = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> Node[_P, _R]: ...
 @overload
 def node(
-    func: Callable[Concatenate[Context, _P], _R | Awaitable[_R]],
+    func: Callable[_P, _R | Awaitable[_R]],
     /,
     *,
+    inject_ctx: bool = False,
     params: Mapping[str, Any] | None = None,
+    result_to: Any = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> Node[_P, _R]: ...
 @overload
@@ -441,73 +258,30 @@ def node(
     func: None = None,
     /,
     *,
+    inject_ctx: bool = False,
     params: Mapping[str, Any] | None = None,
+    result_to: Any = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> _NodeDecorator: ...
 def node(
     func: Callable[..., Any] | None = None,
     /,
     *,
+    inject_ctx: bool = False,
     params: Mapping[str, Any] | None = None,
+    result_to: Any = None,
     metadata: Mapping[str, Metadata] | None = None,
 ) -> Any:
-    """Decorate a function as a directly callable Node.
-
-    Snapshot params and metadata when configuring the decorator. Use partial()
-    to derive independent bindings; Auto evaluation happens only on invocation.
-    """
-    saved_params = None if params is None else dict(params)
-    saved_metadata = None if metadata is None else dict(metadata)
+    """Adapt a function into a Node, optionally passing it the execution Context."""
 
     def decorate(target: Callable[..., Any]) -> AnyNode[Any]:
-        return Node(func=target, params=saved_params, metadata=saved_metadata)
-
-    return decorate if func is None else decorate(func)
-
-
-@overload
-def wrapper(
-    func: Callable[
-        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
-        Awaitable[_R],
-    ],
-    /,
-    *,
-    params: Mapping[str, Any] | None = None,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_P, _R]: ...
-@overload
-def wrapper(
-    func: Callable[
-        Concatenate[Context, AnyNode[_R], Callable[[Context], _R | Awaitable[_R]], _P],
-        _R | Awaitable[_R],
-    ],
-    /,
-    *,
-    params: Mapping[str, Any] | None = None,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Wrapper[_P, _R]: ...
-@overload
-def wrapper(
-    func: None = None,
-    /,
-    *,
-    params: Mapping[str, Any] | None = None,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> _WrapperDecorator: ...
-def wrapper(
-    func: Callable[..., Any] | None = None,
-    /,
-    *,
-    params: Mapping[str, Any] | None = None,
-    metadata: Mapping[str, Metadata] | None = None,
-) -> Any:
-    """Decorate a function as a directly callable Wrapper with saved bindings."""
-    saved_params = None if params is None else dict(params)
-    saved_metadata = None if metadata is None else dict(metadata)
-
-    def decorate(target: Callable[..., Any]) -> AnyWrapper[Any]:
-        return Wrapper(func=target, params=saved_params, metadata=saved_metadata)
+        return Node(
+            func=target,
+            inject_ctx=inject_ctx,
+            params=params,
+            result_to=result_to,
+            metadata=metadata,
+        )
 
     return decorate if func is None else decorate(func)
 

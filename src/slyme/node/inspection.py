@@ -1,4 +1,4 @@
-"""Describe stored bindings, without invoking Nodes or composing Wrappers."""
+"""Inspect explicit nested composition through normal Node parameters."""
 
 from __future__ import annotations
 
@@ -7,19 +7,16 @@ from typing import Any
 
 from slyme.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
 
-from .core import Auto, Node, NodeElement, Wrapper
+from .core import Auto, Node
 
 NODE_INSPECTION_TYPE_NAMES: Mapping[type, str] = {
     Node: "slyme.node",
-    Wrapper: "slyme.wrapper",
     Auto: "slyme.auto",
 }
 
 
-def _flatten(value: NodeElement[..., Any]) -> tuple[Iterable[Any], TreeAux]:
-    names: tuple[str, ...] = ("func", "params", "metadata")
-    if isinstance(value, Node):
-        names += ("wrappers",)
+def _flatten(value: Node[..., Any]) -> tuple[Iterable[Any], TreeAux]:
+    names = ("func", "params", "metadata", "inject_ctx", "result_to")
     return (
         (getattr(value, name) for name in names),
         TreeAux(children_keys=tuple(AttributeKey(name) for name in names)),
@@ -29,7 +26,6 @@ def _flatten(value: NodeElement[..., Any]) -> tuple[Iterable[Any], TreeAux]:
 NODE_INSPECTION_TREE_RULES = TreeRules(
     {
         Node: TreeHandler(_flatten, None),
-        Wrapper: TreeHandler(_flatten, None),
         Auto: TreeHandler(
             lambda obj: ((obj.value,), TreeAux(children_keys=(AttributeKey("value"),))),
             None,

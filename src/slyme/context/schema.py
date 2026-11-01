@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, final
@@ -384,6 +384,15 @@ class Schema:
     ) -> Ref[_T]:
         """Return the declared Ref; an empty path resolves the root container."""
         return self.resolve_entry(key, role=role).ref
+
+    def resolve_entries(
+        self,
+        keys: Iterable[ContextKey[_T]],
+        *,
+        role: Literal["leaf", "container"] | None = None,
+    ) -> tuple[RefEntry[_T], ...]:
+        """Resolve all requested declarations, preserving order and duplicates."""
+        return tuple(self.resolve_entry(key, role=role) for key in keys)
 
     def declare(
         self,

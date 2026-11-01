@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from typing_extensions import assert_type
 
-from slyme.context import Context, Lifecycle, Scope
+from slyme.context import Context, Lifecycle, Ref, RefEntry, Schema, Scope
 from slyme.context.core import ContextView
+
+
+def check_batch_types(ctx: Context, schema: Schema, field: Ref[int]) -> None:
+    assert_type(ctx.resolve_entries([field]), tuple[RefEntry[int], ...])
+    assert_type(schema.resolve_entries([field]), tuple[RefEntry[int], ...])
+    assert_type(ctx.resolve_entries(["untyped"]), tuple[RefEntry[Any], ...])
+    assert_type(ctx.set_many({field: 1, "another": "value"}), None)
+    assert_type(ctx.delete_many([field, "another"]), None)
+    assert_type(ctx.register_many({field: 1}), Callable[[], None])
 
 
 def check_observation_properties(ctx: Context, lifecycle: Lifecycle, view: ContextView):

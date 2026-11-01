@@ -38,7 +38,7 @@ def test_schema_module_preserves_public_ref_and_context_interoperation() -> None
     assert isinstance(ref, PathRef)
     ctx = Context()
     remove = ctx.declare(schema)
-    ctx.update({ref: 1})
+    ctx.set_many({ref: 1})
     remove_source()
     assert ctx.get(ref) == 1
     remove()
@@ -646,7 +646,7 @@ def test_context_operations_respect_schema_leaf_and_container_roles() -> None:
         ctx.to_dict("leaf")
 
     with pytest.raises(ContextPathError, match="container.*not a leaf"):
-        ctx.update({"leaf": 1, "container": 2})
+        ctx.set_many({"leaf": 1, "container": 2})
     assert not ctx.exists("leaf")
 
     ctx.set("leaf", {"child": 1})
@@ -662,7 +662,7 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
     settings = {"theme": "dark"}
     ctx = Context()
     ctx.declare(R)
-    ctx.update(
+    ctx.set_many(
         {
             R.resolve("user.name"): "Ada",
             R.resolve("user.age"): 37,
@@ -702,7 +702,7 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
     assert not ctx.exists(R.resolve("user.age"))
     ctx.delete(R.resolve("user.name"))
     assert not ctx.exists(R.resolve("user"))
-    ctx.drop([R.resolve("settings"), R.resolve("not_present")])
+    ctx.delete_many([R.resolve("settings"), R.resolve("not_present")])
     assert ctx.to_dict() == {
         "$": ctx.get("$").to_dict(),
     }
@@ -734,9 +734,9 @@ def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
         "$.inspection.raw_value_types",
     ]
     with pytest.raises(ContextPathError, match="value"):
-        ctx.update({"value": 1})
+        ctx.set_many({"value": 1})
     ctx.declare({"value": Schema.leaf()})
-    ctx.update({"value": 1})
+    ctx.set_many({"value": 1})
     assert ctx.get("value") == 1
     ctx.dispose()
 
@@ -744,10 +744,10 @@ def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
 def test_context_constructor_accepts_keyword_ownership_and_visibility() -> None:
     root = Context()
     root.declare(R)
-    root.update({R.resolve("a.b.c"): 1})
+    root.set_many({R.resolve("a.b.c"): 1})
     child_scope = root.scope.fork()
     child = Context(parent=root, scope=child_scope)
-    child.update({R.resolve("c"): 3})
+    child.set_many({R.resolve("c"): 3})
 
     assert child.parent is root
     assert child.scope is child_scope
@@ -778,7 +778,7 @@ def test_context_path_errors_do_not_partially_mutate() -> None:
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "blocked": {"child": 1}}
 
     with pytest.raises(ContextPathError, match="parent.*not a leaf"):
-        ctx.update({R.resolve("other"): 2, R.resolve("parent"): 1})
+        ctx.set_many({R.resolve("other"): 2, R.resolve("parent"): 1})
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "blocked": {"child": 1}}
 
     ctx.set(R.resolve("short"), 3)
@@ -793,7 +793,7 @@ def test_context_path_errors_do_not_partially_mutate() -> None:
 def test_context_drop_and_update_are_separate_operations() -> None:
     ctx = Context()
     ctx.declare(R)
-    ctx.update(
+    ctx.set_many(
         {
             R.resolve("a.old"): 1,
             R.resolve("a.keep"): 2,
@@ -801,17 +801,17 @@ def test_context_drop_and_update_are_separate_operations() -> None:
         }
     )
 
-    ctx.drop([R.resolve("a")])
-    ctx.update({R.resolve("a.new"): 4})
+    ctx.delete_many([R.resolve("a")])
+    ctx.set_many({R.resolve("a.new"): 4})
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "a": {"new": 4}, "other": 3}
 
-    ctx.drop([R.resolve("a"), R.resolve("a.new")])
-    ctx.update({R.resolve("other"): 5})
+    ctx.delete_many([R.resolve("a"), R.resolve("a.new")])
+    ctx.set_many({R.resolve("other"): 5})
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "other": 5}
 
     before = ctx.to_dict()
-    assert ctx.update({}) is None
-    assert ctx.drop([]) is None
+    assert ctx.set_many({}) is None
+    assert ctx.delete_many([]) is None
     assert ctx.to_dict() == before
 
 
@@ -840,7 +840,7 @@ def test_context_deletion_does_not_change_schema_structure_roles() -> None:
 def test_context_mutation_validates_before_inplace_apply() -> None:
     ctx = Context()
     ctx.declare(R)
-    ctx.update(
+    ctx.set_many(
         {
             R.resolve("a.b.c"): 1,
             R.resolve("blocked.child"): 2,
@@ -848,7 +848,7 @@ def test_context_mutation_validates_before_inplace_apply() -> None:
         }
     )
     with pytest.raises(ContextPathError, match="blocked.*not a leaf"):
-        ctx.update({R.resolve("a.new"): 4, R.resolve("blocked"): 5})
+        ctx.set_many({R.resolve("a.new"): 4, R.resolve("blocked"): 5})
     assert ctx.to_dict() == {
         "$": ctx.get("$").to_dict(),
         "a": {"b": {"c": 1}},
@@ -859,23 +859,6 @@ def test_context_mutation_validates_before_inplace_apply() -> None:
     ctx.set(R.resolve("a.b.c"), 6)
     ctx.set(R.resolve("a.new"), 7)
     assert ctx.to_dict(R.resolve("a")) == {"b": {"c": 6}, "new": 7}
-
-
-def test_update_tree_and_structured_extract() -> None:
-    ctx = Context()
-    ctx.declare(R)
-    refs = {
-        "position": (R.resolve("point.x"), R.resolve("point.y")),
-        "label": R.resolve("point.label"),
-    }
-    values = {"position": (3, 4), "label": "p"}
-    ctx.update_tree(refs, values)
-
-    assert ctx.extract(refs) == values
-    assert ctx.extract([R.resolve("point.x"), {"y": R.resolve("point.y")}]) == [
-        3,
-        {"y": 4},
-    ]
 
 
 @given(
@@ -897,7 +880,7 @@ def test_context_eval_engine_flatten_round_trip(tree: Any) -> None:
 def test_context_is_an_opaque_tree_leaf() -> None:
     ctx = Context()
     ctx.declare(R)
-    ctx.update({R.resolve("a.b.c"): 1, R.resolve("c"): 2})
+    ctx.set_many({R.resolve("a.b.c"): 1, R.resolve("c"): 2})
 
     leaves, definition = flatten(ctx, rules=DATA_RULES)
     rebuilt = definition.unflatten(leaves)
@@ -909,7 +892,7 @@ def test_flatten_reconstructs_context_without_copying_leaf_values() -> None:
     shared_marker = object()
     ctx = Context()
     ctx.declare(R)
-    ctx.update(
+    ctx.set_many(
         {
             R.resolve("branch.value"): shared_mapping,
             R.resolve("branch.marker"): shared_marker,
@@ -922,7 +905,7 @@ def test_flatten_reconstructs_context_without_copying_leaf_values() -> None:
     }
     rebuilt = Context()
     rebuilt.declare(R)
-    rebuilt.update(flattened)
+    rebuilt.set_many(flattened)
 
     assert flattened == {
         R.resolve("branch.value"): shared_mapping,
@@ -953,10 +936,10 @@ def test_to_dict_is_a_nested_projection_while_flatten_preserves_leaf_paths() -> 
     tree_schema = Schema({"settings": {"theme": Schema.leaf()}})
     mapping_leaf = Context()
     mapping_leaf.declare(leaf_schema)
-    mapping_leaf.update({leaf_schema.resolve("settings"): {"theme": "dark"}})
+    mapping_leaf.set_many({leaf_schema.resolve("settings"): {"theme": "dark"}})
     structured = Context()
     structured.declare(tree_schema)
-    structured.update({tree_schema.resolve("settings.theme"): "dark"})
+    structured.set_many({tree_schema.resolve("settings.theme"): "dark"})
 
     assert mapping_leaf.get("settings") == structured.to_dict("settings")
     assert mapping_leaf.flatten() == {
@@ -1054,17 +1037,17 @@ def test_independent_context_roots_do_not_share_data_through_a_scope() -> None:
 
 def test_context_crud_uses_only_the_bound_scope() -> None:
     operations = (
-        Context.extract,
         Context.get,
         Context.exists,
         Context.keys,
         Context.to_dict,
         Context.flatten,
-        Context.update,
-        Context.drop,
+        Context.set_many,
+        Context.delete_many,
         Context.set,
         Context.register,
-        Context.update_tree,
+        Context.register_many,
+        Context.resolve_entries,
         Context.delete,
     )
 
@@ -1113,7 +1096,7 @@ def test_context_read_operations_can_select_local_or_effective_data() -> None:
         R.resolve("group.parent"): 1,
     }
     assert child.flatten(local=True) == {R.resolve("group.child"): 2}
-    assert child.extract([R.resolve("group.child")], local=True) == [2]
+    assert child.get(R.resolve("group.child"), local=True) == 2
 
 
 def test_context_views_follow_later_parent_and_child_changes() -> None:
@@ -1132,7 +1115,7 @@ def test_context_views_follow_later_parent_and_child_changes() -> None:
     }
 
     child.delete(R.resolve("group.local"))
-    root.drop([R.resolve("group.initial"), R.resolve("group.later")])
+    root.delete_many([R.resolve("group.initial"), R.resolve("group.later")])
     with pytest.raises(ContextPathError):
         view.to_dict()
 
@@ -1457,7 +1440,7 @@ def test_context_keeps_user_mappings_as_atomic_leaves() -> None:
     settings = {"theme": "dark"}
     ctx = Context()
     ctx.declare(R)
-    ctx.update({R.resolve("settings"): settings})
+    ctx.set_many({R.resolve("settings"): settings})
 
     assert ctx.get(R.resolve("settings")) is settings
     with pytest.raises(ContextPathError, match="theme"):
@@ -1474,7 +1457,7 @@ def test_flatten_can_materialize_an_effective_context() -> None:
 
     snapshot = Context()
     snapshot.declare(R)
-    snapshot.update({value: child.get(value)})
+    snapshot.set_many({value: child.get(value)})
     assert snapshot.parent is None
     assert snapshot.get(value) == 1
 
@@ -1493,7 +1476,7 @@ def test_flatten_cannot_implicitly_recreate_registration_ownership() -> None:
     with pytest.raises(ContextPathError, match="register"):
         context_4 = Context()
         context_4.declare(schema)
-        context_4.update(ctx.flatten())
+        context_4.set_many(ctx.flatten())
     snapshot = Context()
     snapshot.declare(schema)
     snapshot.register(value, 2)

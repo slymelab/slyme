@@ -5,41 +5,67 @@ description: API guidance, architectural best practices, and code-style conventi
 
 # Develop with Slyme
 
-## Mental model
+Start with [the everyday API](../../README.md); consult the [Node guide](../../docs/src/guide/essentials/node.md)
+for calls, binding, results and errors. Slyme extends ordinary functions
+with callable, bindable Nodes and scoped Context data. Most application logic
+needs Node calls, normal arguments/results and Context data operations. Add
+lifecycle, visibility and dynamic composition only when their semantics are needed.
 
-Use `node`, `wrapper`, and `auto` from `slyme.node`, and `ref` from `slyme.context` as the four common function entry points. `Node`, `Wrapper`, and `Ref` remain available for type annotations and explicit construction; the Auto marker class is internal. Node/Wrapper configuration is read-only; use `partial` or `replace` to derive a new object.
+## Define a contract and choose its boundary
 
-Slyme uses directly callable Node and Wrapper objects. Their parameter mappings are read-only; `partial(**params)` creates a new object with shallowly merged bindings. Node and Wrapper calls pass their current static parameter containers directly to user functions; mutations to those containers remain on the live element and are visible to later calls. Use `partial(...)` or call an assembly function again when another independently configurable graph is needed. An application Context root holds an explicit `Schema` reference and owns its data store and lifetime subtree. Contexts form a single-parent lifetime tree, while immutable `Scope` objects independently provide C3 visibility. `Context.fork()` creates an owned child that shares its parent's Scope by default; use `ctx.fork(scope=ctx.scope.fork())` for a local data identity. `Scope.fork()` is single-parent; construct `Scope(parents=(...))` explicitly for C3 multiple inheritance. `Context.flatten()` exposes the visible Ref-to-value mapping without copying stored values.
+Use a Node for a complete capability or phase that callers should be able to bind,
+wrap, replace or compose. Put dependencies in parameters; bind application paths
+and implementations at assembly. Use native parameters by default; opt into Context with `@node(inject_ctx=True)`. A Node's
+size follows a responsibility, not a line count or an instruction to turn every
+function into a Node.
 
-`@node` and `@wrapper` directly return Node and Wrapper objects, with optional `params` and `metadata` mappings. Read bindings with `get(name, default)` or the read-only `params` mapping; use `partial(**params)` to derive new bindings. There are no parameter set/delete methods. Call-time kwargs override bindings for one invocation before Auto evaluation. Function defaults and argument errors follow Python. Auto marks explicit binding trees for evaluation; ordinary values pass through unchanged. `replace(params=..., wrappers=..., metadata=...)` returns a new Node with entire supplied fields replaced; omit a field to retain it, or pass None to clear it. Wrapper.replace accepts params and metadata. Public configuration is read-only; referenced values are not deep-copied or frozen.
+Keep local parsing, formatting and algorithms in ordinary functions. Classes can
+own state and resource invariants. Reuse these helpers from Nodes. Keep the
+replaceable workflow visible in composition rather than hiding it inside a large
+service method or creating another workflow builder.
 
-Application code creates a `Context`, handles external inputs, calls the root Node with that Context, and reads outputs explicitly. Wrappers modify a mounted Node's execution and are not independently runnable workflow boundaries.
+Use ordinary functions to assemble Nodes. A named child Node expresses a role;
+a sequence expresses an ordered extensible region. Normal loops and branches
+express control flow. Use `sequential` for a plain linear pipeline. Compose is for
+independent owners adding/removing contributions at runtime, not for a fixed list.
 
-- `@node` defines an execution unit and may return either a derived value or control information.
-- `@wrapper` surrounds a Node with cross-cutting behavior such as tracing, retry, or error handling.
-- Ordinary Python functions assemble reusable Node graphs. Use return annotations for their intended result type; no assembly decorator is needed.
-- `Context` has at most one lifetime parent and one bound Scope. Reads follow `ctx.scope.mro` by default, writes target `ctx.scope`, and `local=True` restricts reads to that exact Scope. Context CRUD never accepts a separate Scope.
-- A Context tree and its mutable Schema and Compose objects belong to one thread and one event loop. This usage rule has no runtime thread-identity check. Offloaded thread or process work receives ordinary values and returns results for owner-thread Context mutation.
-- Context construction accepts only keyword `parent` and `scope`. Create it, call `ctx.declare(schema_or_dict)`, then `ctx.update(values)`. Importing a Schema copies its current definitions with independent ownership; source changes do not propagate. Schema fixes each path's leaf or container role; runtime data stores only leaf bindings.
-- `Context.effect()` owns immediate or awaitable setup and cleanup. Use `await_result` from `slyme.execution` to await either form. Setup and cleanup cannot dispose their owner or an ancestor. `dispose()` runs synchronous cleanup immediately and returns an awaitable if unfinished; await it to finish recursive LIFO cleanup. Repeated disposal shares its completion and reproduces terminal failures.
-- `Schema.leaf()` defaults to `mode="assign"`, permitting `set()`/`delete()`. With `mode="register"`, use `Context.register()` and its exact disposer instead; the caller owns that installation. A mode rejects the other mode's writes even when no value is present. `Context.declare()` likewise binds declaration cleanup to the calling Context.
-- `ctx.derive(label=..., parents=..., bindings=...)` creates an owned child Context and one new Scope configured for declared leaf paths and Compose objects. Parents defaults to `ctx.scope`, accepts one Scope or a tuple, and does not change the child's lifecycle parent. Binding values accept `ScopeBinding` or `Identity`, not `None`. A direct Identity is shorthand for `ScopeBinding(identity=identity)`. `ScopeBinding()` creates private storage; `ScopeBinding(identity=shared)` shares storage. Both ScopeBinding and Identity default to unblocked; enable either barrier explicitly with `blocked=True`. Scope construction and derive APIs are keyword-only; stored `scope.parents` is always a tuple.
-- `Compose(factory=..., query=...)` manages reversible registrations in application-defined layers. Each layer implements synchronous `register(token, /, *args, **kwargs)` returning a synchronous disposer; Compose injects only the token and invokes the disposer at most once. `layers(scope)` follows C3 visibility; `resolve(scope)` applies the query. Use `ctx.effect(lambda: compose.register(scope, value))` for owned cleanup, or manage its disposer explicitly. `compose.derive()` and `Compose.derive_many()` configure new Scopes without lifecycle ownership. See [references/core-api.md](references/core-api.md) for layer examples and default Tree/Eval rules.
+## Public API
 
-## Architecture
+Use the [Node guide](../../docs/src/guide/essentials/node.md) for calls, binding,
+replacement and Auto, and the [Context guide](../../docs/src/guide/essentials/context.md)
+for data, lifecycle and Compose contracts.
+Bind business inputs before `wrap(outer, inner, task)`; calls and partials apply
+only to the outer Node. `.to(ref_or_tree)` publishes a successful result and
+returns it unchanged. Keep intermediate/conditional state writes explicit.
+Import callable factories from `slyme.node`, data/scope objects from
+`slyme.context`, and mixed sync/async helpers from `slyme.execution`.
 
-Decompose the execution flow from top to bottom into atomic operations and steps, then represent each with Slyme `@node` or `@wrapper`. Model execution patterns that coordinate child Nodes with higher-order `@node`s.
+## Ownership and verification
 
-A higher-order Node accepts child Nodes through named parameters containing either one child or a structured collection. Each parameter represents a distinct role or extensible region in the execution topology, while the higher-order Node defines how its children participate in execution. Use a custom higher-order Node when it should provide execution semantics beyond simple linear chaining; use `sequential(...)` for a plain linear pipeline.
+`ctx.fork()` shares the parent's Scope; `ctx.derive()` creates a new Scope. Both
+are owned child lifetimes. Visibility and lifetime ownership are independent.
+Use `ctx.effect` for owned setup/cleanup. Release Contexts in `finally`:
+use `ctx.dispose()` for fully synchronous cleanup and
+`await await_result(ctx.dispose())` when cleanup may be asynchronous.
+Stop and join tasks before releasing the Context/resources they use; Context
+does not own arbitrary tasks. A Context tree belongs to one thread/event loop;
+offloaded work receives ordinary values and returns results to the owner.
 
-Represent a single, stable child role with an individual named `Node` parameter. For a statically assembled extensible group, use a container such as `Sequence[Node]` for ordered execution or `Mapping[K, Node]` for keyed dispatch. Use `Compose` when independent owners must add and remove values by Scope at runtime. Keep independently meaningful roles or phases in separate named parameters. See [references/core-api.md](references/core-api.md) for examples.
+For mixed sync/async results and disposal use `await_result` from
+`slyme.execution`. Prefer normal `async`/`await` in async applications. Read
+[async execution](references/async.md) when preserving both execution modes.
 
-`Auto` Ref parameters read the supplied Context. Every Auto child Node receives an owned child Context with a distinct child Scope, and Slyme disposes that child before parent execution continues. Use a returned value for self-contained dataflow; it must not depend on a resource owned by the disposed child. Call children explicitly with a selected Context when their writes and effects must share its lifetime. Context does not own arbitrary tasks that use it, so stop and await them before disposal.
+Implement the smallest coherent change satisfying the complete public contract.
+Test public Nodes with fresh Contexts and explicit arguments. Reuse fixtures
+and parametrized cases; cover public seams without duplicating the framework
+suite for every helper. Node calls propagate original exceptions unchanged,
+including through `wrapped(ctx)`. Auto may group failures. Assert the expected
+exception type, identity and chaining directly. For concurrent tests,
+observe events before unrelated awaits, control progress with explicit gates,
+and release held work on assertion failure.
 
-Reuse existing Nodes whenever possible. Extend behavior through composition before introducing new Nodes.
-
-## API by example
-
-Read [references/core-api.md](references/core-api.md) before writing Slyme code. It provides the Slyme API reference and best-practice guidance to follow throughout development.
-
-For async or mixed sync/async work, also read [references/async.md](references/async.md); it only describes differences from the core example.
+Consult [core examples](references/core-api.md), the
+[Context guide](../../docs/src/guide/essentials/context.md) and the
+[Tree guide](../../docs/src/guide/slyme-in-depth/tree-in-slyme.md) for advanced rules
+such as identity sharing, barriers, Compose layers and Tree/evaluator registration. They are references, not mandatory reading before
+writing an ordinary business function.

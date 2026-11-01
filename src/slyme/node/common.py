@@ -32,4 +32,4 @@ def sequential_exec(ctx: Context, nodes: Iterable[Node]) -> Generator[Any, Any, 
         yield item.__call__.flat_call(ctx)
 
 
-sequential = node(sequential_exec)
+sequential = node(sequential_exec, inject_ctx=True)

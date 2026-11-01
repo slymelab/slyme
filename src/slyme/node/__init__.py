@@ -20,24 +20,18 @@ from .common import (
 )
 from .core import (
     AnyNode,
-    AnyWrapper,
     Node,
-    NodeElement,
-    Wrapper,
     auto,
     node,
-    wrapper,
+    wrap,
 )
 from .eval import eval_tree
 
 __all__ = [
-    "NodeElement",
     "Node",
     "AnyNode",
-    "AnyWrapper",
-    "Wrapper",
     "node",
-    "wrapper",
+    "wrap",
     "sequential_exec",
     "sequential",
     "auto",

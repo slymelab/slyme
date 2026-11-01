@@ -6,10 +6,10 @@
 from slyme.context import Context, Ref, Schema, ref
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import inspect
-from slyme.node import node, auto
+from slyme.node import node, auto, wrap
 
 
-@node
+@node(inject_ctx=True)
 def task(ctx, *, value):
     return value
 
@@ -32,13 +32,13 @@ Names follow their roles rather than sharing one grammatical form. `inspection` 
 
 ## Two independent operations
 
-**Children** come from `TreeRules` and `flatten_one()`. Defaults cover data containers, Node/Wrapper bindings and metadata, Auto payloads, Context ownership children and declarations, Scopes, Refs, and Compose layers. Node and Wrapper values inside any parameter continue expanding. `Wrapper.compose()` creates a temporary call chain; inspection does not infer relationships from its closures or mutate the original objects.
+**Children** come from `TreeRules` and `flatten_one()`. Defaults cover data containers, Node bindings and metadata, Auto payloads, Context ownership children and declarations, Scopes, Refs, and Compose layers. Nodes values inside any parameter continue expanding. `wrap()` returns nested Nodes with explicit `wrapped` bindings, so temporary compositions are inspectable too. Inspection never changes the original objects.
 
 **Interpretation** uses a mapping from exact types to synchronous functions. Each function receives `(value, env)` and returns `Interpretation(value, env=...)` or `None`. Omitting `env` inherits the input environment; explicitly passing `None` clears it. Returning `None` means unavailable; `Interpretation(None)` means an observed value of `None`.
 
 With a Context environment, default interpreters read Refs through `ctx.get()` and call a Compose's configured query through `resolve(ctx.scope)`. Compose without a query remains unavailable. Context and ContextView interpret their own visible Ref-to-value mappings and select their owning Context as the result's environment. With these adapters, `inspect(target_ctx, **options)` needs no extra environment; `inspect(node, **options)` without an environment still describes its stored structure. The configuration source, target object and interpretation environment are independent.
 
-Both structural children and interpreted values continue through structure expansion and interpretation. Children inherit their current environment; only the interpreted result uses an environment explicitly supplied by `Interpretation.env`. A query can therefore expose Nodes nested in arbitrary containers without executing those Nodes. The inspector never evaluates Auto, invokes Node/Wrapper bodies, awaits values, drives generators, or calls arbitrary `repr`, getters, or iteration protocols. Unknown objects remain opaque references. Queries and user-supplied adapters are ordinary Python code: keep them synchronous, lightweight, stable during the call, and free of side effects. They are not sandboxed or interrupted by the inspector.
+Both structural children and interpreted values continue through structure expansion and interpretation. Children inherit their current environment; only the interpreted result uses an environment explicitly supplied by `Interpretation.env`. A query can therefore expose Nodes nested in arbitrary containers without executing those Nodes. The inspector never evaluates Auto, invokes Node bodies, awaits values, drives generators, or calls arbitrary `repr`, getters, or iteration protocols. Unknown objects remain opaque references. Queries and user-supplied adapters are ordinary Python code: keep them synchronous, lightweight, stable during the call, and free of side effects. They are not sandboxed or interrupted by the inspector.
 
 ## Extension
 
@@ -62,7 +62,12 @@ Semantic type names identify object-table records independently of Python class 
 ```python
 from dataclasses import dataclass
 
-from slyme.context import Context, Metadata, INSPECTION_TREE_RULES_REF, INSPECTION_TYPE_NAMES_REF
+from slyme.context import (
+    Context,
+    Metadata,
+    INSPECTION_TREE_RULES_REF,
+    INSPECTION_TYPE_NAMES_REF,
+)
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import inspect
 from slyme.tree import AttributeKey, TreeAux, TreeHandler, TreeRules
@@ -141,7 +146,7 @@ interface InspectionGraph {
 
 Object IDs are local to the graph. Shared objects and cycles reuse references. Every admitted value has a record; types allowed by `raw_value_types` include the original object in `value`, or all types when it is `None`. Omission does not mean the value is `None`: an allowed `None` is stored explicitly. Synthetic interpretation records have no raw `value`. Root and entry references always point into the object table; entries retain order. The source object's `interpretation` entry identifies its observation; no reverse `source` or `parent` entries are stored. Consumers can index incoming entries when needed.
 
-`kind` describes the representation; optional `type` identifies its semantics; `label` is display-only. Built-in semantic types are `slyme.node`, `slyme.wrapper`, `slyme.auto`, `slyme.context`, `slyme.context_view`, `slyme.ref`, `slyme.scope`, `slyme.identity`, `slyme.scope_binding`, `slyme.ref_entry`, `slyme.ref_declaration`, `slyme.ref_leaf_config`, `slyme.ref_container_config`, and `slyme.compose`. These identifiers and adapter field names are independent of implementation module paths and storage attributes. A type does not imply that structural expansion succeeded.
+`kind` describes the representation; optional `type` identifies its semantics; `label` is display-only. Built-in semantic types are `slyme.node`, `slyme.auto`, `slyme.context`, `slyme.context_view`, `slyme.ref`, `slyme.scope`, `slyme.identity`, `slyme.scope_binding`, `slyme.ref_entry`, `slyme.ref_declaration`, `slyme.ref_leaf_config`, `slyme.ref_container_config`, and `slyme.compose`. These identifiers and adapter field names are independent of implementation module paths and storage attributes. A type does not imply that structural expansion succeeded.
 
 | Kind | Meaning |
 | --- | --- |

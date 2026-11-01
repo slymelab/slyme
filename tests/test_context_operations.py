@@ -10,7 +10,6 @@ from slyme.context.core import ContextPathError
 from slyme.context.default import DATA_TREE_REF
 from slyme.context.store import _MISSING
 from slyme.node.eval import ref_evaluator
-from slyme.tree import TreeAux, TreeHandler, TreeRules
 from slyme.utils.exception import BaseExceptionGroup
 
 
@@ -76,7 +75,7 @@ def test_entry_resolution_does_not_materialize_metadata() -> None:
 def test_container_reads_share_scope_visibility_and_empty_container_rules() -> None:
     root = Context()
     root.declare({"group": {"first": Schema.leaf(), "second": Schema.leaf()}})
-    root.update({"group.first": False, "group.second": None})
+    root.set_many({"group.first": False, "group.second": None})
     child = root.fork(scope=root.scope.fork())
     assert child.get("group").to_dict() == {"first": False, "second": None}
     assert tuple(child.keys("group")) == ("first", "second")
@@ -152,43 +151,29 @@ def test_falsy_values_are_not_missing(value: Any) -> None:
     ctx.dispose()
 
 
-@pytest.mark.parametrize("operation", ["update", "update_tree"])
 @pytest.mark.parametrize("failure", ["container", "undeclared", "register"])
-def test_batch_write_preflight_leaves_all_bindings_unchanged(
-    operation: str, failure: str
-) -> None:
+def test_batch_write_preflight_leaves_all_bindings_unchanged(failure: str) -> None:
     schema = Schema(
         {"a": Schema.leaf(), "b": Schema.leaf(mode="register"), "group": {}}
     )
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"a": 1})
+    ctx.set_many({"a": 1})
     ctx.register("b", 2)
     target = {"container": "group", "undeclared": "missing", "register": "b"}[failure]
     with pytest.raises(ContextPathError):
-        if operation == "update":
-            ctx.update({"a": 3, target: 4})
-        else:
-            ctx.update_tree(["a", target], [3, 4])
+        ctx.set_many({"a": 3, target: 4})
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "a": 1, "b": 2}
     ctx.dispose()
 
 
-def test_update_normalizes_ref_and_string_keys_before_writing() -> None:
+def test_set_many_normalizes_ref_and_string_keys_before_writing() -> None:
     schema = Schema({"value": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"value": 1, schema.resolve("value"): 2})
+    ctx.set_many({"value": 1, schema.resolve("value"): 2})
     assert ctx.get("value") == 2
-    ctx.update({"value": 3})
-    assert ctx.get("value") == 3
-    ctx.dispose()
-
-
-def test_update_tree_uses_the_last_occurrence_of_each_resolved_path() -> None:
-    ctx = Context()
-    ctx.declare({"value": Schema.leaf()})
-    ctx.update_tree(["value", ctx.resolve("value"), "value"], [1, 2, 3])
+    ctx.set_many({"value": 3})
     assert ctx.get("value") == 3
     ctx.dispose()
 
@@ -216,7 +201,7 @@ def test_keys_follow_schema_order_and_omit_children_without_visible_leaves() -> 
     root.dispose()
 
 
-@pytest.mark.parametrize("operation", ["set", "update", "update_tree"])
+@pytest.mark.parametrize("operation", ["set", "set_many"])
 def test_assignment_cannot_create_an_empty_registration(operation: str) -> None:
     schema = Schema({"service": Schema.leaf(mode="register")})
     ctx = Context()
@@ -225,10 +210,8 @@ def test_assignment_cannot_create_an_empty_registration(operation: str) -> None:
     with pytest.raises(ContextPathError, match="register"):
         if operation == "set":
             ctx.set("service", object())
-        elif operation == "update":
-            ctx.update({"service": object()})
         else:
-            ctx.update_tree(["service"], [object()])
+            ctx.set_many({"service": object()})
     assert set(ctx._store._data) == {
         ctx.resolve_entry(ref.path) for ref in ctx.get("$").flatten()
     }
@@ -236,7 +219,7 @@ def test_assignment_cannot_create_an_empty_registration(operation: str) -> None:
     ctx.dispose()
 
 
-@pytest.mark.parametrize("operation", ["delete", "drop"])
+@pytest.mark.parametrize("operation", ["delete", "delete_many"])
 @pytest.mark.parametrize("target", ["group.service", "group", ""])
 @pytest.mark.parametrize("installed", [False, True])
 def test_deletion_rejects_registration_fields_before_changing_any_value(
@@ -247,7 +230,7 @@ def test_deletion_rejects_registration_fields_before_changing_any_value(
     )
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"group.value": 1})
+    ctx.set_many({"group.value": 1})
     if installed:
         ctx.register("group.service", None)
     before = ctx.flatten()
@@ -255,7 +238,7 @@ def test_deletion_rejects_registration_fields_before_changing_any_value(
         if operation == "delete":
             ctx.delete(target)
         else:
-            ctx.drop(["group.value", target])
+            ctx.delete_many(["group.value", target])
     assert ctx.flatten() == before
     ctx.dispose()
 
@@ -266,11 +249,11 @@ def test_failed_update_keeps_the_explicitly_created_context_alive() -> None:
     root.set("value", "original")
     child = root.fork()
     with pytest.raises(ContextPathError, match="register"):
-        child.update({"value": "changed", "service": object()})
+        child.set_many({"value": "changed", "service": object()})
     assert root.get("value") == "original"
     assert child in root.children
     assert root._store._scope_usages[root.scope].viewers == {root, child}
-    child.update({"value": "valid"})
+    child.set_many({"value": "valid"})
     assert root.get("value") == "valid"
     child.dispose()
     assert root._store._scope_usages[root.scope].viewers == {root}
@@ -307,7 +290,7 @@ def test_shared_identity_has_one_registration_and_allows_reinstallation() -> Non
     root.dispose()
 
 
-def test_update_applies_assignments_in_order_after_a_reentrant_write() -> None:
+def test_set_many_applies_assignments_in_order_after_a_reentrant_write() -> None:
     schema = Schema({"a": Schema.leaf(), "b": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
@@ -317,7 +300,7 @@ def test_update_applies_assignments_in_order_after_a_reentrant_write() -> None:
             ctx.set("b", "reentrant")
 
     ctx.set("a", WriteOnRelease())
-    ctx.update({"a": "updated", "b": "requested"})
+    ctx.set_many({"a": "updated", "b": "requested"})
     assert ctx.to_dict() == {
         "$": ctx.get("$").to_dict(),
         "a": "updated",
@@ -327,11 +310,13 @@ def test_update_applies_assignments_in_order_after_a_reentrant_write() -> None:
 
 
 @pytest.mark.parametrize("failure", ["path", "iteration"])
-def test_drop_validates_and_consumes_all_inputs_before_deleting(failure: str) -> None:
+def test_delete_many_validates_and_consumes_all_inputs_before_deleting(
+    failure: str,
+) -> None:
     schema = Schema({"group": {"a": Schema.leaf(), "b": Schema.leaf()}})
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"group.a": 1, "group.b": 2})
+    ctx.set_many({"group.a": 1, "group.b": 2})
 
     def refs() -> Iterable[str]:
         yield "group"
@@ -341,7 +326,7 @@ def test_drop_validates_and_consumes_all_inputs_before_deleting(failure: str) ->
 
     error = RuntimeError if failure == "iteration" else ContextPathError
     with pytest.raises(error):
-        ctx.drop(refs())
+        ctx.delete_many(refs())
     assert ctx.to_dict() == {"$": ctx.get("$").to_dict(), "group": {"a": 1, "b": 2}}
     ctx.dispose()
 
@@ -351,11 +336,11 @@ def test_deleting_containers_only_removes_local_values(batch: bool) -> None:
     schema = Schema({"group": {"a": Schema.leaf(), "b": Schema.leaf()}})
     root = Context()
     root.declare(schema)
-    root.update({"group.a": 1, "group.b": 2})
+    root.set_many({"group.a": 1, "group.b": 2})
     child = root.fork(scope=root.scope.fork())
-    child.update({"group.a": 3, "group.b": 4})
+    child.set_many({"group.a": 3, "group.b": 4})
     if batch:
-        child.drop(["group", "group.a", "group"])
+        child.delete_many(["group", "group.a", "group"])
     else:
         child.delete("group")
     assert child.to_dict(local=True) == {}
@@ -367,69 +352,29 @@ def test_deleting_containers_only_removes_local_values(batch: bool) -> None:
     root.dispose()
 
 
-def test_update_assigns_local_values_over_inheritance_and_barriers() -> None:
+def test_set_many_assigns_local_values_over_inheritance_and_barriers() -> None:
     schema = Schema({"service": Schema.leaf()})
     root = Context()
     root.declare(schema)
-    root.update({"service": "root"})
+    root.set_many({"service": "root"})
     child = root.fork(scope=root.scope.fork())
     isolated = root.derive(bindings={"service": ScopeBinding(blocked=True)})
-    child.update({"service": "child"})
-    isolated.update({"service": "isolated"})
+    child.set_many({"service": "child"})
+    isolated.set_many({"service": "isolated"})
     assert child.get("service") == "child"
     assert isolated.get("service") == "isolated"
-    isolated.drop(["service"])
+    isolated.delete_many(["service"])
     assert not isolated.exists("service")
-    isolated.update({"service": "new"})
+    isolated.set_many({"service": "new"})
     assert isolated.get("service") == "new"
     assert root.get("service") == "root"
     root.dispose()
 
 
-def test_extract_traverses_custom_containers_once_and_reconstructs_only_final_values(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Box:
-        def __init__(self, value: Any):
-            self.value = value
-
-    events: list[tuple[str, Any]] = []
-
-    def flatten(box):
-        events.append(("flatten", box.value))
-        return iter((box.value,)), TreeAux()
-
-    def unflatten(children, aux):
-        value = next(iter(children))
-        events.append(("unflatten", value))
-        return Box(value)
-
-    rules = TreeRules({Box: TreeHandler(flatten, unflatten)})
-    schema = Schema({"value": Schema.leaf()})
-    ref = schema.resolve("value")
-    payload = [object()]
-    ctx = Context()
-    ctx.effect(lambda: ctx.get(DATA_TREE_REF).register(ctx.scope, rules))
-    ctx.declare(schema)
-    ctx.update({ref: payload})
-    request = Box(ref)
-    result = ctx.extract(request)
-    assert result is not request
-    assert result.value is payload
-    assert events == [("flatten", ref), ("unflatten", payload)]
-    ctx.dispose()
-
-
-def test_extract_resolves_and_reads_each_ref_in_traversal_order() -> None:
+def test_ref_evaluator_groups_failures_in_input_order() -> None:
     schema = Schema({"empty": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    with pytest.raises(ContextPathError) as caught:
-        ctx.extract([schema.resolve("empty"), Ref("undeclared")])
-    assert caught.value.args[0] == "Context path 'empty' has no visible value."
-    with pytest.raises(ContextPathError) as caught:
-        ctx.extract([Ref("undeclared"), schema.resolve("empty")])
-    assert caught.value.args[0] == "Context path 'undeclared' is not declared."
     with pytest.raises(BaseExceptionGroup) as caught:
         ref_evaluator(ctx, [schema.resolve("empty"), Ref("undeclared")])
     assert len(caught.value.exceptions) == 2
@@ -473,7 +418,7 @@ def test_ref_evaluator_uses_get_in_input_order_and_preserves_container_views() -
     payload = [object()]
     ctx = RecordingContext()
     ctx.declare(schema)
-    ctx.update({"group.value": payload})
+    ctx.set_many({"group.value": payload})
     refs = [schema.resolve("group.value"), schema.resolve("group")]
     value, view = ref_evaluator(ctx, refs)
     assert seen == refs
@@ -522,7 +467,7 @@ def test_flatten_selects_a_container_and_preserves_absolute_refs(
             "other": Schema.leaf(),
         }
     )
-    root.update({"group.parent": "inherited", "other": "excluded"})
+    root.set_many({"group.parent": "inherited", "other": "excluded"})
     child = root.fork(scope=root.scope.fork())
     payload = [object()]
     child.set("group.child", payload)

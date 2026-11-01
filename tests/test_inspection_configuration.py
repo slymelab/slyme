@@ -101,7 +101,7 @@ def test_raw_value_retention_can_be_unrestricted_without_changing_context_defaul
 
 
 def test_default_options_allow_json_for_node_and_context_graphs(root):
-    @node
+    @node(inject_ctx=True)
     def task(ctx, **kwargs):
         pytest.fail("Node execution")
 

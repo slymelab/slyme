@@ -132,12 +132,12 @@ jobs:
           remove()
           assert values.resolve(ctx.scope) == ()
 
-          @node
+          @node(inject_ctx=True)
           async def value(ctx):
               return ctx.get(ref)
 
           def evaluate():
-              return (yield asyncio.gather(value()(ctx), value()(ctx)))
+              return (yield asyncio.gather(value(ctx), value(ctx)))
 
           async def main():
               return await await_result(run(evaluate()))

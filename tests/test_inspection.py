@@ -21,7 +21,7 @@ from slyme.context import (
 )
 from slyme.context.inspection import resolve_inspection_options
 from slyme.inspection import Interpretation, inspect
-from slyme.node import Node, Wrapper, auto, node, wrapper
+from slyme.node import Node, auto, node, wrap
 from slyme.tree import (
     TreeAux,
     TreeHandler,
@@ -168,12 +168,11 @@ def test_builtin_semantic_types_and_user_override(observe) -> None:
 
     assert set(NODE_INSPECTION_TYPE_NAMES.values()) == {
         "slyme.node",
-        "slyme.wrapper",
         "slyme.auto",
     }
     assert CONTEXT_INSPECTION_TYPE_NAMES[Ref] == "slyme.ref"
 
-    @node
+    @node(inject_ctx=True)
     def task(ctx, **kwargs):
         pytest.fail("Node body")
 
@@ -306,7 +305,7 @@ def assert_relationship_example(name, document):
 
 
 def test_relationship_node_auto_ref(observe) -> None:
-    @node
+    @node(inject_ctx=True)
     def task(ctx, **kwargs):
         pytest.fail("Node body")
 
@@ -403,38 +402,39 @@ def test_opaque_objects_do_not_run_repr_getattr_iter_or_await(observe) -> None:
     assert_graph(document)
 
 
-def test_node_and_wrapper_bindings_expand_without_temporary_compose_edges(
-    observe,
-) -> None:
+def test_nested_nodes_and_temporary_composition_are_inspectable(observe) -> None:
     @node
-    def task(ctx, **kwargs):
+    def task(**kwargs):
         pytest.fail("Node body")
 
-    @wrapper
-    def around(ctx, wrapped, call_next, **kwargs):
-        pytest.fail("Wrapper body")
+    @node(inject_ctx=True)
+    def around(ctx, *, wrapped, **kwargs):
+        pytest.fail("Layer body")
 
     nested = task.partial()
     inner = around.partial(child=nested)
     outer = around.partial(other=inner)
-    root = task.partial(child=inner)
-    root = root.replace(wrappers=(outer,))
+    target = task.partial(child=inner)
+    destination = Ref("state.result")
+    root = wrap(outer, target).to(destination)
     before = observe(root)
-    temporary = Wrapper.compose([inner], wrapped=root, call_next=root)
+    result_to = field(before, before["root"], "result_to")
+    assert record(before, result_to)["type"] == "slyme.ref"
+    temporary = wrap(inner, root)
     assert observe(root) == before
-    assert record(observe(temporary), {"$ref": "0"})["kind"] == "opaque"
-    wrapped_ref = field(before, field(before, before["root"], "params"), "child")
-    node_ref = field(before, field(before, wrapped_ref, "params"), "child")
-    assert record(before, node_ref)["label"].endswith(".Node")
-    other_wrapper = children(before, field(before, before["root"], "wrappers"))[0][
-        "value"
-    ]
-    assert field(before, field(before, other_wrapper, "params"), "other") == wrapped_ref
+    assert record(observe(temporary), {"$ref": "0"})["type"] == "slyme.node"
+    params = field(before, before["root"], "params")
+    target_ref = field(before, params, "wrapped")
+    inner_ref = field(before, field(before, target_ref, "params"), "child")
+    assert field(before, params, "other") == inner_ref
+    nested_ref = field(before, field(before, inner_ref, "params"), "child")
+    assert record(before, nested_ref)["label"].endswith(".Node")
     assert_graph(before)
+    assert_graph(observe(temporary))
 
 
 def test_auto_nested_refs_and_compose_queries_expand_dynamic_nodes(observe) -> None:
-    @node
+    @node(inject_ctx=True)
     def task(ctx, **kwargs):
         pytest.fail("Node body")
 
@@ -666,7 +666,7 @@ def test_custom_metadata_rules_and_custom_tree_keys_do_not_need_path_resolution(
         }
     )
 
-    @node(metadata={"description": Description("example")})
+    @node(metadata={"description": Description("example")}, inject_ctx=True)
     def task(ctx):
         return 1
 

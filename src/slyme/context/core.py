@@ -22,10 +22,9 @@ from typing import Any, Generic, Literal, overload
 from typing_extensions import TypeVar
 
 from slyme.execution import continuation, once
-from slyme.tree import flatten, get_element, iter_with_key_path
 
 from .compose import Compose
-from .default import DATA_TREE_REF, _apply
+from .default import _apply
 from .lifecycle import Lifecycle, _Cleanup, _Disposer, _Effect
 from .schema import (
     ContextKey,
@@ -198,6 +197,16 @@ class Context(Generic[_F]):
         """Return the live declaration and metadata at a path."""
         self._lifecycle.assert_readable()
         return self._schema.resolve_entry(key, role=role)
+
+    def resolve_entries(
+        self,
+        keys: Iterable[ContextKey[_T]],
+        *,
+        role: Literal["leaf", "container"] | None = None,
+    ) -> tuple[RefEntry[_T], ...]:
+        """Resolve all requested declarations, preserving order and duplicates."""
+        self._lifecycle.assert_readable()
+        return self._schema.resolve_entries(keys, role=role)
 
     def declare(self, declaration: Schema | _Declaration) -> Callable[[], None]:
         """Declare shared paths with cleanup owned by this Context."""
@@ -413,17 +422,6 @@ class Context(Generic[_F]):
         entry = self.resolve_entry("" if ref is None else ref, role="container")
         return dict(self._store.items(self.scope, entry, local=local))
 
-    def extract(self, ref_tree: Any, *, local: bool = False) -> Any:
-        """Resolve and read each Ref in traversal order, stopping at the first failure."""
-        self._lifecycle.assert_readable()
-        rules = self.get(DATA_TREE_REF).resolve(self.scope)
-        refs, treedef = flatten(ref_tree, rules=rules)
-        values = [
-            self._entry_value(self._schema.resolve_entry(ref), local=local)
-            for ref in refs
-        ]
-        return treedef.unflatten(values)
-
     def set(self, ref: ContextKey[_T], value: _T) -> None:
         """Assign one local value at an assign-mode leaf."""
         self._lifecycle.assert_active()
@@ -436,10 +434,10 @@ class Context(Generic[_F]):
         entry = self._schema.resolve_entry(ref)
         self._store.delete(self.scope, entry)
 
-    def update(self, updates: Mapping[ContextKey, Any]) -> None:
+    def set_many(self, updates: Mapping[ContextKey, Any]) -> None:
         """Assign a batch after validating every path and mode, without write rollback."""
         self._lifecycle.assert_active()
-        self._store.update(
+        self._store.set_many(
             self.scope,
             (
                 (self._schema.resolve_entry(ref, role="leaf"), value)
@@ -447,10 +445,12 @@ class Context(Generic[_F]):
             ),
         )
 
-    def drop(self, refs: Iterable[ContextKey]) -> None:
+    def delete_many(self, refs: Iterable[ContextKey]) -> None:
         """Delete local assignments after validating all selected paths and modes."""
         self._lifecycle.assert_active()
-        self._store.drop(self.scope, (self._schema.resolve_entry(ref) for ref in refs))
+        self._store.delete_many(
+            self.scope, (self._schema.resolve_entry(ref) for ref in refs)
+        )
 
     def register(self, ref: ContextKey[_T], value: _T) -> Callable[[], None]:
         """Install an owned register-mode value and return its exact early disposer."""
@@ -460,18 +460,24 @@ class Context(Generic[_F]):
             )
         )
 
-    def update_tree(self, ref_tree: Any, value_tree: Any) -> None:
-        """Assign values from a matching tree after validating paths and modes."""
-        self._lifecycle.assert_active()
-        rules = self.get(DATA_TREE_REF).resolve(self.scope)
-        updates = (
-            (
-                self._schema.resolve_entry(ref, role="leaf"),
-                get_element(value_tree, path),
+    def register_many(
+        self, registrations: Mapping[ContextKey, Any]
+    ) -> Callable[[], None]:
+        """Own a batch of registrations with one exact, idempotent early disposer.
+
+        Resolve paths and validate modes before installation. On installation
+        failure, withdraw registrations already installed by this batch. Disposal
+        runs in reverse order and attempts every cleanup even after failures.
+        """
+        return self._lifecycle.effect(
+            lambda: self._store.register_many(
+                self.scope,
+                (
+                    (self._schema.resolve_entry(ref, role="leaf"), value)
+                    for ref, value in registrations.items()
+                ),
             )
-            for path, ref in iter_with_key_path(ref_tree, rules=rules)
         )
-        self._store.update(self.scope, updates)
 
 
 @dataclass(frozen=True, repr=False)

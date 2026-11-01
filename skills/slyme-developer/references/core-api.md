@@ -4,7 +4,7 @@
 
 ```python
 from slyme.context import Compose, Context, Ref, Schema, Scope
-from slyme.node import Node, node, sequential_exec, wrapper
+from slyme.node import Node, node, sequential_exec, wrap
 
 
 R = Schema(
@@ -20,17 +20,17 @@ R = Schema(
 )
 
 
-@node
+@node(inject_ctx=True)
 def calculate(ctx, *, value: float, scale: float = 1.0) -> float:
     return value * scale
 
 
-@node
+@node(inject_ctx=True)
 def increment(ctx, *, counter: Ref[int]) -> None:
     ctx.set(counter, ctx.get(counter) + 1)
 
 
-@node
+@node(inject_ctx=True)
 def execute(
     ctx,
     *,
@@ -43,11 +43,11 @@ def execute(
     return derived
 ```
 
-`partial(**params)` accepts keyword bindings without inspecting function signatures. Node execution passes Context positionally and bindings by keyword; Python handles defaults, variadic parameters, and argument errors. Wrap a bound parameter tree in `auto(...)` to resolve registered leaves such as Ref and value-producing Node; omit the wrapper when the function needs the object itself.
+`partial(**params)` accepts keyword bindings without inspecting function signatures. Node execution passes bindings by keyword, plus positional Context only with inject_ctx=True; Python handles defaults, variadic parameters, and argument errors. Wrap a bound parameter tree in `auto(...)` to resolve registered leaves such as Ref and value-producing Node; omit auto when the function needs the object itself.
 
 An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned child Context with a distinct `ctx.scope.fork()`. Slyme disposes that child, including its effects, before parent execution continues. Call a child explicitly with `ctx`, or use `sequential_exec`, when later steps must observe its writes.
 
-`Schema.leaf()` defaults to `mode="assign"`: `set()`, `update()`, and `delete()` modify data in place and return `None`. Declare `mode="register"` for `register()`, which returns an exact early disposer and is removed automatically with its owning Context. Each mode rejects the other mode's writes. `declare()` also returns an owned early disposer. A Node returns an immediate value or an awaitable completion.
+`Schema.leaf()` defaults to `mode="assign"`: `set()`, `set_many()`, and `delete()` modify data in place and return `None`. Declare `mode="register"` for `register()`, which returns an exact early disposer and is removed automatically with its owning Context. Each mode rejects the other mode's writes. `declare()` also returns an owned early disposer. A Node returns an immediate value or an awaitable completion.
 
 ## Context lifetime, Scope visibility, and Compose
 
@@ -93,7 +93,7 @@ Context reads follow the bound Scope's C3 order by default and accept `local=Tru
 
 Root Contexts install `TreeLayer` and `TypeLayer` compositions from `slyme.context.default`. Their static `merge()` methods produce snapshots. Within one Identity, the same exact class cannot be registered twice; after withdrawal it can be registered again. Child layers can override inherited handlers without modifying the parent.
 
-Create an application root with `Context(scope=optional_scope)`, declare paths with `ctx.declare(R)`, then assign values with `ctx.update(data)`. Schema import copies definitions with independent ownership; later source changes do not propagate. Every path must belong to the application Schema. A child has one `parent`, shares its private Schema and ContextStore, and owns a distinct Lifecycle attached to its parent's Lifecycle. Resolve application-wide declarations through `ctx.resolve(path)`, `ctx.resolve_entry(path)`, and `ctx.entries`; entries include containers and unset leaves. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(label="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
+Create an application root with `Context(scope=optional_scope)`, declare paths with `ctx.declare(R)`, then assign values with `ctx.set_many(data)`. Schema import copies definitions with independent ownership; later source changes do not propagate. Every path must belong to the application Schema. A child has one `parent`, shares its private Schema and ContextStore, and owns a distinct Lifecycle attached to its parent's Lifecycle. Resolve application-wide declarations through `ctx.resolve(path)`, `ctx.resolve_entry(path)`, and `ctx.entries`; entries include containers and unset leaves. `ctx.fork()` shares `ctx.scope`; pass a Scope explicitly when visibility should differ. `Scope.fork()` creates a single-parent child. Scope parents may come from unrelated roots when explicit C3 composition is needed: `Scope(label="combined", parents=(left, right))`. `ctx.scope.mro` is the visibility order, while `ctx.root` owns the application data store and lifetime subtree. `to_dict()` returns a nested ordinary-dict projection; `flatten()` returns the exact visible Ref-to-value leaf mapping. Neither copies stored values.
 
 Normal Context operations check the caller's lifecycle state, not a state shared by Schema or Store. Disposal forbids new mutations throughout the owned subtree, but allows reads until each Context finishes releasing. Exact registration disposers and Scope release remain available during cleanup. Another active Context can still modify shared data. Application cleanup belongs in `ctx.effect()`; Lifecycle, not overridden Context methods, traverses child disposal. `Lifecycle` can also own effects independently of Context data.
 
@@ -107,43 +107,43 @@ Effect setup and cleanup cannot dispose their owner Context or an ancestor while
 
 Use `ctx.effect(lambda: ctx.get(ref).register(target_scope, value))` when a Compose stored at `ref` should receive a lifecycle-owned contribution. `ctx.get(ref)` selects the Compose through the Context's bound Scope; `target_scope` explicitly selects where to store the contribution. The calling Context owns cleanup regardless of the target Scope. Direct `compose.register(scope, value)` remains available when the caller will manage its returned disposer itself. `compose.derive(parents=parent, binding=ScopeBinding(identity=identity))` creates a Scope using the selected Identity in this Compose. `Compose.derive_many(parents=parents, bindings={compose: config, ...})` configures multiple Composes on one new Scope. Both are keyword-only, require parents (one Scope or a tuple), accept an optional label, and create no lifecycle. Binding is permanent for each live Scope and has no disposer; contributions remain independently reversible.
 
-## Wrappers
+## Higher-order Nodes
 
 ```python
-@wrapper
-def trace(ctx, wrapped: Node, call_next, *, name: str):
+@node(inject_ctx=True)
+def trace(ctx, *, wrapped: Node, name: str):
     print(name, "start")
     try:
-        return call_next(ctx)
+        return wrapped(ctx)
     finally:
         print(name, "end")
 ```
 
-Wrapper execution passes Context, the wrapped Node, and the next callable positionally, followed by keyword bindings. Attach it by deriving a new Node with `task.replace(wrappers=(...))`. This example and the `execute` function above assume synchronous children. For mixed children, use `async def` and `await await_result(...)` before inspecting results, executing following statements, or leaving `try/finally`; see [async.md](async.md).
+A `inject_ctx=True` higher-order Node receives Context and an explicit keyword `wrapped`. Assemble with `wrap(layer, task)` after binding target arguments. This example and the `execute` function above assume synchronous children. For mixed children, use `async def` and `await await_result(...)` before inspecting results, executing following statements, or leaving `try/finally`; see [async.md](async.md).
 
 ## Assembly and execution
 
 ```python
-from slyme.node import auto
+from slyme.node import auto, wrap
 
-root = execute.partial(
-    derived=auto(
-        calculate.partial(
-            value=auto(R.resolve("input.value")),
-            scale=2.0,
-        )
+root = wrap(
+    trace.partial(name="execute"),
+    execute.partial(
+        derived=auto(
+            calculate.partial(value=auto(R.resolve("input.value")), scale=2.0)
+        ),
+        children=(increment.partial(counter=R.resolve("state.counter")),),
+        output=R.resolve("output.result"),
     ),
-    children=(increment.partial(counter=R.resolve("state.counter")),),
-    output=R.resolve("output.result"),
-).replace(wrappers=(trace.partial(name="execute"),))
+)
 
 ctx = Context()
 ctx.declare(R)
-ctx.update({R.resolve("input.value"): 3.0, R.resolve("state.counter"): 0})
+ctx.set_many({R.resolve("input.value"): 3.0, R.resolve("state.counter"): 0})
 result = root(ctx)
 assert ctx.get(R.resolve("output.result")) == result
 ```
 
-Node bindings are read-only. Read them with `root.get(name)` or `root.params`; derive a new Node with `root.partial(**params)`. Later bindings win, and call-time keywords override them for one execution. `partial` and `replace` preserve referenced values and Wrapper objects; configuration mappings are read-only snapshots and wrapper order is a tuple. Copy application containers explicitly when independent contents are required.
+Node bindings are read-only. Read them with `root.get(name)` or `root.params`; derive a new Node with `root.partial(**params)`. Later bindings win, and call-time keywords override them for one execution. `partial` and `replace` preserve referenced values; configuration mappings are shallow read-only snapshots. `wrap` constructs explicit nested Node bindings. Copy application containers explicitly when independent contents are required.
 
 Use named child parameters for stable roles and Python sequences or mappings for extensible physical composition. Use `sequential(...)` for a plain declarative pipeline and a custom higher-order Node when execution semantics differ.

@@ -41,6 +41,15 @@
           "key": {
             "$ref": "8"
           }
+        },
+        {
+          "role": "child",
+          "value": {
+            "$ref": "9"
+          },
+          "key": {
+            "$ref": "10"
+          }
         }
       ],
       "type": "slyme.node"
@@ -55,10 +64,10 @@
         {
           "role": "child",
           "value": {
-            "$ref": "9"
+            "$ref": "11"
           },
           "key": {
-            "$ref": "10"
+            "$ref": "12"
           }
         }
       ],
@@ -70,10 +79,10 @@
         {
           "role": "child",
           "value": {
-            "$ref": "11"
+            "$ref": "13"
           },
           "key": {
-            "$ref": "12"
+            "$ref": "14"
           }
         }
       ]
@@ -84,10 +93,10 @@
         {
           "role": "child",
           "value": {
-            "$ref": "13"
+            "$ref": "15"
           },
           "key": {
-            "$ref": "10"
+            "$ref": "12"
           }
         }
       ],
@@ -103,17 +112,17 @@
         {
           "role": "child",
           "value": {
-            "$ref": "14"
+            "$ref": "16"
           },
           "key": {
-            "$ref": "10"
+            "$ref": "12"
           }
         }
       ],
       "type": "slyme.tree.attribute_key"
     },
     "7": {
-      "kind": "object",
+      "kind": "opaque",
       "entries": []
     },
     "8": {
@@ -122,10 +131,10 @@
         {
           "role": "child",
           "value": {
-            "$ref": "15"
+            "$ref": "17"
           },
           "key": {
-            "$ref": "10"
+            "$ref": "12"
           }
         }
       ],
@@ -136,25 +145,6 @@
       "entries": []
     },
     "10": {
-      "kind": "opaque",
-      "entries": []
-    },
-    "11": {
-      "kind": "object",
-      "entries": [
-        {
-          "role": "child",
-          "value": {
-            "$ref": "16"
-          },
-          "key": {
-            "$ref": "17"
-          }
-        }
-      ],
-      "type": "slyme.auto"
-    },
-    "12": {
       "kind": "object",
       "entries": [
         {
@@ -163,25 +153,21 @@
             "$ref": "18"
           },
           "key": {
-            "$ref": "10"
+            "$ref": "12"
           }
         }
       ],
-      "type": "slyme.tree.mapping_key"
+      "type": "slyme.tree.attribute_key"
+    },
+    "11": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "12": {
+      "kind": "opaque",
+      "entries": []
     },
     "13": {
-      "kind": "opaque",
-      "entries": []
-    },
-    "14": {
-      "kind": "opaque",
-      "entries": []
-    },
-    "15": {
-      "kind": "opaque",
-      "entries": []
-    },
-    "16": {
       "kind": "object",
       "entries": [
         {
@@ -192,40 +178,42 @@
           "key": {
             "$ref": "20"
           }
-        },
-        {
-          "role": "interpretation",
-          "value": {
-            "$ref": "21"
-          }
         }
       ],
-      "type": "slyme.ref"
+      "type": "slyme.auto"
     },
-    "17": {
+    "14": {
       "kind": "object",
       "entries": [
         {
           "role": "child",
           "value": {
-            "$ref": "18"
+            "$ref": "21"
           },
           "key": {
-            "$ref": "10"
+            "$ref": "12"
           }
         }
       ],
-      "type": "slyme.tree.attribute_key"
+      "type": "slyme.tree.mapping_key"
+    },
+    "15": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "16": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "17": {
+      "kind": "opaque",
+      "entries": []
     },
     "18": {
       "kind": "opaque",
       "entries": []
     },
     "19": {
-      "kind": "opaque",
-      "entries": []
-    },
-    "20": {
       "kind": "object",
       "entries": [
         {
@@ -234,13 +222,57 @@
             "$ref": "22"
           },
           "key": {
-            "$ref": "10"
+            "$ref": "23"
+          }
+        },
+        {
+          "role": "interpretation",
+          "value": {
+            "$ref": "24"
+          }
+        }
+      ],
+      "type": "slyme.ref"
+    },
+    "20": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "21"
+          },
+          "key": {
+            "$ref": "12"
           }
         }
       ],
       "type": "slyme.tree.attribute_key"
     },
     "21": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "22": {
+      "kind": "opaque",
+      "entries": []
+    },
+    "23": {
+      "kind": "object",
+      "entries": [
+        {
+          "role": "child",
+          "value": {
+            "$ref": "25"
+          },
+          "key": {
+            "$ref": "12"
+          }
+        }
+      ],
+      "type": "slyme.tree.attribute_key"
+    },
+    "24": {
       "kind": "interpretation",
       "attributes": {
         "state": "resolved"
@@ -249,27 +281,27 @@
         {
           "role": "env",
           "value": {
-            "$ref": "23"
+            "$ref": "26"
           }
         },
         {
           "role": "value",
           "value": {
-            "$ref": "24"
+            "$ref": "27"
           }
         }
       ]
     },
-    "22": {
+    "25": {
       "kind": "opaque",
       "entries": []
     },
-    "23": {
+    "26": {
       "kind": "opaque",
       "entries": [],
       "type": "slyme.context"
     },
-    "24": {
+    "27": {
       "kind": "opaque",
       "entries": []
     }

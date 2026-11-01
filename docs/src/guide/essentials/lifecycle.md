@@ -49,7 +49,7 @@ Facets belong to Context instances, not Scope identities. A child receives `None
 
 ```python
 from slyme.context import Context, Schema
-from slyme.node import node, auto
+from slyme.node import node, auto, wrap
 
 R = Schema(
     {
@@ -61,29 +61,30 @@ R = Schema(
 )
 
 
-@node
+@node(inject_ctx=True)
 def process(ctx: Context, /, *, timeout: int = 30, data: list):
     return timeout, data
 
 
 task = process.partial(data=auto([R.resolve("user.age"), R.resolve("user.name")]))
-task.set("timeout", 60)
+task = task.partial(timeout=60)
 ```
 
-Node parameters and wrappers may be changed between calls. A change never requires recompiling the whole graph and becomes visible on the next call.
+Use partial/replace/to to derive a new Node between calls. Existing Nodes stay unchanged; no graph recompilation is required.
 
 ## Live calls and explicit branches
 
-At the start of each Node or Wrapper call, Slyme:
+At the start of each Node call, Slyme:
 
 1. shallowly snapshots saved bindings and applies this call's keyword overrides;
 2. separates ordinary values from explicitly wrapped Auto trees;
-3. builds the wrapper chain and evaluates Auto parameters before each user function invocation;
-4. passes static parameter containers directly to the user function.
+3. evaluates explicit Auto parameters before invoking the function with optional Context injection;
+4. passes static parameter containers directly to the user function;
+5. publishes the result to configured destinations after successful completion, then returns the original result.
 
-Parameter bindings are shallow-snapshotted, not deep-copied. Mutating a non-Auto `list`, `dict`, or other leaf from inside a Node or Wrapper mutates the live parameter and is visible to later calls. Every Auto parameter is traversed and its containers reconstructed according to Tree rules, whether or not they contain evaluatable leaves. Ordinary leaves and evaluator results remain shared.
+Parameter bindings are shallow-snapshotted, not deep-copied. Mutating a non-Auto `list`, `dict`, or other leaf from inside a Node mutates the live parameter and is visible to later calls. Every Auto parameter is traversed and its containers reconstructed according to Tree rules, whether or not they contain evaluatable leaves. Ordinary leaves and evaluator results remain shared.
 
-Use `partial(...)` or call an assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. To materialize `assign` fields into a new root, create it, declare the copied paths, then call `snapshot.update(context.get("app").flatten())`; `register` fields require explicit `register()` calls on the new owner. None of these operations copies application values.
+Use `partial(...)` or call an assembly function again when another independently configurable graph is required. `context.fork()` creates an owned lifetime child and shares `context.scope` by default. Use `context.fork(scope=context.scope.fork())` when that child needs a separate local data layer with live Scope C3 lookup. To materialize `assign` fields into a new root, create it, declare the copied paths, then call `snapshot.set_many(context.get("app").flatten())`; `register` fields require explicit `register()` calls on the new owner. None of these operations copies application values.
 
 A Context owns its children and cleanup registered through `effect()`, `register()`, and `declare()`. Its `dispose_mode` selects sequential or batch cleanup of these directly owned items. `dispose()` returns `None` on synchronous completion or an awaitable when cleanup is asynchronous; `await await_result(ctx.dispose())` handles either. Context does not own arbitrary tasks using it: stop and await those tasks before disposal.
 
@@ -116,21 +117,23 @@ Different cleanup functions can wait on the same early disposer; it executes onc
 Static parameter values and values retrieved from `Context` keep their normal Python mutability:
 
 ```python
-from slyme.node import auto
+from slyme.node import auto, wrap
 
 ctx = Context()
 ctx.declare(R)
-ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
+ctx.set_many({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
 process.partial(data=auto([R.resolve("a"), R.resolve("b")]))(
     ctx
 )  # Auto produces the evaluated list [1, 2]
-process.partial(data=auto(R.resolve("items")))(ctx)  # data is the list stored in Context
+process.partial(data=auto(R.resolve("items")))(
+    ctx
+)  # data is the list stored in Context
 ```
 
 Auto Ref values are read from `ctx`. Every Auto child Node instead executes with an owned child Context and a distinct child Scope. Child calls and synchronous cleanup run inline; asynchronous results are scheduled concurrently when awaited, retaining input order. Each child disposes its Context in `finally` on success or failure, independently of other siblings. Without caller cancellation, evaluation waits for every child and its cleanup before reporting errors or running the parent function.
 
-Auto attempts every sibling and every evaluator group, even after a synchronous failure. Evaluator groups are independent and may execute concurrently; a Ref lookup failure does not prevent Node evaluation. A child failure or cancellation does not cancel siblings: evaluation waits for all of them. Failures form nested exception groups: the outer group follows evaluator-group order of first appearance, and built-in evaluator groups follow their inputs' order. Only failures are included; each evaluation group's message lists the original failing indices. Partial successful results are not exposed. A child cleanup failure becomes that child's error; if the Node also failed, Python's `finally` semantics retain the Node exception as the cleanup error's `__context__`. Node and Wrapper record ordinary groups through `__cause__`; groups containing non-`Exception` control failures propagate unchanged. Exception objects returned as ordinary values remain data. A child that never finishes keeps evaluation pending; application code owns timeouts and abort policies.
+Auto attempts every sibling and every evaluator group, even after a synchronous failure. Evaluator groups are independent and may execute concurrently; a Ref lookup failure does not prevent Node evaluation. A child failure or cancellation does not cancel siblings: evaluation waits for all of them. Failures form nested exception groups: the outer group follows evaluator-group order of first appearance, and built-in evaluator groups follow their inputs' order. Only failures are included; each evaluation group's message lists the original failing indices. Partial successful results are not exposed. A child cleanup failure becomes that child's error; if the Node also failed, Python's `finally` semantics retain the Node exception as the cleanup error's `__context__`. Nodes propagate original exceptions and exception groups unchanged. Exception objects returned as ordinary values remain data. A child that never finishes keeps evaluation pending; application code owns timeouts and abort policies.
 
 Cancelling the outer evaluation Task propagates to its pending children through asyncio, without aggregating partial evaluation results. Each child enters its `finally` cleanup. Cancellation during the cleanup wait can let evaluation exit while Context-owned cleanup continues in the background. A synchronous child runs inline on the event-loop thread and cannot be interrupted while executing. Task cancellation does not guarantee that underlying network, thread, or process work has stopped; application adapters own that behavior.
 

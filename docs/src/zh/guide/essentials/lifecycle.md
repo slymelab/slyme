@@ -49,7 +49,7 @@ facet 属于 Context 实例，而不是 Scope 身份。即使共享父级 Scope�
 
 ```python
 from slyme.context import Context, Schema
-from slyme.node import node, auto
+from slyme.node import node, auto, wrap
 
 R = Schema(
     {
@@ -61,29 +61,30 @@ R = Schema(
 )
 
 
-@node
+@node(inject_ctx=True)
 def process(ctx: Context, /, *, timeout: int = 30, data: list):
     return timeout, data
 
 
 task = process.partial(data=auto([R.resolve("user.age"), R.resolve("user.name")]))
-task.set("timeout", 60)
+task = task.partial(timeout=60)
 ```
 
-Node 参数和 wrapper 可以在两次调用之间修改。修改不需要重新编译整张图，并会从下一次调用开始生效。
+使用 partial/replace/to 在两次调用之间派生新 Node，已有 Node 保持不变，不需要重新编译整张图。
 
 ## 实时调用与显式分支
 
-每次 Node 或 Wrapper 调用开始时，Slyme 会：
+每次 Node 调用开始时，Slyme 会：
 
 1. 对已保存的绑定取浅快照，并应用本次调用的关键字覆盖；
 2. 分离普通值与显式包装的 Auto 树；
-3. 构建 wrapper chain，在每次用户函数调用前求值 Auto 参数；
-4. 将静态参数容器直接传给用户函数。
+3. 求值显式 Auto 参数，按照 inject_ctx 配置决定是否向函数注入 Context；
+4. 将静态参数容器直接传给用户函数；
+5. 成功完成后按 result_to 配置写入返回值，并返回原始结果。
 
-参数绑定使用浅快照，不做深拷贝。在 Node 或 Wrapper 内修改非 Auto 的 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。每个 Auto 参数都会按 Tree 规则遍历并重建容器，无论其中是否包含可求值叶子。普通叶子和 evaluator 返回值仍然共享。
+参数绑定使用浅快照，不做深拷贝。在 Node 内修改非 Auto 的 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。每个 Auto 参数都会按 Tree 规则遍历并重建容器，无论其中是否包含可求值叶子。普通叶子和 evaluator 返回值仍然共享。
 
-需要另一张可独立配置的图时，应调用 `partial(...)` 或重新调用组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；所选业务子树的字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.update(context.get("app").flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
+需要另一张可独立配置的图时，应调用 `partial(...)` 或重新调用组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；所选业务子树的字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.set_many(context.get("app").flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
 
 Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare()` 注册的 cleanup。其 `dispose_mode` 决定直接归属项采用串行还是批量清理。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
 
@@ -116,11 +117,11 @@ plugin_b = plugins.fork()
 静态参数值和从 `Context` 取得的值都保持普通 Python 可变语义：
 
 ```python
-from slyme.node import auto
+from slyme.node import auto, wrap
 
 ctx = Context()
 ctx.declare(R)
-ctx.update({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
+ctx.set_many({R.resolve("a"): 1, R.resolve("b"): 2, R.resolve("items"): [1, 2]})
 
 process.partial(data=auto([R.resolve("a"), R.resolve("b")]))(
     ctx
@@ -130,7 +131,7 @@ process.partial(data=auto(R.resolve("items")))(ctx)  # data 是 Context 中保�
 
 Auto Ref 会从 `ctx` 读取值；每个 Auto 子 Node 则使用由父 Context 管理、绑定到独立 child Scope 的 Context 执行。子调用和同步清理内联执行；异步结果在被等待时并发调度，结果保持输入顺序。每个子节点无论成功还是失败，都在自己的 `finally` 中释放 Context，不等待其他 sibling。在调用者未取消的情况下，求值会等待所有子节点及其清理完成，再报告错误或执行父函数。
 
-Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling，求值会等待所有节点结束。错误组成嵌套异常组：外层按 evaluator 组首次出现的顺序排列，内置 evaluator 的组按其输入顺序排列。组内只包含失败，每个求值组的消息列出失败项的原始输入索引，不提供部分成功结果。子 Context 的清理错误作为该子节点的错误；如果 Node 本身也失败，Python 的 `finally` 语义会将 Node 异常保留为清理错误的 `__context__`。Node 和 Wrapper 通过异常记录的 `__cause__` 保存普通异常组；包含非 `Exception` 控制异常的组原样传播。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
+Auto 会尝试执行所有 sibling 和所有 evaluator 组，包括同步求值已经失败的情况。Evaluator 组互相独立，可以并发执行；Ref 查找失败不会阻止 Node 求值。子节点失败或取消不会取消其他 sibling，求值会等待所有节点结束。错误组成嵌套异常组：外层按 evaluator 组首次出现的顺序排列，内置 evaluator 的组按其输入顺序排列。组内只包含失败，每个求值组的消息列出失败项的原始输入索引，不提供部分成功结果。子 Context 的清理错误作为该子节点的错误；如果 Node 本身也失败，Python 的 `finally` 语义会将 Node 异常保留为清理错误的 `__context__`。Node 原样传播原始异常和异常组。作为普通返回值的异常对象仍是数据。某个子节点一直不结束，求值就会一直等待；超时和 abort 策略由应用负责。
 
 取消外层求值 Task 时，asyncio 会将取消传播给尚未完成的子任务，不汇总部分求值结果。每个子节点都会进入自己的 `finally` 清理。等待清理期间的取消可能使求值先退出，而由 Context 管理的清理继续在后台运行。同步子节点在事件循环线程内直接执行，执行期间无法被打断。Task 取消不保证底层网络、线程或进程中的工作已经停止；这些行为由应用适配层负责。
 

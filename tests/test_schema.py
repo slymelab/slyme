@@ -167,9 +167,9 @@ def test_schema_withdrawal_and_binding_cleanup_do_not_read_config(monkeypatch) -
     first = schema.declare(declaration)
     second = schema.declare(declaration)
     left = root.fork(scope=root.scope.fork())
-    left.update({"group.value": "left"})
+    left.set_many({"group.value": "left"})
     right = root.fork(scope=root.scope.fork())
-    right.update({"group.value": "right"})
+    right.set_many({"group.value": "right"})
     remove_owned = left.register("group.owned", "owned")
     child = left.derive(bindings={"group.value": ScopeBinding(blocked=True)})
     child.set("group.value", "child")
@@ -228,7 +228,7 @@ def test_failed_declaration_rollback_does_not_read_config(monkeypatch) -> None:
     ctx = Context()
     ctx.declare(schema)
     schema = ctx._schema
-    ctx.update({"stable": 1})
+    ctx.set_many({"stable": 1})
     original = Schema._set_entry
     failure = ValueError("registration failed")
 
@@ -258,7 +258,7 @@ def test_partial_declaration_commit_removes_only_its_new_paths(monkeypatch) -> N
     ctx = Context()
     ctx.declare(schema)
     schema = ctx._schema
-    ctx.update({"stable": 1})
+    ctx.set_many({"stable": 1})
     owners = {
         path: dict(entry._declarations) for path, entry in schema._entries.items()
     }
@@ -300,7 +300,7 @@ def test_schema_tracks_contributions_without_replacing_runtime_bindings() -> Non
     second = Schema.leaf(metadata={"second": second_marker})
     remove_first = schema.declare({"value": first})
     entry = schema.resolve_entry("value")
-    ctx.update({"value": "runtime value"})
+    ctx.set_many({"value": "runtime value"})
     with pytest.raises(ValueError, match="Conflicting Ref configurations"):
         schema.declare({"value": second, "blocked": Schema.leaf(mode="register")})
     assert entry.config is first.config
@@ -625,7 +625,7 @@ def test_child_first_conflict_rolls_back_unconfigured_ancestor_dicts(
     schema = Schema({"blocked": Schema.leaf()})
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"blocked": 1})
+    ctx.set_many({"blocked": 1})
     original = Schema._normalize_declaration
     entries = dict(schema._entries)
     owners = {path: dict(entry._declarations) for path, entry in entries.items()}
@@ -730,7 +730,7 @@ def test_schema_keys_and_context_keys_distinguish_declarations_from_visible_valu
     schema = Schema({"group": {"left": Schema.leaf(), "right": Schema.leaf()}})
     ctx = Context()
     ctx.declare(schema)
-    ctx.update({"group.right": 2})
+    ctx.set_many({"group.right": 2})
     assert schema._child_names(("group",)) == ("left", "right")
     assert ctx.get("group").keys() == ("right",)
     ctx.dispose()

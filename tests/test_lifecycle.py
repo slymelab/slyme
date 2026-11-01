@@ -661,7 +661,7 @@ def test_failed_binding_leaves_child_disposal_to_its_owner() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     initial_effects = tuple(root._lifecycle._effects)
-    root.update({"value": "root"})
+    root.set_many({"value": "root"})
     child = root.derive(
         bindings={"value": ScopeBinding(original_identity, blocked=False)}
     )

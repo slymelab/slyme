@@ -1,6 +1,6 @@
 # Using the Slyme Skill
 
-Slyme provides an [Agent Skill](https://agentskills.io/) for coding agents that develop downstream applications with the framework. It teaches agents the recommended patterns for `@node`, `@wrapper`, graph assembly, `Context`, `Ref`, `Auto`, Trees, and CLI arguments.
+Slyme provides an [Agent Skill](https://agentskills.io/) for coding agents that develop downstream applications with the framework. It teaches agents the recommended patterns for `@node`, higher-order Nodes, graph assembly, `Context`, `Ref`, `Auto`, Trees, and CLI arguments.
 
 The Skill is intended for projects that **use** Slyme. It does not instruct an agent to maintain or modify the Slyme framework itself.
 
@@ -76,7 +76,7 @@ normalizes them with an node, and writes the result to Context.
 
 ```text
 Review this Slyme node tree. Check explicit Auto bindings, call-time keyword
-overrides, Context updates, and wrapper composition.
+overrides, Context updates, and higher-order composition.
 ```
 
 The Skill directs the agent to inspect the target project's installed Slyme version and existing conventions before making changes.

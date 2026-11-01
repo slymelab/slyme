@@ -6,14 +6,13 @@ import pytest
 
 from slyme.context import Context, Metadata, Ref, Schema, ref
 from slyme.execution import await_result
-from slyme.node import Node, auto, node, wrapper
+from slyme.node import auto, node, wrap
 
 
-@pytest.mark.parametrize("decorate", [node, wrapper])
-def test_replace_distinguishes_omission_empty_and_none(decorate):
+def test_replace_distinguishes_omission_empty_and_none():
     marker = Metadata()
     shared = []
-    original = decorate(
+    original = node(
         lambda *args, value=10, **kwargs: (value, kwargs),
         params={"value": 1, "shared": shared},
         metadata={"tag": marker},
@@ -25,7 +24,6 @@ def test_replace_distinguishes_omission_empty_and_none(decorate):
     assert copied.get("shared") is shared
     shared.append(2)
     assert copied.get("shared") == [2]
-
     replacement = {"value": 3}
     changed = original.replace(params=replacement, metadata={})
     replacement.clear()
@@ -39,59 +37,51 @@ def test_replace_distinguishes_omission_empty_and_none(decorate):
         assert cleared.params == cleared.metadata == {}
         ctx = Context()
         try:
-            runtime = (
-                (ctx,)
-                if isinstance(cleared, Node)
-                else (ctx, node(lambda ctx: None), lambda ctx: None)
-            )
+            runtime = (ctx,)
             assert cleared(*runtime) == (10, {})
         finally:
             ctx.dispose()
 
 
-def test_wrapper_replacement_preserves_order_and_previous_graph():
+def test_layer_replacement_preserves_order_and_previous_graph():
     events = []
 
-    @wrapper
-    def trace(ctx, wrapped, call_next, *, label):
+    @node(inject_ctx=True)
+    def trace(ctx, *, wrapped, label):
         events.append(label)
-        return call_next(ctx)
+        return wrapped(ctx)
 
-    @node
+    @node(inject_ctx=True)
     def task(ctx):
         return 7
 
     outer = trace.partial(label="outer")
     inner = trace.partial(label="inner")
     supplied = [outer]
-    first = task.replace(wrappers=iter(supplied))
+    first = wrap(*iter(supplied), task)
     supplied.clear()
-    second = first.replace(wrappers=(*first.wrappers, inner))
-    assert task.wrappers == ()
-    assert first.wrappers == (outer,)
-    assert second.partial().wrappers == (outer, inner)
+    second = first.partial(wrapped=wrap(inner, task))
+    assert task.params == {}
+    assert first.get("wrapped") is task
+    assert second.get("wrapped").get("wrapped") is task
     ctx = Context()
     try:
         assert second(ctx) == first(ctx) == task(ctx) == 7
         assert events == ["outer", "inner", "outer"]
-        for empty in (None, ()):
-            assert second.replace(wrappers=empty).wrappers == ()
+        assert wrap(second) is second
     finally:
         ctx.dispose()
 
 
-@pytest.mark.parametrize("decorate", [node, wrapper])
-def test_public_configuration_is_read_only(decorate):
-    element = decorate(
+def test_public_configuration_is_read_only():
+    element = node(
         lambda *args, **kwargs: kwargs,
         params={"value": 1},
         metadata={"tag": Metadata()},
     )
     assert element.params is element.params
     assert element.metadata is element.metadata
-    for field in ("func", "params", "metadata") + (
-        ("wrappers",) if isinstance(element, Node) else ()
-    ):
+    for field in ("func", "inject_ctx", "params", "result_to", "metadata"):
         with pytest.raises(AttributeError):
             setattr(element, field, getattr(element, field))
     for mapping in (element.params, element.metadata):
@@ -103,13 +93,13 @@ async def test_replace_and_factories_keep_auto_lazy_across_async_calls():
     value_ref: Ref[int] = ref("value")
     calls = []
 
-    @node
+    @node(inject_ctx=True)
     async def source(ctx):
         await asyncio.sleep(0)
         calls.append(ctx.get(value_ref))
         return calls[-1]
 
-    @node
+    @node(inject_ctx=True)
     def read(ctx, *, value):
         return value
 

@@ -86,7 +86,7 @@ def test_factory_preserves_its_returned_value(value) -> None:
 def test_derive_installs_all_bindings_before_creating_facet() -> None:
     root = Context()
     root.declare({name: Schema.leaf() for name in ("shared", "hidden", "inherited")})
-    root.update({"shared": "root", "hidden": "root", "inherited": "root"})
+    root.set_many({"shared": "root", "hidden": "root", "inherited": "root"})
     values = Compose(factory=ValueLayer, query=collect_values)
     root.effect(lambda: values.register(root.scope, "root"))
     shared = Identity()

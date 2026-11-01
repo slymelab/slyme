@@ -26,20 +26,20 @@ Slyme (发音为 /slaɪm/) 是一个高度可组合的函数式执行框架。�
 如前面提到的，[Node](/zh/guide/essentials/node) 是 Slyme 的基本执行单元：
 
 - [**@node**](/zh/guide/essentials/node)：运行时接收 Context，可以修改 Context、执行副作用、协调子 Node，或返回派生值。
-- [**@wrapper**](/zh/guide/essentials/node#wrapper)：用于拦截或增强 Node 执行，例如 tracing、计时、重试或异常处理。
+- [**高阶 Node**](/zh/guide/essentials/node#高阶组合)：用于拦截或增强 Node 执行，例如 tracing、计时、重试或异常处理。
 
 ::: info
-@node 和 @wrapper 同时支持普通函数与 `async def` 函数。
+@node 支持普通函数与 `async def` 函数。
 :::
 
 ### 图的组装
 
-[普通 Python 函数](/zh/guide/essentials/graph-assembly) 用于组装可复用的 Node 图。它们可以调用其他组装函数，返回单个 Node 或结构化集合。Node 与 Wrapper 参数也可以使用任意嵌套结构。
+[普通 Python 函数](/zh/guide/essentials/graph-assembly) 用于组装可复用的 Node 图。它们可以调用其他组装函数，返回单个 Node 或结构化集合。Node 参数也可以使用任意嵌套结构。
 
 ### 动态图与显式分层
 
 Slyme 在组装与执行期间都使用可直接调用的 Node（详见[生命周期](/zh/guide/essentials/lifecycle)）。
 
-- **调用之间**：用户可以组装或修改 Node 参数、wrapper 与组合结构。
+- **调用之间**：用户可以组装或修改 Node 参数与组合结构。
 - **单次调用内**：当前 Node 直接传递静态参数容器，使用传入的 Context 解析动态值并执行；调用内对静态容器的修改会保留在实时 Node 上。
-- **需要隔离时**：调用 `partial(...)` 或重新调用组装函数可获得可独立配置的图；Context `fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 Scope，需要独立数据层时应传入 child Scope。创建新根并声明相应路径后，用 `snapshot.update(context.get("app").flatten())` 物化 `app` 等仅含 assign 字段的业务子树，排除 `$` 下的框架注册。已存储的应用对象仍然共享。
+- **需要隔离时**：调用 `partial(...)` 或重新调用组装函数可获得可独立配置的图；Context `fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 Scope，需要独立数据层时应传入 child Scope。创建新根并声明相应路径后，用 `snapshot.set_many(context.get("app").flatten())` 物化 `app` 等仅含 assign 字段的业务子树，排除 `$` 下的框架注册。已存储的应用对象仍然共享。

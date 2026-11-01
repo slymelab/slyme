@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 
 import pytest
 
 from slyme.context import Context
 from slyme.context.default import EVALUATORS_REF
 from slyme.execution import SharedAwaitable, await_result, continuation
-from slyme.node import Node, auto, eval_tree, node, sequential_exec, wrapper
-from slyme.node.exception import NodeExceptionRecord, WrapperExceptionRecord
+from slyme.node import Node, auto, eval_tree, node, sequential_exec, wrap
 from slyme.utils.exception import BaseExceptionGroup
 
 
@@ -26,7 +25,7 @@ async def test_await_result_preserves_values_and_only_awaits_outer_completion() 
 
 
 def test_sync_call_and_disposal_need_no_event_loop() -> None:
-    @node
+    @node(inject_ctx=True)
     def value(ctx: Context, /) -> int:
         return 3
 
@@ -38,7 +37,7 @@ def test_sync_call_and_disposal_need_no_event_loop() -> None:
 async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
     events: list[str] = []
 
-    @node
+    @node(inject_ctx=True)
     def child(ctx: Context, /) -> Awaitable[int]:
         events.append("call")
 
@@ -48,7 +47,7 @@ async def test_regular_function_returning_awaitable_needs_no_mode() -> None:
 
         return finish()
 
-    @node
+    @node(inject_ctx=True)
     def parent(ctx: Context, /, *, value: int) -> int:
         events.append("parent")
         return value + 1
@@ -69,7 +68,7 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
     started: set[int] = set()
     both = asyncio.Event()
 
-    @node
+    @node(inject_ctx=True)
     async def child(ctx: Context, /, *, index: int) -> int:
         started.add(index)
         if len(started) == 2:
@@ -77,7 +76,7 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
         await both.wait()
         return index
 
-    @node
+    @node(inject_ctx=True)
     def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
@@ -94,7 +93,7 @@ async def test_sync_parent_waits_for_concurrent_auto_children() -> None:
 async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
     events = []
 
-    @node
+    @node(inject_ctx=True)
     def child(ctx: Context, /, *, index: int):
         events.append(("call", index))
 
@@ -105,7 +104,7 @@ async def test_auto_calls_every_sync_prefix_before_scheduling() -> None:
 
         return finish()
 
-    @node
+    @node(inject_ctx=True)
     def parent(ctx: Context, /, *, values: list[int]) -> int:
         return sum(values)
 
@@ -128,7 +127,7 @@ async def test_node_sequence_stops_at_first_failure(asynchronous) -> None:
     failure = ValueError("sequence")
     calls = []
 
-    @node
+    @node(inject_ctx=True)
     def child(ctx: Context, /, *, index: int):
         def execute():
             calls.append(index)
@@ -143,42 +142,37 @@ async def test_node_sequence_stops_at_first_failure(asynchronous) -> None:
         return finish() if asynchronous else execute()
 
     ctx = Context()
-    with pytest.raises(NodeExceptionRecord) as caught:
+    with pytest.raises(type(failure)) as caught:
         await await_result(
             sequential_exec(ctx, [child.partial(index=i) for i in range(3)])
         )
     assert calls == [0, 1]
-    assert caught.value.__cause__ is failure
+    assert caught.value is failure
     ctx.dispose()
 
 
-async def test_sync_wrapper_forwards_completion_and_async_wrapper_waits() -> None:
+async def test_sync_layer_forwards_completion_and_async_layer_waits() -> None:
     events: list[str] = []
 
-    @node
+    @node(inject_ctx=True)
     def value(ctx: Context, /) -> int:
         events.append("node")
         return 5
 
-    @wrapper
-    def forward(ctx: Context, wrapped: Node, call_next: Callable, /):
+    @node(inject_ctx=True)
+    def forward(ctx: Context, /, *, wrapped: Node):
         events.append("forward")
-        return call_next(ctx)
+        return wrapped(ctx)
 
-    @wrapper
-    async def finished(ctx: Context, wrapped: Node, call_next: Callable, /):
+    @node(inject_ctx=True)
+    async def finished(ctx: Context, /, *, wrapped: Node):
         events.append("before")
-        result = await await_result(call_next(ctx))
+        result = await await_result(wrapped(ctx))
         events.append("after")
         return result + 1
 
     ctx = Context()
-    graph = value.partial().replace(
-        wrappers=(
-            forward.partial(),
-            finished.partial(),
-        )
-    )
+    graph = wrap(forward.partial(), finished.partial(), value.partial())
     pending = graph(ctx)
     assert events == ["forward"]
     assert await await_result(pending) == 6
@@ -186,36 +180,35 @@ async def test_sync_wrapper_forwards_completion_and_async_wrapper_waits() -> Non
     ctx.dispose()
 
 
-@pytest.mark.parametrize("failure_in_wrapper", [False, True])
-async def test_awaited_failures_keep_node_and_wrapper_attribution(
-    failure_in_wrapper: bool,
+@pytest.mark.parametrize("failure_in_layer", [False, True])
+async def test_awaited_failures_keep_node_and_layer_exception_identity(
+    failure_in_layer: bool,
 ) -> None:
     failure = ValueError("awaited failure")
 
-    @node
+    @node(inject_ctx=True)
     async def value(ctx: Context, /) -> int:
         await asyncio.sleep(0)
-        if not failure_in_wrapper:
+        if not failure_in_layer:
             raise failure
         return 3
 
-    @wrapper
-    async def wrap(ctx: Context, wrapped: Node, call_next: Callable, /):
-        result = await await_result(call_next(ctx))
-        if failure_in_wrapper:
+    @node(inject_ctx=True)
+    async def around(ctx: Context, /, *, wrapped: Node):
+        result = await await_result(wrapped(ctx))
+        if failure_in_layer:
             raise failure
         return result
 
     ctx = Context()
-    wrapping = wrap.partial()
+    wrapping = around.partial()
     graph = value.partial()
-    if failure_in_wrapper:
-        graph = graph.replace(wrappers=(wrapping,))
-    error_type = WrapperExceptionRecord if failure_in_wrapper else NodeExceptionRecord
+    if failure_in_layer:
+        graph = wrap(wrapping, graph)
+    error_type = type(failure)
     with pytest.raises(error_type) as caught:
         await await_result(graph(ctx))
-    assert caught.value.__cause__ is failure
-    assert caught.value.exception_node is (wrapping if failure_in_wrapper else graph)
+    assert caught.value is failure
     ctx.dispose()
 
 
@@ -406,7 +399,7 @@ async def test_continuation_composes_node_setup_and_disposal(asynchronous) -> No
         events.append("setup")
         return finish(cleanup) if asynchronous else cleanup
 
-    @node
+    @node(inject_ctx=True)
     def value(ctx: Context, /):
         events.append("node")
         return finish(5) if asynchronous else 5
@@ -511,10 +504,10 @@ async def test_async_setup_cleanup_failure_replays_without_repeating() -> None:
     assert ctx.dispose() is None
 
 
-async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
+async def test_sync_layer_waits_for_its_async_auto_parameter() -> None:
     events: list[str] = []
 
-    @node
+    @node(inject_ctx=True)
     async def parameter(ctx: Context, /) -> int:
         async def cleanup() -> None:
             await asyncio.sleep(0)
@@ -523,22 +516,20 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
         ctx.effect(lambda: cleanup)
         return 2
 
-    @node
+    @node(inject_ctx=True)
     def value(ctx: Context, /) -> int:
         return 3
 
-    @wrapper
-    def add(ctx: Context, wrapped: Node, call_next: Callable, /, *, extra: int):
+    @node(inject_ctx=True)
+    def add(ctx: Context, /, *, wrapped: Node, extra: int):
         assert events == ["cleanup"]
-        return call_next(ctx) + extra
+        return wrapped(ctx) + extra
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
     assert (
         await await_result(
-            value.partial().replace(
-                wrappers=(add.partial(extra=auto(parameter.partial())),)
-            )(ctx)
+            wrap(add.partial(extra=auto(parameter.partial())), value.partial())(ctx)
         )
         == 5
     )
@@ -549,12 +540,12 @@ async def test_sync_wrapper_waits_for_its_async_auto_parameter() -> None:
 async def test_sequential_continues_sync_and_async_steps_after_first_await() -> None:
     events: list[int] = []
 
-    @node
+    @node(inject_ctx=True)
     async def asynchronous(ctx: Context, /, *, value: int) -> None:
         await asyncio.sleep(0)
         events.append(value)
 
-    @node
+    @node(inject_ctx=True)
     def synchronous(ctx: Context, /, *, value: int) -> None:
         events.append(value)
 
@@ -577,7 +568,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
     failure = ValueError("node")
     cleanup_failure = RuntimeError("cleanup")
 
-    @node
+    @node(inject_ctx=True)
     def child(ctx: Context, /) -> int:
         async def cleanup():
             await asyncio.sleep(0)
@@ -586,15 +577,15 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
         ctx.effect(lambda: cleanup)
         raise failure
 
-    @node
+    @node(inject_ctx=True)
     def parent(ctx: Context, /, *, value: int) -> int:
         return value
 
     ctx = Context()
     initial_effects = tuple(ctx._lifecycle._effects)
-    with pytest.raises(NodeExceptionRecord) as caught:
+    with pytest.raises(BaseExceptionGroup) as caught:
         await await_result(parent.partial(value=auto(child.partial()))(ctx))
-    group = caught.value.__cause__
+    group = caught.value
     assert isinstance(group, BaseExceptionGroup)
     child_errors = group.exceptions[0]
     assert isinstance(child_errors, BaseExceptionGroup)
@@ -602,8 +593,7 @@ async def test_sync_auto_failure_waits_for_async_cleanup_and_chains_errors() -> 
     assert isinstance(cleanup_error, BaseExceptionGroup)
     assert cleanup_error.exceptions == (cleanup_failure,)
     node_error = cleanup_error.__context__
-    assert isinstance(node_error, NodeExceptionRecord)
-    assert node_error.__cause__ is failure
+    assert node_error is failure
     assert child_errors.__cause__ is None
     assert tuple(ctx._lifecycle._effects) == initial_effects
     ctx.dispose()

@@ -37,9 +37,9 @@ Tree handler 和 Auto evaluator 按精确类型匹配，子类需要显式注册
 `slyme.context.inspection` 中的 `resolve_inspection_options(ctx)` 可通过 `**options` 提供分层配置。
 详见[自省文档](../docs/src/zh/guide/slyme-in-depth/inspection.md)。
 
-推荐 `slyme.node` 的 `node/wrapper/auto` 和 `slyme.context` 的 `ref` 作为四个常用函数入口。`Node/Wrapper/Ref` 保留用于类型标注与显式构造，Auto 标记类为内部实现；`Node/Wrapper` 的公开配置只读，通过 `partial/replace` 派生新对象。
+推荐 `slyme.node` 的 `node/auto` 和 `slyme.context` 的 `ref` 作为常用函数入口。`Node/Ref` 保留用于类型标注与显式构造，Auto 标记类为内部实现；`Node` 的公开配置只读，通过 `partial/replace` 派生新对象。
 
-Node 和 Wrapper 对象只保存传入的关键字绑定。函数原生默认值在实际调用时生效；`node(ctx, **kwargs)` 在 Auto 求值前为本次调用覆盖已保存的绑定。使用 `get` 或只读 `params` 读取绑定，通过 `partial(**params)` 派生新的 Node/Wrapper。
+Node 对象只保存传入的关键字绑定。函数原生默认值在实际调用时生效；`node(ctx, **kwargs)` 在 Auto 求值前为本次调用覆盖已保存的绑定。使用 `get` 或只读 `params` 读取绑定，通过 `partial(**params)` 派生新的 Node。
 
 ## 安装
 
@@ -53,13 +53,17 @@ pip install slyme
 
 ## 快速开始
 
-以下示例使用 `@node`、`@wrapper` 和组装图的普通函数构建简单的执行流水线：
+`@node` 默认适配不接收 Context 的原生函数；需要 Context 时显式使用 `@node(inject_ctx=True)`。
+Node 始终通过 `task(ctx, **params)` 调用。`.to(ref_or_tree)` 可选择将成功结果写入 Context，
+并返回原始结果；条件写入和中间状态仍使用显式 Context 操作。
+
+以下示例使用 `@node`、高阶 Node 和组装图的普通函数构建简单的执行流水线：
 
 ```python
 from time import time
 from collections.abc import Callable
 from slyme.context import Context, Ref, Schema
-from slyme.node import node, wrapper, AnyNode, auto
+from slyme.node import node, AnyNode, auto, wrap
 
 
 R = Schema(
@@ -73,14 +77,14 @@ R = Schema(
 
 
 # 1. 定义执行节点
-@node
+@node(inject_ctx=True)
 def llm_api(ctx: Context, /, *, prompts: list[str], responses: Ref[list[str]]):
     responses_ = [f"Response to the prompt: {prompt}" for prompt in prompts]
     ctx.set(responses, responses_)
 
 
 # 2. 定义产生值的节点
-@node
+@node(inject_ctx=True)
 def format_prompts(ctx: Context, /, *, articles: list[dict]) -> list[str]:
     return [
         f"Summarize: {article['title']}. Content: {article['content']}"
@@ -89,17 +93,10 @@ def format_prompts(ctx: Context, /, *, articles: list[dict]) -> list[str]:
 
 
 # 3. 定义中间件包装器（例如性能计时）
-@wrapper
-def timing(
-    ctx: Context,
-    wrapped: AnyNode,
-    call_next: Callable[[Context], object],
-    /,
-    *,
-    prefix: str,
-):
+@node(inject_ctx=True)
+def timing(ctx: Context, /, *, wrapped: AnyNode, prefix: str):
     start_time = time()
-    result = call_next(ctx)
+    result = wrapped(ctx)
     end_time = time()
     print(f"[{prefix}] Finished successfully in {end_time - start_time:.4f} seconds.")
     return result
@@ -107,21 +104,22 @@ def timing(
 
 # 4. 在构建时组装流水线
 def build_pipeline() -> AnyNode[None]:
-    return llm_api.partial(
-        responses=R.resolve("output.responses"),
-        prompts=auto(
-            format_prompts.partial(
-                articles=auto(R.resolve("input.articles")),
-            )
+    return wrap(
+        timing.partial(prefix="LLM API Call"),
+        llm_api.partial(
+            responses=R.resolve("output.responses"),
+            prompts=auto(
+                format_prompts.partial(articles=auto(R.resolve("input.articles")))
+            ),
         ),
-    ).replace(wrappers=(timing.partial(prefix="LLM API Call"),))
+    )
 
 
 # 5. 在运行时执行
 if __name__ == "__main__":
     ctx = Context()
     ctx.declare(R)
-    ctx.update(
+    ctx.set_many(
         {
             "input.articles": [
                 {"title": "Article 1", "content": "Content 1"},
@@ -137,11 +135,11 @@ if __name__ == "__main__":
 
 执行或清理可能异步时，从 `slyme.execution` 导入 `await_result`，使用 `await await_result(task(ctx))` 和 `await await_result(ctx.dispose())`。需要在同一个函数中组合两种模式时，使用同模块的 `@continuation` 并 yield 这些调用。纯同步应用仍可直接调用 `task(ctx)` 和 `ctx.dispose()`。
 
-`Wrapper.compose(wrappers, wrapped=task, call_next=terminal)` 构建从外到内的 callable 链，不执行它。Wrapper 顺序采用快照，组合链保留原有 Wrapper 对象；每个 wrapper 控制对下一层的调用，并可返回同步或异步结果。
+`wrap(outer, inner, task)` 等价于 `outer.partial(wrapped=inner.partial(wrapped=task))`。各层控制紧邻内层的调用，默认不创建作用域或转发参数。先绑定目标业务参数再组装，返回类型取决于外层 Node。
 
 需要混合执行时，编写普通生成器并传给 `slyme.execution` 的 `run()`。每个 `value = yield operation()` 都可以接收同步或异步结果。驱动器同步执行到第一个被 yield 的 awaitable，再返回尚未调度的异步剩余流程。循环、分支和 `try/except/finally` 留在生成器内。返回模式不确定时，使用 `await await_result(run(generator))`。驱动器不调度 task、不汇总错误，也不拥有资源生命周期。
 
-Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递归 LIFO 清理。两者都通过异常组报告失败，不提供部分成功结果。Auto 按输入索引排列错误，Context 按清理执行顺序排列错误；正常返回的异常对象仍是普通数据。Node 和 Wrapper 会将普通异常（包括普通异常组）包装成异常记录，由 `__cause__` 保存原始异常；已有 Node 异常记录及非 `Exception` 控制异常原样传播。
+Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递归 LIFO 清理。两者都通过异常组报告失败，不提供部分成功结果。Auto 按输入索引排列错误，Context 按清理执行顺序排列错误；正常返回的异常对象仍是普通数据。Node 原样传播原始异常和异常组。
 
 `slyme.utils.exception.exception_group(message, excs)` 将非空异常序列组成异常组，同一模块导出 `ExceptionGroup` 和 `BaseExceptionGroup` 供捕获异常组。Python 3.11+ 使用原生异常组；Python 3.10 使用提供 `message` 和有序 `exceptions` 的简单兼容类，不支持 `except*`、子组操作或分组堆栈显示。仅包含 `Exception` 的组可以被 `except Exception` 捕获；包含取消或其他非 `Exception` 异常的组则不会被捕获。
 
@@ -151,7 +149,7 @@ Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递�
 
 使用 `schema.resolve_entry(path)` 查询单个字段，通过 `schema.entries` tuple 枚举 root、container 和 leaf entry。公开的 `RefEntry` 提供 `ref`、`config`、缓存的只读 `metadata` 快照和 `alive`。仅可见 key 或代表对象身份变化时使缓存失效，读取时按需生成新快照，旧快照保持不变。 Metadata 默认按身份兼容，不同对象使用显式 `equals` 判断等价；比较必须纯粹、稳定，满足等价关系。每个 key 使用最早仍有效的原始贡献作为代表，撤销时直接切换，不比较、不 clone。Schema 只声明角色、写入模式和辅助信息；值的静态类型由 `Ref[T]` 表达。`RefLeafConfig` 和 `RefContainerConfig` 只存角色与写入模式，`RefConfig` 是两者的联合类型。`Schema.leaf/container` 返回分别携带 config 与 metadata 的 `RefDeclaration`。这些类型均由 `slyme.context` 导出。
 
-`set` 和 `delete` 修改单个本地路径。`update` 和 `drop` 会在应用修改前校验整个批次；预检失败时 binding 保持不变，实际应用修改时发生的失败不会触发回滚。
+`set` 和 `delete` 修改单个本地路径。`set_many` 和 `delete_many` 会在应用修改前校验整个批次；预检失败时 binding 保持不变，实际应用修改时发生的失败不会触发回滚。
 
 `Schema.leaf()` 默认使用 `mode="assign"`，允许 `set()`/`delete()`；声明 `mode="register"` 后，改用 `ctx.register(ref, value)` 及其 disposer 撤销。两种模式互不允许对方的写入操作。删除 container（包括 `ctx.delete("")`）时，任何 `register` 后代都会使操作在修改数据前报错。模式约束的是绑定，而不是所存对象是否可变。
 

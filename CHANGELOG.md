@@ -8,15 +8,65 @@ breaking changes when they are documented here.
 
 ## [Unreleased]
 
-### Type annotations
+- Exclude local documentation dependencies from source distributions.
 
-- Node and Wrapper now retain the callback's business `ParamSpec` as `Node[P, R]`
-  and `Wrapper[P, R]`. Use `AnyNode[R]` / `AnyWrapper[R]` for former result-only
-  annotations. Factories remain ordinary keyword-only partial builders; binding
-  and invocation behavior is unchanged.
-- Original callback signatures are retained by `.func`; async constructors infer
-  completion results, and `Auto[S].value` preserves its source type. Partial
-  keyword bindings remain dynamic within standard Python typing's limits.
+- Remove `slyme.node.exception`; Node calls now propagate original exceptions
+  and exception groups unchanged instead of wrapping them in exception records.
+
+- Context uses explicit `dispose()` rather than the context-manager protocol;
+  release it in `finally` and await asynchronous cleanup with `await_result`.
+
+### Context batch API (breaking)
+
+- Rename `Context.update/drop` and `ContextStore.update/drop` to
+  `set_many/delete_many`; the old names are removed.
+- Add `Context.resolve_entries` and `Schema.resolve_entries`, returning live
+  declarations in input order with duplicates preserved.
+- Add lifecycle-owned `Context.register_many` and the corresponding Store operation.
+  A batch returns one reverse-order disposer; failed installation withdraws only
+  that batch's successful registrations. Cleanup attempts all withdrawals and
+  aggregates failures. Registration does not dispose the stored objects.
+- Remove `Context.extract/update_tree`. Use ordinary reads or Tree mapping with
+  `ctx.get` for extraction, and Node result projection or Tree traversal plus
+  `set_many` for writes. `eval_tree` is not a pure-read replacement: it evaluates
+  Ref/Node leaves, awaits values and keeps strings literal.
+- Node owns result projection and mode selection, using public Context APIs:
+  `resolve_entries`, followed by `register_many` and then `set_many`. Output is
+  a mapping, not an interleaved write sequence. Duplicate registration targets
+  fail before writing; duplicate assignment targets keep only the last value.
+  Registration failure withdraws its batch and prevents assignments. Assignment
+  failure does not undo successful registrations; the groups are not one
+  transaction. Node calls still require an explicit Context; `.func` exposes
+  the original callable.
+
+### Node API (breaking)
+
+- `node` and `Node` default to `inject_ctx=False`, adapting native functions. Use
+  `inject_ctx=True` to pass execution Context into the function. Node calls still require
+  `task(ctx, **kwargs)` in both modes; no signature reflection is performed.
+- Add optional `result_to` and `.to(result_to)`: publish the successful result, or a
+  selected result tree, using each destination's declared assign/register mode,
+  then return the original object. Registrations belong to the execution Context;
+  they do not dispose the returned object. None disables result binding. Projection is
+  prevalidated; application follows Context's non-transactional write semantics.
+- Add `auto_partial(**params)`, equivalent to partial with each supplied value
+  wrapped in auto. Binding remains lazy and later overrides win before evaluation.
+- Replace Wrapper, AnyWrapper, wrapper, WrapperExceptionRecord, NodeElement and
+  the Node.wrappers field with ordinary higher-order Nodes. `wrap(outer,
+  inner, task)` binds `wrapped` outermost first, with the target last. One Node
+  returns unchanged; at least one is required. Bind business arguments before wrapping;
+  there is no implicit forwarding. Original exceptions propagate unchanged.
+- `Node[P, R]` now retains the full original callable signature, including Context
+  in P for inject_ctx=True. `.func`, partial, replace and to preserve that signature;
+  async constructors infer completed results. `AnyNode[R]` erases parameters only.
+  Keyword bindings remain dynamic; inject_ctx/signature consistency is explicit config.
+- Configuration properties are read-only. Partial merges business bindings;
+  replace replaces params/result_to/metadata. Function and Context mode stay fixed.
+  Inspection follows nested Node bindings and exposes Context mode and result destinations.
+- Node construction is the single snapshot boundary for params and metadata.
+  Configured decorators retain references until applied, avoiding a redundant
+  copy. Changes before application affect the new Node; later changes do not.
+  Result destination trees and nested payloads retain their original references.
 
 ### Import paths
 
@@ -36,14 +86,14 @@ breaking changes when they are documented here.
 
 - `slyme.inspection.inspect(value, tree_rules=...)` describes shared/cyclic structures as an
   in-memory object graph with configurable raw-value retention, using Tree rules and synchronous value interpreters.
-  Context, Ref, Compose, Node, and Wrapper adapters preserve runtime behavior.
+  Context, Ref, Compose, and Node adapters preserve runtime behavior.
   Root-owned `$.inspection.tree_rules`, `$.inspection.interpreters`, and
   `$.inspection.type_names` and `$.inspection.raw_value_types` provide scoped configuration without
   implicit fallback through `slyme.context.inspection.resolve_inspection_options(ctx)`.
   Inspection itself is independent of Context and accepts explicit configuration.
-  Node, Wrapper, and Auto structural descriptions live in `slyme.node.inspection`;
+  Node and Auto structural descriptions live in `slyme.node.inspection`;
   execution and data traversal use separate rules.
-- Node/Wrapper decorators and constructors accept auxiliary metadata.
+- Node decorators and constructors accept auxiliary metadata.
 - Read-only `Context.state`, `Lifecycle.state`, and `ContextView.context` / `path`.
 
 - Generic `Context[A]` facets, created by an optional synchronous `facet_factory`

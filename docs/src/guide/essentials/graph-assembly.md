@@ -7,7 +7,7 @@ Use ordinary Python functions to assemble and reuse Node graphs. A function can 
 Given application Nodes `load_data`, `process_data`, and `save_data`, a function can assemble a sequential pipeline:
 
 ```python
-from slyme.node import AnyNode, sequential
+from slyme.node import AnyNode, sequential, wrap
 from slyme.context import Schema
 # Assume nodes are already defined
 # from my_nodes import load_data, process_data, save_data
@@ -39,7 +39,7 @@ Use return type annotations and a static type checker to verify assembly functio
 Assembly functions can call each other. Use partial to derive a customized pipeline from a base graph:
 
 ```python
-from slyme.node import AnyNode, sequential
+from slyme.node import AnyNode, sequential, wrap
 from slyme.context import Schema
 
 R = Schema({"default_config": Schema.leaf(), "output_path": Schema.leaf()})
@@ -60,13 +60,15 @@ def custom_pipeline(new_path: str) -> AnyNode[None]:
 
     # 2. Derive bindings and replace the sequence
     first, *rest = pipeline.get("nodes")
-    return pipeline.partial(nodes=[
-        first.partial(path=new_path),
-        *rest,
-        save_data.partial(output=R.resolve("output_path")),
-    ])
+    return pipeline.partial(
+        nodes=[
+            first.partial(path=new_path),
+            *rest,
+            save_data.partial(output=R.resolve("output_path")),
+        ]
+    )
 ```
 
 Each call to `base_pipeline()` creates fresh Nodes and a fresh list; modifications in one pipeline do not change another. Application values passed into multiple graphs remain shared unless explicitly copied.
 
-Assembly functions and parameter structures may nest freely. Node and Wrapper calls return immediate values or awaitables; `sequential` preserves step order for both.
+Assembly functions and parameter structures may nest freely. Node calls return immediate values or awaitables; `sequential` preserves step order for both.

@@ -27,12 +27,11 @@ def test_root_with_defaults_is_a_readable_view(key: str | Ref, local: bool) -> N
     assert view.keys(local=local) == ("$",)
     assert view.to_dict(local=local) == {"$": ctx.get("$").to_dict()}
     assert view.flatten(local=local) == ctx.get("$").flatten()
-    assert ctx.extract({"root": key}, local=local) == {"root": view}
     assert len(ctx._store._data) == 6
     with pytest.raises(ContextPathError, match="register"):
         ctx.delete(key)
     with pytest.raises(ContextPathError, match="register"):
-        ctx.drop([key])
+        ctx.delete_many([key])
     assert ctx.get(key) == view
     ctx.dispose()
     with pytest.raises(RuntimeError, match="disposed"):
@@ -74,7 +73,7 @@ def test_root_view_remains_live_across_declaration_value_and_cleanup_changes() -
 
 @pytest.mark.parametrize("key", ["", Ref("")])
 @pytest.mark.parametrize(
-    "operation", ["set", "register", "update", "update_tree", "bind", "block"]
+    "operation", ["set", "register", "set_many", "register_many", "bind", "block"]
 )
 def test_root_rejects_leaf_operations_without_partial_writes(
     key: str | Ref, operation: str
@@ -82,12 +81,12 @@ def test_root_rejects_leaf_operations_without_partial_writes(
     ctx = Context()
     ctx.declare(Schema({"value": Schema.leaf()}))
     initial_effects = tuple(ctx._lifecycle._effects)
-    ctx.update({"value": 1})
+    ctx.set_many({"value": 1})
     with pytest.raises(ContextPathError, match="container, not a leaf"):
-        if operation == "update":
-            ctx.update({"value": 2, key: {}})
-        elif operation == "update_tree":
-            ctx.update_tree(["value", key], [2, {}])
+        if operation == "set_many":
+            ctx.set_many({"value": 2, key: {}})
+        elif operation == "register_many":
+            ctx.register_many({key: {}})
         elif operation == "bind":
             ctx.derive(bindings={key: ScopeBinding()})
         elif operation == "block":
@@ -110,7 +109,7 @@ def test_root_deletion_rejects_inherited_default_registrations(batch: bool) -> N
     before = child.flatten()
     with pytest.raises(ContextPathError, match="register"):
         if batch:
-            child.drop(["value", ""])
+            child.delete_many(["value", ""])
         else:
             child.delete("")
     assert child.flatten() == before
@@ -123,7 +122,7 @@ def test_root_deletion_rejects_inherited_default_registrations(batch: bool) -> N
 
 
 def test_auto_can_inject_the_root_view() -> None:
-    @node
+    @node(inject_ctx=True)
     def snapshot(ctx, /, *, data):
         return data.to_dict()
 

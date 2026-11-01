@@ -187,19 +187,19 @@ R = Schema(
 
 ctx = Context()
 ctx.declare(R)
-ctx.update({R.resolve("user.name"): "Ada"})
-ctx.update({R.resolve("user.age"): 36, R.resolve("status"): "active"})
+ctx.set_many({R.resolve("user.name"): "Ada"})
+ctx.set_many({R.resolve("user.age"): 36, R.resolve("status"): "active"})
 
 assert ctx.get(R.resolve("user.name")) == "Ada"
 assert ctx.exists(R.resolve("user.age"))
 assert ctx.get("user.name") == "Ada"
-assert ctx.extract({"name": R.resolve("user.name"), "age": R.resolve("user.age")}) == {
+assert {name: ctx.get(f"user.{name}") for name in ("name", "age")} == {
     "name": "Ada",
     "age": 36,
 }
 ```
 
-`Context(*, parent=None, scope=None, dispose_mode="sequential")` 建立归属和可见性。根创建自己的 Schema 和 Store，并在 `$` 下安装独立的框架配置；子级共享 parent 的 Schema 和 Store，不重复安装默认配置。`root` 是固定字段：根指向自身，子级指向同一个应用根。Context 的属性绑定不可重赋值，但声明的数据仍可修改。创建后通过 `declare()` 声明路径，再用 `update()` 或 `set()` 赋值。所有数据访问都要求路径已声明，包括带 default 的读取和 `exists()` 检查。`update()` 只接受 `assign` 字段。
+`Context(*, parent=None, scope=None, dispose_mode="sequential")` 建立归属和可见性。根创建自己的 Schema 和 Store，并在 `$` 下安装独立的框架配置；子级共享 parent 的 Schema 和 Store，不重复安装默认配置。`root` 是固定字段：根指向自身，子级指向同一个应用根。Context 的属性绑定不可重赋值，但声明的数据仍可修改。创建后通过 `declare()` 声明路径，再用 `set_many()` 或 `set()` 赋值。所有数据访问都要求路径已声明，包括带 default 的读取和 `exists()` 检查。`set_many()` 只接受 `assign` 字段。
 
 应用既可以预先构建 Schema，再通过 `ctx.declare(schema)` 导入，也可以直接声明 dict。导入会把当前定义复制到应用自己的 Schema，声明所有权独立；源 Schema 后续的新增或撤销不会自动传播。即使导入同一个源，不同根的 Schema 仍相互独立。同一应用的 Context 所声明的变动，已有 fork 会立即看到：
 
@@ -229,11 +229,11 @@ remove_core()
 ```
 
 fragment 仍用于声明和导出该插件拥有的路径；`ctx.entries` 列出整个应用的声明并集。
-`Schema.declare()` 返回由调用方管理的 disposer。`ctx.declare()` 在应用的 Schema 中登记定义，并把清理作为 `ctx` 拥有的 effect，返回精确的提前 disposer。后续的 `declare()` 或 `update()` 失败不会销毁已经创建的 Context；调用方决定重试还是 dispose。
+`Schema.declare()` 返回由调用方管理的 disposer。`ctx.declare()` 在应用的 Schema 中登记定义，并把清理作为 `ctx` 拥有的 effect，返回精确的提前 disposer。后续的 `declare()` 或 `set_many()` 失败不会销毁已经创建的 Context；调用方决定重试还是 dispose。
 
 `Schema(...)`、`Schema.declare(...)` 和 `Context.declare(...)` 的 `declaration` 参数表示一次登记的声明树，其中可以包含多个路径。每个声明的 leaf 及其祖先 container 都记录声明者 ID 和各 metadata key 的原始贡献。先检查路径角色与写入模式，再检查 metadata 等价性。仅所有权变化不会使 metadata 缓存失效；可见 metadata 变化后，下次读取直接生成当前代表的快照，不重新比较。框架内部撤销、回滚及 Context dispose 不读取 config 或调用 `equals`。每次 declare 返回一个 disposer，按登记的逆序释放，仅在最后一个声明者退出后删除定义。某项 cleanup 失败不会阻止其余条目的清理，全部失败以异常组抛出；后续调用重现同一个异常组，不重复清理。尚未调用的 disposer 会持有 Schema 及其条目；首次调用无论成功或失败都会释放这些引用，但失败的 traceback 仍可能保留清理现场。
 
-`set` 和 `update` 只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `drop` 接受任一角色。删除 container 会移除其后代的本地值，不会删除 Schema 声明或继承值。
+`set` 和 `set_many` 只接受声明为 leaf 的路径；`keys` 和 `to_dict(ref)` 只接受声明为 container 的路径；`get`、`exists`、`delete` 和 `delete_many` 接受任一角色。删除 container 会移除其后代的本地值，不会删除 Schema 声明或继承值。
 
 ### 框架配置
 
@@ -250,7 +250,7 @@ from slyme.context import Context, Ref, Schema, ref
 
 root_ctx = Context()
 root_ctx.declare(Schema({"value": Schema.leaf()}))
-root_ctx.update({"value": 1})
+root_ctx.set_many({"value": 1})
 child_ctx = root_ctx.fork(scope=root_ctx.scope.fork())
 root_view = child_ctx.get(ref(""))
 child_ctx.set("value", 2)
@@ -263,11 +263,35 @@ assert root_ctx.get("value") == 1
 root_ctx.dispose()
 ```
 
-`delete("")` 和 `drop([""])` 会因框架的 register 字段而在任何值被删除前报错；应删除仅含 assign 字段的业务子树。删除 container 保留声明、继承值、隔离 barrier 和 effect。通过 `set`、`register` 或 `update` 给根赋值会被拒绝，因为根是 container。
+`delete("")` 和 `delete_many([""])` 会因框架的 register 字段而在任何值被删除前报错；应删除仅含 assign 字段的业务子树。删除 container 保留声明、继承值、隔离 barrier 和 effect。通过 `set`、`register` 或 `set_many` 给根赋值会被拒绝，因为根是 container。
 
 ### 批量更新
 
-`update` 会在写入前校验全部路径和写入模式；`drop` 会在删除前消费并校验全部输入路径，收集其后代叶子。预检失败时 binding 保持不变。实际应用修改时发生的错误或重入副作用不会触发回滚。先删除再更新是两次独立调用，不构成组合事务。
+`set_many` 会在写入前校验全部路径和写入模式；`delete_many` 会在删除前消费并校验全部输入路径，收集其后代叶子。预检失败时 binding 保持不变。实际应用修改时发生的错误或重入副作用不会触发回滚。先删除再更新是两次独立调用，不构成组合事务。
+
+
+`register_many(mapping)` 安装多个 register 字段，返回一个归 Context 所有的 disposer。
+安装前检查全部路径和模式；安装冲突时撤销本批次已经装入的注册，保留此前存在的值。
+清理按注册的逆序执行，即使某项清理失败也继续处理其余项，最后汇总错误。
+不会调用所存对象自身的清理方法。
+
+```python
+ctx.declare(
+    {
+        "services": {
+            "format": Schema.leaf(mode="register"),
+            "parse": Schema.leaf(mode="register"),
+        }
+    }
+)
+remove_services = ctx.register_many({"services.format": str, "services.parse": int})
+assert ctx.get("services.parse")("42") == 42
+remove_services()  # 可提前撤销；所属 Context 释放时也会自动清理。
+```
+
+`ctx.resolve_entries(fields, role=...)` 和 `schema.resolve_entries(...)` 按输入顺序
+返回声明 Entry，保留重复项，只解析声明、不读取值。Entry 用于观察声明，不作为写入句柄；
+写入仍接受路径或 Ref。
 
 Schema 将应用内的每个有效路径固定为 leaf 或 container 之一，Context 数据不能改变这个角色：删除 value 不会让对应路径变成 container，删除 container 的局部值也不会让对应路径可以写入 leaf value。只要任一匹配声明仍然有效，该路径的角色和写入模式就不能改变。Context 只保存平铺的 leaf binding；访问 container 时先遍历 Schema，再读取相应的 binding。
 
@@ -336,7 +360,7 @@ from slyme.context import Identity
 service_schema = Schema({"service": Schema.leaf()})
 root = Context()
 root.declare(service_schema)
-root.update({"service": "default"})
+root.set_many({"service": "default"})
 service = service_schema.resolve("service")
 isolated = root.derive(bindings={service: ScopeBinding(blocked=True)})
 assert not isolated.exists(service)
@@ -373,7 +397,7 @@ finally:
     remove_schema()
 ```
 
-继承的值可以被 child Scope 的注册遮蔽。共享同一局部 identity 的 Context 不能注册多个相互竞争的值，必须先撤销已有注册再安装新值。`set()`、`update()`、`update_tree()`、`delete()` 和 `drop()` 都拒绝 `register` 字段，即使当前没有局部值；删除 container 时，只要任一后代是 `register` 字段，整个操作都会被拒绝。`assign` 字段则拒绝 `register()`。这些模式约束绑定的修改方式，不限制所存对象自身是否可变。
+继承的值可以被 child Scope 的注册遮蔽。共享同一局部 identity 的 Context 不能注册多个相互竞争的值，必须先撤销已有注册再安装新值。`set()`、`set_many()`、`delete()` 和 `delete_many()` 都拒绝 `register` 字段，即使当前没有局部值；删除 container 时，只要任一后代是 `register` 字段，整个操作都会被拒绝。`assign` 字段则拒绝 `register()`。这些模式约束绑定的修改方式，不限制所存对象自身是否可变。
 
 Context 强持有 binding 表。注册 disposer 捕获 Binding、Scope 和安装 token，不持有 Store 或内部值记录。调用时，其闭包在 `finally` 中释放 Binding 引用，即使清理失败也会释放；异常 traceback 可能另外持有方法栈帧。尚未调用时，它会保留 Binding 及其中剩余的 identity 数据。最终撤销 Schema 声明会清空整个 Binding，最后一个 viewer 退出时 Scope 释放会清空对应 identity 数据，这些操作不受外部 disposer 持有的影响。
 
@@ -397,7 +421,7 @@ owner.dispose()
 root.dispose()
 ```
 
-局部操作使用普通函数；需要参数绑定、Auto 或 Wrapper 组合时再使用 Node。调用注册的 Node 时，先通过 `task = child.get(task_ref)` 获取，再调用 `task(child, **overrides)`。Context 字段通过 `get()` 访问，不会变成对象属性。
+局部操作使用普通函数；需要参数绑定、Auto 或高阶组合时再使用 Node。调用注册的 Node 时，先通过 `task = child.get(task_ref)` 获取，再调用 `task(child, **overrides)`。Context 字段通过 `get()` 访问，不会变成对象属性。
 
 ## Effect 与 dispose
 
@@ -479,9 +503,24 @@ root.dispose()
 
 ## 结构化操作与投影
 
-Context 接受 Ref Tree 进行批量读写。`extract` 会将输入展开一次，按遍历顺序逐个解析 Ref 并读取值，再重建一次请求结构；遇到第一个未声明路径或缺少可见值的路径即停止，不再解析后续 Ref。叶子值保持原对象 identity。`update_tree` 从结构一致的 value tree 写入各个路径，复用 `update` 的预检规则。
+Context 处理路径和值；Tree 投影由 Tree 工具和 Node 完成。
+路径列表直接使用 `[ctx.get(field) for field in fields]`；任意结构可以使用当前的数据 Tree 规则：
 
-`ContextView` 只提供 `get/exists/keys/to_dict/flatten`，用于读取和自省子树。它仅保存 Context 与路径前缀并转发读取，不独立管理数据、Scope 或生命周期操作。只读属性 `context` 和 `path` 暴露所属 Context 与绝对路径（根路径为空字符串），释放后仍可访问，但不能据此读取已释放的数据。树形提取使用 `ctx.extract(...)`，传入绝对路径或 Ref；View 不提供 `extract()`，也不依赖 Tree 配置。
+```python
+from slyme.context import DATA_TREE_REF
+from slyme.tree import map as tree_map
+
+rules = ctx.get(DATA_TREE_REF).resolve(ctx.scope)
+values = tree_map(ctx.get, {"name": "user.name", "age": "user.age"}, rules=rules)
+```
+
+仅读取局部值时，传入 `lambda field: ctx.get(field, local=True)`。
+纯读取保留存储的原始值，包括 awaitable。`eval_tree` 用于求值：字符串保持原样，
+Ref 会读取并等待其中的 awaitable，Node 可以被执行，因此不能直接替换纯读取。
+Node 返回值投影使用 `.to(...)`；显式赋值可以组合 Tree 遍历与 `set_many`。
+Context 不再提供 `extract/update_tree`。
+
+`ContextView` 只提供 `get/exists/keys/to_dict/flatten`，用于读取和自省子树。它仅保存 Context 与路径前缀并转发读取，不独立管理数据、Scope 或生命周期操作。只读属性 `context` 和 `path` 暴露所属 Context 与绝对路径（根路径为空字符串），释放后仍可访问，但不能据此读取已释放的数据。View 不依赖 Tree 配置。
 
 `Context.flatten(ref=None, *, local=False)` 接受字符串或 Ref 指定的 container 路径，省略时选择根。ContextView 的 `flatten()` 将自身前缀转发给这个方法。两者都返回绝对 Ref 键，不复制 leaf value。
 
@@ -492,10 +531,10 @@ leaf_schema = Schema({"settings": Schema.leaf()})
 tree_schema = Schema({"settings": {"theme": Schema.leaf()}})
 mapping_leaf = Context()
 mapping_leaf.declare(leaf_schema)
-mapping_leaf.update({leaf_schema.resolve("settings"): {"theme": "dark"}})
+mapping_leaf.set_many({leaf_schema.resolve("settings"): {"theme": "dark"}})
 nested_path = Context()
 nested_path.declare(tree_schema)
-nested_path.update({tree_schema.resolve("settings.theme"): "dark"})
+nested_path.set_many({tree_schema.resolve("settings.theme"): "dark"})
 
 assert mapping_leaf.get("settings") == nested_path.to_dict("settings")
 assert mapping_leaf.flatten() == {
@@ -508,7 +547,7 @@ assert nested_path.get("settings").flatten() == {
 ```
 
 两者默认解析绑定 Scope 的 C3 有效视图，也都接受 `local=True`。`ContextView` 只接受相对字符串路径；空字符串表示 View 自身，也是 `keys()` 和 `to_dict()` 的默认路径。绝对 Ref 直接交给 Context 查询。View 的 `flatten()` 仍返回以 Schema 绝对 Ref 为键的字典。两种方法都不会复制 leaf value。
-创建新根并声明所有被复制的路径后，调用 `snapshot.update(ctx.flatten("app"))` 物化值；这里选择 `app` 等业务子树，复制的字段必须全部采用 `assign` 模式；整根 flatten 还包含 register 模式的框架配置。
+创建新根并声明所有被复制的路径后，调用 `snapshot.set_many(ctx.flatten("app"))` 物化值；这里选择 `app` 等业务子树，复制的字段必须全部采用 `assign` 模式；整根 flatten 还包含 register 模式的框架配置。
 `register` 字段需要在新 owner 上显式调用 `register()`，快照不会转移所有权。
 新应用根默认获得新的 Scope，因此看不到目标为源 Scope 的
 contribution；显式复用该 Scope 会共享 Compose 可见性，但不同 Context 根仍不会共享

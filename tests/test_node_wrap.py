@@ -7,31 +7,46 @@ import pytest
 
 from slyme.context import Context, Schema
 from slyme.execution import await_result, continuation
-from slyme.node import Node, Wrapper, auto, node, wrapper
-from slyme.node.exception import (
-    NodeException,
-    NodeExceptionRecord,
-    WrapperExceptionRecord,
-)
+from slyme.node import Node, auto, node, wrap
 from slyme.utils.exception import exception_group
 
 
+def test_flat_and_nested_wrap_have_the_same_outer_to_inner_order() -> None:
+    @node(inject_ctx=True)
+    def layer(ctx: Context, wrapped: Node, label: str):
+        return f"{label}({wrapped(ctx)})"
+
+    target = node(lambda: "target")
+    outer = layer.partial(label="outer")
+    inner = layer.partial(label="inner")
+    flat = wrap(outer, inner, target)
+    nested = wrap(outer, wrap(inner, target))
+    ctx = Context()
+    try:
+        assert flat(ctx) == nested(ctx) == "outer(inner(target))"
+        assert flat.func is nested.func is outer.func
+        assert wrap(target) is target
+        assert "wrapped" not in outer.params and "wrapped" not in inner.params
+    finally:
+        ctx.dispose()
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("origin", ["node", "wrapper"])
+@pytest.mark.parametrize("origin", ["node", "layer"])
 @pytest.mark.parametrize(
     "failure_factory",
     [
         asyncio.CancelledError,
         KeyboardInterrupt,
         SystemExit,
-        NodeException,
+        ValueError,
         pytest.param(
             lambda: exception_group("cancelled", [asyncio.CancelledError()]),
             id="control_exception_group",
         ),
     ],
 )
-async def test_node_and_wrapper_preserve_control_and_framework_exceptions(
+async def test_node_and_layer_preserve_original_exceptions(
     asynchronous: bool,
     origin: str,
     failure_factory: Callable[[], BaseException],
@@ -43,30 +58,28 @@ async def test_node_and_wrapper_preserve_control_and_framework_exceptions(
             raise failure
         return 1
 
-    @node
+    @node(inject_ctx=True)
     def target(ctx: Context, /) -> int:
         return run()
 
-    @node
+    @node(inject_ctx=True)
     async def atarget(ctx: Context, /) -> int:
         await asyncio.sleep(0)
         return run()
 
-    @wrapper
-    def around(ctx: Context, wrapped: Node, call_next: Callable, /):
-        if origin == "wrapper":
+    @node(inject_ctx=True)
+    def around(ctx: Context, /, *, wrapped: Node):
+        if origin == "layer":
             raise failure
-        return call_next(ctx)
+        return wrapped(ctx)
 
-    @wrapper
-    async def aaround(ctx: Context, wrapped: Node, call_next: Callable, /):
+    @node(inject_ctx=True)
+    async def aaround(ctx: Context, /, *, wrapped: Node):
         await asyncio.sleep(0)
-        return await await_result(around.partial()(ctx, wrapped, call_next))
+        return await await_result(around(ctx, wrapped=wrapped))
 
     graph = atarget.partial() if asynchronous else target.partial()
-    graph = graph.replace(
-        wrappers=(aaround.partial() if asynchronous else around.partial(),)
-    )
+    graph = wrap(aaround.partial() if asynchronous else around.partial(), graph)
     ctx = Context()
     try:
         with pytest.raises(type(failure)) as caught:
@@ -77,8 +90,8 @@ async def test_node_and_wrapper_preserve_control_and_framework_exceptions(
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("origin", ["node", "wrapper"])
-async def test_node_and_wrapper_record_exception_groups_as_cause(
+@pytest.mark.parametrize("origin", ["node", "layer"])
+async def test_node_and_layer_preserve_exception_groups(
     asynchronous: bool, origin: str
 ) -> None:
     failure = exception_group("failed", [ValueError("first"), LookupError("second")])
@@ -89,49 +102,47 @@ async def test_node_and_wrapper_record_exception_groups_as_cause(
             yield asyncio.sleep(0)
         raise failure
 
-    graph = node(lambda ctx: fail() if origin == "node" else None)
-    around = wrapper(
-        lambda ctx, wrapped, call_next: (
-            fail() if origin == "wrapper" else call_next(ctx)
-        )
+    graph = node(lambda ctx: fail() if origin == "node" else None, inject_ctx=True)
+    around = node(
+        lambda ctx, *, wrapped: fail() if origin == "layer" else wrapped(ctx),
+        inject_ctx=True,
     )
-    if origin == "wrapper":
-        graph = graph.replace(wrappers=(around,))
-    expected = NodeExceptionRecord if origin == "node" else WrapperExceptionRecord
+    if origin == "layer":
+        graph = wrap(around, graph)
+    expected = type(failure)
     ctx = Context()
     try:
         with pytest.raises(expected) as caught:
             await await_result(graph(ctx))
-        assert caught.value.__cause__ is failure
-        assert caught.value.exception_node is (graph if origin == "node" else around)
+        assert caught.value is failure
     finally:
         await await_result(ctx.dispose())
 
 
-def test_compose_retains_original_wrappers_when_partial_creates_a_replacement() -> None:
+def test_compose_retains_original_layers_when_partial_creates_a_replacement() -> None:
     events = []
 
-    @node
+    @node(inject_ctx=True)
     def target(ctx: Context, /) -> int:
         events.append("target")
         return 3
 
     graph = target.partial()
 
-    @wrapper
+    @node(inject_ctx=True)
     @continuation
-    def around(ctx: Context, wrapped: Node, call_next: Callable, /, *, label: str):
-        assert wrapped is graph
+    def around(ctx: Context, /, *, wrapped: Node, label: str):
+        assert wrapped is graph if label == "inner" else wrapped.get("wrapped") is graph
         events.append((label, "before"))
-        value = yield call_next(ctx)
+        value = yield wrapped(ctx)
         events.append((label, "after"))
         return value
 
     outer, inner = around.partial(label="outer"), around.partial(label="inner")
-    wrappers = [outer, inner]
-    chain = Wrapper.compose(iter(wrappers), wrapped=graph, call_next=graph)
+    layers = [outer, inner]
+    chain = wrap(*iter(layers), graph)
     assert events == []
-    wrappers.clear()
+    layers.clear()
     replacement = inner.partial(label="updated")
     assert replacement.get("label") == "updated"
     ctx = Context()
@@ -148,7 +159,7 @@ def test_compose_retains_original_wrappers_when_partial_creates_a_replacement() 
         ]
         * 2
     )
-    assert Wrapper.compose([], wrapped=graph, call_next=graph) is graph
+    assert wrap(*[], graph) is graph
     ctx.dispose()
 
 
@@ -158,42 +169,42 @@ async def test_compose_preserves_context_replacement_and_multiple_next_calls(
 ) -> None:
     ctx = Context()
     ctx.declare(Schema({"value": Schema.leaf()}))
-    ctx.update({"value": 1})
+    ctx.set_many({"value": 1})
     child = ctx.fork(scope=ctx.scope.fork())
     child.set("value", 2)
 
-    @node
+    @node(inject_ctx=True)
     def value(ctx: Context, /) -> int:
         return ctx.get("value")
 
-    @node
+    @node(inject_ctx=True)
     async def avalue(ctx: Context, /) -> int:
         return ctx.get("value")
 
-    @wrapper
+    @node(inject_ctx=True)
     @continuation
-    def twice(ctx: Context, wrapped: Node, call_next: Callable, /):
-        first = yield call_next(ctx)
-        second = yield call_next(child)
+    def twice(ctx: Context, /, *, wrapped: Node):
+        first = yield wrapped(ctx)
+        second = yield wrapped(child)
         return first + second
 
     graph = avalue.partial() if asynchronous else value.partial()
-    chain = Wrapper.compose([twice.partial()], wrapped=graph, call_next=graph)
+    chain = wrap(*[twice.partial()], graph)
     assert await await_result(chain(ctx)) == 3
     ctx.dispose()
 
 
-def test_compose_wrapper_can_short_circuit_without_calling_the_target() -> None:
-    @node
+def test_compose_layer_can_short_circuit_without_calling_the_target() -> None:
+    @node(inject_ctx=True)
     def target(ctx: Context, /) -> str:
         raise AssertionError("target must not run")
 
-    @wrapper
-    def stop(ctx: Context, wrapped: Node, call_next: Callable, /) -> str:
+    @node(inject_ctx=True)
+    def stop(ctx: Context, /, *, wrapped: Node) -> str:
         return "stopped"
 
     graph = target.partial()
-    chain = Wrapper.compose([stop.partial()], wrapped=graph, call_next=graph)
+    chain = wrap(*[stop.partial()], graph)
     ctx = Context()
     assert chain(ctx) == "stopped"
     ctx.dispose()
@@ -212,7 +223,7 @@ async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
     child.set("value", 2)
     events = []
 
-    @node
+    @node(inject_ctx=True)
     @continuation
     def parameter(ctx: Context, /):
         if asynchronous:
@@ -221,23 +232,21 @@ async def test_node_auto_uses_each_delegated_context_and_skips_short_circuits(
         events.append(("auto", value))
         return value
 
-    @node
+    @node(inject_ctx=True)
     def target(ctx: Context, /, *, value: int) -> int:
         events.append(("target", value))
         return value
 
-    @wrapper
+    @node(inject_ctx=True)
     @continuation
-    def around(ctx: Context, wrapped: Node, call_next: Callable, /):
+    def around(ctx: Context, /, *, wrapped: Node):
         if short_circuit:
             return -1
-        first = yield call_next(child)
-        second = yield call_next(ctx)
+        first = yield wrapped(child)
+        second = yield wrapped(ctx)
         return first + second
 
-    graph = target.partial(value=auto(parameter.partial())).replace(
-        wrappers=(around.partial(),)
-    )
+    graph = wrap(around.partial(), target.partial(value=auto(parameter.partial())))
     try:
         result = await await_result(graph(ctx))
         if short_circuit:

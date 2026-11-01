@@ -26,20 +26,20 @@ To understand how Slyme works, you need to understand the following core concept
 As mentioned earlier, [Node](/guide/essentials/node) is Slyme's basic execution unit:
 
 - [**@node**](/guide/essentials/node): Accepts a Context at runtime and may mutate Context, perform side effects, coordinate child Nodes, or return a derived value.
-- [**@wrapper**](/guide/essentials/node#wrappers): Middleware that intercepts or enhances Node execution, for example tracing, timing, retry, or exception handling.
+- [**Higher-order Nodes**](/guide/essentials/node#higher-order-composition): Composition that intercepts or enhances Node execution, for example tracing, timing, retry, or exception handling.
 
 ::: info
-@node and @wrapper support both regular functions and `async def` functions.
+@node supports both regular functions and `async def` functions.
 :::
 
 ### Graph Assembly
 
-[Ordinary Python functions](/guide/essentials/graph-assembly) assemble reusable Node graphs. They can call other assembly functions and return individual Nodes or structured collections. Node and Wrapper parameters may use arbitrary nested structures.
+[Ordinary Python functions](/guide/essentials/graph-assembly) assemble reusable Node graphs. They can call other assembly functions and return individual Nodes or structured collections. Nodes parameters may use arbitrary nested structures.
 
 ### Live Graph and Explicit Layers
 
 Slyme uses directly callable Nodes across assembly and execution (see [Lifecycle](/guide/essentials/lifecycle)).
 
-- **Between calls**: Users may assemble or modify Node parameters, wrappers, and composition structures.
+- **Between calls**: Users may assemble or modify Node parameters and composition structures.
 - **During a call**: The current Node passes static parameter containers directly, resolves dynamic values with the supplied Context, and executes. In-call mutations to static containers remain on the live Node.
-- **When isolation is needed**: Use `partial(...)` or call an assembly function again for an independently configurable graph. Context `fork()` creates an owned lifetime child and shares its Scope by default; pass a child Scope for a separate data layer. Create a new root, declare the copied paths, then call `snapshot.update(context.get("app").flatten())` to materialize an assign-only business subtree such as `app`, excluding framework registrations under `$`. Stored application objects remain shared.
+- **When isolation is needed**: Use `partial(...)` or call an assembly function again for an independently configurable graph. Context `fork()` creates an owned lifetime child and shares its Scope by default; pass a child Scope for a separate data layer. Create a new root, declare the copied paths, then call `snapshot.set_many(context.get("app").flatten())` to materialize an assign-only business subtree such as `app`, excluding framework registrations under `$`. Stored application objects remain shared.

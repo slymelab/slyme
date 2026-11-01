@@ -7,7 +7,7 @@
 假设应用已定义 `load_data`、`process_data` 和 `save_data`，可以通过函数组装顺序执行的流水线：
 
 ```python
-from slyme.node import AnyNode, sequential
+from slyme.node import AnyNode, sequential, wrap
 from slyme.context import Schema
 # 假设有定义好的 nodes
 # from my_nodes import load_data, process_data, save_data
@@ -39,7 +39,7 @@ pipeline = create_data_pipeline("/path/to/data")
 组装函数可以互相调用。通过 partial 可以从基础图派生新的流水线：
 
 ```python
-from slyme.node import AnyNode, sequential
+from slyme.node import AnyNode, sequential, wrap
 from slyme.context import Schema
 
 R = Schema({"default_config": Schema.leaf(), "output_path": Schema.leaf()})
@@ -60,13 +60,15 @@ def custom_pipeline(new_path: str) -> AnyNode[None]:
 
     # 2. 派生参数绑定，替换步骤列表
     first, *rest = pipeline.get("nodes")
-    return pipeline.partial(nodes=[
-        first.partial(path=new_path),
-        *rest,
-        save_data.partial(output=R.resolve("output_path")),
-    ])
+    return pipeline.partial(
+        nodes=[
+            first.partial(path=new_path),
+            *rest,
+            save_data.partial(output=R.resolve("output_path")),
+        ]
+    )
 ```
 
 每次调用 `base_pipeline()` 都会创建新的 Node 和列表，修改其中一条流水线不会改变另一条。传入多个图的应用值仍然共享，除非显式复制。
 
-组装函数和参数结构可以自由嵌套。Node 与 Wrapper 调用返回直接值或 awaitable，`sequential` 对两者都保持步骤顺序。
+组装函数和参数结构可以自由嵌套。Node 调用返回直接值或 awaitable，`sequential` 对两者都保持步骤顺序。
