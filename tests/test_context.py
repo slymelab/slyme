@@ -709,7 +709,11 @@ def test_context_crud_views_and_user_dict_leaves() -> None:
 
 
 def test_context_creation_is_separate_from_declaration_and_assignment() -> None:
-    parameters = inspect.signature(Context).parameters
+    parameters = {
+        name: parameter
+        for name, parameter in inspect.signature(Context).parameters.items()
+        if not name.startswith("_")
+    }
     assert tuple(parameters) == ("parent", "scope", "dispose_mode", "facet_factory")
     assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters.values())
     assert parameters["parent"].default is parameters["scope"].default is None

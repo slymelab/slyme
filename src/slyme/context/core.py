@@ -44,6 +44,7 @@ _T2 = TypeVar("_T2")
 _F = TypeVar("_F", default=Any, covariant=True)
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
+_PreparedBindings = tuple[tuple[RefEntry[Any] | Compose[Any, Any], ScopeBinding], ...]
 
 
 @dataclass(frozen=True, repr=False, eq=False, init=False)
@@ -86,6 +87,7 @@ class Context(Generic[_F]):
         scope: Scope | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
         facet_factory: Callable[[Context[_F]], _F] | None = None,
+        _bindings: _PreparedBindings = (),
     ) -> None: ...
     def __init__(
         self,
@@ -94,6 +96,7 @@ class Context(Generic[_F]):
         scope: Scope | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
         facet_factory: Callable[[Context[_F]], _F] | None = None,
+        _bindings: _PreparedBindings = (),
     ) -> None:
         """Create a lifetime and data view, then construct the facet if supplied.
 
@@ -101,6 +104,8 @@ class Context(Generic[_F]):
         facet before returning. Prefer registering effects after construction;
         failure rollback cannot await asynchronous setup or cleanup.
         Roots require sequential disposal to preserve defaults during cleanup.
+        _bindings is internal to derive's new Scope initialization, not a public
+        parameter for binding or modifying existing Scopes.
         """
         # Root defaults must outlive all child and user effect cleanup.
         if parent is None and dispose_mode != "sequential":
@@ -133,6 +138,11 @@ class Context(Generic[_F]):
             store.acquire_scope(self, bound_scope)
             if parent is None:
                 _apply(self)
+            for target, binding in _bindings:
+                if isinstance(target, Compose):
+                    target._bind(bound_scope, binding)
+                else:
+                    store.bind(bound_scope, target, binding)
             object.__setattr__(
                 self,
                 "facet",
@@ -334,21 +344,15 @@ class Context(Generic[_F]):
             for target, binding in (bindings or {}).items()
         )
 
-        def create_facet(child: Context) -> Any:
-            for target, binding in prepared:
-                if isinstance(target, Compose):
-                    target._bind(child.scope, binding)
-                else:
-                    self._store.bind(child.scope, target, binding)
-            return facet_factory(child) if facet_factory is not None else None
-
-        return self.fork(
+        return Context(
+            parent=self,
             scope=Scope(
                 label=scope_label,
                 parent=self.scope if scope_parent is _MISSING else scope_parent,
             ),
             dispose_mode=dispose_mode,
-            facet_factory=create_facet,
+            facet_factory=facet_factory,
+            _bindings=prepared,
         )
 
     def _entry_value(

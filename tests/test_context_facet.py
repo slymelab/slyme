@@ -120,6 +120,41 @@ def test_derive_installs_all_bindings_before_creating_facet() -> None:
     root.dispose()
 
 
+def test_derive_factory_failure_releases_bindings_without_affecting_peers() -> None:
+    root = Context()
+    root.declare({"value": Schema.leaf()})
+    values = Compose(factory=ValueLayer, query=collect_values)
+    shared, local = Identity(), Identity()
+    peer = root.derive(bindings={"value": shared, values: shared})
+    peer.set("value", "shared")
+    peer.effect(lambda: values.register(peer.scope, "shared"))
+    failure = ValueError("facet construction failed")
+    children = root.children
+    cleanup = []
+
+    def fail(child: Context) -> None:
+        assert child.get("value") == "shared"
+        assert values.resolve(child.scope) == ("shared",)
+        child.set("value", "local")
+        child.effect(lambda: values.register(child.scope, "local"))
+        child.effect(lambda: lambda: cleanup.append(child.get("value")))
+        raise failure
+
+    with pytest.raises(ValueError) as caught:
+        root.derive(
+            bindings={"value": (local, shared), values: (local, shared)},
+            facet_factory=fail,
+        )
+    assert caught.value is failure
+    assert cleanup == ["local"]
+    assert root.children == children
+    assert peer.get("value") == "shared"
+    assert values.resolve(peer.scope) == ("shared",)
+    assert local not in root._store._data[root.resolve_entry("value")]._data
+    assert local not in values._buckets
+    root.dispose()
+
+
 @pytest.mark.parametrize("creation", ["root", "fork", "derive"])
 def test_factory_failure_disposes_context_and_synchronous_effects(creation) -> None:
     parent = Context()

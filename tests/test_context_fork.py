@@ -465,7 +465,8 @@ def test_failed_mixed_configuration_releases_context_data_and_child() -> None:
                 values: ScopeBinding(blocked=True),
                 "value": ScopeBinding(blocked=True),
                 Ref("value"): ScopeBinding(blocked=True),
-            }
+            },
+            facet_factory=lambda child: pytest.fail("Bindings must succeed first"),
         )
     assert tuple(root._lifecycle._effects) == children
     assert not root.children
