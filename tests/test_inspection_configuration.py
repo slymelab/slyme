@@ -12,6 +12,7 @@ from slyme.context import (
     INSPECTION_TYPE_NAMES_REF,
     Context,
     ContextPathError,
+    Identity,
     Ref,
     Schema,
     Scope,
@@ -152,8 +153,12 @@ def test_configuration_is_root_owned_scoped_and_reversible(
         compose = root.get(ref)
         assert compose is not other.get(ref)
         assert builtin in entries(compose.resolve(root.scope))
-        left, right = root.derive(), root.derive()
-        joined = root.fork(scope=Scope(parents=(left.scope, right.scope)))
+        left_id, right_id = Identity(), Identity()
+        left = root.derive(bindings={compose: left_id})
+        right = root.derive(bindings={compose: right_id})
+        joined = root.derive(
+            bindings={compose: ScopeBinding((Identity(), left_id, right_id))}
+        )
         first, second = make("first"), make("second")
         remove = left.effect(lambda: compose.register(left.scope, first))
         right.effect(lambda: compose.register(right.scope, second))

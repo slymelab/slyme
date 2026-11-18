@@ -51,12 +51,17 @@ def test_first_value_query_uses_scope_and_registration_precedence() -> None:
         values.resolve(agent)
 
 
-def test_query_follows_c3_without_repeating_diamond_ancestors() -> None:
+def test_query_follows_explicit_identity_order_then_parent() -> None:
     root = Scope(label="root")
     left = root.fork(label="left")
     right = root.fork(label="right")
-    child = Scope(label="child", parents=(left, right))
     values = Compose(factory=ValueLayer, query=collect_values)
+    left_id, right_id = Identity(), Identity()
+    values._bind(left, ScopeBinding((left_id,)))
+    values._bind(right, ScopeBinding((right_id,)))
+    child = values.derive(
+        scope_parent=root, binding=ScopeBinding((Identity(), left_id, right_id))
+    )
     values.register(root, "root")
     values.register(left, "left")
     values.register(right, "right")
@@ -145,10 +150,12 @@ def test_derive_shares_identity_only_in_that_compose() -> None:
     independent = Compose(factory=ValueLayer, query=collect_values)
 
     left = shared.derive(
-        parents=Scope(label="left"), binding=ScopeBinding(identity, blocked=True)
+        scope_parent=Scope(label="left"),
+        binding=ScopeBinding((identity,), blocked=True),
     )
     right = shared.derive(
-        parents=Scope(label="right"), binding=ScopeBinding(identity, blocked=True)
+        scope_parent=Scope(label="right"),
+        binding=ScopeBinding((identity,), blocked=True),
     )
     shared.register(left, "left")
     shared.register(right, "right")
@@ -167,10 +174,10 @@ def test_derive_creates_fresh_scopes_without_changing_parent_binding() -> None:
     values.register(parent, "parent")
     original = values._scope_bindings[parent]
 
-    first = values.derive(parents=parent, binding=ScopeBinding())
-    second = values.derive(parents=parent, binding=ScopeBinding())
+    first = values.derive(scope_parent=parent, binding=ScopeBinding())
+    second = values.derive(scope_parent=parent, binding=ScopeBinding())
     assert first is not second
-    assert first.parents == second.parents == (parent,)
+    assert first.parent == second.parent == parent
     assert values._scope_bindings[parent] is original
     assert values.resolve(parent) == ("parent",)
     assert values.resolve(first) == values.resolve(second) == ("parent",)
@@ -183,8 +190,7 @@ def test_derive_creates_fresh_scopes_without_changing_parent_binding() -> None:
     assert values.resolve(first) == ("parent",)
 
 
-@pytest.mark.parametrize("single", [False, True])
-def test_derive_many_configures_all_composes_on_one_scope(single: bool) -> None:
+def test_derive_many_configures_all_composes_on_one_scope() -> None:
     parent = Scope(label="parent")
     tools, events, unconfigured = (
         Compose(factory=ValueLayer, query=collect_values),
@@ -195,23 +201,25 @@ def test_derive_many_configures_all_composes_on_one_scope(single: bool) -> None:
     events.register(parent, "parent event")
     unconfigured.register(parent, "inherited")
     identity = Identity()
-    peer = events.derive(parents=(), binding=ScopeBinding(identity, blocked=True))
+    peer = events.derive(
+        scope_parent=None, binding=ScopeBinding((identity,), blocked=True)
+    )
     events.register(peer, "shared event")
     scope = Compose.derive_many(
-        label="derived",
-        parents=parent if single else (parent,),
+        scope_label="derived",
+        scope_parent=parent,
         bindings={
             tools: ScopeBinding(blocked=True),
-            events: ScopeBinding(identity, blocked=True),
+            events: ScopeBinding((identity,), blocked=True),
         },
     )
     assert scope.label == "derived"
-    assert scope.parents == (parent,)
-    assert scope.mro == (scope, parent)
+    assert scope.parent == parent
+    assert tuple(scope.lineage()) == (scope, parent)
     assert tools.resolve(scope) == ()
     assert events.resolve(scope) == ("shared event",)
     assert unconfigured.resolve(scope) == ("inherited",)
-    assert tools._scope_bindings[scope].identity is not identity
+    assert tools._scope_bindings[scope].identities[0] is not identity
     remove = tools.register(scope, "private tool")
     assert tools.resolve(scope) == ("private tool",)
     assert tools.resolve(parent) == ("parent tool",)
@@ -219,33 +227,22 @@ def test_derive_many_configures_all_composes_on_one_scope(single: bool) -> None:
     assert tools.resolve(scope) == ()
 
 
-def test_derive_many_handles_c3_and_empty_configuration() -> None:
+def test_derive_many_handles_identity_lists_and_empty_configuration() -> None:
     root = Scope()
-    left, right = root.fork(), root.fork()
     values = Compose(factory=ValueLayer, query=collect_values)
+    left_id, right_id = Identity(), Identity()
+    left = values.derive(scope_parent=root, binding=left_id)
+    right = values.derive(scope_parent=root, binding=right_id)
     values.register(left, "left")
     values.register(right, "right")
-    config = ScopeBinding(blocked=False)
-    scope = Compose.derive_many(parents=(left, right), bindings={values: config})
-    assert scope.mro == (scope, left, right, root)
+    config = ScopeBinding((Identity(), left_id, right_id))
+    scope = Compose.derive_many(scope_parent=root, bindings={values: config})
+    assert scope.parent is root
     assert values._scope_bindings[scope] is config
     assert values.resolve(scope) == ("left", "right")
-    empty = Compose.derive_many(parents=(), bindings={})
-    assert empty.parents == ()
-    assert empty.mro == (empty,)
+    empty = Compose.derive_many(bindings={})
+    assert empty.parent is None
     assert values.resolve(empty) == ()
-
-
-def test_derive_many_rejects_inconsistent_parents_without_installing_bindings() -> None:
-    values = Compose(factory=ValueLayer, query=collect_values)
-    left, right = Scope(), Scope()
-    xy, yx = Scope(parents=(left, right)), Scope(parents=(right, left))
-    with pytest.raises(TypeError, match="consistent Scope C3"):
-        Compose.derive_many(
-            parents=(xy, yx), bindings={values: ScopeBinding(blocked=True)}
-        )
-    assert not values._scope_bindings
-    assert not tuple(values.layers())
 
 
 def test_internal_binding_is_idempotent_and_rejects_rebinding() -> None:
@@ -255,12 +252,12 @@ def test_internal_binding_is_idempotent_and_rejects_rebinding() -> None:
     first = Identity()
     second = Identity()
 
-    values._bind(left, ScopeBinding(first, blocked=False))
-    values._bind(left, ScopeBinding(first, blocked=False))
+    values._bind(left, ScopeBinding((first,), blocked=False))
+    values._bind(left, ScopeBinding((first,), blocked=False))
     with pytest.raises(ValueError, match="immutable"):
-        values._bind(left, ScopeBinding(second, blocked=False))
+        values._bind(left, ScopeBinding((second,), blocked=False))
 
-    values._bind(right, ScopeBinding(first, blocked=False))
+    values._bind(right, ScopeBinding((first,), blocked=False))
     values.register(right, "shared")
     assert values.resolve(left) == ("shared",)
 
@@ -271,25 +268,25 @@ def test_read_does_not_bind_and_first_write_prevents_later_rebinding() -> None:
     identity = Identity()
 
     assert values.resolve(scope) == ()
-    values._bind(scope, ScopeBinding(identity, blocked=False))
+    values._bind(scope, ScopeBinding((identity,), blocked=False))
     remove = values.register(scope, "value")
     remove()
 
     assert values.resolve(scope) == ()
     with pytest.raises(ValueError, match="immutable"):
-        values._bind(scope, ScopeBinding(Identity(), blocked=False))
+        values._bind(scope, ScopeBinding((Identity(),), blocked=False))
     values.register(scope, "new")
-    assert values._scope_bindings[scope].identity is identity
+    assert values._scope_bindings[scope].identities[0] is identity
 
     implicit = Scope()
     values.register(implicit, "implicit")
     with pytest.raises(ValueError, match="immutable"):
-        values._bind(implicit, ScopeBinding(identity, blocked=False))
+        values._bind(implicit, ScopeBinding((identity,), blocked=False))
 
 
 def test_empty_binding_does_not_retain_an_unreferenced_scope() -> None:
     values = Compose(factory=ValueLayer, query=collect_values)
-    scope = values.derive(parents=Scope(), binding=ScopeBinding())
+    scope = values.derive(scope_parent=Scope(), binding=ScopeBinding())
     scope_ref = weakref.ref(scope)
 
     del scope
@@ -299,14 +296,18 @@ def test_empty_binding_does_not_retain_an_unreferenced_scope() -> None:
     assert not values._scope_bindings
 
 
-def test_c3_lookup_visits_a_shared_identity_only_once() -> None:
+def test_lookup_visits_a_shared_identity_only_once() -> None:
     root = Scope(label="root")
     identity = Identity()
     values = Compose(factory=ValueLayer, query=collect_values)
 
-    left = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
-    right = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
-    child = Scope(label="child", parents=(left, right))
+    left = values.derive(
+        scope_parent=root, binding=ScopeBinding((identity,), blocked=False)
+    )
+    right = values.derive(
+        scope_parent=root, binding=ScopeBinding((identity,), blocked=False)
+    )
+    child = values.derive(scope_parent=left, binding=ScopeBinding((identity, identity)))
     values.register(left, "left")
     values.register(right, "right")
     values.register(root, "root")
@@ -315,20 +316,20 @@ def test_c3_lookup_visits_a_shared_identity_only_once() -> None:
 
 
 @pytest.mark.parametrize("label", [None, "", "shared"])
-def test_sparse_c3_reads_see_new_bindings_without_allocating_identities(
+def test_sparse_reads_see_new_bindings_without_allocating_identities(
     label: str | None,
 ) -> None:
     identity = Identity(label)
     root = Scope()
     left = root.fork()
     right = root.fork()
-    unbound = Scope(parents=(left, right))
+    unbound = Scope(parent=left)
     child = unbound.fork()
     values = Compose(factory=ValueLayer, query=collect_values)
 
     assert values.resolve(child) == ()
-    values._bind(left, ScopeBinding(identity, blocked=False))
-    values._bind(right, ScopeBinding(identity, blocked=False))
+    values._bind(left, ScopeBinding((identity,), blocked=False))
+    values._bind(right, ScopeBinding((identity,), blocked=False))
     remove = values.register(left, "shared")
     assert values.resolve(child) == ("shared",)
     values.register(root, "root")
@@ -392,8 +393,12 @@ def test_compose_disposer_does_not_retain_an_already_removed_value() -> None:
 def test_bucket_is_removed_after_the_last_shared_identity_entry_leaves() -> None:
     values = Compose(factory=ValueLayer, query=collect_values)
     identity = Identity()
-    left = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
-    right = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
+    left = values.derive(
+        scope_parent=Scope(), binding=ScopeBinding((identity,), blocked=True)
+    )
+    right = values.derive(
+        scope_parent=Scope(), binding=ScopeBinding((identity,), blocked=True)
+    )
     remove_left = values.register(left, "left")
     bucket = values._buckets[identity]
     remove_right = values.register(right, "right")
@@ -469,7 +474,9 @@ def test_layer_disposer_owns_cleanup_state_and_releases_it_after_disposal() -> N
 def test_value_finalizer_can_add_to_the_same_identity(keep_other_entry: bool) -> None:
     values = Compose(factory=ValueLayer, query=collect_values)
     identity = Identity()
-    scope = values.derive(parents=Scope(), binding=ScopeBinding(identity, blocked=True))
+    scope = values.derive(
+        scope_parent=Scope(), binding=ScopeBinding((identity,), blocked=True)
+    )
     remove_new = []
 
     class Value:
@@ -530,14 +537,16 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
     root = Context()
     root.declare(Schema({"value": Schema.leaf(mode="register")}))
     identity = Identity(blocked=True)
-    child = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
+    child = root.derive(bindings={"value": ScopeBinding((identity,), blocked=False)})
     binding = root._store._data[root.resolve_entry("value")]
     remove = root._store.register(child.scope, root.resolve_entry("value"), "old")
-    assert binding._scope_bindings[child.scope].identity.blocked
+    assert binding._scope_bindings[child.scope].identities[0].blocked
 
     child.dispose()
     assert not binding._data
-    replacement = root.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
+    replacement = root.derive(
+        bindings={"value": ScopeBinding((identity,), blocked=False)}
+    )
     replacement.register("value", "new")
     remove()
     assert replacement.get("value") == "new"
@@ -548,8 +557,11 @@ def test_context_identity_cleanup_clears_value_and_preserves_new_tokens() -> Non
 def test_all_values_are_explicit_and_scoped_reads_do_not_leak() -> None:
     left = Scope(label="left")
     right = Scope(label="right")
-    combined = Scope(label="combined", parents=(left, right))
     values = Compose(factory=ValueLayer, query=collect_values)
+    left_id, right_id = Identity(), Identity()
+    values._bind(left, ScopeBinding((left_id,)))
+    values._bind(right, ScopeBinding((right_id,)))
+    combined = values.derive(binding=ScopeBinding((Identity(), left_id, right_id)))
     values.register(left, "left")
     values.register(right, "right")
 
@@ -578,22 +590,22 @@ def test_context_fork_shares_scope_unless_one_is_explicit() -> None:
 
 def test_context_data_and_scope_identity_are_orthogonal() -> None:
     ref = R.resolve("tools")
-    left = Scope(label="left")
-    right = Scope(label="right")
-    combined = Scope(label="combined", parents=(left, right))
-    root = Context(scope=left)
+    root = Context()
     root.declare(R)
-    right_context = root.fork(scope=right)
-    combined_context = root.fork(scope=combined)
-
-    root.set(ref, "left")
-    right_context.set(ref, "right")
-
-    assert root.get(ref) == "left"
-    assert right_context.get(ref) == "right"
-    assert combined_context.get(ref) == "left"
-    root.delete(ref)
-    assert combined_context.get(ref) == "right"
+    left_id, right_id = Identity(), Identity()
+    left = root.derive(scope_parent=None, bindings={ref: left_id})
+    right = root.derive(scope_parent=None, bindings={ref: right_id})
+    combined = root.derive(
+        scope_parent=None, bindings={ref: ScopeBinding((Identity(), left_id, right_id))}
+    )
+    left.set(ref, "left")
+    right.set(ref, "right")
+    assert left.get(ref) == "left"
+    assert right.get(ref) == "right"
+    assert combined.get(ref) == "left"
+    left.delete(ref)
+    assert combined.get(ref) == "right"
+    root.dispose()
 
 
 def test_independent_context_roots_do_not_share_data_with_the_same_scope() -> None:

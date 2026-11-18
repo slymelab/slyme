@@ -10,7 +10,7 @@ Lifecycle 状态依次为 `ACTIVE → DISPOSE_PENDING → DISPOSING → DISPOSED
 
 `ctx.children` 按创建顺序返回直接子级的 tuple 快照。子级在异步清理期间仍然挂靠父级，释放结束后才移除，失败时也会移除。已释放的 Context 没有子级，但保留原来的 `parent` 引用。Scope 继承与这棵归属树相互独立。
 
-构造过程先登记子级归属，再获取 Scope 可见性。获取时先登记整个 MRO 的 viewer，再恢复 binding 数据。恢复或默认配置安装失败时，统一通过 Context dispose 回滚，Store acquire 不自行回滚。每次 viewer 登记必须恰好释放一次；Context dispose 和 finalize 的重复调用由各实例的 `once` 包装处理。
+构造过程先登记子级归属，再获取 Scope 可见性。获取时先登记整条 Scope 父链的 viewer，再恢复 binding 数据。恢复或默认配置安装失败时，统一通过 Context dispose 回滚，Store acquire 不自行回滚。每次 viewer 登记必须恰好释放一次；Context dispose 和 finalize 的重复调用由各实例的 `once` 包装处理。
 
 `@node` 直接返回可调用的 Node，调用它时执行原函数；使用 `partial(**params)` 派生新的参数绑定。组装和执行不区分定义树与执行树。
 
@@ -84,7 +84,7 @@ task = task.partial(timeout=60)
 
 参数绑定使用浅快照，不做深拷贝。在 Node 内修改非 Auto 的 `list`、`dict` 或其他叶子，会直接修改该元素上的实时参数，并被后续调用观察到。每个 Auto 参数都会按 Tree 规则遍历并重建容器，无论其中是否包含可求值叶子。普通叶子和 evaluator 返回值仍然共享。
 
-需要另一张可独立配置的图时，应调用 `partial(...)` 或重新调用组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope C3 查找时，应使用 `context.fork(scope=context.scope.fork())`；所选业务子树的字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.set_many(context.get("app").flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
+需要另一张可独立配置的图时，应调用 `partial(...)` 或重新调用组装函数。`context.fork()` 创建由当前 Context 管理的生命周期子级，并默认共享 `context.scope`。子级需要独立局部数据层和实时 Scope 分层查找时，应使用 `context.fork(scope=context.scope.fork())`；所选业务子树的字段都采用 `assign` 模式时，可以创建新根并声明相应路径，再用 `snapshot.set_many(context.get("app").flatten())` 物化值；`register` 字段需要在新 owner 上显式调用 `register()`。这些操作都不会复制应用值。
 
 Context 拥有子 Context，以及通过 `effect()`、`register()` 和 `declare()` 注册的 cleanup。其 `dispose_mode` 决定直接归属项采用串行还是批量清理。`dispose()` 同步完成时返回 `None`，遇到异步清理则返回 awaitable；两者均可使用 `await await_result(ctx.dispose())` 完成。Context 不会自动拥有使用它的任意 task，应用应先停止并等待这些 task，再释放 Context。
 

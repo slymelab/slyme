@@ -51,7 +51,7 @@ ctx.dispose()
 | `INSPECTION_TYPE_NAMES_REF` | `$.inspection.type_names` | 精确类型 → 语义类型名称 |
 | `INSPECTION_RAW_VALUE_TYPES_REF` | `$.inspection.raw_value_types` | 精确类型 → `None`；键表示允许保留原值的类型 |
 
-通过 `ctx.effect()` 登记并管理贡献的撤销。同一层不允许重复登记精确类型；子层按 Scope C3 顺序覆盖继承的项。撤销后重新显露下一条适用定义。子类需要单独登记，返回 `None` 的解释器可以禁用继承的解释。
+通过 `ctx.effect()` 登记并管理贡献的撤销。同一层不允许重复登记精确类型；子层按 Scope 显式 Identity 列表及父链顺序覆盖继承的项。撤销后重新显露下一条适用定义。子类需要单独登记，返回 `None` 的解释器可以禁用继承的解释。
 
 `resolve_inspection_options(ctx)` 按 `ctx.scope` 解析配置，返回 `tree_rules`、`interpreters`、`type_names`、`raw_value_types` 四个关键字参数。它不观察对象，也不选择 `env`。各项配置都是浅快照，`raw_value_types` 是新的 `dict[type, None]`，以键作为白名单。需要新配置时重新调用；解释环境切换不会重新选择配置。配置缺失时报错，不回退到 root 或内置适配器。
 

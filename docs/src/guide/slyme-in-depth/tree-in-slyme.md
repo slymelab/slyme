@@ -49,7 +49,7 @@ The `$.tree.data` container currently contains only `rules`; no resolver fields 
 
 Each operation resolves its rule and evaluator mappings once, before traversal or asynchronous suspension. Contributions added or removed afterward affect subsequent operations, not that operation's dispatch or reconstruction. Capturing a callable does not extend the lifetime of resources managed by its owner.
 
-The default compositions use `TreeLayer` and `TypeLayer` from `slyme.context.default`. Each layer rejects a second registration of the same exact class, even for the same handler or through a different Scope sharing its Identity. A conflicting batch installs none of its classes. Withdrawal allows those classes to be registered again. Across layers, queries keep the first handler in Scope C3 order; register into a child layer to override an inherited contribution. Dispose a contribution to reveal the next applicable definition:
+The default compositions use `TreeLayer` and `TypeLayer` from `slyme.context.default`. Each layer rejects a second registration of the same exact class, even for the same handler or through a different Scope sharing its Identity. A conflicting batch installs none of its classes. Withdrawal allows those classes to be registered again. Across layers, queries keep the first handler in explicit Identity and parent order; register into a child layer to override an inherited contribution. Dispose a contribution to reveal the next applicable definition:
 
 ```python
 from dataclasses import dataclass
@@ -87,7 +87,7 @@ ctx.dispose()
 
 ## Scope isolation
 
-Ordinary forks reuse their parent's configuration. A child Scope inherits it through C3. A fork bound to an unrelated `Scope()` sees no default values: install the required Compose objects and contributions explicitly. There is no fallback to `ctx.root`. A separate root `Context()` installs independent defaults.
+Ordinary forks reuse their parent's configuration. A child Scope inherits it through its parent chain. A fork bound to an unrelated `Scope()` sees no default values: install the required Compose objects and contributions explicitly. There is no fallback to `ctx.root`. A separate root `Context()` installs independent defaults.
 
 Install an independent tree composition in an owned, isolated child:
 

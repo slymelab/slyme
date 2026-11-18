@@ -453,8 +453,8 @@ def test_auto_nodes_receive_isolated_child_contexts() -> None:
     assert seen[0].parent is ctx
     assert seen[1].parent is ctx
     assert seen[0].scope is not seen[1].scope
-    assert seen[0].scope.parents == (ctx.scope,)
-    assert seen[1].scope.parents == (ctx.scope,)
+    assert seen[0].scope.parent == ctx.scope
+    assert seen[1].scope.parent == ctx.scope
     assert not ctx.exists(temporary)
 
 
@@ -518,8 +518,8 @@ async def test_async_auto_nodes_receive_isolated_child_contexts() -> None:
     assert seen[0].parent is ctx
     assert seen[1].parent is ctx
     assert seen[0].scope is not seen[1].scope
-    assert seen[0].scope.parents == (ctx.scope,)
-    assert seen[1].scope.parents == (ctx.scope,)
+    assert seen[0].scope.parent == ctx.scope
+    assert seen[1].scope.parent == ctx.scope
     assert not ctx.exists(temporary)
 
 

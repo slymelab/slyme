@@ -51,7 +51,7 @@ Root Contexts install four register-mode Composes, exposed by constants from `sl
 | `INSPECTION_TYPE_NAMES_REF` | `$.inspection.type_names` | Exact type → semantic type name |
 | `INSPECTION_RAW_VALUE_TYPES_REF` | `$.inspection.raw_value_types` | Exact type → `None`; keys allow raw-value retention |
 
-Register through `ctx.effect()` to own contribution cleanup. Each layer rejects duplicate exact types; child layers override inherited entries in Scope C3 order. Withdrawal reveals the next applicable entry. Subclasses need separate registrations. An interpreter returning `None` disables an inherited observation.
+Register through `ctx.effect()` to own contribution cleanup. Each layer rejects duplicate exact types; child layers override inherited entries in explicit Identity and parent order. Withdrawal reveals the next applicable entry. Subclasses need separate registrations. An interpreter returning `None` disables an inherited observation.
 
 `resolve_inspection_options(ctx)` resolves configuration using `ctx.scope` and returns keyword arguments: `tree_rules`, `interpreters`, `type_names`, and `raw_value_types`. It does not observe objects or choose an `env`. All configurations are shallow snapshots; `raw_value_types` is a fresh `dict[type, None]` whose keys form the allowlist. Resolve again to observe configuration changes. Switching interpretation environments does not reselect configuration. Missing configuration raises rather than falling back to the root or built-in adapters.
 

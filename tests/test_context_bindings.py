@@ -16,8 +16,8 @@ def test_binding_distinguishes_saved_identity_from_active_scope_ownership() -> N
     assert not binding.restore_scope(left)
     assert not binding._scope_bindings
     assert binding.scopes == ()
-    binding.bind(left, ScopeBinding(shared_identity, blocked=False))
-    binding.bind(right, ScopeBinding(shared_identity, blocked=False))
+    binding.bind(left, ScopeBinding((shared_identity,), blocked=False))
+    binding.bind(right, ScopeBinding((shared_identity,), blocked=False))
     binding.set(left, "value")
     snapshot = binding.scopes
     assert set(snapshot) == {left, right}
@@ -45,15 +45,15 @@ def test_bind_reuses_same_identity_without_replacing_value_or_token() -> None:
     scope = Scope()
     identity = Identity("shared", blocked=True)
     token = object()
-    binding.bind(scope, ScopeBinding(identity, blocked=False))
+    binding.bind(scope, ScopeBinding((identity,), blocked=False))
     binding.set(scope, None, token=token)
     data = binding._data[identity]
 
-    binding.bind(scope, ScopeBinding(identity, blocked=False))
+    binding.bind(scope, ScopeBinding((identity,), blocked=False))
     binding.bind(scope, binding._scope_bindings[scope])
     with pytest.raises(ValueError, match="immutable"):
         binding.bind(
-            scope, ScopeBinding(Identity("shared", blocked=True), blocked=False)
+            scope, ScopeBinding((Identity("shared", blocked=True),), blocked=False)
         )
     assert binding._data[identity] is data
     assert binding.scopes == (scope,)
@@ -70,13 +70,13 @@ def test_block_rejects_rebinding_a_saved_identity(released: bool) -> None:
     binding = _ContextBinding()
     scope = Scope()
     binding.set(scope, "value")
-    identity = binding._scope_bindings[scope].identity
+    identity = binding._scope_bindings[scope].identities[0]
     if released:
         binding.release_scope(scope)
 
     with pytest.raises(ValueError, match="immutable"):
-        binding.bind(scope, ScopeBinding(Identity(), blocked=False))
-    assert binding._scope_bindings[scope].identity is identity
+        binding.bind(scope, ScopeBinding((Identity(),), blocked=False))
+    assert binding._scope_bindings[scope].identities[0] is identity
     if released:
         assert not binding._data
     else:
@@ -90,14 +90,14 @@ def test_scope_restoration_does_not_revive_released_data() -> None:
     binding = _ContextBinding()
     scope = Scope()
     token = object()
-    binding.bind(scope, ScopeBinding(saved_identity, blocked=False))
+    binding.bind(scope, ScopeBinding((saved_identity,), blocked=False))
     binding.set(scope, "old", token=token)
     binding.release_scope(scope)
     binding.release_scope(scope)
     assert not binding._data
 
     assert binding.restore_scope(scope)
-    assert binding._scope_bindings[scope].identity is saved_identity
+    assert binding._scope_bindings[scope].identities[0] is saved_identity
     assert binding.scopes == (scope,)
     assert binding.get(scope, local=True) is _MISSING
     assert not binding.matches(scope, token=token)
@@ -223,8 +223,8 @@ def test_shared_identity_enforces_the_same_token_from_every_scope() -> None:
     shared_identity = Identity("shared", blocked=True)
     binding = _ContextBinding()
     left, right = Scope(), Scope()
-    binding.bind(left, ScopeBinding(shared_identity, blocked=False))
-    binding.bind(right, ScopeBinding(shared_identity, blocked=False))
+    binding.bind(left, ScopeBinding((shared_identity,), blocked=False))
+    binding.bind(right, ScopeBinding((shared_identity,), blocked=False))
     owner = object()
     binding.set(left, "original", token=owner)
     assert binding.matches(right, token=owner)
@@ -246,7 +246,7 @@ def test_binding_clear_detaches_data_without_mutating_retained_records() -> None
     class Payload:
         pass
 
-    binding.bind(scope, ScopeBinding(original_identity, blocked=False))
+    binding.bind(scope, ScopeBinding((original_identity,), blocked=False))
     payload = Payload()
     payload_ref = weakref.ref(payload)
     token = object()
@@ -260,7 +260,7 @@ def test_binding_clear_detaches_data_without_mutating_retained_records() -> None
     assert data.token is token
     assert data.scopes == {scope}
 
-    binding.bind(scope, ScopeBinding(replacement_identity, blocked=False))
+    binding.bind(scope, ScopeBinding((replacement_identity,), blocked=False))
     binding.set(scope, "new")
     del data
     gc.collect()
@@ -423,9 +423,11 @@ def test_shared_identity_has_one_current_value_and_a_persistent_barrier() -> Non
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     root.set_many({"value": "root"})
-    left = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
+    left = root.derive(
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
+    )
     right = root.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
     )
     left.set("value", "original")
     binding = root._store._data[root.resolve_entry("value")]
@@ -454,10 +456,10 @@ def test_shared_value_does_not_retain_its_disposed_writers_scope() -> None:
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     writer = root.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
     )
     reader = root.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
     )
     writer.set("value", "retained")
     scope_ref = weakref.ref(writer.scope)
@@ -513,14 +515,14 @@ def test_identity_release_preserves_a_barrier_created_by_a_value_finalizer() -> 
     root.declare(Schema({"value": Schema.leaf()}))
     root.set_many({"value": "root"})
     writer = root.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
     )
     replacements: list[Context] = []
 
     class Payload:
         def __del__(self) -> None:
             child = root.derive(
-                bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+                bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
             )
             child.set("value", "new")
             replacements.append(child)
@@ -544,11 +546,11 @@ def test_context_get_stops_at_value_or_barrier_without_creating_identities(
     root = Context()
     root.declare(Schema({"value": Schema.leaf()}))
     root.set_many({"value": "root"})
-    left = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
-    right = root.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+    left = root.derive(
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
     )
-    unbound = Scope(parents=(left.scope, right.scope))
+    root.derive(bindings={"value": ScopeBinding((shared_identity,), blocked=False)})
+    unbound = Scope(parent=left.scope)
     child = root.fork(scope=unbound.fork())
     child.set("value", value)
     binding = root._store._data[root.resolve_entry("value")]

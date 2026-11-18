@@ -16,11 +16,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import overload
 
-__all__ = ["Identity", "Scope", "ScopeBinding"]
+__all__ = ["Identity", "Scope", "ScopeBinding", "identities"]
 
 _Missing = Enum("_Missing", ["MARK"])
 _MISSING = _Missing.MARK
@@ -31,92 +32,65 @@ class Identity:
     """Shared storage identity with immutable fallback policy.
 
     Sharing requires the same object, not an equal label. Storage is local to
-    each Context field or Compose. A blocked identity stops ancestor lookup
-    after its own values, including when its storage is empty.
+    each Context field or Compose. A blocked identity stops lookup after its
+    own values, including when its storage is empty.
     """
 
     label: str | None = None
     blocked: bool = False
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class ScopeBinding:
-    """Immutable storage selection and local fallback policy for a new Scope.
+    """Write to ``identity`` and read through the ordered ``identities`` list.
 
-    Each default binding has a private Identity and allows ancestor lookup.
-    Either this binding's blocked flag or its Identity's flag stops fallback.
+    Identities are deduplicated in order and truncated after the first blocked
+    Identity. A blocked binding stops parent lookup after its own list.
     """
 
-    identity: Identity = field(default_factory=Identity)
-    blocked: bool = False
-
-
-@dataclass(frozen=True, eq=False, repr=False, init=False)
-class Scope:
-    """One immutable C3 position with direct parents normalized to a tuple."""
-
-    label: object = None
-    parents: tuple[Scope, ...] = ()
-    _mro: tuple[Scope, ...] = field(init=False)
+    identities: tuple[Identity, ...]
+    blocked: bool
+    identity: Identity = field(init=False, repr=False, compare=False)
 
     def __init__(
         self,
-        *,
-        label: object = None,
-        parents: Scope | tuple[Scope, ...] = (),
+        identities: Identity | Iterable[Identity] | None = None,
+        blocked: bool = False,
     ) -> None:
-        direct_parents = (parents,) if isinstance(parents, Scope) else parents
-        if len(direct_parents) != len(set(direct_parents)):
-            raise TypeError("A Scope cannot contain duplicate direct parents.")
+        if identities is None:
+            identities = (Identity(),)
+        elif isinstance(identities, Identity):
+            identities = (identities,)
+        visible: dict[Identity, None] = {}
+        for identity in identities:
+            visible[identity] = None
+            if identity.blocked:
+                break
+        if not visible:
+            raise ValueError("A Scope binding requires a writable Identity.")
+        identities = tuple(visible)
+        object.__setattr__(self, "identities", identities)
+        object.__setattr__(self, "identity", identities[0])
+        object.__setattr__(self, "blocked", blocked)
 
-        object.__setattr__(self, "label", label)
-        object.__setattr__(self, "parents", direct_parents)
-        object.__setattr__(self, "_mro", (self, *self._merge_mro(direct_parents)))
 
-    @staticmethod
-    def _merge_mro(parents: tuple[Scope, ...]) -> tuple[Scope, ...]:
-        if len(parents) == 1:
-            return parents[0].mro
-        pending = [list(parent.mro) for parent in parents]
-        pending.append(list(parents))
-        result: list[Scope] = []
+@dataclass(frozen=True, eq=False, repr=False, kw_only=True)
+class Scope:
+    """An immutable visibility scope with one optional parent."""
 
-        while True:
-            pending = [sequence for sequence in pending if sequence]
-            if not pending:
-                return tuple(result)
+    label: object = None
+    parent: Scope | None = None
 
-            candidate = next(
-                (
-                    sequence[0]
-                    for sequence in pending
-                    if not any(
-                        any(value is sequence[0] for value in other[1:])
-                        for other in pending
-                    )
-                ),
-                None,
-            )
-            if candidate is None:
-                raise TypeError("Cannot create a consistent Scope C3 linearization.")
+    def lineage(self) -> Iterator[Scope]:
+        """Yield this Scope followed by its ancestors, nearest first."""
+        current: Scope | None = self
+        while current is not None:
+            yield current
+            current = current.parent
 
-            result.append(candidate)
-            for sequence in pending:
-                if sequence and sequence[0] is candidate:
-                    sequence.pop(0)
-
-    @property
-    def mro(self) -> tuple[Scope, ...]:
-        """Return this Scope followed by its C3-linearized ancestors."""
-        return self._mro
-
-    def fork(
-        self,
-        *,
-        label: object = None,
-    ) -> Scope:
-        """Create a base Scope with this Scope as its only direct parent."""
-        return Scope(label=label, parents=self)
+    def fork(self, *, label: object = None) -> Scope:
+        """Create a base Scope with this Scope as its parent."""
+        return Scope(label=label, parent=self)
 
     @overload
     def find(self, label: object, default: Scope | _Missing = _MISSING) -> Scope: ...
@@ -125,11 +99,11 @@ class Scope:
     def find(
         self, label: object, default: Scope | None | _Missing = _MISSING
     ) -> Scope | None:
-        """Return the first label match in C3 order, or the explicit default.
+        """Return the nearest label match, or the explicit default.
 
         If no Scope matches and no default is supplied, raise LookupError.
         """
-        for scope in self.mro:
+        for scope in self.lineage():
             if scope.label == label:
                 return scope
         if default is _MISSING:
@@ -137,5 +111,28 @@ class Scope:
         return default
 
     def find_all(self, label: object) -> tuple[Scope, ...]:
-        """Return all label matches in C3 order, or an empty tuple."""
-        return tuple(scope for scope in self.mro if scope.label == label)
+        """Return all label matches from this Scope to its root, or an empty tuple."""
+        return tuple(scope for scope in self.lineage() if scope.label == label)
+
+
+def identities(
+    scope: Scope,
+    bindings: Mapping[Scope, ScopeBinding],
+    *,
+    local: bool = False,
+) -> Iterator[Identity]:
+    """Expand per-target bindings in lookup order, respecting every barrier."""
+    if local:
+        if (binding := bindings.get(scope)) is not None:
+            yield binding.identity
+        return
+    seen: set[Identity] = set()
+    for current in scope.lineage():
+        if (binding := bindings.get(current)) is None:
+            continue
+        for identity in binding.identities:
+            if identity not in seen:
+                seen.add(identity)
+                yield identity
+        if binding.blocked or binding.identities[-1].blocked:
+            return

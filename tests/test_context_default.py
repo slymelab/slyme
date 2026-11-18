@@ -118,11 +118,17 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
     root.dispose()
 
 
-def test_rule_composition_uses_c3_and_rejects_duplicate_types_in_one_layer() -> None:
+def test_rule_composition_uses_identity_routes_and_rejects_duplicate_types_in_one_layer() -> (
+    None
+):
     root = Context()
-    left = root.fork(scope=root.scope.fork())
-    right = root.fork(scope=root.scope.fork())
-    joined = root.fork(scope=Scope(parents=(left.scope, right.scope)))
+    rules = root.get(DATA_TREE_REF)
+    left_id, right_id = Identity(), Identity()
+    left = root.derive(bindings={rules: left_id})
+    right = root.derive(bindings={rules: right_id})
+    joined = root.derive(
+        bindings={rules: ScopeBinding((Identity(), left_id, right_id))}
+    )
     first = TreeHandler(lambda box: (("first",), TreeAux()), BOX_HANDLER.unflatten)
     second = TreeHandler(lambda box: (("second",), TreeAux()), BOX_HANDLER.unflatten)
     rules = root.get(DATA_TREE_REF)

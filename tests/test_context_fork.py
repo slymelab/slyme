@@ -4,7 +4,7 @@ from typing import Literal
 
 import pytest
 
-from slyme.context import Compose, Context, Identity, Ref, Schema, Scope, ScopeBinding
+from slyme.context import Compose, Context, Identity, Ref, Schema, ScopeBinding
 from slyme.context.default import DATA_TREE_REF
 from slyme.context.schema import ContextPathError
 from tests.compose_helpers import ValueLayer, collect_values
@@ -19,11 +19,13 @@ def test_binding_configuration_survives_all_viewer_lifetimes(
     root.declare({"value": Schema.leaf()})
     root.set("value", "parent")
     owner = root.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=mode == "scope")}
+        bindings={"value": ScopeBinding((shared_identity,), blocked=mode == "scope")}
     )
     scope = owner.scope
     viewer = root.fork(scope=scope)
-    peer = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
+    peer = root.derive(
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
+    )
     binding = root._store._data[root.resolve_entry("value")]
 
     owner.dispose()
@@ -37,14 +39,14 @@ def test_binding_configuration_survives_all_viewer_lifetimes(
     expected = "parent" if mode == "scope" else None
     assert not restored.exists("value")
     assert peer.get("value", None) == expected
-    assert binding._scope_bindings[scope].identity is shared_identity
+    assert binding._scope_bindings[scope].identities[0] is shared_identity
     restored.dispose()
     peer.dispose()
     assert shared_identity not in binding._data
 
     reused = root.fork(scope=scope)
     assert not reused.exists("value")
-    assert binding._scope_bindings[scope].identity is shared_identity
+    assert binding._scope_bindings[scope].identities[0] is shared_identity
     fresh = root.fork(scope=root.scope.fork())
     assert fresh.get("value") == "parent"
     root.dispose()
@@ -55,11 +57,15 @@ def test_both_barriers_can_coexist_without_resetting_each_other() -> None:
     root = Context()
     root.declare({"value": Schema.leaf()})
     root.set("value", "parent")
-    left = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=True)})
-    right = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=True)})
+    left = root.derive(
+        bindings={"value": ScopeBinding((shared_identity,), blocked=True)}
+    )
+    right = root.derive(
+        bindings={"value": ScopeBinding((shared_identity,), blocked=True)}
+    )
     binding = root._store._data[root.resolve_entry("value")]
     assert binding._scope_bindings[left.scope].blocked
-    assert binding._scope_bindings[left.scope].identity.blocked
+    assert binding._scope_bindings[left.scope].identities[0].blocked
     right.set("value", "local")
     assert left.get("value") == "local"
     left.delete("value")
@@ -90,21 +96,21 @@ def test_derive_combines_per_field_identities_and_local_barriers(
     left = root.derive(
         bindings={
             "first": ScopeBinding(blocked=True),
-            second: ScopeBinding(shared_identity, blocked=True),
+            second: ScopeBinding((shared_identity,), blocked=True),
         }
     )
     right = root.derive(
         bindings={
             "first": ScopeBinding(blocked=True),
-            second: ScopeBinding(shared_identity, blocked=True),
+            second: ScopeBinding((shared_identity,), blocked=True),
         }
     )
     observer = root.derive(
-        bindings={second: ScopeBinding(shared_identity, blocked=False)}
+        bindings={second: ScopeBinding((shared_identity,), blocked=False)}
     )
 
     assert left.parent is root
-    assert left.scope.parents == (root.scope,)
+    assert left.scope.parent == root.scope
     assert left.scope is not right.scope
     assert left.get(DATA_TREE_REF) is root.get(DATA_TREE_REF)
     assert left.get("other") == "inherited"
@@ -143,7 +149,7 @@ def test_derive_allocates_distinct_identities_for_separate_bindings() -> None:
     identities = [
         root._store._data[root.resolve_entry(path)]
         ._scope_bindings[child.scope]
-        .identity
+        .identities[0]
         for path in ("first", "second")
     ]
     assert identities[0] is not identities[1]
@@ -177,14 +183,16 @@ def test_derive_releases_partial_bindings_on_conflict() -> None:
     shared_identity = Identity("shared")
     root = Context()
     root.declare({"value": Schema.leaf()})
-    peer = root.derive(bindings={"value": ScopeBinding(shared_identity, blocked=False)})
+    peer = root.derive(
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
+    )
     peer.set("value", "retained")
     binding = root._store._data[root.resolve_entry("value")]
     children = tuple(root._lifecycle._effects)
     with pytest.raises(ValueError, match="immutable"):
         root.derive(
             bindings={
-                "value": ScopeBinding(shared_identity, blocked=True),
+                "value": ScopeBinding((shared_identity,), blocked=True),
                 Ref("value"): ScopeBinding(),
             }
         )
@@ -201,7 +209,7 @@ def test_empty_derive_still_creates_a_scope_and_lifetime() -> None:
     root.set("value", "parent")
     child = root.derive(bindings={})
     assert child.parent is root
-    assert child.scope.parents == (root.scope,)
+    assert child.scope.parent == root.scope
     assert child.get("value") == "parent"
     child.set("value", "child")
     assert root.get("value") == "parent"
@@ -215,7 +223,7 @@ def test_schema_withdrawal_removes_bindings_but_not_identity_configuration(
     root = Context()
     withdraw = root.declare({"value": Schema.leaf()})
     identity = Identity(blocked=mode == "identity")
-    child = root.derive(bindings={"value": ScopeBinding(identity, blocked=True)})
+    child = root.derive(bindings={"value": ScopeBinding((identity,), blocked=True)})
     binding = root._store._data[root.resolve_entry("value")]
     withdraw()
     assert not binding._data
@@ -223,7 +231,9 @@ def test_schema_withdrawal_removes_bindings_but_not_identity_configuration(
     root.declare({"value": Schema.leaf()})
     root.set("value", "parent")
     assert child.get("value") == "parent"
-    configured = child.derive(bindings={"value": ScopeBinding(identity, blocked=False)})
+    configured = child.derive(
+        bindings={"value": ScopeBinding((identity,), blocked=False)}
+    )
     assert configured.get("value", None) == (None if mode == "identity" else "parent")
     root.dispose()
 
@@ -235,7 +245,7 @@ def test_fork_distinguishes_shared_supplied_and_new_scopes() -> None:
     configured = root.derive(bindings={})
     supplied = root.fork(scope=configured.scope)
     assert shared.scope is explicit_none.scope is root.scope
-    assert configured.scope.parents == (root.scope,)
+    assert configured.scope.parent == root.scope
     assert supplied.scope is configured.scope
     assert all(
         child.parent is root for child in (shared, explicit_none, configured, supplied)
@@ -261,53 +271,27 @@ def test_context_children_do_not_propagate_the_parents_subclass(method) -> None:
     assert not root.children
 
 
-def test_derive_rejects_inconsistent_parents_before_registering_a_child() -> None:
-    root = Context()
-    root.declare({"value": Schema.leaf()})
-    left, right = Scope(), Scope()
-    xy = Scope(parents=(left, right))
-    yx = Scope(parents=(right, left))
-    values = Compose(factory=ValueLayer, query=collect_values)
-    children = tuple(root._lifecycle._effects)
-    data = dict(root._store._data)
-    with pytest.raises(TypeError, match="consistent Scope C3"):
-        root.derive(
-            parents=(xy, yx),
-            bindings={
-                "value": ScopeBinding(blocked=True),
-                values: ScopeBinding(blocked=True),
-            },
-        )
-    assert tuple(root._lifecycle._effects) == children
-    assert root._store._data == data
-    assert not values._scope_bindings
-    root.dispose()
-
-
-@pytest.mark.parametrize("single", [False, True])
-def test_derive_selects_visibility_parents_independently_of_lifecycle(
-    single: bool,
-) -> None:
+def test_derive_selects_visibility_parents_independently_of_lifecycle() -> None:
     root = Context()
     root.declare({"value": Schema.leaf(), "other": Schema.leaf()})
     owner = root.fork(scope=root.scope.fork())
     owner.set("other", "owner")
     provider = root.fork(scope=root.scope.fork())
     provider.set("other", "provider")
-    original = provider.scope.parents
+    original = provider.scope.parent
     identity = Identity()
     child = owner.derive(
-        label="derived",
-        parents=provider.scope if single else (provider.scope,),
-        bindings={"value": ScopeBinding(identity, blocked=True)},
+        scope_label="derived",
+        scope_parent=provider.scope,
+        bindings={"value": ScopeBinding((identity,), blocked=True)},
     )
     assert child.parent is owner
     assert child.root is root
     assert child.scope is not provider.scope
-    assert child.scope.parents == (provider.scope,)
+    assert child.scope.parent == provider.scope
     assert child.scope.label == "derived"
     assert child.get("other") == "provider"
-    assert provider.scope.parents == original
+    assert provider.scope.parent == original
     child.set("value", "owned")
     binding = root._store._data[root.resolve_entry("value")]
     assert binding._data[identity].scopes == {child.scope}
@@ -329,8 +313,8 @@ def test_derive_without_bindings_creates_an_owned_inheriting_scope(options) -> N
     assert child.parent is root
     assert child.root is root
     assert child.scope is not root.scope
-    assert child.scope.parents == (root.scope,)
-    assert child.scope.mro == (child.scope, root.scope)
+    assert child.scope.parent == root.scope
+    assert tuple(child.scope.lineage()) == (child.scope, root.scope)
     assert child.get("value") == explicit.get("value") == "parent"
     assert not child.exists("value", local=True)
     assert child.get(DATA_TREE_REF) is root.get(DATA_TREE_REF)
@@ -352,10 +336,10 @@ def test_derive_without_bindings_accepts_independent_scope_and_label() -> None:
     root = Context()
     root.declare({"value": Schema.leaf()})
     root.set("value", "parent")
-    child = root.derive(parents=(), label="independent", bindings=None)
+    child = root.derive(scope_parent=None, scope_label="independent", bindings=None)
     assert child.parent is root
     assert child.scope.label == "independent"
-    assert child.scope.mro == (child.scope,)
+    assert tuple(child.scope.lineage()) == (child.scope,)
     assert not child.exists("value")
     assert child.get(DATA_TREE_REF, None) is None
     child.set("value", "child")
@@ -363,24 +347,26 @@ def test_derive_without_bindings_accepts_independent_scope_and_label() -> None:
     root.dispose()
 
 
-def test_derive_uses_c3_parents_and_allows_an_independent_root_scope() -> None:
+def test_derive_selects_fields_and_allows_an_independent_root_scope() -> None:
     root = Context()
     root.declare({"first": Schema.leaf(), "second": Schema.leaf()})
-    left = root.fork(scope=root.scope.fork())
-    right = root.fork(scope=root.scope.fork())
+    left_id, right_id = Identity(), Identity()
+    left = root.derive(bindings={"first": left_id})
+    right = root.derive(bindings={"first": right_id, "second": right_id})
     left.set("first", "left")
     right.set_many({"first": "right", "second": "right"})
-    child = root.derive(parents=(left.scope, right.scope))
-    assert child.scope.mro == (child.scope, left.scope, right.scope, root.scope)
+    child = root.derive(
+        bindings={
+            "first": ScopeBinding((Identity(), left_id, right_id)),
+            "second": ScopeBinding((Identity(), right_id)),
+        }
+    )
+    assert child.scope.parent is root.scope
     assert child.get("first") == "left"
     assert child.get("second") == "right"
-
-    independent = root.derive(
-        parents=(), label="independent", bindings={"first": ScopeBinding(blocked=True)}
-    )
+    independent = root.derive(scope_parent=None, scope_label="independent")
     assert independent.parent is root
-    assert independent.scope.parents == ()
-    assert independent.scope.mro == (independent.scope,)
+    assert independent.scope.parent is None
     assert independent.get("second", None) is None
     assert independent.get(DATA_TREE_REF, None) is None
     independent.set("first", "private")
@@ -400,7 +386,7 @@ def test_mixed_targets_share_one_new_scope_without_replacing_compose_fields() ->
     root.effect(lambda: tools.register(root.scope, "parent tool"))
     root.effect(lambda: hooks.register(root.scope, "parent hook"))
     shared = Identity("tools")
-    config = ScopeBinding(shared, blocked=False)
+    config = ScopeBinding((shared,), blocked=False)
     child = root.derive(
         bindings={
             Ref("service"): ScopeBinding(blocked=True),
@@ -408,15 +394,15 @@ def test_mixed_targets_share_one_new_scope_without_replacing_compose_fields() ->
             hooks: ScopeBinding(blocked=True),
         }
     )
-    assert child.scope.mro == (child.scope, root.scope)
+    assert tuple(child.scope.lineage()) == (child.scope, root.scope)
     assert child.get("tools") is tools
     assert not child.exists("service")
     assert tools.resolve(child.scope) == ("parent tool",)
     assert hooks.resolve(child.scope) == ()
     assert tools._scope_bindings[child.scope] is config
     assert (
-        tools._scope_bindings[child.scope].identity
-        is not hooks._scope_bindings[child.scope].identity
+        tools._scope_bindings[child.scope].identities[0]
+        is not hooks._scope_bindings[child.scope].identities[0]
     )
     child.effect(lambda: tools.register(child.scope, "child tool"))
     child.effect(lambda: hooks.register(child.scope, "child hook"))
@@ -493,7 +479,7 @@ def test_duplicate_path_spellings_accept_identical_binding_values() -> None:
     root.declare({"value": Schema.leaf()})
     identity = Identity()
     child = root.derive(
-        bindings={"value": identity, Ref("value"): ScopeBinding(identity)}
+        bindings={"value": identity, Ref("value"): ScopeBinding((identity,))}
     )
     child.set("value", "child")
     assert child.get("value") == "child"
@@ -512,13 +498,13 @@ def test_context_and_compose_derivations_keep_the_explicit_binding(
     config = (
         ScopeBinding(blocked=True)
         if level == "scope"
-        else ScopeBinding(Identity(blocked=True))
+        else ScopeBinding((Identity(blocked=True),))
         if level == "identity"
         else ScopeBinding()
     )
     child = root.derive(bindings={"value": config, values: config})
-    independent = values.derive(parents=root.scope, binding=config)
-    batch = Compose.derive_many(parents=root.scope, bindings={values: config})
+    independent = values.derive(scope_parent=root.scope, binding=config)
+    batch = Compose.derive_many(scope_parent=root.scope, bindings={values: config})
     bindings = (
         root._store._data[root.resolve_entry("value")]._scope_bindings[child.scope],
         values._scope_bindings[child.scope],
@@ -529,7 +515,7 @@ def test_context_and_compose_derivations_keep_the_explicit_binding(
     assert child.get("value", None) == ("parent" if level == "none" else None)
     assert values.resolve(independent) == (("parent",) if level == "none" else ())
     assert values.resolve(batch) == values.resolve(independent)
-    assert independent.parents == (root.scope,)
+    assert independent.parent == root.scope
     root.dispose()
 
 
@@ -544,9 +530,9 @@ def test_identity_shorthand_keeps_its_policy_without_a_scope_barrier(
     root.effect(lambda: values.register(root.scope, "parent"))
     identity = Identity(blocked=blocked)
     child = root.derive(bindings={"value": identity, values: identity})
-    peer = root.derive(bindings={"value": ScopeBinding(identity)})
-    independent = values.derive(parents=root.scope, binding=identity)
-    batch = Compose.derive_many(parents=root.scope, bindings={values: identity})
+    peer = root.derive(bindings={"value": ScopeBinding((identity,))})
+    independent = values.derive(scope_parent=root.scope, binding=identity)
+    batch = Compose.derive_many(scope_parent=root.scope, bindings={values: identity})
     bindings = (
         root._store._data[root.resolve_entry("value")]._scope_bindings[child.scope],
         values._scope_bindings[child.scope],
@@ -554,7 +540,8 @@ def test_identity_shorthand_keeps_its_policy_without_a_scope_barrier(
         values._scope_bindings[batch],
     )
     assert all(
-        binding.identity is identity and not binding.blocked for binding in bindings
+        binding.identities[0] is identity and not binding.blocked
+        for binding in bindings
     )
     assert child.get("value", None) == (None if blocked else "parent")
     assert values.resolve(independent) == (() if blocked else ("parent",))
@@ -601,7 +588,7 @@ def test_compose_derive_does_not_register_a_context_or_own_contributions() -> No
     root = Context()
     values = Compose(factory=ValueLayer, query=collect_values)
     children = tuple(root._lifecycle._effects)
-    scope = values.derive(parents=root.scope, binding=ScopeBinding())
+    scope = values.derive(scope_parent=root.scope, binding=ScopeBinding())
     assert tuple(root._lifecycle._effects) == children
     assert scope not in root._store._scope_usages
     remove = values.register(scope, "independent")

@@ -153,7 +153,7 @@ Auto 独立管理全部完成后汇总的求值策略，Context 独立管理递�
 
 `Schema.leaf()` 默认使用 `mode="assign"`，允许 `set()`/`delete()`；声明 `mode="register"` 后，改用 `ctx.register(ref, value)` 及其 disposer 撤销。两种模式互不允许对方的写入操作。删除 container（包括 `ctx.delete("")`）时，任何 `register` 后代都会使操作在修改数据前报错。模式约束的是绑定，而不是所存对象是否可变。
 
-Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 只创建单 parent 子级，显式构造 `Scope(parents=(...))` 时则支持 C3 多继承。读取沿绑定 Scope 的 C3 顺序查找，写入绑定到该 Scope 的 leaf 局部 identity。`Compose.derive(parents=..., binding=...)` 和静态 `Compose.derive_many(parents=..., bindings=...)` 创建配置好的 Scope，后者将多个 Compose 配置在同一个 Scope 上，两者都不管理生命周期。所有 derive 绑定值接受 ScopeBinding 或 Identity，不接受 None；直接传 Identity 等价于 ScopeBinding(identity=identity)。ScopeBinding 和 Identity 默认均不阻断，阻断需显式设置 blocked=True。`ctx.derive(label=..., parents=..., bindings=...)` 则创建子 Context 和一个新 Scope，配置指定字段与 Compose，并接管数据生命周期；省略 parents 时继承当前 Scope，显式 parents 可以是一个 Scope 或 tuple，`()` 表示无父级。Scope 构造与 derive 接口均为 keyword-only，Scope 存储的 parents 始终为 tuple。`effect()` 管理同步或异步 setup 和 cleanup，`register()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.execution` 导入。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
+Context 根持有实时 `Schema` 引用，并拥有应用数据存储与生命周期树。每个 Context 最多有一个 parent，并绑定一个不可变 `Scope`。`Context.fork()` 创建由当前 Context 管理的子 Context，默认共享当前 Scope；需要独立的局部可见身份时，应传入 `scope=ctx.scope.fork()`。`Scope.fork()` 创建单 parent 子级，`Scope(parent=...)` 显式选择父级。每个字段或 Compose 可通过 `ScopeBinding((local, shared, fallback))` 指定有序 Identity 列表：第一项负责写入，读取依次查找列表及父 Scope，同一 Identity 只在首次出现时参与读取。`local=True` 只读取第一项。Identity 的 `blocked=True` 在该项之后停止查找；ScopeBinding 的 `blocked=True` 在列表之后阻断父级回退。`Compose.derive(scope_parent=..., binding=...)` 与 `Compose.derive_many(scope_parent=..., bindings=...)` 创建配置好的 Scope，不管理生命周期。`ctx.derive(scope_parent=..., bindings=...)` 同时创建生命周期子级；省略 scope_parent 时继承当前 Scope，显式 `scope_parent=None` 创建独立 Scope。绑定值可为 ScopeBinding、Identity 或 Iterable[Identity]；直接传 Identity 等价于 `ScopeBinding((identity,))`，默认 `ScopeBinding()` 创建一个私有且不阻断的 Identity。Scope 与绑定均不可变。`effect()` 管理同步或异步 setup 和 cleanup，`register()` 与 `declare()` 管理同步注册清理。`dispose()` 在同步完成时返回 `None`，否则返回剩余清理的 awaitable。两种情况统一使用 `await await_result(ctx.dispose())`，其中 `await_result` 从 `slyme.execution` 导入。一棵 Context 树及其可变的 Schema 和 Compose 对象只归属于一个线程；异步执行时也只归属于一个事件循环，框架不会通过线程身份检查主动执行这一约束。worker 线程或进程应只接收普通输入值，并把结果返回 owner 线程后再修改 Context。注册操作会返回可用于提前移除的精确 disposer：
 
 ```python
 from slyme.context import Compose, Context, Schema
@@ -177,7 +177,7 @@ hooks = Compose(
     query=lambda layers: tuple(value for layer in layers for value in layer.values()),
 )
 root.register(R.resolve("hooks"), hooks)
-agent = root.derive(label="agent")
+agent = root.derive(scope_label="agent")
 
 root.effect(lambda: hooks.register(root.scope, "root"))
 agent.effect(lambda: agent.get(R.resolve("hooks")).register(agent.scope, "agent"))
@@ -200,7 +200,7 @@ Scope viewer、共享的 Context-binding identity 和 Schema 声明直接记录�
 
 **无限可组合性：** 通过完全解耦构建任意复杂的执行流程。得益于 Tree 增强，节点 containment 关系可以直接通过原生 Python 结构表示。
 
-**显式生命周期与可见性：** Context 提供单 parent 的生命周期归属，Scope 提供独立的 C3 可见性。每个 Context 路径、结构角色和写入模式都由共享 Schema 声明；`flatten()` 暴露可见的 Ref 到 value 映射，`Compose` 则沿 Scope 层次管理有序、可撤销的组合值。
+**显式生命周期与可见性：** Context 提供单 parent 的生命周期归属，Scope 提供独立的 单父继承与按字段导入的可见性。每个 Context 路径、结构角色和写入模式都由共享 Schema 声明；`flatten()` 暴露可见的 Ref 到 value 映射，`Compose` 则沿 Scope 层次管理有序、可撤销的组合值。
 
 **无缝协作：** 高度解耦的节点通过显式 Context 路径与 Compose 对象通信。这允许团队独立开发功能并编写单元测试，减少“胶水代码”和深层系统耦合。
 

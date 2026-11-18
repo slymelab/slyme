@@ -10,7 +10,7 @@ Slyme (发音为 /slaɪm/) 是一个高度可组合的函数式执行框架。�
 
 - **原生的 Python 开发体验**: Slyme 没有繁重的面向对象的样板代码，也没有陡峭的学习曲线，你只需要掌握 Python 的一些基础概念，包括 Python 函数和一些原生的数据结构（如字典、列表、元组等），以及理解一点核心概念之后便可快速上手。
 - **无限可组合性**: Slyme 的基本执行单元是 [Node](/zh/guide/essentials/node)，它负责执行一个用户自定义的函数。Node 支持**无限组合**，一个 Node 既可以包含其他 Node，也可以被其他 Node 所包含。有趣的是，受到 Tree 的增强，这种包含关系可以直接通过原生的 Python 数据结构来表示，比如列表或字典。无限组合使得 Slyme 能够构建出任意复杂的执行流程，并且 Node 之间可实现完全解耦。
-- **显式生命周期与可见性**：Context 提供单 parent 的生命周期归属，不可变 Scope 则独立提供 C3 可见性。`flatten()` 暴露可见的 Ref 到 value 映射，`Compose` 按 Scope 管理有序、可撤销的值。
+- **显式生命周期与可见性**：Context 提供单 parent 的生命周期归属，不可变 Scope 则独立提供 分层可见性。`flatten()` 暴露可见的 Ref 到 value 映射，`Compose` 按 Scope 管理有序、可撤销的值。
 - **无缝协作**: Slyme 的 Node 设计是高度解耦的，这些 Node 之间通过 Context 进行通信，这使得社区/开发团队可以独立地开发各自的功能、进行单元测试，减少了开发过程中的代码冲突，让开发者专注于逻辑的实现，而不是被深层的系统耦合和琐碎的“胶水代码”所束缚。
 
 ## 核心概念
@@ -19,7 +19,7 @@ Slyme (发音为 /slaɪm/) 是一个高度可组合的函数式执行框架。�
 
 ### Context
 
-[Context](/zh/guide/essentials/context) 拥有运行时数据、子级生命周期与可撤销 effect。[Ref](/zh/guide/essentials/context#ref) 用于标识 `a.b` 等路径；每个 Context 绑定一个决定 C3 数据可见性的 [Scope](/zh/guide/essentials/context#scope)。[Compose](/zh/guide/essentials/context#compose) 会组合可见 Scope 上注册的值。
+[Context](/zh/guide/essentials/context) 拥有运行时数据、子级生命周期与可撤销 effect。[Ref](/zh/guide/essentials/context#ref) 用于标识 `a.b` 等路径；每个 Context 绑定一个决定 分层数据可见性的 [Scope](/zh/guide/essentials/context#scope)。[Compose](/zh/guide/essentials/context#compose) 会组合可见 Scope 上注册的值。
 
 ### Node
 

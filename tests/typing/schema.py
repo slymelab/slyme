@@ -74,46 +74,62 @@ def check_types(ctx: Context, schema: Schema, mapping: Mapping[str, Any]) -> Non
     assert_type(ctx.derive(), Context)
     assert_type(ctx.derive(bindings=None), Context)
     assert_type(ctx.derive(bindings={}), Context)
-    assert_type(ctx.derive(parents=ctx.scope, label="child"), Context)
+    assert_type(ctx.derive(scope_parent=ctx.scope, scope_label="child"), Context)
     assert_type(
         ctx.derive(
-            bindings={"value": ScopeBinding(), Ref("service"): ScopeBinding(identity)}
+            bindings={
+                "value": ScopeBinding(),
+                Ref("service"): ScopeBinding((identity,)),
+            }
         ),
         Context,
     )
     assert_type(ctx.derive(bindings={values: ScopeBinding(blocked=False)}), Context)
-    assert_type(ctx.derive(label="child", parents=ctx.scope, bindings={}), Context)
-    assert_type(ctx.derive(parents=(ctx.scope,), bindings={}), Context)
-    assert_type(ctx.derive(parents=(), bindings={}), Context)
-    assert_type(values.derive(parents=ctx.scope, binding=ScopeBinding()), Scope)
-    assert_type(values.derive(parents=ctx.scope, binding=ScopeBinding(identity)), Scope)
     assert_type(
-        values.derive(label="child", parents=(ctx.scope,), binding=ScopeBinding()),
-        Scope,
+        ctx.derive(scope_label="child", scope_parent=ctx.scope, bindings={}), Context
     )
-    assert_type(values.derive(parents=(), binding=ScopeBinding()), Scope)
+    assert_type(ctx.derive(scope_parent=ctx.scope, bindings={}), Context)
+    assert_type(ctx.derive(scope_parent=None, bindings={}), Context)
+    assert_type(values.derive(scope_parent=ctx.scope, binding=ScopeBinding()), Scope)
     assert_type(
-        Compose.derive_many(
-            parents=ctx.scope, bindings={values: ScopeBinding(identity)}
+        values.derive(scope_parent=ctx.scope, binding=ScopeBinding((identity,))), Scope
+    )
+    assert_type(
+        values.derive(
+            scope_label="child", scope_parent=ctx.scope, binding=ScopeBinding()
         ),
         Scope,
     )
-    assert_type(Compose.derive_many(label="root", parents=(), bindings={}), Scope)
+    assert_type(values.derive(scope_parent=None, binding=ScopeBinding()), Scope)
+    assert_type(
+        Compose.derive_many(
+            scope_parent=ctx.scope, bindings={values: ScopeBinding((identity,))}
+        ),
+        Scope,
+    )
+    assert_type(
+        Compose.derive_many(scope_label="root", scope_parent=None, bindings={}), Scope
+    )
     ctx.fork(bindings={})  # type: ignore[call-overload]
     ctx.derive(bindings={}, scope=ctx.scope)  # type: ignore[call-overload]
     ctx.derive({})  # type: ignore[call-overload]
     values.derive()  # type: ignore[call-arg]
     values.derive(ctx.scope)  # type: ignore[misc, call-arg]
-    Compose.derive_many(bindings={})  # type: ignore[call-arg]
-    values.derive(parents=ctx.scope)  # type: ignore[call-arg]
-    assert_type(values.derive(parents=ctx.scope, binding=identity), Scope)
-    values.derive(parents=ctx.scope, binding=None)  # type: ignore[arg-type]
+    assert_type(Compose.derive_many(bindings={}), Scope)
+    values.derive(scope_parent=ctx.scope)  # type: ignore[call-arg]
+    assert_type(values.derive(scope_parent=ctx.scope, binding=identity), Scope)
+    values.derive(scope_parent=ctx.scope, binding=None)  # type: ignore[arg-type]
     assert_type(ctx.derive(bindings={"value": identity, values: identity}), Context)
+    assert_type(
+        ctx.derive(bindings={"value": [identity], values: iter([identity])}), Context
+    )
+    assert_type(values.derive(binding=(identity,)), Scope)
+    assert_type(Compose.derive_many(bindings={values: iter([identity])}), Scope)
     ctx.derive(bindings={"value": None})  # type: ignore[dict-item]
     assert_type(
-        Compose.derive_many(parents=ctx.scope, bindings={values: identity}), Scope
+        Compose.derive_many(scope_parent=ctx.scope, bindings={values: identity}), Scope
     )
-    Compose.derive_many(parents=ctx.scope, bindings={values: None})  # type: ignore[dict-item]
+    Compose.derive_many(scope_parent=ctx.scope, bindings={values: None})  # type: ignore[dict-item]
     assert_type(ctx.resolve_entry("value"), RefEntry[Any])
     assert_type(ctx.resolve_entry(Ref("value"), role=None), RefEntry[Any])
     assert_type(schema.entries, tuple[RefEntry[Any], ...])

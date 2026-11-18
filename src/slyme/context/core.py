@@ -148,7 +148,7 @@ class Context(Generic[_F]):
         """Finish internal bookkeeping once after effect cleanup, retaining failure."""
         try:
             # NOTE: acquire_scope must register this viewer for the entire Scope
-            # MRO before restoring bindings; release relies on those registrations
+            # lineage before restoring bindings; release relies on those registrations
             # even when construction fails.
             self._store.release_scope(self, self.scope)
         finally:
@@ -276,9 +276,11 @@ class Context(Generic[_F]):
     def derive(
         self,
         *,
-        label: object = None,
-        parents: Scope | tuple[Scope, ...] | None = None,
-        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
+        scope_label: object = None,
+        scope_parent: Scope | None | _Missing = _MISSING,
+        bindings: Mapping[
+            ContextKey | Compose[Any, Any], ScopeBinding | Identity | Iterable[Identity]
+        ]
         | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
         facet_factory: Callable[[Context[_T]], _T],
@@ -287,9 +289,11 @@ class Context(Generic[_F]):
     def derive(
         self,
         *,
-        label: object = None,
-        parents: Scope | tuple[Scope, ...] | None = None,
-        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
+        scope_label: object = None,
+        scope_parent: Scope | None | _Missing = _MISSING,
+        bindings: Mapping[
+            ContextKey | Compose[Any, Any], ScopeBinding | Identity | Iterable[Identity]
+        ]
         | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
         facet_factory: None = None,
@@ -297,25 +301,25 @@ class Context(Generic[_F]):
     def derive(
         self,
         *,
-        label: object = None,
-        parents: Scope | tuple[Scope, ...] | None = None,
-        bindings: Mapping[ContextKey | Compose[Any, Any], ScopeBinding | Identity]
+        scope_label: object = None,
+        scope_parent: Scope | None | _Missing = _MISSING,
+        bindings: Mapping[
+            ContextKey | Compose[Any, Any], ScopeBinding | Identity | Iterable[Identity]
+        ]
         | None = None,
         dispose_mode: Literal["sequential", "batch"] = "sequential",
         facet_factory: Callable[[Context], Any] | None = None,
     ) -> Context:
         """Create an owned child and one new Scope configured for all targets.
 
-        Parents defaults to this Scope, independently of lifecycle ownership;
-        an empty tuple creates an independent Scope. Path keys configure declared
-        leaves; Compose keys configure contribution layers without replacing
-        Context values. Each ScopeBinding selects private or shared storage and
-        allows ancestor fallback unless it or its Identity is blocked.
-        An Identity is shorthand for ScopeBinding(identity=identity).
-        Unselected targets inherit. None or empty bindings create a new Scope
-        without explicit bindings. derive() is equivalent to
-        fork(scope=self.scope.fork()). Disposal mode defaults to sequential,
-        independently of the parent.
+        The parent Scope defaults to this Scope; scope_parent=None creates an
+        independent Scope without changing lifecycle ownership. Path keys configure
+        declared leaves; Compose keys configure contribution layers. An Identity
+        or iterable of Identities is shorthand for ScopeBinding(...). Writes target
+        the first Identity; reads follow the list, then the parent unless blocked.
+        Unselected targets inherit.
+        derive() is equivalent to fork(scope=self.scope.fork()). Disposal mode
+        defaults to sequential, independently of the parent Context.
         The facet factory runs after all bindings are installed. Without a
         factory, the child's facet is None, regardless of its parent's facet.
         """
@@ -325,7 +329,7 @@ class Context(Generic[_F]):
                 target
                 if isinstance(target, Compose)
                 else self._schema.resolve_entry(target, role="leaf"),
-                ScopeBinding(binding) if isinstance(binding, Identity) else binding,
+                binding if isinstance(binding, ScopeBinding) else ScopeBinding(binding),
             )
             for target, binding in (bindings or {}).items()
         )
@@ -340,7 +344,8 @@ class Context(Generic[_F]):
 
         return self.fork(
             scope=Scope(
-                label=label, parents=self.scope if parents is None else parents
+                label=scope_label,
+                parent=self.scope if scope_parent is _MISSING else scope_parent,
             ),
             dispose_mode=dispose_mode,
             facet_factory=create_facet,

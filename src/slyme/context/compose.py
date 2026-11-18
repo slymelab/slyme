@@ -23,7 +23,7 @@ from typing import Any, Generic, ParamSpec, Protocol, TypeVar, overload
 
 from slyme.execution import once
 
-from .scope import Identity, Scope, ScopeBinding
+from .scope import Identity, Scope, ScopeBinding, identities
 
 __all__ = ["Compose", "ComposeLayer"]
 
@@ -57,7 +57,7 @@ class _Bucket(Generic[_L]):
 
 
 class Compose(Generic[_L, _R]):
-    """Own registration tokens and expose visible layers in C3 order.
+    """Own registration tokens and expose visible layers in explicit lookup order.
 
     Each Identity receives one factory-created ComposeLayer. A layer receives
     only its registration token and caller-supplied business arguments, never an
@@ -92,26 +92,30 @@ class Compose(Generic[_L, _R]):
     def derive(
         self,
         *,
-        label: object = None,
-        parents: Scope | tuple[Scope, ...],
-        binding: ScopeBinding | Identity,
+        scope_label: object = None,
+        scope_parent: Scope | None = None,
+        binding: ScopeBinding | Identity | Iterable[Identity],
     ) -> Scope:
-        """Create a configured Scope without changing parents or owning cleanup."""
-        return self.derive_many(label=label, parents=parents, bindings={self: binding})
+        """Create a configured Scope without changing the parent or owning cleanup."""
+        return self.derive_many(
+            scope_label=scope_label, scope_parent=scope_parent, bindings={self: binding}
+        )
 
     @staticmethod
     def derive_many(
         *,
-        label: object = None,
-        parents: Scope | tuple[Scope, ...],
-        bindings: Mapping[Compose[Any, Any], ScopeBinding | Identity],
+        scope_label: object = None,
+        scope_parent: Scope | None = None,
+        bindings: Mapping[
+            Compose[Any, Any], ScopeBinding | Identity | Iterable[Identity]
+        ],
     ) -> Scope:
         """Configure several Composes on one new Scope without lifecycle ownership."""
-        scope = Scope(label=label, parents=parents)
+        scope = Scope(label=scope_label, parent=scope_parent)
         for compose, binding in bindings.items():
             compose._bind(
                 scope,
-                ScopeBinding(binding) if isinstance(binding, Identity) else binding,
+                binding if isinstance(binding, ScopeBinding) else ScopeBinding(binding),
             )
         return scope
 
@@ -121,7 +125,7 @@ class Compose(Generic[_L, _R]):
             self._scope_bindings[scope] = binding
         elif previous != binding:
             raise ValueError(
-                "A Scope binding's identity and blocked policy are immutable."
+                "A Scope binding's identities and blocked policy are immutable."
             )
 
     def register(
@@ -180,27 +184,18 @@ class Compose(Generic[_L, _R]):
         """Yield layers once per visible Identity, without creating data.
 
         Omit scope to inspect all live layers. local=True selects only the
-        supplied Scope's Identity, including registrations through other Scopes
-        sharing it. Empty and duplicate-Identity bindings still apply barriers.
+        supplied Scope's writable Identity, including registrations through
+        other Scopes sharing it. Empty and duplicate bindings still apply barriers.
         """
         if scope is None:
             if local:
                 raise ValueError("local=True requires a Scope.")
             yield from (bucket.data for bucket in self._buckets.values())
             return
-        seen: set[Identity] = set()
-        for current in (scope,) if local else scope.mro:
-            binding = self._scope_bindings.get(current)
-            if binding is None:
-                continue
-            identity = binding.identity
-            if identity not in seen:
-                seen.add(identity)
-                bucket = self._buckets.get(identity)
-                if bucket is not None:
-                    yield bucket.data
-            if binding.blocked or identity.blocked:
-                break
+        for identity in identities(scope, self._scope_bindings, local=local):
+            bucket = self._buckets.get(identity)
+            if bucket is not None:
+                yield bucket.data
 
     @overload
     def resolve(

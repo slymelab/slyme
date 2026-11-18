@@ -1015,7 +1015,7 @@ def test_context_lifecycle_parent_and_scope_visibility_are_orthogonal() -> None:
     assert left.get(value) == "left"
     assert right.get(value) == "right"
 
-    combined_scope = Scope(label="combined", parents=(left_scope, right_scope))
+    combined_scope = Scope(label="combined", parent=left_scope)
     combined = right.fork(scope=combined_scope)
     assert combined.parent is right
     assert combined.get(value) == "left"
@@ -1061,10 +1061,10 @@ def test_context_bind_shares_only_the_selected_leaf() -> None:
     root.declare(R)
     identity = Identity(blocked=True)
     left = root.derive(
-        bindings={R.resolve("value"): ScopeBinding(identity, blocked=False)}
+        bindings={R.resolve("value"): ScopeBinding((identity,), blocked=False)}
     )
     right = root.derive(
-        bindings={R.resolve("value"): ScopeBinding(identity, blocked=False)}
+        bindings={R.resolve("value"): ScopeBinding((identity,), blocked=False)}
     )
     left.set(R.resolve("value"), "shared")
     left.set(R.resolve("runtime.value"), "left-only")
@@ -1120,40 +1120,6 @@ def test_context_views_follow_later_parent_and_child_changes() -> None:
         view.to_dict()
 
 
-def test_scope_uses_c3_for_multiple_parents() -> None:
-    value = R.resolve("value")
-    root_scope = Scope(label="root")
-    left_scope = root_scope.fork(label="left")
-    right_scope = root_scope.fork(label="right")
-    child_scope = Scope(label="child", parents=(left_scope, right_scope))
-    root = Context(scope=root_scope)
-    root.declare(R)
-    left = root.fork(scope=left_scope)
-    right = root.fork(scope=right_scope)
-    child = left.fork(scope=child_scope)
-
-    root.set(value, "root")
-    right.set(value, "right")
-    left.set(value, "left")
-
-    assert child.scope.mro == (
-        child_scope,
-        left_scope,
-        right_scope,
-        root_scope,
-    )
-    assert child.get(value) == "left"
-
-    x = root_scope.fork()
-    y = root_scope.fork()
-    xy = Scope(parents=(x, y))
-    yx = Scope(parents=(y, x))
-    with pytest.raises(TypeError, match="C3"):
-        Scope(parents=(xy, yx))
-    with pytest.raises(TypeError, match="duplicate"):
-        Scope(parents=(root_scope, root_scope))
-
-
 def test_context_structural_lookup_merges_declared_container_branches() -> None:
     root = Context()
     root.declare(R)
@@ -1201,28 +1167,23 @@ def test_context_views_follow_schema_structure_and_declaration_order() -> None:
     assert tuple(view.keys()) == ("first", "nested", "later")
 
 
-def test_scope_c3_branch_merge_uses_nearest_value_for_each_leaf() -> None:
-    root_scope = Scope()
-    root = Context(scope=root_scope)
+def test_explicit_identity_routes_merge_container_leaves() -> None:
+    root = Context()
     root.declare(R)
-    root.set(R.resolve("a.root"), 1)
-    left_scope = root_scope.fork()
-    left = root.fork(scope=left_scope)
-    left.set(R.resolve("a.left"), 2)
-    right_scope = root_scope.fork()
-    right = root.fork(scope=right_scope)
-    right.set(R.resolve("a.root"), 3)
-
-    child_scope = Scope(parents=(left_scope, right_scope))
-    child = left.fork(scope=child_scope)
-
-    assert child.scope.mro == (
-        child_scope,
-        left_scope,
-        right_scope,
-        root_scope,
+    root.set("a.root", 1)
+    left_id, right_id = Identity(), Identity()
+    left = root.derive(bindings={"a.left": left_id})
+    right = root.derive(bindings={"a.root": right_id})
+    left.set("a.left", 2)
+    right.set("a.root", 3)
+    child = root.derive(
+        bindings={
+            "a.left": ScopeBinding((Identity(), left_id)),
+            "a.root": ScopeBinding((Identity(), right_id)),
+        }
     )
-    assert child.to_dict(R.resolve("a")) == {"left": 2, "root": 3}
+    assert child.to_dict("a") == {"left": 2, "root": 3}
+    root.dispose()
 
 
 def test_context_registration_shadows_inheritance_and_is_exactly_reversible() -> None:
@@ -1279,7 +1240,7 @@ def test_context_barrier_survives_registration_removal() -> None:
 
 
 @pytest.mark.parametrize("mode", ["scope", "identity"])
-def test_context_barrier_stops_c3_lookup_before_later_parents(mode) -> None:
+def test_context_barrier_stops_parent_lookup(mode) -> None:
     value = R.resolve("value")
     root = Context()
     root.declare(R)
@@ -1287,19 +1248,18 @@ def test_context_barrier_stops_c3_lookup_before_later_parents(mode) -> None:
     left = root.derive(
         bindings={
             value: ScopeBinding(
-                Identity(blocked=mode == "identity"), blocked=mode == "scope"
+                (Identity(blocked=mode == "identity"),), blocked=mode == "scope"
             )
         }
     )
     right = root.fork(scope=root.scope.fork())
     right.set(value, "right")
-    child_scope = Scope(parents=(left.scope, right.scope))
+    child_scope = Scope(parent=left.scope)
     child = left.fork(scope=child_scope)
 
-    assert child.scope.mro == (
+    assert tuple(child.scope.lineage()) == (
         child_scope,
         left.scope,
-        right.scope,
         root.scope,
     )
     assert child.get(value, "missing") == "missing"

@@ -25,7 +25,7 @@ from slyme.execution import once
 from slyme.utils.exception import exception_group
 
 from .schema import ContextPathError, Ref, RefEntry, RefLeafConfig, Schema
-from .scope import Identity, Scope, ScopeBinding
+from .scope import Identity, Scope, ScopeBinding, identities
 
 __all__ = ["ContextStore"]
 
@@ -71,41 +71,41 @@ class _ContextBinding:
     @property
     def scopes(self) -> tuple[Scope, ...]:
         """Snapshot Scopes retaining identity data, excluding inactive identities."""
-        return tuple(scope for data in self._data.values() for scope in data.scopes)
+        return tuple(
+            dict.fromkeys(
+                scope for data in self._data.values() for scope in data.scopes
+            )
+        )
 
     def _get_data(self, scope: Scope) -> _IdentityData | None:
         binding = self._scope_bindings.get(scope)
         return None if binding is None else self._data.get(binding.identity)
 
-    def _ensure_data(self, scope: Scope) -> _IdentityData:
-        """Retain local data under the saved identity or a new immutable identity."""
+    def _ensure_data(self, scope: Scope, *, local: bool) -> _IdentityData:
+        """Retain the write Identity or the full binding and return the write slot."""
         binding = self._scope_bindings.get(scope)
         if binding is None:
             binding = self._scope_bindings[scope] = ScopeBinding()
-        data = self._data.get(binding.identity)
-        if data is None:
-            data = self._data[binding.identity] = _IdentityData()
-        data.scopes.add(scope)
-        return data
+        for identity in (binding.identity,) if local else binding.identities:
+            data = self._data.get(identity)
+            if data is None:
+                data = self._data[identity] = _IdentityData()
+            data.scopes.add(scope)
+        return self._data[binding.identity]
 
     def restore_scope(self, scope: Scope) -> bool:
         """Restore saved identity ownership; return False for an unbound Scope."""
         if scope not in self._scope_bindings:
             return False
-        self._ensure_data(scope)
+        self._ensure_data(scope, local=False)
         return True
 
     def get(self, scope: Scope, *, local: bool = False) -> Any:
         """Return the first visible value, or _MISSING without acquiring ownership."""
-        for current in (scope,) if local else scope.mro:
-            binding = self._scope_bindings.get(current)
-            if binding is None:
-                continue
-            data = self._data.get(binding.identity)
+        for identity in identities(scope, self._scope_bindings, local=local):
+            data = self._data.get(identity)
             if data is not None and data.value is not _MISSING:
                 return data.value
-            if binding.blocked or binding.identity.blocked:
-                break
         return _MISSING
 
     def matches(self, scope: Scope, *, token: object | None) -> bool:
@@ -115,7 +115,7 @@ class _ContextBinding:
 
     def set(self, scope: Scope, value: Any, *, token: object | None = None) -> None:
         """Write freely when unprotected; otherwise require the stored token."""
-        data = self._ensure_data(scope)
+        data = self._ensure_data(scope, local=True)
         if data.token is not None and data.token is not token:
             raise ValueError("Context value token does not match.")
         data.token = token
@@ -132,27 +132,30 @@ class _ContextBinding:
             data.value = _MISSING
 
     def bind(self, scope: Scope, binding: ScopeBinding) -> None:
-        """Fix local lookup policy and retain its identity's current data."""
+        """Fix local lookup policy and retain its reachable identities."""
         previous = self._scope_bindings.get(scope)
         if previous is None:
             self._scope_bindings[scope] = binding
         elif previous != binding:
             raise ValueError(
-                "A Scope binding's identity and blocked policy are immutable."
+                "A Scope binding's identities and blocked policy are immutable."
             )
-        self._ensure_data(scope)
+        self._ensure_data(scope, local=False)
 
     def release_scope(self, scope: Scope) -> None:
         """Release data after its last retaining Scope, keeping binding policy."""
         binding = self._scope_bindings.get(scope)
         if binding is None:
             return
-        data = self._data.get(binding.identity)
-        if data is None:
-            return
-        data.scopes.discard(scope)
-        if not data.scopes:
-            del self._data[binding.identity]
+        # Defer reference release so __del__ cannot reenter partially cleared state.
+        retired = []
+        for identity in binding.identities:
+            data = self._data.get(identity)
+            if data is not None:
+                data.scopes.discard(scope)
+                if not data.scopes:
+                    retired.append(self._data.pop(identity))
+        retired.clear()
 
     def clear(self) -> None:
         """Clear values and saved identities."""
@@ -188,7 +191,7 @@ class ContextStore:
         """Register all viewers before restoring bindings; Context owns rollback."""
         usages = self._scope_usages
         restored_scopes: list[Scope] = []
-        for scope in requested_scope.mro:
+        for scope in requested_scope.lineage():
             usage = usages.get(scope)
             if usage is None:
                 usage = usages[scope] = _ScopeUsage()
@@ -207,7 +210,7 @@ class ContextStore:
         """Release one registered viewer exactly once, even after restoration fails."""
         usages = self._scope_usages
         expired: list[tuple[Scope, _ScopeUsage]] = []
-        for scope in requested_scope.mro:
+        for scope in requested_scope.lineage():
             usage = usages[scope]
             usage.viewers.remove(viewer)
             if not usage.viewers:

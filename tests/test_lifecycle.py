@@ -663,13 +663,13 @@ def test_failed_binding_leaves_child_disposal_to_its_owner() -> None:
     initial_effects = tuple(root._lifecycle._effects)
     root.set_many({"value": "root"})
     child = root.derive(
-        bindings={"value": ScopeBinding(original_identity, blocked=False)}
+        bindings={"value": ScopeBinding((original_identity,), blocked=False)}
     )
     with pytest.raises(ValueError, match="immutable"):
         child._store.bind(
             child.scope,
             child.resolve_entry("value", role="leaf"),
-            ScopeBinding(replacement_identity, blocked=False),
+            ScopeBinding((replacement_identity,), blocked=False),
         )
     assert child.get("value") == "root"
     assert root._store._scope_usages[child.scope].viewers == {child}

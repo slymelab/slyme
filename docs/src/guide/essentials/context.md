@@ -1,6 +1,6 @@
 # Context
 
-`Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by leaf-local identities bound to Scopes. Reads follow the bound Scope's C3 order by default, while writes change the identity bound to that exact Scope.
+`Context` combines a declared mutable data view with lifetime ownership. Each Context has at most one parent and is bound to one immutable `Scope`. The application root keeps flat bindings keyed by active Schema leaf entries, with values indexed by leaf-local identities bound to Scopes. Reads follow the bound Scope's explicit lookup order by default, while writes change the identity bound to that exact Scope.
 
 Context privately holds three cooperating objects: `Schema` defines paths and metadata, `ContextStore` stores scoped values and tracks their viewers, and `Lifecycle` owns effects and disposal state. Context alone maintains the parent/child tree, exposed through `parent` and a read-only `children` tuple snapshot. Contexts in one application share Schema and Store, but each owns a distinct Lifecycle. Context exposes `declare()`, `resolve()`, `resolve_entry()`, and `entries`; callers do not need access to those private objects. `entries` includes declared containers and unset leaves, whereas `keys()` and `flatten()` describe visible values.
 
@@ -14,7 +14,7 @@ Each Context binding stores an immutable `ScopeBinding` per Scope. It selects an
 
 Store enforces Schema write modes and the requirement that registration cannot overwrite a local value. Binding provides token-aware writes and deletions: a stored `None` token is unprotected, while a non-`None` token requires that exact token, including when the caller supplies `None`. Store registration creates a unique token and a `once()` disposer that calls Binding's `matches()` and `delete()`. `matches()` requires a local value and an exact token match, so an old disposer cannot delete a replacement, even an unprotected one.
 
-Reads visit the complete Scope MRO, skip unbound Scopes, and select the first value or inheritance barrier. They do not create bindings or cache their results, so later writes and removals are visible on the next read.
+Reads visit the complete Scope parent chain, skip unbound Scopes, and select the first value or inheritance barrier. They do not create bindings or cache their results, so later writes and removals are visible on the next read.
 
 A Context tree and its mutable Schema and Compose objects are single-thread-owned. Synchronous workflows use them on that thread; asynchronous workflows use them on one event loop. This is a usage requirement rather than a runtime thread-identity check. Worker threads and processes should receive ordinary values and return results for Context mutation on the owner thread.
 
@@ -313,89 +313,120 @@ ctx.set(R.resolve("settings"), {"theme": "dark"})  # one mapping-valued leaf
 ctx.set(R.resolve("user.name"), "Ada")  # a structural branch and leaf
 ```
 
-Every read operation accepts `local=True` to inspect only `ctx.scope`. The default is the effective view across `ctx.scope.mro`. Context CRUD never accepts a separate Scope argument; use a Context bound to the target Scope when data must be read or written elsewhere.
+Every read operation accepts `local=True` to inspect only the first Identity bound to `ctx.scope`. The default is the effective view across the current Scope and its parent chain. Context CRUD never accepts a separate Scope argument; use a Context bound to the target Scope when data must be read or written elsewhere.
 
 ## Context lifetime and Scope lookup {#scope}
 
-`Context.fork()` and `Context.derive()` create base `Context` instances; `Scope.fork()` creates a base `Scope`. These methods do not propagate the receiver's Python subclass. Use facets and composition for business extensions.
+`Context.fork()` and `Context.derive()` create base `Context` instances;
+`Scope.fork()` creates a base `Scope`. Use facets and composition for business
+extensions rather than relying on these methods to propagate subclasses.
 
-`fork()` creates an owned child Context whose `parent` is the receiver. It shares the receiver's Scope by default, so Contexts in the same application root and bound to that Scope observe the same local values. Pass an explicit child Scope when a distinct data layer is required:
+Context parentage determines lifecycle ownership and the shared Schema and Store.
+Scope parentage determines visibility. These are independent: disposing a Context
+closes its owned children, not every Context that uses its Scope.
+
+- `ctx.fork()` creates an owned child sharing `ctx.scope`.
+- `ctx.fork(scope=scope)` selects an existing Scope.
+- `ctx.derive()` creates an owned child with a new Scope inheriting `ctx.scope`.
+- `ctx.derive(scope_parent=scope)` chooses another visibility parent.
+- `ctx.derive(scope_parent=None)` creates an independent Scope, with no inherited values
+  or framework defaults. Its lifecycle still belongs to `ctx`.
+
+`Scope(*, label=None, parent=None)` is immutable and has at most one parent.
+`scope.fork(label=...)` creates a child. `scope.find(label)` searches from the
+current Scope to its root and raises `LookupError` when absent; pass a second
+argument for an explicit fallback, including `None`. `scope.find_all(label)`
+returns all matches in that order. Labels use equality, need not be unique or
+hashable, and do not determine Scope identity. Separate Context roots never
+share Context data, even if they use the same Scope or Identity objects.
+
+### Explicit storage routes
+
+`Identity(label=None, blocked=False)` names a storage slot within one Context
+field or one Compose. Sharing requires the same Identity object, not an equal
+label. `ScopeBinding(identities=(...), blocked=False)` gives an ordered, nonempty
+tuple of Identities for that target:
+
+1. Writes, deletes, and registrations target **only the first Identity**.
+2. Reads inspect each Identity in order, then continue through the parent Scope.
+   The first occurrence of an Identity wins; repeated occurrences are skipped.
+3. `Identity.blocked` stops lookup immediately after that Identity.
+   `ScopeBinding.blocked` stops parent lookup after the binding's list.
+   Barriers apply even when data is absent or an Identity has already appeared.
+4. `local=True` inspects only the current Scope's **first Identity**, including
+   data written through other Scopes sharing that same slot. It excludes imports
+   and parent fallback.
+
+`ScopeBinding(shared)` is shorthand for `ScopeBinding((shared,))`;
+Lists and generators are also accepted, including directly as `bindings` values.
+The iterable is consumed once, stopping at the first blocked Identity.
+`binding.identities` is always a tuple, and `binding.identity` is its write target.
+Construction removes repeated Identities in first-occurrence order and discards
+everything after the first blocked Identity. Bindings compare by this normalized
+sequence and their `blocked` flag; the original input sequence is not retained.
+`ScopeBinding()` creates one private, unblocked Identity. Bindings are immutable;
+public APIs install them only on new Scopes. A first write on an unbound Scope
+creates a private binding. Reads do not create bindings or storage.
+
+`ctx.derive(bindings={target: binding})` configures declared leaf paths or Refs;
+a Compose object as target configures its contribution layers without replacing
+the Context value. An Identity alone is shorthand for `ScopeBinding((identity,))`.
+Omitted bindings inherit normally. Each target has its own route, so two fields
+can deliberately use different precedence:
 
 ```python
-from slyme.context import Context, Schema
+from slyme.context import Context, Identity, Schema, ScopeBinding
 
-R = Schema({"settings": {"timeout": Schema.leaf(), "mode": Schema.leaf()}})
 root = Context()
-root.declare(R)
-root.set(R.resolve("settings.timeout"), 30)
+root.declare({"settings": {"timeout": Schema.leaf(), "mode": Schema.leaf()}})
+root.set("settings.timeout", 30)
 
-plugin = root.fork()
-assert plugin.scope is root.scope
+feature_id = Identity("feature")
+mixin_id = Identity("mixin")
+feature = root.derive(bindings={"settings.mode": feature_id})
+mixin = root.derive(bindings={"settings.timeout": mixin_id})
+feature.set("settings.mode", "fast")
+mixin.set("settings.timeout", 45)
 
-feature_scope = root.scope.fork(label="feature")
-mixin_scope = root.scope.fork(label="mixin")
-agent_scope = Scope(label="agent", parents=(feature_scope, mixin_scope))
-
-feature = root.fork(scope=feature_scope)
-mixin = root.fork(scope=mixin_scope)
-agent = feature.fork(scope=agent_scope)
-feature.set(R.resolve("settings.mode"), "fast")
-mixin.set(R.resolve("settings.timeout"), 45)
-
-assert agent.parent is feature
-assert agent.root is root
-assert agent.scope.mro == (agent_scope, feature_scope, mixin_scope, root.scope)
-assert agent.scope.find("mixin") is mixin_scope
+agent = feature.derive(
+    scope_parent=root.scope,
+    bindings={
+        "settings.mode": (Identity(), feature_id),
+        "settings.timeout": (Identity(), mixin_id),
+    },
+)
+assert agent.parent is feature                 # lifecycle owner
+assert agent.scope.parent is root.scope       # visibility parent
 assert agent.to_dict("settings") == {"mode": "fast", "timeout": 45}
-```
-
-Context parentage and Scope ancestry are independent. The parent determines lifetime ownership and the application root that holds Schema and data; the Scope determines lookup. `Scope(*, label=None, parents=())` accepts one Scope or a tuple, normalizing the stored `parents` attribute to a tuple before C3 linearization. Parents may come from otherwise unrelated Scope roots. `scope.fork()` creates a single-parent child. Separate Context roots never share Context data, even when they use the same Scope object.
-
-A single-parent Scope prepends itself to its parent's existing MRO, even when the parent itself uses multiple inheritance. Its construction is linear in the length of that MRO.
-
-`scope.find(label)` returns the first equal label in C3 order and raises `LookupError` when none matches. Pass `scope.find(label, default)` to return an explicit Scope or `None` instead; passing that `None` to `ctx.fork(scope=...)` shares the current Scope. `scope.find_all(label)` returns all matches in C3 order, or an empty tuple. Labels need not be hashable or unique and do not determine Scope identity.
-
-Deleting a local value normally reveals the next value in the Scope MRO.
-
-`fork()` creates an owned child Context sharing the current Scope; `fork(scope=...)` selects an existing Scope. `Identity(label=None, blocked=False)` is an immutable storage identity: sharing requires the same object, not the same label. Data remains local to each field in one Context store, or to one Compose. `blocked=True` fixes a fallback barrier for every Scope using that Identity.
-
-`ScopeBinding(identity=Identity(), blocked=False)` describes a storage identity and Scope-local barrier. Each instance creates a private Identity by default; both blocking flags default to False. Public APIs install explicit configurations only on new Scopes; existing bindings cannot be changed. An unbound Scope's first write fixes a private, unblocked binding. A present value remains visible; otherwise either barrier stops C3 lookup, including later parents. Context and Compose expose no in-place binding or blocking changes.
-
-Payload cleanup does not alter configuration. Reusing a saved Scope preserves its field binding, including the local barrier; reusing an Identity preserves its identity-level barrier. Cleared values are never restored. Withdrawing the final Schema declaration removes that field's bindings, but cannot change an externally retained Identity. These rules control lookup, not authorization between plugins.
-
-`ctx.derive(*, label=None, parents=None, bindings=None, dispose_mode="sequential")` creates an owned child Context and one new Scope for all targets. `parents=None` inherits `ctx.scope`; an explicit Scope or tuple selects the new Scope's direct parents, and `()` creates an independent Scope. Lifecycle ownership remains with `ctx`. Path or Ref keys configure declared leaves; Compose object keys configure contributions without replacing Context values. Each value is a ScopeBinding or an Identity. A direct Identity is shorthand for `ScopeBinding(identity=identity)`; individual binding values cannot be `None`. `ScopeBinding()` creates a private Identity without blocking; `ScopeBinding(identity=shared)` selects shared storage. Enable either barrier explicitly with `blocked=True`. Unselected targets inherit through the selected parents. Omitted, None, or empty bindings create a new Scope without explicit bindings. Calling `ctx.derive()` is equivalent to `ctx.fork(scope=ctx.scope.fork())`. Identity sharing does not make the new Scope's barrier apply to unrelated Scopes:
-
-```python
-from slyme.context import Identity
-
-service_schema = Schema({"service": Schema.leaf()})
-root = Context()
-root.declare(service_schema)
-root.set_many({"service": "default"})
-service = service_schema.resolve("service")
-isolated = root.derive(bindings={service: ScopeBinding(blocked=True)})
-assert not isolated.exists(service)
-
-isolated.set(service, "ready")
-assert isolated.get(service) == "ready"
-isolated.delete(service)
-assert not isolated.exists(service)
-assert root.get(service) == "default"
-isolated.dispose()
-
-shared = Identity("shared")
-left = root.derive(bindings={service: ScopeBinding(identity=shared)})
-right = root.derive(bindings={service: ScopeBinding(identity=shared)})
-left.set(service, "shared value")
-assert right.get(service) == "shared value"
+agent.set("settings.timeout", 60)              # writes its private first slot
+assert mixin.get("settings.timeout") == 45
+agent.delete("settings.timeout")
+assert agent.get("settings.timeout") == 45
 root.dispose()
 ```
 
-For plugin reloads, use a plugin-owned child Context with a fresh Scope derived from a clean shared base, and own declarations, registrations, Compose contributions, and cleanup through that Context. After successful disposal and task shutdown, another plugin can start without those contributions. Reusing a Scope or Identity explicitly retains its configuration and any still-owned shared data; new Scopes still inherit their ancestors unless blocked. Disposal does not undo arbitrary writes to shared assign-mode values, mutations of stored objects, or file/network effects. Immutable configuration and exact cleanup therefore support clean reloads, but are not a general transaction rollback.
+Unlisted fields inherit only from the chosen parent, not from the sources of
+imported Identities. Importing a field does not implicitly import a provider's
+other fields, Scope ancestry, or lifetime. To block all fallback for a target,
+use `ScopeBinding(blocked=True)`; to write directly to shared storage, put its
+Identity first or pass it alone.
+
+Payload cleanup does not reset binding configuration. A retained Scope keeps
+its ordered route and barriers; expired values are never restored. An explicit
+binding retains the data slots it can reach until its Scope has no viewers.
+This does not extend registrations or external resource lifetimes: their exact
+disposers still remove them. Final Schema withdrawal clears that field's bindings.
+These are visibility rules, not a security boundary.
+
+For reloadable plugins, own declarations, registrations, contributions, and
+cleanup through a plugin Context. Disposal does not undo arbitrary writes to
+shared assign-mode values, object mutations, or file/network effects. Reusing
+an Identity shares any still-owned data; using a fresh first Identity isolates
+new writes. Resource ownership must cover every consumer.
 
 ## Reversible local bindings
 
-Declare a field with `mode="register"` to use `register()`. It installs a value only when the bound identity has no value. The calling Context owns the installation and removes it during disposal; the returned idempotent disposer can remove it early:
+Declare a field with `mode="register"` to use `register()`. It installs a value only when the first Identity has no value; imported and parent values do not prevent registration. The calling Context owns the installation and removes it during disposal; the returned idempotent disposer can remove it early:
 
 ```python
 request_schema = Schema({"request": {"abort": Schema.leaf(mode="register")}})
@@ -448,7 +479,7 @@ Before running any cleanup, `dispose()` synchronously forbids mutations througho
 
 Setup and cleanup must not reenter disposal of themselves, their owning Context, or an ancestor, or wait for disposal that includes themselves. These calls are unsupported; Lifecycle does not detect such reentry or wait cycles. Signal an external coordinator to dispose instead. An independent task may dispose the owner while setup or cleanup is pending: disposal waits for that operation, which must not wait back on disposal. During disposal, pending setup can finish acquisition and return cleanup, but cannot make new Context mutations or registrations.
 
-Disposing a Context removes it from the viewer sets for every Scope in `ctx.scope.mro`; it does not detach or destroy `ctx.scope`. A value installed by `set()` remains stored while another active Context in the same application root can view its Context-binding identity. A value installed by `register()` is additionally removed when its owning Context or exact disposer runs. Compose entries likewise remain until their exact disposers run. Data visibility never guarantees that an external resource inside a value is still open: its effect owner may have already closed it. Align resource ownership with every Context that may use it, and dispose child Contexts deterministically rather than relying on garbage collection.
+Disposing a Context removes it from the viewer sets for its Scope and every ancestor; it does not detach or destroy `ctx.scope`. A value installed by `set()` remains stored while another active Context in the same application root can view its Context-binding identity. A value installed by `register()` is additionally removed when its owning Context or exact disposer runs. Compose entries likewise remain until their exact disposers run. Data visibility never guarantees that an external resource inside a value is still open: its effect owner may have already closed it. Align resource ownership with every Context that may use it, and dispose child Contexts deterministically rather than relying on garbage collection.
 
 Context bindings track the observed Scopes for each identity and remove its values when the last viewer leaves, without scanning unrelated Scope bindings. Reusing a retained Scope, directly or as an ancestor, restores its viewer registration and preserves its original identity binding; values already cleared are not restored.
 
@@ -487,7 +518,7 @@ tools = Compose(
 root.register("tools", tools)
 root.effect(lambda: tools.register(root.scope, "read"))
 
-agent = root.derive(label="agent")
+agent = root.derive(scope_label="agent")
 remove_agent = agent.effect(
     lambda: agent.get("tools").register(agent.scope, value="shell")
 )
@@ -504,13 +535,13 @@ root.dispose()
 
 `resolve(scope)` applies the constructor's query; `resolve(scope, query)` overrides it for that call and may return another type. With no default, callers must supply a query; otherwise resolve raises ValueError. Queries combine visible layers; each layer controls its own storage, indexes, and local ordering.
 
-`layers(scope)` lazily yields live layer objects, not flattened contributions or copies. Each shared Identity appears once in C3 order. `local=True` selects only the current Scope's Identity, including registrations through other Scopes sharing it. Every visited binding applies its Scope-local and Identity barriers after that layer, even if the layer is empty or its Identity was already visited. `layers()` without a Scope enumerates all active layers; `local=True` requires a Scope. Reads never create layers or bindings.
+`layers(scope)` lazily yields live layer objects, not copies. It expands each binding's Identity list before its parent Scope and yields each Identity once. `local=True` selects only the current Scope's first Identity. An Identity barrier applies after that item; a binding barrier applies after its entire list, including empty layers and repeated Identities. `layers()` without a Scope enumerates all active layers; `local=True` requires a Scope. Reads never create layers or bindings.
 
 Do not structurally mutate a Compose during query iteration. Snapshot selected handlers before invoking them. Snapshots retain objects but do not extend their external resources' lifetimes. Inspect application data through the layer's own interface; Compose does not reconstruct original values from an aggregate-only layer.
 
 Each successful registration keeps a unique token and its contributing Scope alive until exact disposal. Compose returns a `once()` wrapper that removes its registration record, detaches the layer if this was its final registration, invokes the layer disposer, and releases the Scope. The layer disposer needs no separate `once()` wrapper. Layer cleanup depends on live registrations, not its size, computed result, or truthiness; `len(compose)` counts registrations. A rejected registration must leave layer data unchanged. Register through Compose, not directly on layers returned by queries. Layer registration and disposal must not explicitly reenter their Compose's mutations. Arbitrary layer changes are not transactionally rolled back. Cleanup failures propagate and are replayed by repeated disposer calls without retrying.
 
-`compose.derive(*, label=None, parents=..., binding=...)` creates a configured Scope for one Compose; `Compose.derive_many(*, label=None, parents=..., bindings=...)` configures several Composes on one new Scope. Both require explicit parents, accept ScopeBinding or Identity values, and create no lifecycle owner. Use `ctx.derive()` for owned children with mixed Context field and Compose bindings. An unbound Scope's first registration fixes a private unblocked binding. Withdrawal does not reset that configuration.
+`compose.derive(*, scope_label=None, scope_parent=None, binding=...)` creates a configured Scope for one Compose; `Compose.derive_many(*, scope_label=None, scope_parent=None, bindings=...)` configures several Composes on one new Scope. Both accept an optional parent and ScopeBinding, Identity, or Iterable[Identity] values, and create no lifecycle owner. Use `ctx.derive()` for owned children with mixed Context field and Compose bindings. An unbound Scope's first registration fixes a private unblocked binding. Withdrawal does not reset that configuration.
 
 `ctx.effect(lambda: ctx.get(ref).register(target_scope, value))` looks up the Compose using ctx.scope, selects the registration layer explicitly, and owns withdrawal even if target_scope is unrelated. The disposer retains its original Compose target if the Context leaf is replaced. Direct compose.register leaves ownership to its caller. A child Context can register a different Compose at the same Context path to obtain an independent collection.
 
@@ -561,4 +592,4 @@ assert nested_path.get("settings").flatten() == {
 }
 ```
 
-Both methods resolve the bound Scope's effective C3 view by default and accept `local=True`. A `ContextView` accepts only relative string paths for subtree access; the empty string addresses the view itself and is the default for `keys()` and `to_dict()`. Use Context directly for absolute Ref lookups. The view’s `flatten()` result still contains absolute Schema refs. Neither method copies leaf values. To materialize values into a new root, create it, declare all copied paths, then call `snapshot.set_many(ctx.flatten("app"))`. Select an application subtree such as `app`; all copied fields must use `assign` mode. Root flattening also includes the register-mode framework configuration. `register` fields require explicit `register()` calls on the new owner; a snapshot does not transfer ownership. A new root receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.
+Both methods resolve the bound Scope's effective Identity and parent view by default and accept `local=True`. A `ContextView` accepts only relative string paths for subtree access; the empty string addresses the view itself and is the default for `keys()` and `to_dict()`. Use Context directly for absolute Ref lookups. The view’s `flatten()` result still contains absolute Schema refs. Neither method copies leaf values. To materialize values into a new root, create it, declare all copied paths, then call `snapshot.set_many(ctx.flatten("app"))`. Select an application subtree such as `app`; all copied fields must use `assign` mode. Root flattening also includes the register-mode framework configuration. `register` fields require explicit `register()` calls on the new owner; a snapshot does not transfer ownership. A new root receives a fresh Scope by default, so contributions targeting the source Scope are not visible; explicitly reusing that Scope shares Compose visibility but still does not share Context data between roots.

@@ -23,11 +23,16 @@ def test_identity_uses_object_identity_and_has_frozen_configuration() -> None:
 def test_scope_binding_is_a_frozen_comparable_value() -> None:
     identity = Identity()
     config = ScopeBinding(identity)
-    assert config == ScopeBinding(identity)
-    assert config != ScopeBinding(identity, blocked=True)
-    assert config != ScopeBinding(Identity())
+    assert config.identities == (identity,)
+    assert config == ScopeBinding((identity,))
+    assert ScopeBinding(identity, blocked=True) == ScopeBinding(
+        (identity,), blocked=True
+    )
+    assert config != ScopeBinding((identity,), blocked=True)
+    assert config != ScopeBinding((Identity(),))
     assert ScopeBinding().identity is not ScopeBinding().identity
     assert not config.blocked
+    assert config.identity is identity
     assert not config.identity.blocked
     with pytest.raises(FrozenInstanceError):
         config.blocked = True  # type: ignore[misc]
@@ -38,7 +43,7 @@ def test_binding_policy_survives_payload_cleanup(blocked: bool) -> None:
     root = Context()
     root.declare({"value": Schema.leaf()})
     identity = Identity()
-    config = ScopeBinding(identity, blocked=blocked)
+    config = ScopeBinding((identity,), blocked=blocked)
     child = root.derive(bindings={"value": config})
     store = root._store
     entry = root.resolve_entry("value")
@@ -46,16 +51,18 @@ def test_binding_policy_survives_payload_cleanup(blocked: bool) -> None:
     child.delete("value")
     for ctx in (child, root.fork(scope=child.scope)):
         store.bind(ctx.scope, entry, config)
-        store.bind(ctx.scope, entry, ScopeBinding(identity, blocked=blocked))
+        store.bind(ctx.scope, entry, ScopeBinding((identity,), blocked=blocked))
         with pytest.raises(ValueError, match="immutable"):
-            store.bind(ctx.scope, entry, ScopeBinding(Identity(), blocked=blocked))
+            store.bind(ctx.scope, entry, ScopeBinding((Identity(),), blocked=blocked))
         with pytest.raises(ValueError, match="immutable"):
-            store.bind(ctx.scope, entry, ScopeBinding(identity, blocked=not blocked))
+            store.bind(ctx.scope, entry, ScopeBinding((identity,), blocked=not blocked))
         ctx.dispose()
     restored = root.fork(scope=child.scope)
     store.bind(restored.scope, entry, config)
     with pytest.raises(ValueError, match="immutable"):
-        store.bind(restored.scope, entry, ScopeBinding(identity, blocked=not blocked))
+        store.bind(
+            restored.scope, entry, ScopeBinding((identity,), blocked=not blocked)
+        )
     root.dispose()
 
 
@@ -84,7 +91,7 @@ def test_empty_binding_stops_lookup_without_any_identity_data(level: str) -> Non
     binding = _ContextBinding()
     binding.set(root, "parent")
     identity = Identity(blocked=level == "identity")
-    binding.bind(child, ScopeBinding(identity, blocked=level == "scope"))
+    binding.bind(child, ScopeBinding((identity,), blocked=level == "scope"))
     binding.release_scope(child)
     assert identity not in binding._data
     assert binding.get(child) is _MISSING
@@ -97,9 +104,11 @@ def test_compose_barriers_survive_empty_buckets(level: str) -> None:
     identity = Identity(blocked=level == "identity")
     values = Compose(factory=ValueLayer, query=collect_values)
     values.register(root, "parent")
-    config = ScopeBinding(identity, blocked=level == "scope")
-    left = values.derive(parents=root, binding=config)
-    right = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
+    config = ScopeBinding((identity,), blocked=level == "scope")
+    left = values.derive(scope_parent=root, binding=config)
+    right = values.derive(
+        scope_parent=root, binding=ScopeBinding((identity,), blocked=False)
+    )
     assert identity not in values._buckets
     assert values.resolve(left) == ()
     expected = ("parent",) if level == "scope" else ()
@@ -113,18 +122,22 @@ def test_compose_barriers_survive_empty_buckets(level: str) -> None:
     assert values.resolve(right) == expected
     values._bind(left, config)
     with pytest.raises(ValueError, match="immutable"):
-        values._bind(left, ScopeBinding(identity, blocked=level != "scope"))
+        values._bind(left, ScopeBinding((identity,), blocked=level != "scope"))
     with pytest.raises(ValueError, match="immutable"):
-        values._bind(left, ScopeBinding(Identity(), blocked=level == "scope"))
+        values._bind(left, ScopeBinding((Identity(),), blocked=level == "scope"))
 
 
 def test_compose_deduplicates_shared_data_but_still_checks_each_scope_barrier() -> None:
     root = Scope()
     identity = Identity()
     values = Compose(factory=ValueLayer, query=collect_values)
-    left = values.derive(parents=root, binding=ScopeBinding(identity, blocked=False))
-    right = values.derive(parents=root, binding=ScopeBinding(identity, blocked=True))
-    child = Scope(parents=(left, right))
+    right = values.derive(
+        scope_parent=root, binding=ScopeBinding((identity,), blocked=True)
+    )
+    left = values.derive(
+        scope_parent=right, binding=ScopeBinding((identity,), blocked=False)
+    )
+    child = left.fork()
     values.register(root, "parent")
     remove = values.register(left, "shared")
     assert values.resolve(child) == ("shared",)
@@ -143,8 +156,10 @@ def test_identity_configuration_is_shared_but_data_is_container_local() -> None:
     left_root, right_root = Context(scope=scope), Context(scope=scope)
     left_root.declare({"value": Schema.leaf()})
     right_root.declare({"value": Schema.leaf()})
-    left = left_root.derive(bindings={"value": ScopeBinding(identity, blocked=True)})
-    right = right_root.derive(bindings={"value": ScopeBinding(identity, blocked=True)})
+    left = left_root.derive(bindings={"value": ScopeBinding((identity,), blocked=True)})
+    right = right_root.derive(
+        bindings={"value": ScopeBinding((identity,), blocked=True)}
+    )
     left.set("value", "left")
     assert not right.exists("value")
     first, second = (
@@ -152,10 +167,10 @@ def test_identity_configuration_is_shared_but_data_is_container_local() -> None:
         Compose(factory=ValueLayer, query=collect_values),
     )
     first_scope = first.derive(
-        parents=scope, binding=ScopeBinding(identity, blocked=True)
+        scope_parent=scope, binding=ScopeBinding((identity,), blocked=True)
     )
     second_scope = second.derive(
-        parents=scope, binding=ScopeBinding(identity, blocked=True)
+        scope_parent=scope, binding=ScopeBinding((identity,), blocked=True)
     )
     first.register(first_scope, "first")
     assert second.resolve(second_scope) == ()
@@ -205,14 +220,14 @@ def test_shared_identity_retains_assignments_but_not_owned_registrations() -> No
     identity = Identity()
     plugin = root.derive(
         bindings={
-            "state": ScopeBinding(identity, blocked=True),
-            "service": ScopeBinding(identity, blocked=True),
+            "state": ScopeBinding((identity,), blocked=True),
+            "service": ScopeBinding((identity,), blocked=True),
         }
     )
     viewer = root.derive(
         bindings={
-            "state": ScopeBinding(identity, blocked=True),
-            "service": ScopeBinding(identity, blocked=True),
+            "state": ScopeBinding((identity,), blocked=True),
+            "service": ScopeBinding((identity,), blocked=True),
         }
     )
     plugin.set("state", "old state")
@@ -220,8 +235,8 @@ def test_shared_identity_retains_assignments_but_not_owned_registrations() -> No
     plugin.dispose()
     replacement = root.derive(
         bindings={
-            "state": ScopeBinding(identity, blocked=True),
-            "service": ScopeBinding(identity, blocked=True),
+            "state": ScopeBinding((identity,), blocked=True),
+            "service": ScopeBinding((identity,), blocked=True),
         }
     )
     assert replacement.get("state") == "old state"
@@ -235,6 +250,6 @@ def test_shared_identity_retains_assignments_but_not_owned_registrations() -> No
     assert not fresh.exists("state")
     viewer.dispose()
     replacement.dispose()
-    reused = root.derive(bindings={"state": ScopeBinding(identity, blocked=True)})
+    reused = root.derive(bindings={"state": ScopeBinding((identity,), blocked=True)})
     assert not reused.exists("state")
     root.dispose()

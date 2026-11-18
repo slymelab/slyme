@@ -49,7 +49,7 @@ Tree 的内置数据类使用 slots，不提供实例字典或弱引用支持。
 
 每次操作在遍历或异步暂停前，只解析一次有效规则与 evaluator 映射。之后新增或撤销 contribution 影响后续操作，不改变本次分派和重建。保留 callable 并不延长其 owner 管理的资源生命周期。
 
-默认组合使用 `slyme.context.default` 中的 `TreeLayer` 和 `TypeLayer`。每层拒绝重复登记相同的精确 class，即使 handler 相同，或登记来自共享该 Identity 的另一个 Scope。批次中存在冲突时，不会安装其中任何 class。撤销后可以重新登记这些 class。跨层查询按 Scope C3 顺序保留首个 handler；向子层登记以覆盖继承的贡献。撤销后重新显露下一条适用定义：
+默认组合使用 `slyme.context.default` 中的 `TreeLayer` 和 `TypeLayer`。每层拒绝重复登记相同的精确 class，即使 handler 相同，或登记来自共享该 Identity 的另一个 Scope。批次中存在冲突时，不会安装其中任何 class。撤销后可以重新登记这些 class。跨层查询按 Scope 显式 Identity 列表及父链顺序保留首个 handler；向子层登记以覆盖继承的贡献。撤销后重新显露下一条适用定义：
 
 ```python
 from dataclasses import dataclass
@@ -87,7 +87,7 @@ ctx.dispose()
 
 ## Scope 隔离
 
-普通 fork 复用父级配置，子 Scope 通过 C3 继承。绑定到无关 `Scope()` 的 fork 看不到默认值，必须显式安装需要的 Compose 和 contribution；框架不会回退到 `ctx.root`。独立创建的根 `Context()` 会安装自己的默认配置。
+普通 fork 复用父级配置，子 Scope 沿单父链继承。绑定到无关 `Scope()` 的 fork 看不到默认值，必须显式安装需要的 Compose 和 contribution；框架不会回退到 `ctx.root`。独立创建的根 `Context()` 会安装自己的默认配置。
 
 在由父级管理、阻断继承的子 Context 中安装独立规则组合：
 

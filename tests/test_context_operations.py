@@ -267,10 +267,10 @@ def test_shared_identity_has_one_registration_and_allows_reinstallation() -> Non
     root.declare(schema)
     root.register("service", "inherited")
     left = root.derive(
-        bindings={"service": ScopeBinding(shared_identity, blocked=False)}
+        bindings={"service": ScopeBinding((shared_identity,), blocked=False)}
     )
     right = root.derive(
-        bindings={"service": ScopeBinding(shared_identity, blocked=False)}
+        bindings={"service": ScopeBinding((shared_identity,), blocked=False)}
     )
     payload: list[str] = []
     remove = left.register("service", payload)
@@ -512,7 +512,7 @@ def test_immutable_barriers_preserve_values_and_registration_tokens(
         root.register("value", "parent")
     identity = Identity(blocked=block_mode == "identity")
     child = root.derive(
-        bindings={"value": ScopeBinding(identity, blocked=block_mode == "scope")}
+        bindings={"value": ScopeBinding((identity,), blocked=block_mode == "scope")}
     )
     assert not child.exists("value")
     if mode == "assign":
@@ -545,10 +545,10 @@ def test_barrier_visibility_with_shared_identity_and_different_ancestry(
     right_parent.set("value", "right parent")
     owned = tuple(root._lifecycle._effects)
     left = left_parent.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=mode == "scope")}
+        bindings={"value": ScopeBinding((shared_identity,), blocked=mode == "scope")}
     )
     right = right_parent.derive(
-        bindings={"value": ScopeBinding(shared_identity, blocked=False)}
+        bindings={"value": ScopeBinding((shared_identity,), blocked=False)}
     )
     assert tuple(root._lifecycle._effects) == owned
     assert not left.exists("value")
@@ -570,12 +570,14 @@ def test_configured_fork_indexes_a_stable_binding(
     root.declare({"value": Schema.leaf()})
     root.set("value", "parent")
     entry = root.resolve_entry("value")
-    config = ScopeBinding(Identity(blocked=mode == "identity"), blocked=mode == "scope")
+    config = ScopeBinding(
+        (Identity(blocked=mode == "identity"),), blocked=mode == "scope"
+    )
     child = root.derive(bindings={"value": config})
     assert root._store._scope_usages[child.scope].entries == {entry}
     binding = root._store._data[entry]
-    identity = binding._scope_bindings[child.scope].identity
-    assert binding._scope_bindings[child.scope].identity is identity
+    identity = binding._scope_bindings[child.scope].identities[0]
+    assert binding._scope_bindings[child.scope].identities[0] is identity
     assert binding._scope_bindings[child.scope] is config
     assert not child.exists("value")
     child.set("value", "child")
@@ -590,24 +592,26 @@ def test_fork_rejects_missing_paths_and_preserves_existing_bindings() -> None:
     with pytest.raises(ContextPathError):
         root.derive(
             bindings={
-                "a": ScopeBinding(shared_identity, blocked=True),
+                "a": ScopeBinding((shared_identity,), blocked=True),
                 "missing": ScopeBinding(blocked=True),
             }
         )
     child = root.derive(
         bindings={
-            "a": ScopeBinding(shared_identity, blocked=True),
-            "b": ScopeBinding(original_identity, blocked=True),
+            "a": ScopeBinding((shared_identity,), blocked=True),
+            "b": ScopeBinding((original_identity,), blocked=True),
         }
     )
     with pytest.raises(ValueError, match="immutable"):
         root.derive(
             bindings={
-                "b": ScopeBinding(original_identity, blocked=True),
-                Ref("b"): ScopeBinding(shared_identity, blocked=True),
+                "b": ScopeBinding((original_identity,), blocked=True),
+                Ref("b"): ScopeBinding((shared_identity,), blocked=True),
             }
         )
-    sibling = root.derive(bindings={"a": ScopeBinding(shared_identity, blocked=False)})
+    sibling = root.derive(
+        bindings={"a": ScopeBinding((shared_identity,), blocked=False)}
+    )
     child.set("a", "retained")
     assert sibling.get("a") == "retained"
     root.dispose()
@@ -626,12 +630,12 @@ def test_disposed_context_rejects_configured_forks(
         child.derive(
             bindings={
                 "value": ScopeBinding(
-                    Identity(blocked=mode == "identity"), blocked=mode == "scope"
+                    (Identity(blocked=mode == "identity"),), blocked=mode == "scope"
                 )
             }
         )
     with pytest.raises(RuntimeError, match="disposed"):
-        child.derive(bindings={"value": ScopeBinding(shared_identity, blocked=True)})
+        child.derive(bindings={"value": ScopeBinding((shared_identity,), blocked=True)})
     with pytest.raises(RuntimeError, match="disposed"):
         child.derive(bindings={"value": ScopeBinding(blocked=True)})
     root.dispose()

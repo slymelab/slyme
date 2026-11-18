@@ -10,7 +10,7 @@ Just want to try Slyme? Jump to the [Quick Start](/guide/intro/quick-start).
 
 - **Native Python Development Experience**: Slyme has no heavy object-oriented boilerplate code and no steep learning curve. You only need to master some basic Python concepts, including Python functions and native data structures (such as dictionaries, lists, tuples, etc.), and understand a few core concepts to get started quickly.
 - **Unlimited Composability**: The basic execution unit in Slyme is [Node](/guide/essentials/node), which is responsible for executing user-defined functions. Node supports **unlimited composition** — a Node can contain other Nodes, or be contained by other Nodes. Interestingly, thanks to Tree augmentation, this containment relationship can be directly represented through native Python data structures, such as lists or dictionaries. Unlimited composition enables Slyme to build arbitrarily complex execution flows, with complete decoupling between Nodes.
-- **Explicit Lifetime and Visibility**: Context provides single-parent lifetime ownership, while immutable Scope objects provide independent C3 visibility. `flatten()` exposes the visible Ref-to-value mapping, and `Compose` manages ordered, reversible values by Scope.
+- **Explicit Lifetime and Visibility**: Context provides single-parent lifetime ownership, while immutable Scope objects provide independent hierarchical visibility. `flatten()` exposes the visible Ref-to-value mapping, and `Compose` manages ordered, reversible values by Scope.
 - **Seamless Collaboration**: Slyme's Node design is highly decoupled. These Nodes communicate through Context, which allows community/development teams to independently develop their own features and perform unit testing, reducing code conflicts during development and allowing developers to focus on logic implementation rather than being bound by deep system coupling and tedious "glue code".
 
 ## Core Concepts
@@ -19,7 +19,7 @@ To understand how Slyme works, you need to understand the following core concept
 
 ### Context
 
-[Context](/guide/essentials/context) owns runtime data, child lifetimes, and reversible effects. [Ref](/guide/essentials/context#ref) identifies paths such as `a.b`; each Context binds a [Scope](/guide/essentials/context#scope) that determines C3 data visibility. [Compose](/guide/essentials/context#compose) combines values registered for visible Scopes.
+[Context](/guide/essentials/context) owns runtime data, child lifetimes, and reversible effects. [Ref](/guide/essentials/context#ref) identifies paths such as `a.b`; each Context binds a [Scope](/guide/essentials/context#scope) that determines hierarchical data visibility. [Compose](/guide/essentials/context#compose) combines values registered for visible Scopes.
 
 ### Node
 

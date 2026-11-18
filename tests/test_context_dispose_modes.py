@@ -25,8 +25,8 @@ def test_disposal_mode_is_fixed_and_not_inherited() -> None:
         direct.dispose_mode == fork.dispose_mode == derived.dispose_mode == "sequential"
     )
     assert direct.scope is fork.scope is root.scope
-    assert derived.scope.parents == batch.scope.parents == (root.scope,)
-    assert detached.scope.parents == ()
+    assert derived.scope.parent == batch.scope.parent == root.scope
+    assert detached.scope.parent is None
     assert group._lifecycle.dispose_mode == "batch"
     with pytest.raises(FrozenInstanceError):
         group.dispose_mode = "sequential"
@@ -35,7 +35,7 @@ def test_disposal_mode_is_fixed_and_not_inherited() -> None:
     assert root.dispose() is None
 
 
-@pytest.mark.parametrize("scope", [None, Scope(), Scope(parents=Scope())])
+@pytest.mark.parametrize("scope", [None, Scope(), Scope(parent=Scope())])
 def test_root_rejects_batch_disposal_before_initialization(scope, monkeypatch) -> None:
     def unexpected_schema():
         pytest.fail("Root mode must be checked before creating shared storage")
