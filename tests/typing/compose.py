@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Literal
 
 from tests.compose_helpers import ValueLayer, collect_values
 from typing_extensions import assert_type
 
-from slyme.context import Compose, Scope
+from slyme.context import (
+    Compose,
+    ComposeLayerInit,
+    ComposeRegistration,
+    ComposeView,
+    Identity,
+    Scope,
+    ScopeBinding,
+)
 
 
 def total(layers: Iterable[ValueLayer[int]]) -> int:
@@ -20,14 +28,22 @@ def check_types(scope: Scope) -> None:
         factory=ValueLayer[str], query=collect_values
     )
     assert_type(collected.resolve(scope), tuple[str, ...])
-    assert_type(collected.layers(scope), Iterable[ValueLayer[str]])
-    assert_type(collected.layers(), Iterable[ValueLayer[str]])
+    assert_type(collected.layers(scope), ComposeView[ValueLayer[str]])
+    assert_type(collected.layers(), ComposeView[ValueLayer[str]])
+    assert_type(
+        collected.layers(scope).items(), Iterator[tuple[Identity, ValueLayer[str]]]
+    )
+    assert_type(collected.layers(scope).identities(), Iterator[Identity])
     assert_type(collected.register(scope, "value"), Callable[[], None])
     assert_type(collected.resolve(scope, lambda layers: len(tuple(layers))), int)
     collected.register(scope, 1)  # type: ignore[arg-type]
 
+    def factory(init: ComposeLayerInit) -> ValueLayer[int]:
+        assert_type(init.identity, Identity)
+        return ValueLayer[int](init)
+
     custom = Compose(
-        factory=ValueLayer[int],
+        factory=factory,
         query=total,
     )
     assert_type(custom.resolve(scope), int)
@@ -40,18 +56,22 @@ def check_types(scope: Scope) -> None:
 class NamedLayer:
     def register(
         self,
-        token: object,
+        registration: ComposeRegistration,
         /,
         name: str,
         value: int,
         *,
         position: Literal["prepend", "append"] = "append",
     ) -> Callable[[], None]:
+        assert_type(registration.scope, Scope)
+        assert_type(registration.binding, ScopeBinding)
         return lambda: None
 
 
 def check_signature(scope: Scope) -> None:
-    names = Compose(factory=NamedLayer, query=lambda layers: len(tuple(layers)))
+    names = Compose(
+        factory=lambda _: NamedLayer(), query=lambda layers: len(tuple(layers))
+    )
     assert_type(names, Compose[NamedLayer, int])
     assert_type(names.register(scope, "x", 1, position="prepend"), Callable[[], None])
     names.register(scope, name="x", value=1)

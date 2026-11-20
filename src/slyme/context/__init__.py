@@ -14,7 +14,13 @@
 
 from __future__ import annotations
 
-from .compose import Compose, ComposeLayer
+from .compose import (
+    Compose,
+    ComposeLayer,
+    ComposeLayerInit,
+    ComposeRegistration,
+    ComposeView,
+)
 from .core import Context
 from .default import (
     DATA_TREE_REF,
@@ -44,6 +50,9 @@ from .store import ContextStore
 __all__ = [
     "Compose",
     "ComposeLayer",
+    "ComposeLayerInit",
+    "ComposeRegistration",
+    "ComposeView",
     "Context",
     "ContextKey",
     "ContextPathError",

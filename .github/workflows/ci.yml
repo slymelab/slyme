@@ -116,12 +116,12 @@ jobs:
           assert ctx.flatten()[ref] == 1
 
           class ValueLayer(dict):
-              def register(self, token, /, value):
-                  self[token] = value
-                  return lambda: self.pop(token)
+              def register(self, registration, /, value):
+                  self[registration] = value
+                  return lambda: self.pop(registration)
 
           values = Compose(
-              factory=ValueLayer,
+              factory=lambda _: ValueLayer(),
               query=lambda layers: tuple(
                   value for layer in layers for value in layer.values()
               ),

@@ -95,7 +95,7 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
         eval_tree(detached, [])
 
     rules = Compose(
-        factory=TreeLayer,
+        factory=lambda _: TreeLayer(),
         query=TreeLayer.merge,
     )
     detached.register(DATA_TREE_REF, rules)
@@ -107,7 +107,7 @@ def test_unrelated_scope_requires_explicit_configuration_without_root_fallback()
     assert node(lambda: 7).to("value")(detached) == 7
     with pytest.raises(ContextPathError):
         eval_tree(detached, [])
-    evaluators = Compose(factory=TypeLayer, query=TypeLayer.merge)
+    evaluators = Compose(factory=lambda _: TypeLayer(), query=TypeLayer.merge)
     detached.register(EVALUATORS_REF, evaluators)
     detached.effect(
         lambda: evaluators.register(
@@ -159,7 +159,7 @@ def test_isolated_tree_rules_do_not_affect_schema_or_parent_rules() -> None:
     isolated.register(
         DATA_TREE_REF,
         Compose(
-            factory=TreeLayer,
+            factory=lambda _: TreeLayer(),
             query=TreeLayer.merge,
         ),
     )

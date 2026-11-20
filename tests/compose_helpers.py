@@ -5,17 +5,23 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import TypeVar
 
+from slyme.context import ComposeLayerInit
+
 _T = TypeVar("_T")
 _K = TypeVar("_K")
 _V = TypeVar("_V")
 
 
 class ValueLayer(dict[object, _T]):
-    def register(self, token: object, /, value: _T) -> Callable[[], None]:
-        self[token] = value
+    def __init__(self, init: ComposeLayerInit):
+        super().__init__()
+        self.identity = init.identity
+
+    def register(self, registration: object, /, value: _T) -> Callable[[], None]:
+        self[registration] = value
 
         def dispose() -> None:
-            del self[token]
+            del self[registration]
 
         return dispose
 

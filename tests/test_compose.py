@@ -10,6 +10,9 @@ import slyme.context as context_module
 from slyme.context import (
     Compose,
     ComposeLayer,
+    ComposeLayerInit,
+    ComposeRegistration,
+    ComposeView,
     Context,
     Identity,
     Schema,
@@ -25,6 +28,84 @@ def test_composition_exports_its_layer_protocol() -> None:
     assert context_module.Compose is Compose
     assert context_module.ComposeLayer is ComposeLayer
     assert not hasattr(context_module, "Value")
+
+
+def test_registration_origin_and_factory_closure_across_shared_writers() -> None:
+    shared = Identity()
+    created = []
+
+    class NamedLayer(dict):
+        def __init__(self, owner, identity):
+            super().__init__()
+            self.owner = owner
+            self.identity = identity
+
+        def register(self, registration: ComposeRegistration, /, name: str):
+            assert self.identity is registration.binding.identity
+            if name != "search":
+                raise ValueError(f"{registration.scope.label} cannot register {name}")
+            self[registration] = name
+
+            def remove():
+                del self[registration]
+
+            return remove
+
+    def factory(init: ComposeLayerInit):
+        layer = NamedLayer(tools, init.identity)
+        created.append(layer)
+        return layer
+
+    tools = Compose(factory=factory)
+    left = tools.derive(binding=shared, scope_label="left")
+    right = tools.derive(binding=(shared, Identity()), scope_label="right")
+    first = tools.register(left, "search")
+    second = tools.register(left, "search")
+    third = tools.register(right, "search")
+    (layer,) = created
+    assert layer.owner is tools
+    a, b, c = layer
+    assert a != b and a.scope is b.scope is left
+    assert a.binding is b.binding
+    assert c.scope is right and c.binding != a.binding
+    with pytest.raises(ValueError, match="right cannot register fetch"):
+        tools.register(right, "fetch")
+    second()
+    assert list(layer) == [a, c]
+    first()
+    third()
+    assert not tuple(tools.layers())
+    with pytest.raises(ValueError, match="left cannot register fetch"):
+        tools.register(left, "fetch")
+    assert len(created) == 2 and created[-1].identity is shared
+
+
+def test_query_view_is_lazy_live_and_keeps_empty_identities_in_order() -> None:
+    tools = Compose(factory=ValueLayer, query=lambda view: view)
+    shared, empty = Identity(), Identity(blocked=True)
+    hidden = Scope()
+    remove_hidden = tools.register(hidden, "hidden")
+    source = tools.derive(binding=shared)
+    scope = tools.derive(scope_parent=hidden, binding=(shared, empty))
+    view = tools.resolve(scope)
+    assert isinstance(view, ComposeView)
+    assert view.scope is scope and not view.local
+    assert tuple(view.identities()) == (shared, empty)
+    assert tuple(view.items()) == tuple(view) == ()
+    remove = tools.register(source, "visible")
+    (layer,) = view
+    assert tuple(view.items()) == ((shared, layer),)
+    local = tools.resolve(scope, lambda view: view, local=True)
+    assert local.local and tuple(local.identities()) == (shared,)
+    all_layers = tools.layers()
+    assert all_layers.scope is None
+    assert list(all_layers.identities()) == [key for key, _ in all_layers.items()]
+    assert empty not in all_layers.identities()
+    remove()
+    remove_hidden()
+    assert not tuple(all_layers.identities())
+    assert not tuple(view)
+    assert tuple(view.identities()) == (shared, empty)
 
 
 def test_first_value_query_uses_scope_and_registration_precedence() -> None:
@@ -442,16 +523,16 @@ def test_layer_disposer_owns_cleanup_state_and_releases_it_after_disposal() -> N
         pass
 
     class Layer:
-        def register(self, token, /, value):
+        def register(self, registration, /, value):
             def dispose():
                 assert value is value_ref()
                 assert scope_ref() is not None
                 assert not values._buckets
-                calls.append(token)
+                calls.append("disposed")
 
             return dispose
 
-    values = Compose(factory=Layer)
+    values = Compose(factory=lambda _: Layer())
     scope, value = Scope(), Value()
     scope_ref, value_ref = weakref.ref(scope), weakref.ref(value)
     dispose = values.register(scope, value)
@@ -512,9 +593,9 @@ def test_bucket_cleanup_failure_is_replayed_without_removing_a_new_bucket(
     error = ValueError("cleanup failed")
     calls = []
 
-    def fail(self, identity, token, cleanup):
+    def fail(self, registration, cleanup):
         calls.append("cleanup")
-        original(self, identity, token, cleanup)
+        original(self, registration, cleanup)
         raise error
 
     with monkeypatch.context() as patch:
@@ -739,13 +820,13 @@ def test_factory_is_lazy_and_registration_failure_does_not_leave_a_bucket() -> N
     created = []
 
     class CheckedLayer(ValueLayer):
-        def register(self, token, /, value):
+        def register(self, registration, /, value):
             if value == "conflict":
                 raise ValueError("conflicting registration")
-            return super().register(token, value)
+            return super().register(registration, value)
 
-    def factory():
-        data = CheckedLayer()
+    def factory(init):
+        data = CheckedLayer(init)
         created.append(data)
         return data
 
@@ -768,7 +849,7 @@ def test_factory_is_lazy_and_registration_failure_does_not_leave_a_bucket() -> N
 
 
 def test_factory_failure_does_not_publish_data() -> None:
-    def factory():
+    def factory(_):
         raise ValueError("factory failed")
 
     values = Compose(factory=factory)
@@ -787,17 +868,17 @@ def test_custom_container_can_aggregate_zero_while_registrations_remain_live() -
         def __bool__(self):
             pytest.fail("Container truthiness must not decide its lifetime.")
 
-        def register(self, token, /, amount):
-            self.contributions[token] = amount
+        def register(self, registration, /, amount):
+            self.contributions[registration] = amount
             self.amount += amount
 
             def dispose():
-                self.amount -= self.contributions.pop(token)
+                self.amount -= self.contributions.pop(registration)
 
             return dispose
 
     values = Compose(
-        factory=Total,
+        factory=lambda _: Total(),
         query=lambda layers: sum(layer.amount for layer in layers),
     )
     scope = Scope()
@@ -816,19 +897,19 @@ def test_custom_container_can_aggregate_zero_while_registrations_remain_live() -
 
 def test_custom_storage_controls_order_and_deletes_exact_duplicates() -> None:
     class OrderedLayer(list):
-        def register(self, token, /, value, *, position="append"):
+        def register(self, registration, /, value, *, position="append"):
             if position == "prepend":
-                self.insert(0, (token, value))
+                self.insert(0, (registration, value))
             else:
-                self.append((token, value))
+                self.append((registration, value))
 
             def dispose():
-                self[:] = [entry for entry in self if entry[0] is not token]
+                self[:] = [entry for entry in self if entry[0] is not registration]
 
             return dispose
 
     values = Compose(
-        factory=OrderedLayer,
+        factory=lambda _: OrderedLayer(),
         query=lambda layers: tuple(value for layer in layers for _, value in layer),
     )
     scope = Scope()
@@ -850,11 +931,11 @@ def test_custom_disposer_failure_is_shared_without_repeating_cleanup() -> None:
     error = ValueError("custom cleanup failed")
 
     class FailingLayer(ValueLayer):
-        def register(self, token, /, value):
-            cleanup = super().register(token, value)
+        def register(self, registration, /, value):
+            cleanup = super().register(registration, value)
 
             def dispose():
-                calls.append(token)
+                calls.append(registration)
                 cleanup()
                 raise error
 
@@ -882,12 +963,12 @@ def test_custom_keyed_storage_looks_up_one_name_and_restores_hidden_contribution
         def __init__(self):
             self.by_name = {}
 
-        def register(self, token, /, name, value):
-            self.by_name.setdefault(name, {})[token] = value
+        def register(self, registration, /, name, value):
+            self.by_name.setdefault(name, {})[registration] = value
 
             def dispose():
                 entries = self.by_name[name]
-                del entries[token]
+                del entries[registration]
                 if not entries:
                     del self.by_name[name]
 
@@ -901,7 +982,7 @@ def test_custom_keyed_storage_looks_up_one_name_and_restores_hidden_contribution
         raise LookupError("search")
 
     tools = Compose(
-        factory=NamedLayer,
+        factory=lambda _: NamedLayer(),
         query=find_search,
     )
     root = Scope()
@@ -931,25 +1012,25 @@ def test_layer_can_register_without_a_value_and_accept_framework_names_as_option
             self.enabled = enabled
             self.options = {}
 
-        def register(self, token, /, **options):
-            self.options[token] = options
+        def register(self, registration, /, **options):
+            self.options[registration] = options
 
             def dispose():
-                del self.options[token]
+                del self.options[registration]
 
             return dispose
 
-    values = Compose(factory=lambda: Flags(enabled=True))
+    values = Compose(factory=lambda _: Flags(enabled=True))
     scope = Scope()
     remove_empty = values.register(scope)
     remove_options = values.register(
-        scope, scope="business scope", token="business token"
+        scope, scope="business scope", registration="business registration"
     )
     layer = next(iter(values.layers(scope)))
     assert layer.enabled
     assert list(layer.options.values()) == [
         {},
-        {"scope": "business scope", "token": "business token"},
+        {"scope": "business scope", "registration": "business registration"},
     ]
     remove_empty()
     assert len(layer.options) == 1

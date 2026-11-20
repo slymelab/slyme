@@ -100,7 +100,7 @@ child = ctx.derive(bindings={DATA_TREE_REF: ScopeBinding(blocked=True)})
 child.register(
     DATA_TREE_REF,
     Compose(
-        factory=TreeLayer,
+        factory=lambda _: TreeLayer(),
         query=TreeLayer.merge,
     ),
 )

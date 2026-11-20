@@ -53,11 +53,11 @@ An Auto Ref reads the supplied Context. Every Auto child Node runs in an owned c
 
 ```python
 class ValueLayer(dict):
-    def register(self, token, /, value):
-        self[token] = value
+    def register(self, registration, /, value):
+        self[registration] = value
 
         def dispose():
-            del self[token]
+            del self[registration]
 
         return dispose
 
@@ -70,7 +70,7 @@ agent_ctx = root_ctx.fork(scope=agent_scope)
 remove_request = agent_ctx.register(R.resolve("request.id"), "request-1")
 
 tools = Compose(
-    factory=ValueLayer,
+    factory=lambda _: ValueLayer(),
     query=lambda layers: tuple(value for layer in layers for value in layer.values()),
 )
 root_ctx.register(R.resolve("tools"), tools)
@@ -89,7 +89,7 @@ root_ctx.dispose()
 
 Context reads expand each target's ordered Identity list, then its single Scope parent, deduplicating by first occurrence. `ScopeBinding((local, shared, fallback))` writes only to `local`; `local=True` reads only that first Identity. `Identity.blocked` stops lookup after that Identity; `ScopeBinding.blocked` stops parent fallback after the entire list, even for empty or repeated Identities. `ScopeBinding()` creates a private first Identity. `ctx.derive(bindings={ref: binding})` configures a new owned child; binding values accept ScopeBinding, Identity, or Iterable[Identity]; non-ScopeBinding values are passed to `ScopeBinding(...)`. `ScopeBinding` accepts a single Identity or an iterable of Identities; its `identities` attribute is always a tuple, deduplicated by object identity in first-occurrence order and truncated after the first blocked Identity. Equality compares this normalized tuple and the binding’s `blocked` flag. Bindings are immutable and nonempty. `binding.identity` is the write Identity, stored at construction from `binding.identities[0]`; only `identities` and `blocked` are constructor inputs. `ctx.derive()` inherits `ctx.scope`; `scope_parent=scope` chooses a different parent, and `scope_parent=None` makes an independent Scope without changing lifecycle ownership. Unselected fields inherit from that parent, not the providers of imported identities. `Context.register()` rejects an existing value only at the first Identity. Contexts sharing that Identity share the same slot within this field and application root. No Context CRUD method accepts a separate `scope=` argument.
 
-`Compose(factory=..., query=...)` creates one layer per active Identity. Layers implement synchronous `register(token, /, *args, **kwargs)` returning a synchronous disposer; Compose supplies only the token and forwards business arguments. Compose owns registration bookkeeping, invokes each layer disposer at most once, and removes the layer after its final registration. Register through Compose rather than directly on its layers. `layers(scope)` exposes live layers in explicit Identity and parent order, `layers()` enumerates all active layers, and `resolve(scope, query=None)` applies the default or a per-call query. Keep cross-layer validation outside the layer. Metadata and registration options belong to the application layer's interface.
+`Compose(factory=..., query=...)` creates one layer per active Identity. Layers implement synchronous `register(registration, /, *args, **kwargs)` returning a synchronous disposer. The factory receives a `ComposeLayerInit` whose `identity` identifies the writable layer. Each unique token is a `ComposeRegistration` carrying the contributing Scope and ScopeBinding. Queries receive a `ComposeView`: iterate layers directly, use `items()` for Identity/layer pairs or `identities()` for visible bindings. Compose owns registration bookkeeping, invokes each layer disposer at most once, and removes the layer after its final registration. Register through Compose rather than directly on its layers. `layers(scope)` exposes live layers in explicit Identity and parent order, `layers()` enumerates all active layers, and `resolve(scope, query=None)` applies the default or a per-call query. Keep cross-layer validation outside the layer. Metadata and registration options belong to the application layer's interface.
 
 Root Contexts install `TreeLayer` and `TypeLayer` compositions from `slyme.context.default`. Their static `merge()` methods produce snapshots. Within one Identity, the same exact class cannot be registered twice; after withdrawal it can be registered again. Child layers can override inherited handlers without modifying the parent.
 

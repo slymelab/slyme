@@ -491,20 +491,20 @@ Scope viewers and binding identities store their owners directly in sets. Contex
 
 ## Compose
 
-`Compose` owns registration tokens, exact withdrawal, and Scope visibility. `Compose[L, R]` describes the application-defined layer and default query result types. Its constructor accepts `factory` and an optional `query`; each active Identity receives a fresh layer from the factory.
+`Compose` owns registration tokens, exact withdrawal, and Scope visibility. `Compose[L, R]` describes the application-defined layer and default query result types. Its constructor accepts `factory` and an optional `query`; `factory(init)` receives a `ComposeLayerInit` carrying the writable Identity in `init.identity`.
 
-The public `ComposeLayer` protocol requires one synchronous method: `register(token, /, *args, **kwargs) -> Callable[[], None]`. Its returned disposer removes exactly that registration's business data. Inheriting the protocol is optional. `compose.register(scope, /, *args, **kwargs)` selects the Identity and injects a unique token, forwarding all business arguments unchanged. A layer receives no implicit Compose, Scope, or Identity. Its registration signature determines the accepted arguments, including keyword options such as prepend/append or metadata. Capture fixed dependencies in the factory; perform cross-layer validation in an outer operation that explicitly receives Compose and Scope.
+The public `ComposeLayer` protocol requires one synchronous method: `register(registration, /, *args, **kwargs) -> Callable[[], None]`. Its returned disposer removes exactly that registration's business data. Inheriting the protocol is optional. `compose.register(scope, /, *args, **kwargs)` selects the Identity and injects a unique token, forwarding all business arguments unchanged. The registration is a read-only `ComposeRegistration` with the original `scope` and `binding`. A factory closure can pass the owning Compose to the layer. Its registration signature determines the accepted arguments, including keyword options such as prepend/append or metadata. Capture fixed dependencies in the factory; perform cross-layer validation in an outer operation that explicitly receives Compose and Scope.
 
 ```python
 from slyme.context import Compose, Context, Schema
 
 
 class ValueLayer(dict):
-    def register(self, token, /, value):
-        self[token] = value
+    def register(self, registration, /, value):
+        self[registration] = value
 
         def dispose():
-            del self[token]
+            del self[registration]
 
         return dispose
 
@@ -512,7 +512,7 @@ class ValueLayer(dict):
 root = Context()
 root.declare({"tools": Schema.leaf(mode="register")})
 tools = Compose(
-    factory=ValueLayer,
+    factory=lambda _: ValueLayer(),
     query=lambda layers: tuple(value for layer in layers for value in layer.values()),
 )
 root.register("tools", tools)
@@ -535,7 +535,7 @@ root.dispose()
 
 `resolve(scope)` applies the constructor's query; `resolve(scope, query)` overrides it for that call and may return another type. With no default, callers must supply a query; otherwise resolve raises ValueError. Queries combine visible layers; each layer controls its own storage, indexes, and local ordering.
 
-`layers(scope)` lazily yields live layer objects, not copies. It expands each binding's Identity list before its parent Scope and yields each Identity once. `local=True` selects only the current Scope's first Identity. An Identity barrier applies after that item; a binding barrier applies after its entire list, including empty layers and repeated Identities. `layers()` without a Scope enumerates all active layers; `local=True` requires a Scope. Reads never create layers or bindings.
+`layers(scope)` returns the same kind of live, reiterable `ComposeView` a query receives. Iterating yields layers. Use `view.items()` for Identity/layer pairs and `view.identities()` for visible Identities, including empty bindings. An unscoped view lists only Identities with live registrations. It expands each binding's Identity list before its parent Scope and yields each Identity once. `local=True` selects only the current Scope's first Identity. An Identity barrier applies after that item; a binding barrier applies after its entire list, including empty layers and repeated Identities. `layers()` without a Scope enumerates all active layers; `local=True` requires a Scope. Reads never create layers or bindings.
 
 Do not structurally mutate a Compose during query iteration. Snapshot selected handlers before invoking them. Snapshots retain objects but do not extend their external resources' lifetimes. Inspect application data through the layer's own interface; Compose does not reconstruct original values from an aggregate-only layer.
 

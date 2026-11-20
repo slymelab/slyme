@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import weakref
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Generic, ParamSpec, Protocol, TypeVar, overload
 
@@ -25,11 +25,32 @@ from slyme.execution import once
 
 from .scope import Identity, Scope, ScopeBinding, identities
 
-__all__ = ["Compose", "ComposeLayer"]
+__all__ = [
+    "Compose",
+    "ComposeLayer",
+    "ComposeLayerInit",
+    "ComposeRegistration",
+    "ComposeView",
+]
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _S = TypeVar("_S")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ComposeLayerInit:
+    """Inputs supplied to the factory when creating a layer."""
+
+    identity: Identity
+
+
+@dataclass(frozen=True, eq=False, slots=True)
+class ComposeRegistration:
+    """The unique token and write origin of one registration."""
+
+    scope: Scope
+    binding: ScopeBinding
 
 
 class ComposeLayer(Protocol[_P]):
@@ -39,11 +60,11 @@ class ComposeLayer(Protocol[_P]):
     must leave data unchanged on failure. Neither registration nor disposal
     explicitly reenters its owning Compose. Compose alone registers on its layers
     and invokes each returned disposer at most once.
-    Registration arguments after token belong entirely to the application.
+    The remaining arguments belong to the application.
     """
 
     def register(
-        self, token: object, /, *args: _P.args, **kwargs: _P.kwargs
+        self, registration: ComposeRegistration, /, *args: _P.args, **kwargs: _P.kwargs
     ) -> Callable[[], None]: ...
 
 
@@ -53,15 +74,40 @@ _L = TypeVar("_L", bound=ComposeLayer[...], covariant=True)
 @dataclass
 class _Bucket(Generic[_L]):
     data: _L
-    registrations: dict[object, Scope] = field(default_factory=dict)
+    registrations: set[ComposeRegistration] = field(default_factory=set)
+
+
+@dataclass(frozen=True, eq=False, slots=True)
+class ComposeView(Iterable[_L]):
+    """A live, reiterable selection of layers in lookup order."""
+
+    _compose: Compose[_L, Any] = field(repr=False)
+    scope: Scope | None
+    local: bool
+
+    def identities(self) -> Iterator[Identity]:
+        """Include visible empty bindings; an unscoped view enumerates live buckets."""
+        if self.scope is None:
+            return iter(self._compose._buckets)
+        return identities(self.scope, self._compose._scope_bindings, local=self.local)
+
+    def items(self) -> Iterator[tuple[Identity, _L]]:
+        """Yield the identity and data of each visible live layer."""
+        buckets = self._compose._buckets
+        for identity in self.identities():
+            bucket = buckets.get(identity)
+            if bucket is not None:
+                yield identity, bucket.data
+
+    def __iter__(self) -> Iterator[_L]:
+        return (layer for _, layer in self.items())
 
 
 class Compose(Generic[_L, _R]):
     """Own registration tokens and expose visible layers in explicit lookup order.
 
-    Each Identity receives one factory-created ComposeLayer. A layer receives
-    only its registration token and caller-supplied business arguments, never an
-    implicitly bound Compose, Scope, or Identity.
+    The factory receives ComposeLayerInit with the writable Identity.
+    A layer receives a unique ComposeRegistration and the business arguments.
 
     Queries receive live layers, not copies. Do not mutate the Compose
     while iterating them; snapshot selected values before invoking user code.
@@ -79,8 +125,8 @@ class Compose(Generic[_L, _R]):
     def __init__(
         self,
         *,
-        factory: Callable[[], _L],
-        query: Callable[[Iterable[_L]], _R] | None = None,
+        factory: Callable[[ComposeLayerInit], _L],
+        query: Callable[[ComposeView[_L]], _R] | None = None,
     ) -> None:
         self._factory = factory
         self._query = query
@@ -135,7 +181,7 @@ class Compose(Generic[_L, _R]):
         *args: _P.args,
         **kwargs: _P.kwargs,
     ) -> Callable[[], None]:
-        """Forward business arguments with a unique token; return an exact disposer.
+        """Register the business arguments and return their exact disposer.
 
         Disposers retain this Compose until called and replay a cleanup failure
         without retrying. Removing the last registration drops its layer;
@@ -147,55 +193,44 @@ class Compose(Generic[_L, _R]):
         identity = binding.identity
         bucket = self._buckets.get(identity)
         if bucket is None:
-            bucket = _Bucket(self._factory())
+            bucket = _Bucket(self._factory(ComposeLayerInit(identity=identity)))
             self._buckets[identity] = bucket
-        token = object()
+        registration = ComposeRegistration(scope, binding)
         try:
-            cleanup = bucket.data.register(token, *args, **kwargs)
+            cleanup = bucket.data.register(registration, *args, **kwargs)
         except BaseException:
             if not bucket.registrations:
                 del self._buckets[identity]
             raise
-        bucket.registrations[token] = scope
+        bucket.registrations.add(registration)
 
         @once
         def dispose() -> None:
-            self._remove(identity, token, cleanup)
+            self._remove(registration, cleanup)
 
         return dispose
 
     def _remove(
-        self, identity: Identity, token: object, cleanup: Callable[[], None]
+        self, registration: ComposeRegistration, cleanup: Callable[[], None]
     ) -> None:
+        identity = registration.binding.identity
         bucket = self._buckets[identity]
-        scope = bucket.registrations.pop(token)
+        bucket.registrations.remove(registration)
         if not bucket.registrations:
             # Detach before releasing payloads: finalizers may register a new layer.
             del self._buckets[identity]
         cleanup()
-        del scope
 
     def layers(
         self,
         scope: Scope | None = None,
         *,
         local: bool = False,
-    ) -> Iterable[_L]:
-        """Yield layers once per visible Identity, without creating data.
-
-        Omit scope to inspect all live layers. local=True selects only the
-        supplied Scope's writable Identity, including registrations through
-        other Scopes sharing it. Empty and duplicate bindings still apply barriers.
-        """
-        if scope is None:
-            if local:
-                raise ValueError("local=True requires a Scope.")
-            yield from (bucket.data for bucket in self._buckets.values())
-            return
-        for identity in identities(scope, self._scope_bindings, local=local):
-            bucket = self._buckets.get(identity)
-            if bucket is not None:
-                yield bucket.data
+    ) -> ComposeView[_L]:
+        """Select layers lazily; local reads use only the Scope's writable Identity."""
+        if scope is None and local:
+            raise ValueError("local=True requires a Scope.")
+        return ComposeView(self, scope, local)
 
     @overload
     def resolve(
@@ -209,14 +244,14 @@ class Compose(Generic[_L, _R]):
     def resolve(
         self,
         scope: Scope,
-        query: Callable[[Iterable[_L]], _S],
+        query: Callable[[ComposeView[_L]], _S],
         *,
         local: bool = False,
     ) -> _S: ...
     def resolve(
         self,
         scope: Scope,
-        query: Callable[[Iterable[_L]], _S] | None = None,
+        query: Callable[[ComposeView[_L]], _S] | None = None,
         *,
         local: bool = False,
     ) -> _R | _S:

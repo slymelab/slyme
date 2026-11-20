@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 from slyme.tree import TreeRules
 from slyme.tree.common import DATA_RULES
 
-from .compose import Compose
+from .compose import Compose, ComposeRegistration
 from .schema import Ref, Schema
 
 if TYPE_CHECKING:
@@ -52,18 +52,22 @@ _T = TypeVar("_T")
 class TreeLayer:
     """Tree rule registrations with one handler per exact class in this layer."""
 
-    rules: dict[object, TreeRules] = field(default_factory=dict, init=False)
+    rules: dict[ComposeRegistration, TreeRules] = field(
+        default_factory=dict, init=False
+    )
     _classes: set[type] = field(default_factory=set, init=False)
 
-    def register(self, token: object, /, rules: TreeRules) -> Callable[[], None]:
+    def register(
+        self, registration: ComposeRegistration, /, rules: TreeRules
+    ) -> Callable[[], None]:
         for cls in rules.handlers:
             if cls in self._classes:
                 raise ValueError(f"Type {cls!r} is already registered in this layer.")
-        self.rules[token] = rules
+        self.rules[registration] = rules
         self._classes.update(rules.handlers)
 
         def dispose() -> None:
-            self._classes.difference_update(self.rules.pop(token).handlers)
+            self._classes.difference_update(self.rules.pop(registration).handlers)
 
         return dispose
 
@@ -82,7 +86,7 @@ class TypeLayer(Generic[_T]):
     entries: dict[type, _T] = field(default_factory=dict, init=False)
 
     def register(
-        self, token: object, /, entries: Mapping[type, _T]
+        self, registration: ComposeRegistration, /, entries: Mapping[type, _T]
     ) -> Callable[[], None]:
         classes = tuple(entries)
         for cls in classes:
@@ -162,19 +166,19 @@ def _apply(ctx: Context) -> None:
             }
         }
     )
-    data = Compose(factory=TreeLayer, query=TreeLayer.merge)
+    data = Compose(factory=lambda _: TreeLayer(), query=TreeLayer.merge)
     evaluators: Compose[
         TypeLayer[BatchEvaluatorFunc], dict[type, BatchEvaluatorFunc]
-    ] = Compose(factory=TypeLayer, query=TypeLayer.merge)
-    inspection_rules = Compose(factory=TreeLayer, query=TreeLayer.merge)
+    ] = Compose(factory=lambda _: TypeLayer(), query=TypeLayer.merge)
+    inspection_rules = Compose(factory=lambda _: TreeLayer(), query=TreeLayer.merge)
     interpreters: Compose[TypeLayer[Interpreter], dict[type, Interpreter]] = Compose(
-        factory=TypeLayer, query=TypeLayer.merge
+        factory=lambda _: TypeLayer(), query=TypeLayer.merge
     )
     type_names: Compose[TypeLayer[str], dict[type, str]] = Compose(
-        factory=TypeLayer, query=TypeLayer.merge
+        factory=lambda _: TypeLayer(), query=TypeLayer.merge
     )
     raw_value_types: Compose[TypeLayer[None], dict[type, None]] = Compose(
-        factory=TypeLayer, query=TypeLayer.merge
+        factory=lambda _: TypeLayer(), query=TypeLayer.merge
     )
     ctx.register(DATA_TREE_REF, data)
     ctx.register(EVALUATORS_REF, evaluators)

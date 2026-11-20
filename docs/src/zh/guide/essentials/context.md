@@ -462,20 +462,22 @@ Scope viewer 和 binding identity 直接使用集合记录持有者。Context di
 
 ## Compose
 
-`Compose` 负责登记 token、精确撤销和 Scope 可见性。`Compose[L, R]` 分别描述应用定义的 Layer 和默认 query 的结果类型。构造函数接受 `factory` 和可选的 `query`；每个活跃 Identity 都通过 factory 创建独立的 Layer。
+`Compose` 负责登记 token、精确撤销和 Scope 可见性。`Compose[L, R]` 分别描述应用定义的 Layer 和默认 query 的结果类型。构造函数接受 `factory` 和可选的 `query`；首次向某个 Identity 注册时，Compose 调用 `factory(init)` 创建 Layer，传入的 `ComposeLayerInit` 通过 `init.identity` 提供写入 Identity。
 
-公开的 `ComposeLayer` 协议只要求一个同步方法：`register(token, /, *args, **kwargs) -> Callable[[], None]`，返回的 disposer 精确移除本次登记的业务数据，不要求继承该协议。`compose.register(scope, /, *args, **kwargs)` 选择 Identity、注入唯一 token，并原样转发所有业务参数。Layer 不接收隐式 Compose、Scope 或 Identity，其 register 签名决定可接受的业务参数，包括 prepend/append、metadata 等关键字选项。固定依赖可以由 factory 闭包提供；跨层检查放在显式接收 Compose 和 Scope 的上层操作中。
+公开的 `ComposeLayer` 协议只要求一个同步方法：`register(registration, /, *args, **kwargs) -> Callable[[], None]`，返回的 disposer 精确移除本次登记的业务数据，不要求继承该协议。`compose.register(scope, /, *args, **kwargs)` 选择 Identity、注入唯一 token，并原样转发所有业务参数。registration 是只读的 `ComposeRegistration`，可以通过 `registration.scope` 和 `registration.binding` 读取登记来源。Layer 的 register 签名决定可接受的业务参数，包括 prepend/append、metadata 等关键字选项。固定依赖可以由 factory 闭包提供；跨层检查放在显式接收 Compose 和 Scope 的上层操作中。
+
+查询接收与 `layers(scope)` 相同的实时 `ComposeView`，可重复迭代。直接迭代得到 Layer；`view.items()` 给出 Identity 和 Layer，`view.identities()` 还包括尚无登记的可见 Identity。省略 Scope 时只枚举有登记的 Identity。
 
 ```python
 from slyme.context import Compose, Context, Schema
 
 
 class ValueLayer(dict):
-    def register(self, token, /, value):
-        self[token] = value
+    def register(self, registration, /, value):
+        self[registration] = value
 
         def dispose():
-            del self[token]
+            del self[registration]
 
         return dispose
 
@@ -483,7 +485,7 @@ class ValueLayer(dict):
 root = Context()
 root.declare({"tools": Schema.leaf(mode="register")})
 tools = Compose(
-    factory=ValueLayer,
+    factory=lambda _: ValueLayer(),
     query=lambda layers: tuple(value for layer in layers for value in layer.values()),
 )
 root.register("tools", tools)
